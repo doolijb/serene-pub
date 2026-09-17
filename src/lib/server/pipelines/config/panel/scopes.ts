@@ -56,10 +56,10 @@ export const visibleTo = (matrixSlot: string, viewer: Viewer): boolean =>
  * used a control that was offered to them, and "scope 'user' may not write slot
  * 'connection'" tells them nothing they can act on (15 §1.3).
  *
- * The matrix is consulted at `session` for session writes and at `instance` for
- * config writes — a config's values are what the whole instance resolves, so
- * the instance column is the one that states what may live there (F20's
- * connection rule included).
+ * The matrix is consulted at `session` for session writes and at `preset` for
+ * config writes — a config's values are what the whole instance resolves, and
+ * since R-10 (2026-09-16) `preset` IS the selected config's column, so it is the
+ * one that states what may live there (F20's connection rule included).
  */
 export function resolveWriteScope(
 	viewer: Viewer,
@@ -86,7 +86,7 @@ export function resolveWriteScope(
 				"your sessions."
 		)
 
-	const matrixScope: ScopeKind = scope === "config" ? "instance" : "session"
+	const matrixScope: ScopeKind = scope === "config" ? "preset" : "session"
 	if (!mayWrite(matrixSlot, matrixScope)) {
 		const allowed = WRITE_MATRIX[matrixSlot] ?? []
 		throw new OptionNotWritableError(

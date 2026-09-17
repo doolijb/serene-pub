@@ -57,12 +57,16 @@
 				]
 			},
 			{
+				// One section, because there is one list. A persona is a
+				// character you play, so it lives on the characters list with
+				// a Persona flag rather than in a second place to look.
 				title: "Characters",
 				pages: [
 					{
 						href: "/document-view/characters",
 						label: "Characters",
-						description: "List of your characters.",
+						description:
+							"List of your characters, personas included.",
 						show: true
 					},
 					{
@@ -76,29 +80,6 @@
 						label: "Browse Character Library",
 						description:
 							"Search and download community characters.",
-						show: true
-					}
-				]
-			},
-			{
-				title: "Personas",
-				pages: [
-					{
-						href: "/document-view/personas",
-						label: "Personas",
-						description: "List of your personas.",
-						show: true
-					},
-					{
-						href: "/document-view/personas/new",
-						label: "Create a New Persona",
-						description: "Simplified persona creation.",
-						show: true
-					},
-					{
-						href: "/document-view/personas/browse",
-						label: "Browse Persona Library",
-						description: "Search and download community personas.",
 						show: true
 					}
 				]

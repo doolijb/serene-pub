@@ -5,7 +5,7 @@ import * as schema from "$lib/server/db/schema"
 // `export global {}` block, same pattern as the Sockets namespace) — no
 // import needed/available for it.
 import { user as loadUser } from "./users"
-import { connectionsList, connectionsSetDefault } from "./connections"
+import { buildConnectionsList, connectionsSetDefault } from "./connections"
 import { Ollama } from "ollama"
 import ollamaAdapter from "$lib/server/connectionAdapters/OllamaAdapter"
 import { OllamaModelSearchSource } from "$lib/shared/constants/OllamaModelSource"
@@ -16,9 +16,11 @@ import { loginRateLimit } from "$lib/server/services/loginRateLimit"
 import { resolveConnectionCapabilities } from "$lib/server/connections/resolve"
 import {
 	endpointIdsServingModel,
-	ensureDefaultModel,
+	ensureConnectionModel,
 	forgetModelEverywhere
 } from "$lib/server/connections/models"
+import { syncManyConnectionModels } from "$lib/server/connections/modelSync"
+import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 
 // --- OLLAMA SPECIFIC FUNCTIONS ---
 
@@ -33,11 +35,6 @@ let downloadingQuants: {
 		files: { [key: string]: { total: number; completed: number } }
 	}
 } = {}
-
-// Function to emit download progress to all connected clients
-function emitDownloadProgress(emitToAll: (event: string, data: any) => void) {
-	emitToAll("ollamaDownloadProgress", { downloadingQuants })
-}
 
 export const ollamaGetDownloadProgress: Handler<
 	Sockets.Ollama.GetDownloadProgress.Params,
@@ -198,8 +195,7 @@ export const ollamaConnectModelHandler: Handler<
 				// Create a new connection if it doesn't exist
 				const data: any = {
 					...ollamaAdapter.connectionDefaults,
-					name: connectionName,
-					model: params.modelName
+					name: connectionName
 				}
 				// A raw insert bypasses everything `connections:create` does to a
 				// new row, including this — and the omission fails INVISIBLY. An
@@ -217,27 +213,57 @@ export const ollamaConnectModelHandler: Handler<
 					.values(data as InsertConnection)
 					.returning()
 				// The other half of the row this insert bypasses. A raw insert
-				// skips everything `connections:create` does, and after 0114
-				// that includes the model row — without which the new endpoint
-				// resolves to no model at all and the very next send fails with
-				// a sentence about a connection that looks perfectly configured.
-				// `ensureDefaultModel` also writes the mirror, so the column this
-				// handler used to set by hand stays in step.
-				await ensureDefaultModel(db, newConnection.id, params.modelName)
+				// skips everything `connections:create` does, and that includes
+				// the model row — without which the new endpoint resolves to no
+				// model at all and the very next send fails with a sentence
+				// about a connection that looks perfectly configured.
+				// `ensureConnectionModel` ensures the ROW, never a default:
+				// connections have none.
+				await ensureConnectionModel(
+					db,
+					newConnection.id,
+					params.modelName
+				)
 				existingConnection = newConnection
 			}
 
-			// Explicitly `text->text`: "Connect model" is somebody choosing, which
-			// is what makes it legitimate under the no-implicit-pickup ruling —
-			// unlike the auto-star deleted from `connections:create`, which
-			// chose on nobody's behalf. The capability is named rather than
-			// derived, because a connection is not one thing.
+			// The model row this flow is for — found, never guessed: the flow
+			// just ensured it above, or a previous run did.
+			const [modelRow] = await db
+				.select()
+				.from(schema.connectionModels)
+				.where(
+					and(
+						eq(
+							schema.connectionModels.connectionId,
+							existingConnection.id
+						),
+						eq(schema.connectionModels.model, params.modelName)
+					)
+				)
+				.limit(1)
+			if (!modelRow) {
+				const res = { error: "That model is not on this connection." }
+				emitToUser("ollama:connectModel:error", res)
+				throw new Error(res.error)
+			}
+
+			// Explicitly `text->text`, with the model named outright: "Connect
+			// model" is somebody choosing, which is what makes it legitimate
+			// under the no-implicit-pickup ruling — unlike the auto-star deleted
+			// from `connections:create`, which chose on nobody's behalf. The
+			// capability is named rather than derived, because a connection is
+			// not one thing.
 			await connectionsSetDefault.handler(
 				socket,
-				{ capability: "text->text", id: existingConnection.id },
+				{
+					capability: "text->text",
+					id: existingConnection.id,
+					modelId: modelRow.id
+				},
 				emitToUser
 			)
-			await connectionsList.handler(socket, {}, emitToUser)
+			await emitToUser("connections:list", () => buildConnectionsList())
 
 			const res: Sockets.Ollama.ConnectModel.Response = {
 				success: "Model connected successfully"
@@ -284,6 +310,15 @@ export const ollamaListRunningModelsHandler: Handler<
 	}
 }
 
+/**
+ * The pull, and the progress pushes that narrate it.
+ *
+ * Those pushes are `ollama:pullProgress` and not the bare `ollamaPullProgress`
+ * they were spelled as for want of ever going through `register`. The prefix is
+ * load-bearing now: `ollama:` is restricted interest, so it is what tells both
+ * interest registries that a non-admin may not hold this key — and this event
+ * was always exactly as admin-only as the handler that sends it.
+ */
 export const ollamaPullModelHandler: Handler<
 	Sockets.Ollama.PullModel.Params,
 	Sockets.Ollama.PullModel.Response
@@ -333,7 +368,7 @@ export const ollamaPullModelHandler: Handler<
 					}
 
 					// Emit cancellation with full state
-					emitToUser("ollamaPullProgress", {
+					emitToUser("ollama:pullProgress", {
 						downloadingQuants
 					})
 
@@ -367,7 +402,7 @@ export const ollamaPullModelHandler: Handler<
 					}
 
 					// Emit the entire downloadingQuants object for full state sync
-					emitToUser("ollamaPullProgress", {
+					emitToUser("ollama:pullProgress", {
 						downloadingQuants
 					})
 				}
@@ -380,9 +415,22 @@ export const ollamaPullModelHandler: Handler<
 			}
 
 			// Emit final progress with full state
-			emitToUser("ollamaPullProgress", {
+			emitToUser("ollama:pullProgress", {
 				downloadingQuants
 			})
+
+			// The pulled model is now something every Ollama endpoint can
+			// serve, so their rows follow at once rather than on the next
+			// sidebar open. Forced: the whole point is that the listing
+			// changed a second ago. Local, so it is cheap.
+			await syncManyConnectionModels(db, {
+				types: [
+					CONNECTION_TYPE.OLLAMA,
+					CONNECTION_TYPE.OLLAMA_EMBEDDINGS
+				],
+				force: true
+			})
+			await emitToUser("connections:list", () => buildConnectionsList())
 
 			const res: Sockets.Ollama.PullModel.Response = {
 				success: "Model downloaded successfully"
@@ -399,7 +447,7 @@ export const ollamaPullModelHandler: Handler<
 			}
 
 			// Emit error progress with full state
-			emitToUser("ollamaPullProgress", {
+			emitToUser("ollama:pullProgress", {
 				downloadingQuants
 			})
 
@@ -700,7 +748,7 @@ export const ollamaRecommendedModelsHandler: Handler<
 		try {
 			// Fetch the recommended models YAML from GitHub
 			const response = await fetch(
-				"https://raw.githubusercontent.com/doolijb/serene-pub-gguf-list/main/recommended.yaml"
+				"https://raw.githubusercontent.com/SerenePub/serene-pub-gguf-list/main/recommended.yaml"
 			)
 
 			if (!response.ok) {
@@ -823,93 +871,7 @@ function compareVersions(version1: string, version2: string): number {
 	return 0
 }
 
-// Legacy functions - keeping original implementations for now
-export async function ollamaConnectModelLegacy(
-	socket: any,
-	message: any,
-	emitToUser: (event: string, data: any) => void
-) {
-	// Redirect to new handler
-	await ollamaConnectModelHandler.handler(socket, message, emitToUser)
-}
-
-export async function ollamaSearchAvailableModelsLegacy(
-	socket: any,
-	message: any,
-	emitToUser: (event: string, data: any) => void
-) {
-	await ollamaSearchAvailableModelsHandler.handler(
-		socket,
-		message,
-		emitToUser
-	)
-}
-
-export async function ollamaDeleteModelLegacy(
-	socket: any,
-	message: any,
-	emitToUser: (event: string, data: any) => void
-) {
-	await ollamaDeleteModelHandler.handler(socket, message, emitToUser)
-}
-
-export async function ollamaListRunningModelsLegacy(
-	socket: any,
-	message: any,
-	emitToUser: (event: string, data: any) => void
-) {
-	await ollamaListRunningModelsHandler.handler(socket, message, emitToUser)
-}
-
-export async function ollamaPullModelLegacy(
-	socket: any,
-	message: any,
-	emitToUser: (event: string, data: any) => void
-) {
-	await ollamaPullModelHandler.handler(socket, message, emitToUser)
-}
-
-export async function ollamaVersionLegacy(
-	socket: any,
-	message: any,
-	emitToUser: (event: string, data: any) => void
-) {
-	await ollamaVersionHandler.handler(socket, message, emitToUser)
-}
-
-export async function ollamaIsUpdateAvailableLegacy(
-	socket: any,
-	message: any,
-	emitToUser: (event: string, data: any) => void
-) {
-	await ollamaIsUpdateAvailableHandler.handler(socket, message, emitToUser)
-}
-
-export async function ollamaCancelPullLegacy(
-	socket: any,
-	message: any,
-	emitToUser: (event: string, data: any) => void
-) {
-	await ollamaCancelPullHandler.handler(socket, message, emitToUser)
-}
-
-export async function ollamaClearDownloadHistoryLegacy(
-	socket: any,
-	message: any,
-	emitToUser: (event: string, data: any) => void
-) {
-	await ollamaClearDownloadHistoryHandler.handler(socket, message, emitToUser)
-}
-
-export async function ollamaRecommendedModelsLegacy(
-	socket: any,
-	message: any,
-	emitToUser: (event: string, data: any) => void
-) {
-	await ollamaRecommendedModelsHandler.handler(socket, message, emitToUser)
-}
-
-import { systemSettingsGet } from "./systemSettings"
+import { buildSystemSettingsGet } from "./systemSettings"
 
 export const ollamaUpdateManagerEnabled: Handler<
 	Sockets.SystemSettings.UpdateOllamaManagerEnabled.Params,
@@ -930,7 +892,7 @@ export const ollamaUpdateManagerEnabled: Handler<
 		const res: Sockets.SystemSettings.UpdateOllamaManagerEnabled.Response =
 			{ success: true, enabled: params.enabled }
 		emitToUser("systemSettings:updateOllamaManagerEnabled", res)
-		await systemSettingsGet.handler(socket, {}, emitToUser)
+		await emitToUser("systemSettings:get", () => buildSystemSettingsGet())
 		return res
 	}
 }

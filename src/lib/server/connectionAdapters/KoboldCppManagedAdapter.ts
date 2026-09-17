@@ -1,5 +1,4 @@
 import { KoboldCppAdapter } from "./KoboldCppAdapter"
-import { fetchCurrentModelName } from "$lib/server/koboldcpp/kcppHttp"
 import type { AdapterExports } from "./BaseConnectionAdapter"
 import type { TextGenResult } from "$lib/server/adapters/actions"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
@@ -202,10 +201,14 @@ async function listModels(
 			normalizeBaseUrl(connection.baseUrl) ||
 			"http://localhost:5001"
 
-		const currentModel =
-			(await fetchCurrentModelName(baseUrl)) || "No model loaded"
-
-		let availableModels: string[] = []
+		// The manager's directory listing, and nothing else. No `[current]`
+		// sentinel is prepended, and an unreachable admin API is never
+		// swallowed into an empty list; both are wrong for a persisted sync —
+		// the sentinel becomes a row no host lists, and an empty list on
+		// failure marks every real gguf missing because the process is down.
+		// An unreachable admin API is an ERROR here, so the sync records it on
+		// the endpoint and touches no row.
+		let availableModels: string[]
 		try {
 			const availableModelsResponse = await fetch(
 				`${baseUrl}/api/admin/list_options`,
@@ -218,29 +221,28 @@ async function listModels(
 					signal: AbortSignal.timeout(5000)
 				}
 			)
-			if (availableModelsResponse.ok) {
-				availableModels = await availableModelsResponse.json()
+			if (!availableModelsResponse.ok)
+				return {
+					models: [],
+					error: `KoboldCPP's admin API answered HTTP ${availableModelsResponse.status}. Is the manager running with an admin password?`
+				}
+			const body = await availableModelsResponse.json()
+			availableModels = Array.isArray(body)
+				? body.filter((f): f is string => typeof f === "string")
+				: []
+		} catch (e: any) {
+			return {
+				models: [],
+				error: `KoboldCPP's admin API could not be reached: ${e?.message ?? String(e)}`
 			}
-		} catch {
-			// Admin API unreachable — still return the current model below.
 		}
 
-		const models = [
-			{
-				id: "[current]",
-				name: `Currently Loaded: ${currentModel}`,
-				object: "model",
-				isCurrent: true
-			},
-			...availableModels.map((filename) => ({
-				id: filename,
-				name: filename,
-				object: "model",
-				isCurrent: false
+		return {
+			models: availableModels.map((filename) => ({
+				model: filename,
+				name: filename
 			}))
-		]
-
-		return { models }
+		}
 	} catch (e: any) {
 		return {
 			models: [],

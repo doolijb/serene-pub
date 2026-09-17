@@ -17,7 +17,10 @@
 	 * parked, and the person needs the form back to correct the field.
 	 */
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
-	import { onDestroy, onMount } from "svelte"
+	import {
+		requestWithInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
 	import * as Icons from "@lucide/svelte"
 	import SchemaForm from "./SchemaForm.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
@@ -100,20 +103,30 @@
 		}
 	}
 
-	onMount(() => {
-		socket.on("pipelines:reviewRequested", onRequested)
-		socket.on("pipelines:reviewClosed", onClosed)
-		socket.on("pipelines:reviews", onList)
-		socket.on("pipelines:resolveReview:error", onError)
-		socket.emit("pipelines:reviews", {})
-	})
+	/**
+	 * The two pushes, both BARE: a review is addressed to the person, not to a
+	 * session — `reviewRequested` is how this modal learns a run parked at all,
+	 * from anywhere in the app — so there is no interest scope to narrow to.
+	 */
+	useInterest<"pipelines:reviewRequested">(
+		"pipelines:reviewRequested",
+		onRequested
+	)
+	useInterest<"pipelines:reviewClosed">("pipelines:reviewClosed", onClosed)
 
-	onDestroy(() => {
-		socket.off("pipelines:reviewRequested", onRequested)
-		socket.off("pipelines:reviewClosed", onClosed)
-		socket.off("pipelines:reviews", onList)
-		socket.off("pipelines:resolveReview:error", onError)
-	})
+	/**
+	 * The catch-up list and the request that fills it, in one: the interest
+	 * sync naming `pipelines:reviews` leaves ahead of the request (ruling 3),
+	 * so the reply cannot arrive before the key that wants it exists.
+	 */
+	$effect(() => requestWithInterest("pipelines:reviews", {}, onList))
+
+	// Never gated (plan ruling 2 — an error is not an output to skip), but the
+	// registry is the only listener path, so it is declared like the rest.
+	useInterest<"pipelines:resolveReview:error">(
+		"pipelines:resolveReview:error",
+		onError
+	)
 </script>
 
 {#if current}

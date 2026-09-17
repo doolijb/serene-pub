@@ -1,11 +1,13 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
-	import { onMount, onDestroy, getContext } from "svelte"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
+	import { onMount, getContext } from "svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import type { ListResponse, ModelDetails, ModelResponse } from "ollama"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
+	import { ollamaChatDefaultModelName } from "./defaultModel"
 
 	interface OllamaModel {
 		name: string
@@ -37,13 +39,22 @@
 	)
 	const panelsCtx: PanelsCtx = getContext("panelsCtx")
 
+	/**
+	 * The Ollama endpoint that carries a `connection_models` row for this
+	 * model — the door the gear button opens. An endpoint names no single
+	 * model of its own, so the match is on its rows, and the first endpoint
+	 * listing the model is the one to open: two Ollama endpoints pointed at
+	 * the same server list the same models, and either is a fair place to go.
+	 */
 	function findConnectionForModel(
 		modelName: string
 	):
 		| Sockets.Connections.List.Response["connectionsList"][number]
 		| undefined {
 		return connectionsList.find(
-			(c) => c.type === "ollama" && c.model === modelName
+			(c) =>
+				c.type === CONNECTION_TYPE.OLLAMA &&
+				c.models?.some((m) => m.model === modelName)
 		)
 	}
 
@@ -71,23 +82,17 @@
 			})
 	)
 
-	let currentConnectionModelName: string | null = $derived.by(() => {
-		// The instance's CHAT default, from connection_defaults — the only place
-		// a default lives since 0181. This tab labels a model "in use", which is
-		// a claim about what a reply would actually run on.
-		const activeConnection = connectionsList.find(
-			(c) =>
-				c.id ===
-				(systemSettingsCtx.capabilityDefaults?.["text->text"]
-					?.connectionId ?? null)
+	// The instance's CHAT capability default — the (endpoint, model) pair from
+	// connection_defaults, the only place a default lives since 0181. This tab
+	// labels a model "in use for chat", which is a claim about what a reply
+	// would actually run on, so the star, the sort and the delete guard all
+	// read this one value.
+	let currentConnectionModelName: string | null = $derived(
+		ollamaChatDefaultModelName(
+			connectionsList,
+			systemSettingsCtx.capabilityDefaults
 		)
-		if (activeConnection?.type === CONNECTION_TYPE.OLLAMA) {
-			return activeConnection.model ?? null
-		}
-		return null
-	})
-
-	$effect(() => {})
+	)
 
 	// Format file size
 	function formatSize(bytes: number): string {
@@ -132,9 +137,9 @@
 
 		if (currentConnectionModelName === model.name) {
 			toaster.error({
-				title: "Cannot delete connected model",
+				title: "Cannot delete the model in use for chat",
 				description:
-					"Please choose a different connection before deleting it."
+					"Use a different model for chat before deleting this one."
 			})
 			return
 		}
@@ -169,8 +174,8 @@
 
 		if (currentConnectionModelName === model.name) {
 			toaster.error({
-				title: "Already connected to this model",
-				description: "Please choose a different model to connect."
+				title: "Already in use for chat",
+				description: "Choose a different model to use for chat."
 			})
 			return
 		}
@@ -190,12 +195,6 @@
 		}
 	}
 
-	// Named so the teardown below can remove just this listener. A bare
-	// socket.off("ollama:modelsList") drops *every* handler for the event,
-	// including OllamaSidebar's, which uses the same list to decide whether to
-	// open on Available during the setup wizard — switching away from this tab
-	// would silently deafen the parent. OllamaAvailableTab already scopes its
-	// own teardown this way.
 	function handleModelsList(message: Sockets.Ollama.ModelsList.Response) {
 		installedModels = message.models
 		isLoading = false
@@ -222,7 +221,7 @@
 		message: Sockets.Ollama.ConnectModel.Response
 	) {
 		if (message.success) {
-			toaster.success({ title: "Model connected successfully" })
+			toaster.success({ title: "Now using this model for chat" })
 			refreshModels()
 		}
 	}
@@ -231,32 +230,42 @@
 		connectionsList = msg.connectionsList ?? []
 	}
 
+	/**
+	 * Five standing interests, all BARE — no event in these families carries a
+	 * scope. `ollama:` is restricted interest, which this tab is inside the
+	 * admin-only half of; `connections:list` is not, so both halves of a card
+	 * (the model, and the pair that makes one the chat default) arrive for the
+	 * same admin.
+	 *
+	 * Declared ABOVE `onMount`, because `onMount` is an effect too and effects
+	 * run in creation order: the keys have to be held before the first request
+	 * leaves, and the typed `emit` flushes the interest sync ahead of itself
+	 * (plan ruling 3) so the reply this tab asked for is not gated away.
+	 *
+	 * Standing rather than one-shot: every one of them lands again unprompted
+	 * — a delete, a pull finishing elsewhere, or "Use for chat" re-emits the
+	 * list this tab renders.
+	 *
+	 * There is no `ollama:stopModel` handler on the server (see
+	 * `server/sockets/ollama.ts`), so there is nothing to declare for it.
+	 */
+	useInterest<"ollama:modelsList">("ollama:modelsList", handleModelsList)
+	useInterest<"ollama:deleteModel">(
+		"ollama:deleteModel",
+		handleOllamaDeleteModel
+	)
+	useInterest<"ollama:listRunningModels">(
+		"ollama:listRunningModels",
+		handleOllamaListRunningModels
+	)
+	useInterest<"ollama:connectModel">(
+		"ollama:connectModel",
+		handleOllamaConnectModel
+	)
+	useInterest<"connections:list">("connections:list", handleConnectionsList)
+
 	onMount(() => {
-		// Socket event listeners
-		socket.on("ollama:modelsList", handleModelsList)
-
-		socket.on("ollama:deleteModel", handleOllamaDeleteModel)
-
-		socket.on("ollama:listRunningModels", handleOllamaListRunningModels)
-
-		// Note: there is no "ollama:stopModel" server handler (see
-		// src/lib/server/sockets/ollama.ts) - it was never implemented, so a
-		// listener for it here was unreachable dead code and has been removed.
-
-		socket.on("ollama:connectModel", handleOllamaConnectModel)
-
-		socket.on("connections:list", handleConnectionsList)
-
-		// Initial load
 		refreshModels()
-	})
-
-	onDestroy(() => {
-		socket.off("ollama:modelsList", handleModelsList)
-		socket.off("ollama:deleteModel", handleOllamaDeleteModel)
-		socket.off("ollama:listRunningModels", handleOllamaListRunningModels)
-		socket.off("ollama:connectModel", handleOllamaConnectModel)
-		socket.off("connections:list", handleConnectionsList)
 	})
 </script>
 
@@ -322,7 +331,9 @@
 			{@const isRunning = isModelRunning(model)}
 			{@const isConnected = currentConnectionModelName === model.name}
 			{@const existingConn = findConnectionForModel(model.name)}
-			<div class="card preset-filled-surface-100-900 flex flex-col gap-2 p-4">
+			<div
+				class="card preset-filled-surface-100-900 flex flex-col gap-2 p-4"
+			>
 				<div class="flex items-center justify-between gap-2">
 					<h4 class="min-w-0 font-semibold break-all">
 						{#if isConnected}
@@ -364,20 +375,21 @@
 				</div>
 				<!-- One wrapping group for all of this card's actions. A nested
 				     group inside a non-wrapping justify-between row can only
-				     resolve by shrinking, which clipped "Set Default". -->
+				     resolve by shrinking, which clipped the wider label. -->
 				<div class="panel-actions justify-between">
 					<div class="panel-actions">
 						<button
 							class="btn btn-sm preset-filled-success-500"
-							title="Set as default connection"
-							aria-label="Set as default connection"
+							title="Use this model for chat"
+							aria-label="Use this model for chat"
 							disabled={isConnected}
 							onclick={() => connectToModel(model)}
 						>
 							{#if isConnected}
-								<Icons.Star size={14} fill="currentColor" /> Default
+								<Icons.Star size={14} fill="currentColor" /> In use
+								for chat
 							{:else}
-								<Icons.Star size={14} /> Set Default
+								<Icons.Star size={14} /> Use for chat
 							{/if}
 						</button>
 						{#if existingConn}

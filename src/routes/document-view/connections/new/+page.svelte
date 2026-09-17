@@ -1,7 +1,8 @@
 <script lang="ts">
-	import { onMount, getContext } from "svelte"
+	import { getContext } from "svelte"
 	import { goto } from "$app/navigation"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { announce } from "$lib/client/accessibility/state.svelte"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
@@ -50,7 +51,6 @@
 		usesCompletionTemplate(wireModeFor(type, undefined))
 	)
 	let baseUrl = $state(CONNECTION_DEFAULTS[CONNECTION_TYPE.OLLAMA].baseUrl)
-	let model = $state("")
 	let apiKey = $state("")
 	let tokenCounter = $state(TokenCounterOptions.ESTIMATE)
 	let promptFormat = $state(PromptFormats.VICUNA)
@@ -60,7 +60,6 @@
 	let error = $state("")
 	let saving = $state(false)
 
-	let availableModels: any[] = $state([])
 	let testResult: { ok: boolean; error?: string } | null = $state(null)
 	let testing = $state(false)
 
@@ -71,7 +70,6 @@
 			tokenCounter = defaults.tokenCounter || TokenCounterOptions.ESTIMATE
 			promptFormat = defaults.promptFormat || PromptFormats.VICUNA
 		}
-		availableModels = []
 		testResult = null
 	}
 
@@ -80,7 +78,6 @@
 			name: name.trim(),
 			type,
 			baseUrl: baseUrl.trim(),
-			model: model.trim(),
 			tokenCounter,
 			promptFormat,
 			// NULL rather than "" for a blank one, so "never wrote a note" has
@@ -88,12 +85,6 @@
 			notes: normalizeNote(notes),
 			extraJson: apiKey.trim() ? { apiKey: apiKey.trim() } : {}
 		}
-	}
-
-	function fetchModels() {
-		socket.emit("connections:refreshModels", {
-			connection: buildConnection()
-		})
 	}
 
 	function testConnection() {
@@ -121,17 +112,6 @@
 		})
 	}
 
-	function handleConnectionsRefreshModels(msg: any) {
-		availableModels = msg.models || []
-		if (msg.error) {
-			error = msg.error
-			announce(error)
-		} else {
-			announce(
-				`${availableModels.length} model${availableModels.length === 1 ? "" : "s"} found.`
-			)
-		}
-	}
 	function handleConnectionsTest(msg: Sockets.Connections.Test.Response) {
 		testing = false
 		testResult = { ok: msg.ok, error: msg.error ?? undefined }
@@ -151,21 +131,18 @@
 		announce(error)
 	}
 
-	onMount(() => {
-		socket.on("connections:refreshModels", handleConnectionsRefreshModels)
-		socket.on("connections:test", handleConnectionsTest)
-		socket.on("connections:create", handleConnectionsCreate)
-		socket.on("connections:create:error", handleConnectionsCreateError)
-		return () => {
-			socket.off(
-				"connections:refreshModels",
-				handleConnectionsRefreshModels
-			)
-			socket.off("connections:test", handleConnectionsTest)
-			socket.off("connections:create", handleConnectionsCreate)
-			socket.off("connections:create:error", handleConnectionsCreateError)
-		}
-	})
+	// Standing interest in the three replies this form's buttons earn. Nothing
+	// is asked for at mount — the form has nothing to load — so there is no
+	// emitting effect for these declarations to sit above.
+	useInterest<"connections:test">("connections:test", handleConnectionsTest)
+	useInterest<"connections:create">(
+		"connections:create",
+		handleConnectionsCreate
+	)
+	useInterest<"connections:create:error">(
+		"connections:create:error",
+		handleConnectionsCreateError
+	)
 </script>
 
 <svelte:head>
@@ -253,33 +230,14 @@
 			/>
 		</div>
 
-		<div class="a11y-field">
-			<label for="a11y-conn-model">Model</label>
-			<input
-				id="a11y-conn-model"
-				type="text"
-				list="a11y-conn-model-list"
-				bind:value={model}
-				disabled={saving}
-			/>
-			<datalist id="a11y-conn-model-list">
-				{#each availableModels as m}
-					<option value={m.model || m.name || m.id}>
-						{m.name || m.model || m.id}
-					</option>
-				{/each}
-			</datalist>
-		</div>
+		<p class="a11y-hint">
+			An endpoint holds no model of its own. Its models are read from the
+			service once it is saved, and which model is used for what is set on
+			the <a href="/admin/defaults">Defaults page</a>
+			.
+		</p>
 
 		<div class="a11y-list-item-actions">
-			<button
-				type="button"
-				class="a11y-btn a11y-btn-secondary a11y-btn-small"
-				onclick={fetchModels}
-				disabled={saving}
-			>
-				Fetch Available Models
-			</button>
 			<button
 				type="button"
 				class="a11y-btn a11y-btn-secondary a11y-btn-small"

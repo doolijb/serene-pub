@@ -4,16 +4,19 @@
 	 * type, primary variant, config selections, actions. Changelist here;
 	 * New and Edit go to dedicated change pages.
 	 */
-	import { getContext, onDestroy, onMount } from "svelte"
+	import { getContext, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { goto } from "$app/navigation"
-	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { getAdminInterestContext } from "$lib/client/sockets/interest.svelte"
 	import AdminList, {
 		type AdminColumn
 	} from "$lib/client/components/admin/AdminList.svelte"
 
 	const userCtx: { user: SelectUser } = getContext("userCtx")
-	const socket = useTypedSocket()
+	// The admin-only half of the registry (plan ruling 6b): `sessionGenres:`
+	// is a RESTRICTED interest family, and this context exists only inside the
+	// admin tree, which already turns non-admins away.
+	const interest = getAdminInterestContext()
 
 	type Row = Sockets.SessionAdmin.PresetRow
 	let rows: Row[] = $state([])
@@ -29,18 +32,24 @@
 	}
 
 	onMount(() => {
-		if (!userCtx.user?.isAdmin) {
-			goto("/")
-			return
-		}
-		socket.on("sessionPresets:list", onPresets)
-		socket.on("sessionGenres:list", onTypes)
-		socket.emit("sessionPresets:list", {})
-		socket.emit("sessionGenres:list", {})
+		if (!userCtx.user?.isAdmin) goto("/")
 	})
-	onDestroy(() => {
-		socket.off("sessionPresets:list", onPresets)
-		socket.off("sessionGenres:list", onTypes)
+
+	/**
+	 * The two lists this changelist joins, each asked for and listened for in
+	 * one. Both BARE — a preset and a genre are the instance's — and both
+	 * STANDING, because the server re-emits each as a cascade after every
+	 * write on this page and on the change pages.
+	 */
+	$effect(() => {
+		if (!userCtx.user?.isAdmin) return
+		const releases = [
+			interest.requestWithInterest("sessionPresets:list", {}, onPresets),
+			interest.requestWithInterest("sessionGenres:list", {}, onTypes)
+		]
+		return () => {
+			for (const release of releases) release()
+		}
 	})
 
 	const typeName = (slug: string) =>

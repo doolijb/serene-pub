@@ -24,6 +24,7 @@ import {
 } from "../utils/characterCardParser"
 import { autoEnqueueCharacter } from "$lib/server/embedding/vectorizationQueue"
 import { canViewCharacter } from "$lib/server/utils/sessionAccess"
+import { markCharacterAsPersona } from "$lib/server/utils/markCharacterAsPersona"
 import {
 	resolveCardSource,
 	cachedSearch,
@@ -113,41 +114,131 @@ async function processCharacterTags(
 	}
 }
 
+/**
+ * The character list, as every surface that shows one reads it.
+ *
+ * The one query behind the `characters:list` request AND behind the four
+ * cascades that re-send the list after a write, so a refresh can never be a
+ * different read from the request's own — and so those cascades can hand it
+ * over LAZILY (socket-interest plan, ruling 4). It is a findMany over every
+ * character this user has, each with its avatar row and its tag joins, so a
+ * create, a rename, a delete or an import made from a surface that shows no
+ * character list pays for none of it. Skipping the emit alone would save
+ * nothing; the query is the cost.
+ */
+export async function buildCharactersList(
+	userId: number
+): Promise<Sockets.Characters.List.Response> {
+	const characterList = await db.query.characters.findMany({
+		columns: {
+			id: true,
+			name: true,
+			nickname: true,
+			avatarMediaId: true,
+			isFavorite: true,
+			description: true,
+			creatorNotes: true,
+			embeddingModel: true,
+			// The persona picker and the folder-grouped library are reads of
+			// THIS list, not of a second family — so these three ride the row
+			// rather than costing a query each.
+			isPersona: true,
+			isDefaultPersona: true,
+			folderId: true
+		},
+		with: {
+			avatarMedia: {
+				columns: { uuid: true, rev: true, frame: true }
+			},
+			characterTags: {
+				with: {
+					tag: true
+				}
+			}
+		},
+		where: (c, { and, eq }) =>
+			and(eq(c.userId, userId), eq(c.isDeleted, false)),
+		orderBy: (c, { asc }) => asc(c.id)
+	})
+	return { characterList }
+}
+
 export const charactersList: Handler<
 	Sockets.Characters.List.Params,
 	Sockets.Characters.List.Response
 > = {
 	event: "characters:list",
 	handler: async (socket, params, emitToUser) => {
-		const characterList = await db.query.characters.findMany({
-			columns: {
-				id: true,
-				name: true,
-				nickname: true,
-				avatarMediaId: true,
-				isFavorite: true,
-				description: true,
-				creatorNotes: true,
-				embeddingModel: true
-			},
-			with: {
-				avatarMedia: {
-					columns: { uuid: true, rev: true, frame: true }
-				},
-				characterTags: {
-					with: {
-						tag: true
-					}
-				}
-			},
-			where: (c, { and, eq }) =>
-				and(eq(c.userId, socket.user!.id), eq(c.isDeleted, false)),
-			orderBy: (c, { asc }) => asc(c.id)
-		})
-		const res: Sockets.Characters.List.Response = { characterList }
+		const res = await buildCharactersList(socket.user!.id)
 		emitToUser("characters:list", res)
 		return res
 	}
+}
+
+/**
+ * One character, as the panel that opened it reads it.
+ *
+ * Shared by the `characters:get` request and the two cascades that re-send the
+ * character after a write it cannot describe (a gallery upload, an avatar
+ * pick), so the push and the request can never be two different reads — and so
+ * those cascades can be LAZY (socket-interest plan, ruling 4): the row, its
+ * avatar, its tags, its owner and the `canViewCharacter` check behind it are
+ * never paid for when no panel is open to receive them.
+ *
+ * ⚠ The not-found reply carries `characterId`, the way `sessions:get`'s does.
+ * There is no character for a scope extractor to read an id off, so without it
+ * the payload would have no **interest scope** and only a BARE `characters:get`
+ * key — one that matches every OTHER character's reply too — could receive it.
+ */
+async function buildCharacterGet(
+	userId: number,
+	characterId: number
+): Promise<Sockets.Characters.Get.Response> {
+	const character = await db.query.characters.findFirst({
+		where: (c, { and, eq }) =>
+			and(eq(c.id, characterId), eq(c.isDeleted, false)),
+		// Unlike buildCharactersList (which already allowlists columns), this
+		// findFirst had no columns restriction and spread the full row —
+		// including the raw embedding vector — into the response.
+		columns: {
+			embedding: false,
+			embeddingModel: false,
+			vectorizedAt: false
+		},
+		with: {
+			avatarMedia: {
+				columns: { uuid: true, rev: true, frame: true }
+			},
+			characterTags: {
+				with: {
+					tag: true
+				}
+			},
+			user: {
+				columns: { username: true, displayName: true }
+			}
+		}
+	})
+
+	const isOwner = character?.userId === userId
+	if (
+		character &&
+		(isOwner || (await canViewCharacter(character.id, userId)))
+	) {
+		// Transform the character data to include tags as string array
+		const characterWithTags = {
+			...character,
+			tags: character.characterTags.map((ct) => ct.tag.name),
+			isOwner,
+			ownerName:
+				character.user?.displayName || character.user?.username || null
+		}
+		const { characterTags, user, ...characterWithoutTags } =
+			characterWithTags
+
+		return { character: characterWithoutTags }
+	}
+	return { character: null, characterId }
 }
 
 export const charactersGet: Handler<
@@ -156,58 +247,7 @@ export const charactersGet: Handler<
 > = {
 	event: "characters:get",
 	handler: async (socket, params, emitToUser) => {
-		const userId = socket.user!.id
-		const character = await db.query.characters.findFirst({
-			where: (c, { and, eq }) =>
-				and(eq(c.id, params.id), eq(c.isDeleted, false)),
-			// Unlike charactersList (which already allowlists columns), this
-			// findFirst had no columns restriction and spread the full row —
-			// including the raw embedding vector — into the response.
-			columns: {
-				embedding: false,
-				embeddingModel: false,
-				vectorizedAt: false
-			},
-			with: {
-				avatarMedia: {
-					columns: { uuid: true, rev: true, frame: true }
-				},
-				characterTags: {
-					with: {
-						tag: true
-					}
-				},
-				user: {
-					columns: { username: true, displayName: true }
-				}
-			}
-		})
-
-		const isOwner = character?.userId === userId
-		if (
-			character &&
-			(isOwner || (await canViewCharacter(character.id, userId)))
-		) {
-			// Transform the character data to include tags as string array
-			const characterWithTags = {
-				...character,
-				tags: character.characterTags.map((ct) => ct.tag.name),
-				isOwner,
-				ownerName:
-					character.user?.displayName ||
-					character.user?.username ||
-					null
-			}
-			const { characterTags, user, ...characterWithoutTags } =
-				characterWithTags
-
-			const res: Sockets.Characters.Get.Response = {
-				character: characterWithoutTags
-			}
-			emitToUser("characters:get", res)
-			return res
-		}
-		const res: Sockets.Characters.Get.Response = { character: null }
+		const res = await buildCharacterGet(socket.user!.id, params.id)
 		emitToUser("characters:get", res)
 		return res
 	}
@@ -263,10 +303,42 @@ export const charactersCreate: Handler<
 			delete (data as any).uuid
 			delete (data as any).id
 
+			// `isDefaultPersona` cannot ride the INSERT: the partial unique
+			// index admits one per user, so a create that claims the default
+			// while another row still holds it is refused outright. Taken out
+			// here and applied by the same transaction `setDefaultPersona`
+			// uses — the setup wizard's starter persona arrives exactly this
+			// way, with both flags set on a create.
+			const makeDefault = (data as any).isDefaultPersona === true
+			delete (data as any).isDefaultPersona
+
+			// `folderId`: ownership-checked, same rule as `characters:update`.
+			if (data.folderId != null) {
+				const folder = await db.query.characterFolders.findFirst({
+					where: (f, { and, eq }) =>
+						and(
+							eq(f.id, data.folderId as number),
+							eq(f.userId, socket.user!.id)
+						),
+					columns: { id: true }
+				})
+				if (!folder) data.folderId = null
+			}
+
 			const [character] = await db
 				.insert(schema.characters)
-				.values({ ...data, userId: socket.user!.id })
+				.values({
+					...data,
+					...(makeDefault ? { isPersona: true } : {}),
+					userId: socket.user!.id
+				})
 				.returning()
+
+			if (makeDefault) {
+				await setDefaultPersona(character.id, socket.user!.id)
+				character.isPersona = true
+				character.isDefaultPersona = true
+			}
 
 			// Process tags after character creation
 			if (tags.length > 0) {
@@ -283,7 +355,12 @@ export const charactersCreate: Handler<
 			autoEnqueueCharacter(character.id, character.name).catch(
 				console.error
 			)
-			await charactersList.handler(socket, {}, emitToUser)
+			// LAZY (see `buildCharactersList`): with no character list open
+			// anywhere, this create pays for no re-list. Awaited so the refreshed
+			// list still lands before the reply, exactly as it did eagerly.
+			await emitToUser("characters:list", () =>
+				buildCharactersList(socket.user!.id)
+			)
 
 			const res: Sockets.Characters.Create.Response = {
 				character: await characterForBroadcast(character.id, character)
@@ -311,6 +388,8 @@ export const charactersUpdate: Handler<
 			const id = data.id
 			const userId = socket.user!.id
 			const tags = (data as any).tags || []
+			// Absent means untouched; an empty array means remove all.
+			const tagsProvided = Array.isArray((params.character as any).tags)
 
 			// Remove fields that shouldn't be in the database update
 			if ("userId" in data) (data as any).userId = undefined
@@ -338,10 +417,38 @@ export const charactersUpdate: Handler<
 			// in an UPDATE.
 			delete (data as any).avatarMedia
 
+			// `folderId`: OWNERSHIP-CHECKED, not blocked. A folder is a shelf
+			// in the caller's own library, so naming someone else's id is not
+			// a move to honour — it files the character at the top level
+			// instead. `undefined` means "not part of this update" and is left
+			// alone; an explicit `null` is the user clearing it.
+			if (data.folderId != null) {
+				const folder = await db.query.characterFolders.findFirst({
+					where: (f, { and, eq }) =>
+						and(
+							eq(f.id, data.folderId as number),
+							eq(f.userId, userId)
+						),
+					columns: { id: true }
+				})
+				if (!folder) data.folderId = null
+			}
+
+			// `isDefaultPersona`: routed through the same transaction as
+			// `characters:setDefaultPersona`, because setting it while another
+			// row still holds it trips `characters_default_persona_unique`.
+			// Taken out of the plain UPDATE below and applied after it.
+			const makeDefault = data.isDefaultPersona === true
+			const clearDefault = data.isDefaultPersona === false
+			delete (data as any).isDefaultPersona
+
 			const [updated] = await db
 				.update(schema.characters)
 				.set({
 					...data,
+					// Setting the default also makes it a persona — a default
+					// you cannot play is not a state worth having.
+					...(makeDefault ? { isPersona: true } : {}),
 					embedding: null,
 					embeddingModel: null,
 					vectorizedAt: null
@@ -358,8 +465,21 @@ export const charactersUpdate: Handler<
 				throw new Error("Character not found or not owned by user.")
 			}
 
-			// Process tags after character update
-			await processCharacterTags(id, tags, userId)
+			if (makeDefault) await setDefaultPersona(id, userId)
+			else if (clearDefault)
+				await db
+					.update(schema.characters)
+					.set({ isDefaultPersona: false })
+					.where(
+						and(
+							eq(schema.characters.id, id),
+							eq(schema.characters.userId, userId)
+						)
+					)
+
+			// Process tags after character update. Absent means untouched; an
+			// empty array means remove all.
+			if (tagsProvided) await processCharacterTags(id, tags, userId)
 
 			if (params.avatarFile) {
 				await handleCharacterAvatarUpload({
@@ -378,7 +498,11 @@ export const charactersUpdate: Handler<
 			const res: Sockets.Characters.Update.Response = {
 				character: await characterForBroadcast(id, updated)
 			}
-			await charactersList.handler(socket, {}, emitToUser)
+			// LAZY (see `buildCharactersList`), in the order the eager cascade
+			// sent it: the refreshed list, then this handler's own reply.
+			await emitToUser("characters:list", () =>
+				buildCharactersList(userId)
+			)
 			emitToUser("characters:update", res)
 			return res
 		} catch (e: any) {
@@ -420,7 +544,8 @@ export const charactersDelete: Handler<
 				)
 			)
 
-		await charactersList.handler(socket, {}, emitToUser)
+		// LAZY (see `buildCharactersList`).
+		await emitToUser("characters:list", () => buildCharactersList(userId))
 
 		// Emit the delete event
 		const res: Sockets.Characters.Delete.Response = {
@@ -695,15 +820,25 @@ async function refreshCharacterList(
 	emitToUser: any,
 	warnings: ImportWarning[]
 ) {
-	try {
-		await charactersList.handler(socket, {}, emitToUser)
-	} catch (e: any) {
-		const reason = e?.message || String(e)
-		console.warn(`Character list refresh after import failed: ${reason}`)
-		warnings.push(
-			"The character list could not be refreshed — reload to see it."
-		)
-	}
+	// LAZY (see `buildCharactersList`), with the catch moved INSIDE the thunk
+	// so it still guards the read it was written for. A gate that never runs
+	// the thunk is not a failed refresh — there was no list to refresh — so it
+	// leaves the warnings alone, and the re-throw is what makes `emitToUser`
+	// log the failure and emit nothing rather than push a half-built list.
+	await emitToUser("characters:list", async () => {
+		try {
+			return await buildCharactersList(socket.user!.id)
+		} catch (e: any) {
+			const reason = e?.message || String(e)
+			console.warn(
+				`Character list refresh after import failed: ${reason}`
+			)
+			warnings.push(
+				"The character list could not be refreshed — reload to see it."
+			)
+			throw e
+		}
+	})
 }
 
 export const charactersImportCard: Handler<
@@ -890,9 +1025,14 @@ export const charactersSearchLibrary: Handler<
 					const userId = socket.user!.id
 					const sourceId = params.source ?? "github-serenepub"
 					const source = resolveCardSource(sourceId)
-					if (!source.supports("character")) {
+					// `catalog` names the REMOTE library's shelf, not our
+					// table — a source still publishes characters and personas
+					// separately, and `supports()` still answers per shelf.
+					const kind =
+						params.catalog === "personas" ? "persona" : "character"
+					if (!source.supports(kind)) {
 						throw new CardSourceUnavailableError(
-							`${source.label} does not support browsing characters`
+							`${source.label} does not support browsing ${kind === "persona" ? "personas" : "characters"}`
 						)
 					}
 
@@ -900,7 +1040,7 @@ export const charactersSearchLibrary: Handler<
 					const { items, hasMore, nextOffset } = await cachedSearch(
 						sourceId,
 						{
-							kind: "character",
+							kind,
 							searchTerm: params.searchTerm,
 							category: params.category,
 							nsfw,
@@ -962,11 +1102,13 @@ export const charactersImportFromLibrary: Handler<
 > = {
 	event: "characters:importFromLibrary",
 	handler: async (socket, params, emitToUser) => {
+		const fromPersonaCatalog = params.catalog === "personas"
 		try {
 			const source = resolveCardSource(params.source)
-			if (!source.supports("character")) {
+			const kind = fromPersonaCatalog ? "persona" : "character"
+			if (!source.supports(kind)) {
 				throw new CardSourceUnavailableError(
-					`${source.label} does not support browsing characters`
+					`${source.label} does not support browsing ${fromPersonaCatalog ? "personas" : "characters"}`
 				)
 			}
 			const buffer = await source.getCardBytes(params.ref, {
@@ -991,6 +1133,17 @@ export const charactersImportFromLibrary: Handler<
 				)
 			}
 
+			// A card off the PERSONA shelf lands as one of your personas: the
+			// user browsed a persona catalogue, which is the same statement
+			// that attaching one to a session makes.
+			if (fromPersonaCatalog) {
+				await markCharacterAsPersona(importResult.character.id)
+				importResult.character.isPersona = true
+				await emitToUser("characters:list", () =>
+					buildCharactersList(socket.user!.id)
+				)
+			}
+
 			const res: Sockets.Characters.ImportFromLibrary.Response = {
 				character: importResult.character,
 				book: importResult.book
@@ -1004,7 +1157,7 @@ export const charactersImportFromLibrary: Handler<
 					error instanceof CardSourceUnavailableError ||
 					error instanceof CardSourceRateLimitedError
 						? error.message
-						: "Failed to import character from library"
+						: `Failed to import ${fromPersonaCatalog ? "persona" : "character"} from library`
 			})
 			throw error
 		}
@@ -1154,6 +1307,27 @@ export const charactersExportCard: Handler<
 	}
 }
 
+/**
+ * One character's gallery, as the panel that opened it reads it.
+ *
+ * Shared by the `characters:listGallery` request, the two cascades that re-send
+ * the gallery after an upload or a delete, and the reorder that answers WITH
+ * it — so the four can never disagree about what the gallery holds. The two
+ * cascades hand it over lazily (socket-interest plan, ruling 4); the reorder
+ * cannot, because its own reply IS this payload.
+ *
+ * The response carries `characterId` so a client with two gallery panels open
+ * can tell which one a broadcast is for, and so the interest scope has an id to
+ * key off.
+ */
+async function buildCharactersGallery(
+	userId: number,
+	characterId: number
+): Promise<Sockets.Characters.ListGallery.Response> {
+	const images = await listCharacterGallery({ characterId, userId })
+	return { images, characterId }
+}
+
 export const charactersListGallery: Handler<
 	Sockets.Characters.ListGallery.Params,
 	Sockets.Characters.ListGallery.Response
@@ -1161,15 +1335,10 @@ export const charactersListGallery: Handler<
 	event: "characters:listGallery",
 	handler: async (socket, params, emitToUser) => {
 		try {
-			const userId = socket.user!.id
-			const images = await listCharacterGallery({
-				characterId: params.characterId,
-				userId
-			})
-			const res: Sockets.Characters.ListGallery.Response = {
-				images,
-				characterId: params.characterId
-			}
+			const res = await buildCharactersGallery(
+				socket.user!.id,
+				params.characterId
+			)
 			emitToUser("characters:listGallery", res)
 			return res
 		} catch (error: any) {
@@ -1209,15 +1378,19 @@ export const charactersUploadGalleryImage: Handler<
 				characterId: params.characterId
 			}
 			emitToUser("characters:uploadGalleryImage", res)
-			await charactersListGallery.handler(
-				socket,
-				{ characterId: params.characterId },
-				emitToUser
+			// Both LAZY (socket-interest plan, ruling 4), in the order the eager
+			// cascades sent them.
+			//
+			// ⚠ A re-read that THROWS is logged by `emitToUser` and emits
+			// nothing — no `characters:listGallery:error`, and nothing raised
+			// into this handler's catch. That is right for a push the caller's
+			// reply does not depend on: the image is already stored, so a failed
+			// refresh must not report the upload as failed.
+			await emitToUser("characters:listGallery", () =>
+				buildCharactersGallery(userId, params.characterId)
 			)
-			await charactersGet.handler(
-				socket,
-				{ id: params.characterId },
-				emitToUser
+			await emitToUser("characters:get", () =>
+				buildCharacterGet(userId, params.characterId)
 			)
 			return res
 		} catch (error: any) {
@@ -1256,10 +1429,10 @@ export const charactersDeleteGalleryImage: Handler<
 				characterId: params.characterId
 			}
 			emitToUser("characters:deleteGalleryImage", res)
-			await charactersListGallery.handler(
-				socket,
-				{ characterId: params.characterId },
-				emitToUser
+			// LAZY, and a failed re-read is swallowed — see the note in
+			// `charactersUploadGalleryImage` above.
+			await emitToUser("characters:listGallery", () =>
+				buildCharactersGallery(userId, params.characterId)
 			)
 			return res
 		} catch (error: any) {
@@ -1290,16 +1463,87 @@ export const charactersReorderGallery: Handler<
 			mediaIds: params.mediaIds
 		})
 
-		const listRes = await charactersListGallery.handler(
-			socket,
-			{ characterId: params.characterId },
-			emitToUser
-		)
+		// EAGER, deliberately: this handler's own reply IS the refreshed
+		// gallery, so a thunk could only skip the `characters:listGallery`
+		// emit, never the read — and skipping an emit alone saves nothing.
+		// Built once and sent twice, which is what keeps the two from
+		// disagreeing.
+		const listRes = await buildCharactersGallery(userId, params.characterId)
+		emitToUser("characters:listGallery", listRes)
 		const res: Sockets.Characters.ReorderGallery.Response = listRes
 		emitToUser("characters:reorderGallery", res)
 		return res
 	}
 }
+
+/**
+ * Clear the caller's current default persona and set this one, in ONE
+ * transaction.
+ *
+ * `characters_default_persona_unique` is a partial unique index over
+ * `user_id`, so the clear and the set have to be the same statement pair or a
+ * concurrent read of the table between them sees two defaults — and a set that
+ * ran first would simply be refused. Scoped to this user only: a bare
+ * "WHERE is_default_persona" would clear every account's default on a
+ * multi-user instance, not just the caller's.
+ *
+ * Also flags the character as a persona, via the one writer of that flag.
+ */
+async function setDefaultPersona(characterId: number, userId: number) {
+	await db.transaction(async (tx) => {
+		await tx
+			.update(schema.characters)
+			.set({ isDefaultPersona: false })
+			.where(
+				and(
+					eq(schema.characters.userId, userId),
+					eq(schema.characters.isDefaultPersona, true)
+				)
+			)
+		await tx
+			.update(schema.characters)
+			.set({ isDefaultPersona: true, isPersona: true })
+			.where(
+				and(
+					eq(schema.characters.id, characterId),
+					eq(schema.characters.userId, userId)
+				)
+			)
+	})
+}
+
+export const charactersSetDefaultPersona: Handler<
+	Sockets.Characters.SetDefaultPersona.Params,
+	Sockets.Characters.SetDefaultPersona.Response
+> = {
+	event: "characters:setDefaultPersona",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const character = await db.query.characters.findFirst({
+			where: (c, { and, eq }) =>
+				and(eq(c.id, params.characterId), eq(c.userId, userId)),
+			columns: { id: true }
+		})
+		if (!character)
+			throw new Error("Character not found or access denied")
+
+		await setDefaultPersona(params.characterId, userId)
+
+		const res: Sockets.Characters.SetDefaultPersona.Response = {
+			success: true
+		}
+		emitToUser("characters:setDefaultPersona", res)
+		// LAZY (see `buildCharactersList`): the list is the only thing that
+		// shows which character is the default, so a view that is not showing
+		// one needs no re-read.
+		await emitToUser("characters:list", () => buildCharactersList(userId))
+		return res
+	}
+}
+
+// `characters:setFolder` lives in `./characterFolders.ts` with the rest of the
+// folder family: it cascades BOTH lists, and putting it here instead would make
+// the two modules import each other.
 
 export const charactersSetAvatar: Handler<
 	Sockets.Characters.SetAvatar.Params,
@@ -1355,13 +1599,20 @@ export const charactersSetAvatar: Handler<
 		emitToUser("characters:setAvatar", res)
 		// The session views listen for `characters:update`, not for this
 		// event — and picking a gallery image changes the face they render.
-		emitToUser("characters:update", {
-			character: broadcast
-		} satisfies Sockets.Characters.Update.Response)
-		await charactersGet.handler(
-			socket,
-			{ id: params.characterId },
-			emitToUser
+		//
+		// Lazy for the emit alone: the payload is already in hand, so there is
+		// no query to skip here — only the push itself, which is dropped when
+		// no view holds `characters:update`.
+		await emitToUser(
+			"characters:update",
+			() =>
+				({
+					character: broadcast
+				}) satisfies Sockets.Characters.Update.Response
+		)
+		// LAZY (see `buildCharacterGet`): the character panel's re-read.
+		await emitToUser("characters:get", () =>
+			buildCharacterGet(userId, params.characterId)
 		)
 		return res
 	}
@@ -1392,4 +1643,5 @@ export function registerCharacterHandlers(
 	register(socket, charactersDeleteGalleryImage, emitToUser)
 	register(socket, charactersReorderGallery, emitToUser)
 	register(socket, charactersSetAvatar, emitToUser)
+	register(socket, charactersSetDefaultPersona, emitToUser)
 }

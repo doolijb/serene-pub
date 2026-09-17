@@ -8,6 +8,105 @@ import { isAndroidWrapper } from "$lib/server/utils"
 import { isLocalEmbeddingSupported } from "$lib/server/embedding"
 import { assertSupportedLanguage } from "./language"
 
+/**
+ * The whole system-settings view, as one function, so every cascade that
+ * refreshes it — the eight writes below, and two in `samplingConfigs.ts` — can
+ * be handed the BUILDER rather than the handler.
+ *
+ * It is five reads plus an embedding-target resolution and the capability
+ * defaults, and `systemSettings:get` is gated: a write made from a surface that
+ * is not showing system settings pays for none of it. Skipping the emit alone
+ * would save nothing; the queries are the cost.
+ *
+ * ⚠ Throws rather than emitting `systemSettings:get:error`. The error emit stays
+ * on the handler, which is the surface a client actually asked; a cascade's
+ * failure is `evaluate`'s to log, and must not push an error at a client whose
+ * own request succeeded.
+ */
+export async function buildSystemSettingsGet(): Promise<Sockets.SystemSettings.Get.Response> {
+	// koboldCppManagedAdminPassword and the CharaVault credential fields
+	// are never read client-side (only used server-side) — exclude them
+	// here regardless of caller so they're never handed to any
+	// authenticated user's browser, not just hidden by client UI. The
+	// CharaVault connection status is surfaced separately via the
+	// admin-only cardSources:charaVault:status event instead.
+	const [
+		settings,
+		ollamaSettings,
+		koboldCppSettings,
+		koboldCppAdminPasswordRow
+	] = await Promise.all([
+		db.query.systemSettings.findFirst({
+			where: eq(schema.systemSettings.id, 1),
+			columns: {
+				id: false,
+				charaVaultEmail: false,
+				charaVaultEncryptedToken: false,
+				charaVaultTokenIv: false,
+				charaVaultTokenAuthTag: false
+			}
+		}),
+		db.query.ollamaSettings.findFirst({
+			where: eq(schema.ollamaSettings.id, 1),
+			columns: { id: false }
+		}),
+		db.query.koboldCppSettings.findFirst({
+			where: eq(schema.koboldCppSettings.id, 1),
+			columns: { id: false, koboldCppManagedAdminPassword: false }
+		}),
+		// Separate, minimal query just for presence -- the password value
+		// itself must never enter a variable that could end up in a
+		// response object, even transiently.
+		db.query.koboldCppSettings.findFirst({
+			where: eq(schema.koboldCppSettings.id, 1),
+			columns: { koboldCppManagedAdminPassword: true }
+		})
+	])
+
+	if (!settings) throw new Error("System settings not found")
+
+	const res: Sockets.SystemSettings.Get.Response = {
+		systemSettings: settings as any,
+		ollamaSettings: (ollamaSettings ?? {}) as any,
+		koboldCppSettings: {
+			...(koboldCppSettings ?? {}),
+			koboldCppManagedAdminPasswordSet:
+				!!koboldCppAdminPasswordRow?.koboldCppManagedAdminPassword
+		} as any,
+		isAndroidWrapper: isAndroidWrapper(),
+		localEmbeddingsSupported: await isLocalEmbeddingSupported(),
+		/**
+		 * The identity every embedded row's `embedding_model` is
+		 * compared against, so a "vectors up to date / stale" badge can
+		 * be rendered without a second round trip.
+		 *
+		 * ⚠ Derived from the STAR, not read off a column. It was
+		 * `system_settings.embedding_model_name`, which meant "the
+		 * active model" and had to be written by four handlers in step
+		 * with two other columns. Sent alongside the row rather than
+		 * inside it for the same reason `capabilityDefaults` is: it is
+		 * not a setting, it is a resolution.
+		 *
+		 * ⚠ For a host-backed connection this string is
+		 * `api::<baseUrl>::<model>`, so it names a base URL — and this
+		 * event has no role gate. That exposure is unchanged from the
+		 * column it replaces (which carried the same composite string
+		 * to everyone) and is carried forward deliberately rather than
+		 * widened: redacting it would blank the badge for every
+		 * non-admin on a shared instance.
+		 */
+		activeEmbeddingModel:
+			(await resolveEmbeddingTarget(db))?.modelId ?? null,
+		// The instance default per capability (0175). It used to be two
+		// columns on `system_settings` and rode along with the row; now it
+		// is its own table, so it is fetched and sent explicitly — the
+		// sidebars need it to star the default and to enable Set Default.
+		capabilityDefaults: await capabilityDefaults(db)
+	}
+
+	return res
+}
+
 export const systemSettingsGet: Handler<
 	Sockets.SystemSettings.Get.Params,
 	Sockets.SystemSettings.Get.Response
@@ -15,86 +114,7 @@ export const systemSettingsGet: Handler<
 	event: "systemSettings:get",
 	handler: async (socket, params, emitToUser) => {
 		try {
-			// koboldCppManagedAdminPassword and the CharaVault credential fields
-			// are never read client-side (only used server-side) — exclude them
-			// here regardless of caller so they're never handed to any
-			// authenticated user's browser, not just hidden by client UI. The
-			// CharaVault connection status is surfaced separately via the
-			// admin-only cardSources:charaVault:status event instead.
-			const [
-				settings,
-				ollamaSettings,
-				koboldCppSettings,
-				koboldCppAdminPasswordRow
-			] = await Promise.all([
-				db.query.systemSettings.findFirst({
-					where: eq(schema.systemSettings.id, 1),
-					columns: {
-						id: false,
-						charaVaultEmail: false,
-						charaVaultEncryptedToken: false,
-						charaVaultTokenIv: false,
-						charaVaultTokenAuthTag: false
-					}
-				}),
-				db.query.ollamaSettings.findFirst({
-					where: eq(schema.ollamaSettings.id, 1),
-					columns: { id: false }
-				}),
-				db.query.koboldCppSettings.findFirst({
-					where: eq(schema.koboldCppSettings.id, 1),
-					columns: { id: false, koboldCppManagedAdminPassword: false }
-				}),
-				// Separate, minimal query just for presence -- the password value
-				// itself must never enter a variable that could end up in a
-				// response object, even transiently.
-				db.query.koboldCppSettings.findFirst({
-					where: eq(schema.koboldCppSettings.id, 1),
-					columns: { koboldCppManagedAdminPassword: true }
-				})
-			])
-
-			if (!settings) throw new Error("System settings not found")
-
-			const res: Sockets.SystemSettings.Get.Response = {
-				systemSettings: settings as any,
-				ollamaSettings: (ollamaSettings ?? {}) as any,
-				koboldCppSettings: {
-					...(koboldCppSettings ?? {}),
-					koboldCppManagedAdminPasswordSet:
-						!!koboldCppAdminPasswordRow?.koboldCppManagedAdminPassword
-				} as any,
-				isAndroidWrapper: isAndroidWrapper(),
-				localEmbeddingsSupported: await isLocalEmbeddingSupported(),
-				/**
-				 * The identity every embedded row's `embedding_model` is
-				 * compared against, so a "vectors up to date / stale" badge can
-				 * be rendered without a second round trip.
-				 *
-				 * ⚠ Derived from the STAR, not read off a column. It was
-				 * `system_settings.embedding_model_name`, which meant "the
-				 * active model" and had to be written by four handlers in step
-				 * with two other columns. Sent alongside the row rather than
-				 * inside it for the same reason `capabilityDefaults` is: it is
-				 * not a setting, it is a resolution.
-				 *
-				 * ⚠ For a host-backed connection this string is
-				 * `api::<baseUrl>::<model>`, so it names a base URL — and this
-				 * event has no role gate. That exposure is unchanged from the
-				 * column it replaces (which carried the same composite string
-				 * to everyone) and is carried forward deliberately rather than
-				 * widened: redacting it would blank the badge for every
-				 * non-admin on a shared instance.
-				 */
-				activeEmbeddingModel:
-					(await resolveEmbeddingTarget(db))?.modelId ?? null,
-				// The instance default per capability (0175). It used to be two
-				// columns on `system_settings` and rode along with the row; now it
-				// is its own table, so it is fetched and sent explicitly — the
-				// sidebars need it to star the default and to enable Set Default.
-				capabilityDefaults: await capabilityDefaults(db)
-			}
-
+			const res = await buildSystemSettingsGet()
 			emitToUser("systemSettings:get", res)
 			return res
 		} catch (error: any) {
@@ -126,7 +146,11 @@ export const systemSettingsUpdateScriptsEnabled: Handler<
 				enabled: params.enabled
 			}
 			emitToUser("systemSettings:updateScriptsEnabled", res)
-			await systemSettingsGet.handler(socket, {}, emitToUser)
+			// Lazy: only a surface actually showing system settings wants them
+			// re-read. See `buildSystemSettingsGet`.
+			await emitToUser("systemSettings:get", () =>
+				buildSystemSettingsGet()
+			)
 			return res
 		} catch (error: any) {
 			console.error("Update scripts enabled error:", error)
@@ -156,7 +180,10 @@ export const systemSettingsUpdateContextDebuggingEnabled: Handler<
 					enabled: params.enabled
 				}
 			emitToUser("systemSettings:updateContextDebuggingEnabled", res)
-			await systemSettingsGet.handler(socket, {}, emitToUser)
+			// Lazy — see `buildSystemSettingsGet`.
+			await emitToUser("systemSettings:get", () =>
+				buildSystemSettingsGet()
+			)
 			return res
 		} catch (error: any) {
 			console.error("Update context debugging enabled error:", error)
@@ -192,7 +219,10 @@ export const systemSettingsUpdateLegacyConfigsVisible: Handler<
 					visible: params.visible
 				}
 			emitToUser("systemSettings:updateLegacyConfigsVisible", res)
-			await systemSettingsGet.handler(socket, {}, emitToUser)
+			// Lazy — see `buildSystemSettingsGet`.
+			await emitToUser("systemSettings:get", () =>
+				buildSystemSettingsGet()
+			)
 			return res
 		} catch (error: any) {
 			console.error("Update legacy configs visible error:", error)
@@ -275,7 +305,10 @@ export const systemSettingsUpdateAccountsEnabled: Handler<
 				enabled: params.enabled
 			}
 			emitToUser("systemSettings:updateAccountsEnabled", res)
-			await systemSettingsGet.handler(socket, {}, emitToUser)
+			// Lazy — see `buildSystemSettingsGet`.
+			await emitToUser("systemSettings:get", () =>
+				buildSystemSettingsGet()
+			)
 
 			// Every socket that connected while accounts were disabled was
 			// auto-attached to the fallback admin with no token (auth.ts) —
@@ -338,7 +371,10 @@ export const systemSettingsUpdateDefaultLanguage: Handler<
 				language
 			}
 			emitToUser("systemSettings:updateDefaultLanguage", res)
-			await systemSettingsGet.handler(socket, {}, emitToUser)
+			// Lazy — see `buildSystemSettingsGet`.
+			await emitToUser("systemSettings:get", () =>
+				buildSystemSettingsGet()
+			)
 			return res
 		} catch (error: any) {
 			console.error("Update default language error:", error)
@@ -416,7 +452,10 @@ export const systemSettingsUpdateAutoTranslate: Handler<
 				success: true
 			}
 			emitToUser("systemSettings:updateAutoTranslate", res)
-			await systemSettingsGet.handler(socket, {}, emitToUser)
+			// Lazy — see `buildSystemSettingsGet`.
+			await emitToUser("systemSettings:get", () =>
+				buildSystemSettingsGet()
+			)
 			return res
 		} catch (error: any) {
 			console.error("Update auto-translate error:", error)
@@ -478,7 +517,10 @@ export const systemSettingsUpdateBackupSettings: Handler<
 				backupIncludeUserFiles: row?.backupIncludeUserFiles ?? false
 			}
 			emitToUser("systemSettings:updateBackupSettings", res)
-			await systemSettingsGet.handler(socket, {}, emitToUser)
+			// Lazy — see `buildSystemSettingsGet`.
+			await emitToUser("systemSettings:get", () =>
+				buildSystemSettingsGet()
+			)
 			return res
 		} catch (error: any) {
 			console.error("Update backup settings error:", error)
@@ -549,7 +591,8 @@ export const systemSettingsUpdateRequireTwoFactor: Handler<
 			success: true
 		}
 		emitToUser("systemSettings:updateRequireTwoFactor", res)
-		await systemSettingsGet.handler(socket, {}, emitToUser)
+		// Lazy — see `buildSystemSettingsGet`.
+		await emitToUser("systemSettings:get", () => buildSystemSettingsGet())
 		return res
 	}
 }

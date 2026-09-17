@@ -2,7 +2,8 @@
 	import * as Icons from "@lucide/svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
-	import { onMount, onDestroy, getContext } from "svelte"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
+	import { onMount, getContext } from "svelte"
 	import OllamaIcon from "../icons/OllamaIcon.svelte"
 
 	interface OllamaModel {
@@ -104,10 +105,6 @@
 		return new Date(dateString).toLocaleDateString()
 	}
 
-	// Named so `off` can name them too. A bare `socket.off("ollama:setBaseUrl")`
-	// removes EVERY listener for that event — including other components
-	// listening for the same event — which then stops updating for the rest
-	// of the session.
 	function handleOllamaSetBaseUrl(
 		message: Sockets.Ollama.SetBaseUrl.Response
 	) {
@@ -143,32 +140,35 @@
 		})
 	}
 
+	/**
+	 * Four standing interests, all BARE — an instance setting has nothing to
+	 * scope it to. Standing rather than one-shot because each lands whenever
+	 * somebody saves the URL or presses one of the two check buttons on this
+	 * tab, not only in reply to the pair asked for at mount. The `:error` half
+	 * is never gated (plan ruling 2).
+	 *
+	 * Declared ABOVE `onMount` — an effect too — so the keys are held before
+	 * the version requests leave; the typed `emit` flushes the interest sync
+	 * ahead of itself (plan ruling 3).
+	 */
+	useInterest<"ollama:setBaseUrl">(
+		"ollama:setBaseUrl",
+		handleOllamaSetBaseUrl
+	)
+	useInterest<"ollama:version">("ollama:version", handleOllamaVersion)
+	useInterest<"ollama:isUpdateAvailable">(
+		"ollama:isUpdateAvailable",
+		handleOllamaIsUpdateAvailable
+	)
+	useInterest<"ollama:isUpdateAvailable:error">(
+		"ollama:isUpdateAvailable:error",
+		handleOllamaIsUpdateAvailableError
+	)
+
 	onMount(() => {
-		// Socket event listeners
-		socket.on("ollama:setBaseUrl", handleOllamaSetBaseUrl)
-
-		socket.on("ollama:version", handleOllamaVersion)
-
-		socket.on("ollama:isUpdateAvailable", handleOllamaIsUpdateAvailable)
-
-		socket.on(
-			"ollama:isUpdateAvailable:error",
-			handleOllamaIsUpdateAvailableError
-		)
-
 		// Load version info when component mounts
 		checkOllamaVersion()
 		checkForUpdates()
-	})
-
-	onDestroy(() => {
-		socket.off("ollama:setBaseUrl", handleOllamaSetBaseUrl)
-		socket.off("ollama:version", handleOllamaVersion)
-		socket.off("ollama:isUpdateAvailable", handleOllamaIsUpdateAvailable)
-		socket.off(
-			"ollama:isUpdateAvailable:error",
-			handleOllamaIsUpdateAvailableError
-		)
 	})
 </script>
 

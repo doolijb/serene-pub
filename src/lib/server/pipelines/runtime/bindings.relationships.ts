@@ -19,7 +19,7 @@
  */
 
 import type { Bindings } from "@serene-pub/sdk"
-import { ok } from "@serene-pub/sdk"
+import { ok, reads, bandIntent, withBandIntents } from "@serene-pub/sdk"
 import type * as C from "@serene-pub/contracts"
 import type { CoreQueryCtx, NodeInput } from "./bindingTypes"
 import type { GraphRelationshipRow } from "$lib/server/utils/graphContextFormatter"
@@ -32,7 +32,10 @@ import {
 	rankRelationships
 } from "$lib/server/pipelines/ranking/relationshipRanking"
 import { keywordQuery } from "$lib/server/pipelines/ranking/keywordQuery"
-import { withDefaults } from "$lib/server/pipelines/ranking/weights"
+import {
+	DEFAULT_GROUPS,
+	withDefaults
+} from "$lib/server/pipelines/ranking/weights"
 // ⚠ A cycle with `bindings.ts`, which imports this module's own export back.
 // Both sides import a hoisted function declaration and call it at run time, not
 // at module evaluation, so the cycle resolves; the alternative is a second
@@ -217,226 +220,258 @@ export function relationshipSearchBindings(): Bindings {
 		 * narrative graph has no relationships, and `optional: true` plus an
 		 * empty list is what that install has always got from this subsystem.
 		 */
-		"core:query/relationship-search@1": async (
-			input: NodeInput<typeof C.relationshipSearch>,
-			ctx: CoreQueryCtx
-		) => {
-			const maxEntries = input?.params?.maxEntries
-			const [rows, links]: [
-				GraphRelationshipRow[] | null,
-				GraphEntryLink[] | null
-			] = await Promise.all([
-				ctx.read("graph_relationships", {
-					sessionId: input?.scope?.sessionId,
-					currentCharacterId: input?.scope?.currentCharacterId ?? null
-				}),
-				ctx.read("graph_entry_links", {
-					sessionId: input?.scope?.sessionId
+		"core:query/relationship-search@1": reads<typeof C.relationshipSearch>(
+			async (
+				input: NodeInput<typeof C.relationshipSearch>,
+				ctx: CoreQueryCtx
+			) => {
+				const maxEntries = input?.params?.maxEntries
+				/**
+				 * The band's intent (R-7 P5), at the head of whatever this
+				 * publishes — the empty answers below included, because a
+				 * graph that holds nothing about this speaker is still a band
+				 * with a share. `maxEntries` is this node's own ceiling, read
+				 * as the band's too: absent is uncapped on both sides, and 0
+				 * leaves the section out here before the ranker ever sees it.
+				 */
+				const intent = bandIntent("relationships", {
+					share:
+						typeof input?.params?.share === "number"
+							? input.params.share
+							: DEFAULT_GROUPS.share.relationships,
+					maxEntries:
+						typeof maxEntries === "number" ? maxEntries : undefined,
+					priority:
+						typeof input?.params?.priority === "string"
+							? input.params.priority
+							: DEFAULT_GROUPS.priority.relationships
 				})
-			])
-
-			/**
-			 * The hop, and the guard in front of it.
-			 *
-			 * ⚠ **No links, no scan.** `chosenEntryIds` re-runs the lore
-			 * mechanisms' own scan, which is real work, and a book in which
-			 * nobody has linked an entry to anything can never produce a hop —
-			 * which is every book until somebody draws a road. The read that
-			 * answers that is one indexed query, so the common install pays a
-			 * query rather than a scan.
-			 *
-			 * ⚠ **Before the no-graph return, not after.** A book of places
-			 * with no cast at all reads `null` from the cast traversal — there
-			 * is no speaker node to walk from — and a hop that lived behind
-			 * that return would be unreachable in exactly the book it was
-			 * written for.
-			 */
-			const linked = links?.length
-				? linkedRows(links, await chosenEntryIds(input, ctx))
-				: []
-
-			// `null` and `[]` are different answers and the receipt says which:
-			// one is "this session has no graph to read", the other is "it has
-			// one and it holds nothing about this speaker".
-			if (!rows && linked.length === 0)
-				return ok({
-					main: [],
-					hits: [],
-					diagnostics: {
-						considered: 0,
-						matched: 0,
-						present: 0,
-						linked: 0,
-						linkedEntries: [],
-						relationships:
-							"no narrative graph for this session, or the speaker has no node in it"
-					}
-				})
-
-			const ranked = rankRelationships(rows ?? [])
-
-			/**
-			 * ⚠ **A band strictly under the direct one, derived rather than
-			 * constant.** `rankRelationships` scores in `(0, 1]` and its floor
-			 * moves with how many ties it ranked — recency alone is
-			 * `0.1 / count` — so a constant "just below" would sit *above* the
-			 * floor of a large graph. Dividing under the observed floor keeps
-			 * every hop below every direct hit whatever the graph's size, and
-			 * keeps the hops in their own order.
-			 */
-			const directFloor = ranked.length
-				? Math.min(...ranked.map((r) => r.score))
-				: 1
-			const linkedRanked = linked.map((row, i) => ({
-				...row,
-				score:
-					(directFloor * (linked.length - i)) / (linked.length + 1),
-				via: "link" as const
-			}))
-
-			// One ceiling over both, so a hop competes for the same room rather
-			// than spending a second allowance nobody set.
-			const kept: Array<
-				(typeof ranked)[number] | (typeof linkedRanked)[number]
-			> = capRanked([...ranked, ...linkedRanked], maxEntries)
-
-			const candidates = kept.map((row, position) => {
-				if ("via" in row) {
-					const content = JSON.stringify({
-						with: row.from,
-						...row.entry
+				const [rows, links]: [
+					GraphRelationshipRow[] | null,
+					GraphEntryLink[] | null
+				] = await Promise.all([
+					ctx.read("graph_relationships", {
+						sessionId: input?.scope?.sessionId,
+						currentCharacterId:
+							input?.scope?.currentCharacterId ?? null
+					}),
+					ctx.read("graph_entry_links", {
+						sessionId: input?.scope?.sessionId
 					})
+				])
+
+				/**
+				 * The hop, and the guard in front of it.
+				 *
+				 * ⚠ **No links, no scan.** `chosenEntryIds` re-runs the lore
+				 * mechanisms' own scan, which is real work, and a book in which
+				 * nobody has linked an entry to anything can never produce a hop —
+				 * which is every book until somebody draws a road. The read that
+				 * answers that is one indexed query, so the common install pays a
+				 * query rather than a scan.
+				 *
+				 * ⚠ **Before the no-graph return, not after.** A book of places
+				 * with no cast at all reads `null` from the cast traversal — there
+				 * is no speaker node to walk from — and a hop that lived behind
+				 * that return would be unreachable in exactly the book it was
+				 * written for.
+				 */
+				const linked = links?.length
+					? linkedRows(links, await chosenEntryIds(input, ctx))
+					: []
+
+				// `null` and `[]` are different answers and the receipt says which:
+				// one is "this session has no graph to read", the other is "it has
+				// one and it holds nothing about this speaker".
+				if (!rows && linked.length === 0)
+					return ok({
+						main: [intent],
+						hits: [intent],
+						diagnostics: {
+							considered: 0,
+							matched: 0,
+							present: 0,
+							linked: 0,
+							linkedEntries: [],
+							relationships:
+								"no narrative graph for this session, or the speaker has no node in it"
+						}
+					})
+
+				const ranked = rankRelationships(rows ?? [])
+
+				/**
+				 * ⚠ **A band strictly under the direct one, derived rather than
+				 * constant.** `rankRelationships` scores in `(0, 1]` and its floor
+				 * moves with how many ties it ranked — recency alone is
+				 * `0.1 / count` — so a constant "just below" would sit *above* the
+				 * floor of a large graph. Dividing under the observed floor keeps
+				 * every hop below every direct hit whatever the graph's size, and
+				 * keeps the hops in their own order.
+				 */
+				const directFloor = ranked.length
+					? Math.min(...ranked.map((r) => r.score))
+					: 1
+				const linkedRanked = linked.map((row, i) => ({
+					...row,
+					score:
+						(directFloor * (linked.length - i)) /
+						(linked.length + 1),
+					via: "link" as const
+				}))
+
+				// One ceiling over both, so a hop competes for the same room rather
+				// than spending a second allowance nobody set.
+				const kept: Array<
+					(typeof ranked)[number] | (typeof linkedRanked)[number]
+				> = capRanked([...ranked, ...linkedRanked], maxEntries)
+
+				const candidates = kept.map((row, position) => {
+					if ("via" in row) {
+						const content = JSON.stringify({
+							with: row.from,
+							...row.entry
+						})
+						return {
+							id: row.id,
+							source: "relationships",
+							tokens: ctx.countTokens(content),
+							signals: {},
+							presetScore: row.score,
+							position,
+							payload: {
+								id: row.id,
+								name: row.name,
+								content,
+								/**
+								 * ⚠ **No `lane`, and that is deliberate.** The
+								 * three lanes are claims about the *speaker* — what
+								 * they think of others, what others think of them,
+								 * who the world has heard of — and a road between
+								 * two places is none of them. Filing a hop under
+								 * one would render it as a claim about the speaker,
+								 * which is worse than not rendering it at all: the
+								 * sections `relationshipSections` builds are keyed
+								 * on lane, so a hop reaches the receipt and the
+								 * budget and stops there until a section it belongs
+								 * in exists.
+								 */
+								entry: row.entry,
+								/** Which chosen entry the hop was reached from. */
+								linkedFrom: row.from,
+								foundBy: "relationships",
+								via: "link"
+							}
+						}
+					}
+					const content = contentOf(row)
 					return {
 						id: row.id,
 						source: "relationships",
 						tokens: ctx.countTokens(content),
+						/**
+						 * ⚠ Empty, and not an oversight. Every signal the ranker
+						 * knows how to weigh is a question about a lorebook entry —
+						 * did its keys fire, does its title occur, is it about what
+						 * is being said — and a graph edge answers none of them.
+						 * Writing a signal here to look complete would give the
+						 * band a number weighted at 0 and say nothing true.
+						 */
 						signals: {},
 						presetScore: row.score,
+						// `select` breaks a score tie on this, and this node has
+						// already decided the order, so it hands over its own.
 						position,
 						payload: {
 							id: row.id,
 							name: row.name,
 							content,
+							lane: row.lane,
+							...(row.counterpart
+								? { counterpart: row.counterpart }
+								: {}),
 							/**
-							 * ⚠ **No `lane`, and that is deliberate.** The
-							 * three lanes are claims about the *speaker* — what
-							 * they think of others, what others think of them,
-							 * who the world has heard of — and a road between
-							 * two places is none of them. Filing a hop under
-							 * one would render it as a claim about the speaker,
-							 * which is worse than not rendering it at all: the
-							 * sections `relationshipSections` builds are keyed
-							 * on lane, so a hop reaches the receipt and the
-							 * budget and stops there until a section it belongs
-							 * in exists.
+							 * The tie as a structure, beside the same tie as text.
+							 *
+							 * Two things rather than one spelling of it: `content`
+							 * is what the budget COUNTED, and this is what the
+							 * prompt's relationship sections are rebuilt from —
+							 * keyed, grouped and laid out by the variable the
+							 * template asks for. Parsing `content` back would make
+							 * the render depend on a stringification staying
+							 * reversible, which is a promise this module would then
+							 * owe forever.
 							 */
 							entry: row.entry,
-							/** Which chosen entry the hop was reached from. */
-							linkedFrom: row.from,
+							...(row.figure ? { figure: row.figure } : {}),
+							/**
+							 * What the explanation panel keys its rank reasons off
+							 * — the same field `entity-search` marks its own hits
+							 * with, for the same purpose: a `presetScore` with no
+							 * account of where it came from renders as a bare
+							 * number, which is the one thing that panel exists not
+							 * to do.
+							 */
 							foundBy: "relationships",
-							via: "link"
+							rank: row.rank
 						}
 					}
-				}
-				const content = contentOf(row)
-				return {
-					id: row.id,
-					source: "relationships",
-					tokens: ctx.countTokens(content),
-					/**
-					 * ⚠ Empty, and not an oversight. Every signal the ranker
-					 * knows how to weigh is a question about a lorebook entry —
-					 * did its keys fire, does its title occur, is it about what
-					 * is being said — and a graph edge answers none of them.
-					 * Writing a signal here to look complete would give the
-					 * band a number weighted at 0 and say nothing true.
-					 */
-					signals: {},
-					presetScore: row.score,
-					// `select` breaks a score tie on this, and this node has
-					// already decided the order, so it hands over its own.
-					position,
-					payload: {
-						id: row.id,
-						name: row.name,
-						content,
-						lane: row.lane,
-						...(row.counterpart
-							? { counterpart: row.counterpart }
-							: {}),
+				})
+
+				const direct = kept.filter(
+					(r): r is (typeof ranked)[number] => !("via" in r)
+				)
+				const hops = kept.filter(
+					(r): r is (typeof linkedRanked)[number] => "via" in r
+				)
+				const present = direct.filter((r) => r.present).length
+				const lanes = direct.reduce<Record<string, number>>(
+					(acc, r) => {
+						acc[LANE_LABELS[r.lane]] =
+							(acc[LANE_LABELS[r.lane]] ?? 0) + 1
+						return acc
+					},
+					{}
+				)
+
+				const published = withBandIntents([intent], candidates)
+				return ok({
+					main: published,
+					hits: published,
+					diagnostics: {
+						considered: (rows?.length ?? 0) + linked.length,
+						matched: candidates.length,
+						present,
+						maxEntries,
+						lanes,
 						/**
-						 * The tie as a structure, beside the same tie as text.
-						 *
-						 * Two things rather than one spelling of it: `content`
-						 * is what the budget COUNTED, and this is what the
-						 * prompt's relationship sections are rebuilt from —
-						 * keyed, grouped and laid out by the variable the
-						 * template asks for. Parsing `content` back would make
-						 * the render depend on a stringification staying
-						 * reversible, which is a promise this module would then
-						 * owe forever.
+						 * The hop, named where a person reads it. A count alone
+						 * cannot be checked against anything, so the endpoints it
+						 * brought in are listed beside it.
 						 */
-						entry: row.entry,
-						...(row.figure ? { figure: row.figure } : {}),
+						linked: hops.length,
+						linkedEntries: hops.map((r) => r.name),
 						/**
-						 * What the explanation panel keys its rank reasons off
-						 * — the same field `entity-search` marks its own hits
-						 * with, for the same purpose: a `presetScore` with no
-						 * account of where it came from renders as a bare
-						 * number, which is the one thing that panel exists not
-						 * to do.
+						 * The mechanism-level sentence, in the shape
+						 * `explainRetrieval` reads the vector mechanism's and the
+						 * entity-link mechanism's: one that produced less than it
+						 * walked has to say why where a person reads it, or a
+						 * ceiling is indistinguishable from an empty graph.
 						 */
-						foundBy: "relationships",
-						rank: row.rank
+						relationships:
+							candidates.length === 0 && maxEntries === 0
+								? "off — the ceiling is 0, so the graph is left out"
+								: `${direct.length} of ${rows?.length ?? 0} ties ranked, ` +
+									`${present} with someone in the cast` +
+									(hops.length
+										? `, ${hops.length} reached through a link`
+										: "")
 					}
-				}
-			})
-
-			const direct = kept.filter(
-				(r): r is (typeof ranked)[number] => !("via" in r)
-			)
-			const hops = kept.filter(
-				(r): r is (typeof linkedRanked)[number] => "via" in r
-			)
-			const present = direct.filter((r) => r.present).length
-			const lanes = direct.reduce<Record<string, number>>((acc, r) => {
-				acc[LANE_LABELS[r.lane]] = (acc[LANE_LABELS[r.lane]] ?? 0) + 1
-				return acc
-			}, {})
-
-			return ok({
-				main: candidates,
-				hits: candidates,
-				diagnostics: {
-					considered: (rows?.length ?? 0) + linked.length,
-					matched: candidates.length,
-					present,
-					maxEntries,
-					lanes,
-					/**
-					 * The hop, named where a person reads it. A count alone
-					 * cannot be checked against anything, so the endpoints it
-					 * brought in are listed beside it.
-					 */
-					linked: hops.length,
-					linkedEntries: hops.map((r) => r.name),
-					/**
-					 * The mechanism-level sentence, in the shape
-					 * `explainRetrieval` reads the vector mechanism's and the
-					 * entity-link mechanism's: one that produced less than it
-					 * walked has to say why where a person reads it, or a
-					 * ceiling is indistinguishable from an empty graph.
-					 */
-					relationships:
-						candidates.length === 0 && maxEntries === 0
-							? "off — the ceiling is 0, so the graph is left out"
-							: `${direct.length} of ${rows?.length ?? 0} ties ranked, ` +
-								`${present} with someone in the cast` +
-								(hops.length
-									? `, ${hops.length} reached through a link`
-									: "")
-				}
-			})
-		}
+				})
+			},
+			// `share` and `priority` beside the ceiling: the band's own intent
+			// (R-7 P5), read here and published, not on the ranker.
+			{ ports: ["scope"], params: ["maxEntries", "share", "priority"] }
+		)
 	}
 }

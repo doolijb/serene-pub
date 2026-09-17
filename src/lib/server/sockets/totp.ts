@@ -31,19 +31,35 @@ function failWith(
 	throw err instanceof Error ? err : new Error(message)
 }
 
+/**
+ * The two-factor status, as one function, so the three cascades below can be
+ * handed the BUILDER rather than the handler.
+ *
+ * `getTotpState` reads the enrolment row and counts the unused recovery codes;
+ * `totp:status` is gated, so with no security surface open neither read is
+ * paid. Handed the socket because `verificationRequired` is a property of THIS
+ * connection, not of the account — and every cascade below has already emptied
+ * `pendingSetup` by the time the thunk runs, which is the answer it should give.
+ */
+async function buildTotpStatus(
+	socket: any
+): Promise<Sockets.Totp.Status.Response> {
+	const state = await getTotpState(socket.user!.id)
+	return {
+		...state,
+		// The client needs this to know whether to show the code prompt
+		// instead of the app.
+		verificationRequired: !!socket.pendingSetup?.includes("twoFactor")
+	}
+}
+
 export const totpStatus: Handler<
 	Sockets.Totp.Status.Params,
 	Sockets.Totp.Status.Response
 > = {
 	event: "totp:status",
 	handler: async (socket, _params, emitToUser) => {
-		const state = await getTotpState(socket.user!.id)
-		const res: Sockets.Totp.Status.Response = {
-			...state,
-			// The client needs this to know whether to show the code prompt
-			// instead of the app.
-			verificationRequired: !!socket.pendingSetup?.includes("twoFactor")
-		}
+		const res = await buildTotpStatus(socket)
 		emitToUser("totp:status", res)
 		return res
 	}
@@ -100,7 +116,9 @@ export const totpEnrollConfirm: Handler<
 			// Shown exactly once. Only hashes are stored.
 			const res: Sockets.Totp.EnrollConfirm.Response = { recoveryCodes }
 			emitToUser("totp:enroll:confirm", res)
-			await totpStatus.handler(socket, {}, emitToUser)
+			// Lazy: the security surface that started this enrolment wants the
+			// refreshed status, and nothing else does. See `buildTotpStatus`.
+			await emitToUser("totp:status", () => buildTotpStatus(socket))
 			return res
 		} catch (err) {
 			failWith("totp:enroll:confirm", emitToUser, err)
@@ -143,7 +161,8 @@ export const totpRegenerateCodes: Handler<
 			const recoveryCodes = await regenerateRecoveryCodes(socket.user!.id)
 			const res: Sockets.Totp.RegenerateCodes.Response = { recoveryCodes }
 			emitToUser("totp:regenerateCodes", res)
-			await totpStatus.handler(socket, {}, emitToUser)
+			// Lazy, for the reason given in `totpEnrollBegin`'s confirm above.
+			await emitToUser("totp:status", () => buildTotpStatus(socket))
 			return res
 		} catch (err) {
 			failWith("totp:regenerateCodes", emitToUser, err)
@@ -174,7 +193,8 @@ export const totpDisable: Handler<
 
 		const res: Sockets.Totp.Disable.Response = { success: true }
 		emitToUser("totp:disable", res)
-		await totpStatus.handler(socket, {}, emitToUser)
+		// Lazy, for the reason given in the enrolment confirm above.
+		await emitToUser("totp:status", () => buildTotpStatus(socket))
 		return res
 	}
 }

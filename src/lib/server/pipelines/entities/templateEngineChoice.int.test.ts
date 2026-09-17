@@ -45,7 +45,7 @@ const unique = (s: string) => `${s} ${++n}`
 describe("a context template's engine", () => {
 	it("stores Liquid as itself, and renders through it", async () => {
 		const row = await createContextTemplate(db, {
-			nodeTypeId: NODE_TYPE,
+			nodeDefinitionId: NODE_TYPE,
 			name: unique("Liquid default"),
 			source: "{% if scenario %}{{ scenario }}{% endif %}",
 			engine: CORE_LIQUID_ENGINE
@@ -62,7 +62,7 @@ describe("a context template's engine", () => {
 	it("refuses a source that does not parse, naming the line", async () => {
 		await expect(
 			createContextTemplate(db, {
-				nodeTypeId: NODE_TYPE,
+				nodeDefinitionId: NODE_TYPE,
 				name: unique("Broken"),
 				source: 'a\n{% include "secrets" %}',
 				engine: CORE_LIQUID_ENGINE
@@ -75,7 +75,7 @@ describe("a context template's engine", () => {
 	it("refuses a Handlebars source that does not parse", async () => {
 		await expect(
 			createContextTemplate(db, {
-				nodeTypeId: NODE_TYPE,
+				nodeDefinitionId: NODE_TYPE,
 				name: unique("Broken hbs"),
 				source: "{{#if x}}{{/each}}",
 				engine: CORE_TEMPLATE_ENGINE
@@ -85,7 +85,7 @@ describe("a context template's engine", () => {
 
 	it("refuses an edit that breaks a template that used to parse", async () => {
 		const row = await createContextTemplate(db, {
-			nodeTypeId: NODE_TYPE,
+			nodeDefinitionId: NODE_TYPE,
 			name: unique("Editable"),
 			source: "{{#if scenario}}{{{scenario}}}{{/if}}"
 		})
@@ -104,7 +104,7 @@ describe("a context template's engine", () => {
 
 	it("refuses switching the engine of a row that has been written in", async () => {
 		const row = await createContextTemplate(db, {
-			nodeTypeId: NODE_TYPE,
+			nodeDefinitionId: NODE_TYPE,
 			name: unique("Written"),
 			source: "{{#if scenario}}{{{scenario}}}{{/if}}"
 		})
@@ -117,7 +117,7 @@ describe("a context template's engine", () => {
 
 	it("allows the engine to be chosen while the row is still empty", async () => {
 		const row = await createContextTemplate(db, {
-			nodeTypeId: NODE_TYPE,
+			nodeDefinitionId: NODE_TYPE,
 			name: unique("Blank"),
 			source: ""
 		})

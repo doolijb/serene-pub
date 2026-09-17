@@ -16,6 +16,7 @@
  */
 
 import { REPLY_SENT_BY_ADAPTER } from "$lib/shared/constants/replyReceipt"
+import type { StatusText } from "@serene-pub/sdk"
 
 /** The run row `pipelines:run` answers with, as this projection needs it. */
 export interface InspectedRun {
@@ -24,6 +25,7 @@ export interface InspectedRun {
 	specVersion: string
 	specHash: string | null
 	specHashIsCurrent: boolean
+	specHashRenamedAt: string | null
 	outcome: string
 	haltNodeKey: string | null
 	haltReason: string | null
@@ -34,6 +36,16 @@ export interface InspectedRun {
 	sessionId: number | null
 	startedAt: string
 	receipt: unknown
+	/** Who portrayed whom, named by the server — see `portrayalsLine`. */
+	portrayals?: PortrayalLine[]
+}
+
+/** One entry of the run's pinned portrayals, as `pipelines:run` names it. */
+export interface PortrayalLine {
+	ref: string
+	name: string
+	by: "person" | "ai" | "none"
+	person?: { name: string; you: boolean }
 }
 
 /** One node's entry in `receipt.nodes`, read structurally. */
@@ -45,9 +57,15 @@ export type ResultBadge = "ok" | "halt" | "skip" | "error"
 export interface NodeRow {
 	seq: number
 	nodeKey: string
-	/** The key, carrying its map iteration when the node ran inside one. */
+	/** The key, carrying its each-iteration when the node ran inside one. */
 	label: string
-	typeId: string
+	/**
+	 * The node definition the step ran, as the receipt pinned it. A receipt
+	 * from before the 2026-09-16 rename says `typeId` and `core:input/…`; it is
+	 * read as written — a receipt is never rewritten — so the old spelling is
+	 * accepted here and shown as it was.
+	 */
+	definitionId: string
 	kind: string
 	/** The executor's own word, whatever it was. */
 	result: string
@@ -56,7 +74,7 @@ export interface NodeRow {
 	tokens: number | null
 	reason: string | null
 	notes: string[]
-	isProvider: boolean
+	isOracle: boolean
 	/** The model the receipt recorded for this call, when it recorded one. */
 	model: string | null
 	cacheHit: boolean
@@ -125,7 +143,7 @@ export function nodeRows(receipt: unknown): NodeRow[] {
 				nodeKey,
 				label:
 					iteration == null ? nodeKey : `${nodeKey} [${iteration}]`,
-				typeId: String(raw?.typeId ?? ""),
+				definitionId: String(raw?.definitionId ?? raw?.typeId ?? ""),
 				kind: String(raw?.kind ?? ""),
 				result,
 				badge: badgeOf(result),
@@ -133,7 +151,9 @@ export function nodeRows(receipt: unknown): NodeRow[] {
 				tokens: typeof raw?.tokens === "number" ? raw.tokens : null,
 				reason: asString(raw?.reason),
 				notes: asArray(raw?.notes).map((n) => String(n)),
-				isProvider: raw?.kind === "provider",
+				// `provider` is the pre-rename spelling on receipts written before
+				// 2026-09-16; both read as the oracle kind.
+				isOracle: raw?.kind === "oracle" || raw?.kind === "provider",
 				model: modelOf(raw ?? {}),
 				cacheHit: raw?.cacheHit === true,
 				recoveredAsEmpty: raw?.recoveredAsEmpty === true,
@@ -148,15 +168,35 @@ export function nodeRows(receipt: unknown): NodeRow[] {
 /**
  * The node a reply adapter sent for, where the receipt says one.
  *
- * The reply road's `ok` is not the ordinary one: every node ran, and the last
- * of them handed its payload to the connection adapter rather than sending it.
- * The node's own reason is where that is recorded — see `recordReplyOutcome`.
+ * Receipts from before the one road (09-B B4): every node ran, and the last of
+ * them handed its payload to the connection adapter rather than sending it.
+ * The node's own reason is where that was recorded. A receipt written since
+ * carries no such node — its oracle ran — and reads as an ordinary run.
  */
 function sentByAdapter(receipt: Record<string, unknown> | null): string | null {
 	const node = asArray(receipt?.nodes).find(
 		(n: ReceiptNode) => asString(n?.reason) === REPLY_SENT_BY_ADAPTER
 	)
 	return node ? (asString(node.nodeKey) ?? null) : null
+}
+
+/**
+ * The receipt's one status (R-19, R-21): what the run was doing when it ended
+ * badly, as the node set it with `{speaker}` filled — `{ nodeKey, text }` —
+ * or null on a run that finished, a preview, or a receipt from before
+ * statuses existed. The component resolves the locale; this reads the shape.
+ */
+export function lastStatusOf(
+	run: InspectedRun
+): { nodeKey: string; text: StatusText } | null {
+	const last = asRecord(asRecord(run.receipt)?.lastStatus)
+	const text = asRecord(last?.text)
+	const en = asString(asRecord(text?.i18n)?.en)
+	if (!last || !text || !en) return null
+	return {
+		nodeKey: String(last.nodeKey ?? ""),
+		text: text as unknown as StatusText
+	}
 }
 
 /**
@@ -167,12 +207,21 @@ function sentByAdapter(receipt: Record<string, unknown> | null): string | null {
  * halt gets its own sentence because "halted" reads as a fault and a preview
  * is the pipeline doing exactly what it was asked — stopping at the
  * pre-call substrate so the adapter makes the call.
+ *
+ * `status` is the receipt's last status already resolved in the reader's
+ * language (`lastStatusOf` + `statusText`) — *Jasmine is typing* — and it
+ * joins the sentence of a run that died: _Stopped at generate on request
+ * while Jasmine is typing._ Absent, the sentence reads as before.
  */
-export function verdict(run: InspectedRun): string {
+export function verdict(
+	run: InspectedRun,
+	opts: { status?: string | null } = {}
+): string {
 	const receipt = asRecord(run.receipt)
 	const node = run.haltNodeKey ?? asString(receipt?.haltNodeKey)
 	const reason = run.haltReason ?? asString(receipt?.haltReason)
 	const at = node ? ` at ${node}` : ""
+	const whileDoing = opts.status ? ` while ${opts.status}` : ""
 
 	if (run.outcome === "ok") {
 		const count = asArray(receipt?.nodes).length
@@ -182,15 +231,70 @@ export function verdict(run: InspectedRun): string {
 			? `${ran}; the reply adapter sent ${sent}'s prompt and wrote the message.`
 			: `${ran}.`
 	}
-	if (run.outcome === "cancelled") return `Stopped${at} on request.`
+	if (run.outcome === "cancelled")
+		return `Stopped${at} on request${whileDoing}.`
 	if (run.outcome === "err")
-		return reason ? `Failed${at}: ${reason}.` : `Failed${at}.`
+		return reason
+			? `Failed${at}${whileDoing}: ${reason}.`
+			: `Failed${at}${whileDoing}.`
 
 	const isPreview =
 		asRecord(receipt?.preview) !== null || !!reason?.startsWith("preview:")
 	if (isPreview)
 		return `Halted${at} as a preview: the adapter sent this prompt.`
-	return reason ? `Halted${at}: ${reason}.` : `Halted${at}.`
+	return reason
+		? `Halted${at}${whileDoing}: ${reason}.`
+		: `Halted${at}${whileDoing}.`
+}
+
+/* ── who portrayed whom ─────────────────────────────────────────────── */
+
+/** One chip of the Portrayed-by line: the participant and who portrayed them. */
+export interface PortrayalChip {
+	ref: string
+	name: string
+	/**
+	 * "AI", "you", "nobody", or — the one case that is not a word of the
+	 * app's — another member's name. `you` says which, so the component can
+	 * pass the words through `t()` and leave a name alone.
+	 */
+	portrayedBy: string
+	by: PortrayalLine["by"]
+	you: boolean
+}
+
+/**
+ * The run's pinned portrayals (R-21 (4)) as the header's one line — "Tom ·
+ * AI", "Elara · you" — in the order the receipt pinned them.
+ *
+ * Only the participants a reader recognises as people or characters are
+ * shown: `character:` and `envoy:` and `user:` references. The roles
+ * (`owner`, `run-owner`, …) are pinned on the receipt too and stay in the
+ * raw receipt; on the line they would say "owner · you" on every run, which
+ * is noise wearing a fact. An empty list means no line.
+ */
+export function portrayalsLine(run: InspectedRun): PortrayalChip[] {
+	const lines = Array.isArray(run.portrayals) ? run.portrayals : []
+	return lines
+		.filter(
+			(v) =>
+				typeof v?.ref === "string" &&
+				/^(character|envoy|user):/.test(v.ref)
+		)
+		.map((v) => ({
+			ref: v.ref,
+			name: v.name,
+			by: v.by,
+			you: v.by === "person" && v.person?.you === true,
+			portrayedBy:
+				v.by === "ai"
+					? "AI"
+					: v.by === "person"
+						? v.person?.you
+							? "you"
+							: (v.person?.name ?? "a member")
+						: "nobody"
+		}))
 }
 
 /* ── the wire ───────────────────────────────────────────────────────── */

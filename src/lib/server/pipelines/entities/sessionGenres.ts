@@ -16,13 +16,27 @@
  * place the shape's meaning is interpreted.
  */
 
-import { and, asc, eq } from "drizzle-orm"
+import {
+	actionsOf,
+	DEFAULT_ACTION_AUDIENCE,
+	effectsOf,
+	sessionEvents,
+	slashNameOf,
+	type ActionEffects,
+	type Audience,
+	type Venue
+} from "@serene-pub/sdk"
+import {
+	actionIdentity,
+	parseActionIdentity
+} from "$lib/shared/actions/identity"
+import { and, asc, eq, isNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
 	presetEventSpec,
 	type PresetFallback
 } from "$lib/server/pipelines/entities/presetBindings"
-import type { SessionShape } from "@serene-pub/sdk"
+import type { EnvoyDecl, SessionShape } from "@serene-pub/sdk"
 
 /** The F29 floor: always present, the default and the backfill (24 §3). */
 export const STANDARD_GENRE_ID = "core:genre/chat"
@@ -30,9 +44,9 @@ export const STANDARD_GENRE_ID = "core:genre/chat"
 /** The spellings the floor wore before 24 §3; read-compat only. */
 export const LEGACY_STANDARD_GENRE_IDS = [
 	"core:spec/create-chat",
-	"core:input/user-message@1"
+	"core:inlet/user-message@1"
 ] as const
-export const LEGACY_STANDARD_GENRE_ID = "core:input/user-message@1"
+export const LEGACY_STANDARD_GENRE_ID = "core:inlet/user-message@1"
 
 /**
  * The primary write a session mode's pipeline must perform (19 §0).
@@ -46,7 +60,7 @@ export const LEGACY_STANDARD_GENRE_ID = "core:input/user-message@1"
  * rather than which version of the consumer it pinned — a `create-message@2`
  * would still be writing the message.
  */
-const CHAT_WRITE_TYPE = "core:consumer/create-message"
+const CHAT_WRITE_TYPE = "core:outlet/create-message"
 
 export interface SessionGenre {
 	/** The genre id (24 §3) — or transitionally an input-type id. */
@@ -63,6 +77,12 @@ export interface SessionGenre {
 	shape: SessionShape
 	/** The event surface (24 §5), off the genre declaration row. */
 	events?: Record<string, { required?: boolean; open?: boolean }>
+	/**
+	 * The envoys the genre brings (plans/29 R-18; U5g), off the same row —
+	 * `meta.genre.envoys` on the create spec's version. Absent for a genre
+	 * that declares none, and for the transitional inlet-declared genres.
+	 */
+	envoys?: EnvoyDecl[]
 }
 
 const en = (v: unknown): string =>
@@ -92,7 +112,7 @@ export async function listSessionGenres(db: Db): Promise<SessionGenre[]> {
 		.filter(
 			(r) =>
 				r.activeVersionId === r.versionId &&
-				r.inputEvent === "session-created" &&
+				r.inputEvent === sessionEvents.sessionCreated &&
 				r.inputGenre &&
 				r.genre?.shape
 		)
@@ -104,26 +124,29 @@ export async function listSessionGenres(db: Db): Promise<SessionGenre[]> {
 			shape: r.genre.shape as SessionShape,
 			events: (r.genre?.events ?? undefined) as
 				| Record<string, { required?: boolean; open?: boolean }>
-				| undefined
+				| undefined,
+			...(Array.isArray(r.genre?.envoys) && r.genre.envoys.length
+				? { envoys: r.genre.envoys as EnvoyDecl[] }
+				: {})
 		}))
 
 	// Transitional: plugin genres still declared on input types, minus the
 	// standard input whose identity moved (listing both shows Chat twice).
 	const rows = await db
 		.select()
-		.from(schema.pipelineTypeRegistry)
-		.where(eq(schema.pipelineTypeRegistry.kind, "input"))
-		.orderBy(asc(schema.pipelineTypeRegistry.id))
+		.from(schema.pipelineDefinitionRegistry)
+		.where(eq(schema.pipelineDefinitionRegistry.kind, "inlet"))
+		.orderBy(asc(schema.pipelineDefinitionRegistry.id))
 	const fromInputs: SessionGenre[] = (rows as any[])
 		.filter(
 			(r) =>
 				r.status === "live" &&
 				r.sessionShape &&
-				`${r.typeId}@${r.version}` !== LEGACY_STANDARD_GENRE_ID
+				`${r.definitionId}@${r.version}` !== LEGACY_STANDARD_GENRE_ID
 		)
 		.map((r) => ({
-			genreId: `${r.typeId}@${r.version}`,
-			name: en(r.i18n?.name) || r.typeId,
+			genreId: `${r.definitionId}@${r.version}`,
+			name: en(r.i18n?.name) || r.definitionId,
 			description: en(r.i18n?.description),
 			shape: r.sessionShape as SessionShape
 		}))
@@ -179,7 +202,14 @@ export function shapeViolations(
 	return out
 }
 
-/** The counts the validator needs, read once. */
+/**
+ * The counts the validator needs, read once. `characters` counts LIVE
+ * CHARACTER seats only: a cast row is a character's or an envoy's (U5g), and
+ * an envoy is the genre's own speaker rather than a library character the
+ * shape bounds — a guide session with its mascot seated has zero characters,
+ * as its `characters: { max: 0 }` demands. A departed seat (`removed_at`)
+ * is not in the room either (U5g review, W2).
+ */
 export async function sessionShapeFacts(
 	db: Db,
 	sessionId: number
@@ -192,11 +222,22 @@ export async function sessionShapeFacts(
 	const characters = await db
 		.select({ sessionId: schema.sessionCharacters.sessionId })
 		.from(schema.sessionCharacters)
-		.where(eq(schema.sessionCharacters.sessionId, sessionId))
+		.where(
+			and(
+				eq(schema.sessionCharacters.sessionId, sessionId),
+				isNull(schema.sessionCharacters.envoySlug),
+				isNull(schema.sessionCharacters.removedAt)
+			)
+		)
 	const personas = await db
 		.select({ sessionId: schema.sessionPersonas.sessionId })
 		.from(schema.sessionPersonas)
-		.where(eq(schema.sessionPersonas.sessionId, sessionId))
+		.where(
+			and(
+				eq(schema.sessionPersonas.sessionId, sessionId),
+				isNull(schema.sessionPersonas.removedAt)
+			)
+		)
 	return {
 		characters: (characters as any[]).length,
 		personas: (personas as any[]).length,
@@ -310,10 +351,23 @@ export async function upgradeSessionGenre(
 			error: `This session does not fit '${mode.name}': ${violations.join("; ")}.`
 		}
 
-	await db
-		.update(schema.sessions)
-		.set({ genreId: targetGenreId })
-		.where(eq(schema.sessions.id, sessionId))
+	// The defaults the new version brings, seated as creation seats them
+	// (U5g review, W3) — a seat the person unseated stays unseated, since
+	// `seatDefaultEnvoys` never revives. Dynamic for the cycle: `envoys.ts`
+	// reads this module's genre.
+	const { seatDefaultEnvoys } = await import(
+		"$lib/server/pipelines/entities/envoys"
+	)
+	// One transaction: a session left with the new genre_id but the old
+	// genre's seats (or vice versa, on a crash between the two writes) is a
+	// session no read agrees on the shape of.
+	await db.transaction(async (tx: Db) => {
+		await tx
+			.update(schema.sessions)
+			.set({ genreId: targetGenreId })
+			.where(eq(schema.sessions.id, sessionId))
+		await seatDefaultEnvoys(tx, sessionId, targetGenreId)
+	})
 	return {}
 }
 
@@ -361,8 +415,8 @@ export async function sessionGenreAvailable(
 const SPEAKER_SELECTION_SHAPE = "core:shape/speaker-selection@1"
 
 export interface SpeakerStrategy {
-	/** The strategy's pinned type id. */
-	typeId: string
+	/** The strategy's pinned definition id. */
+	definitionId: string
 	name: string
 }
 
@@ -380,9 +434,9 @@ export async function listSpeakerStrategies(
 ): Promise<SpeakerStrategy[]> {
 	const rows = await db
 		.select()
-		.from(schema.pipelineTypeRegistry)
-		.where(eq(schema.pipelineTypeRegistry.kind, "task"))
-		.orderBy(asc(schema.pipelineTypeRegistry.id))
+		.from(schema.pipelineDefinitionRegistry)
+		.where(eq(schema.pipelineDefinitionRegistry.kind, "task"))
+		.orderBy(asc(schema.pipelineDefinitionRegistry.id))
 	return (rows as any[])
 		.filter(
 			(r) =>
@@ -390,20 +444,47 @@ export async function listSpeakerStrategies(
 				r.ports?.out?.main === SPEAKER_SELECTION_SHAPE
 		)
 		.map((r) => ({
-			typeId: `${r.typeId}@${r.version}`,
-			name: en(r.i18n?.name) || r.typeId
+			definitionId: `${r.definitionId}@${r.version}`,
+			name: en(r.i18n?.name) || r.definitionId
 		}))
 }
 
 /* --- function routing (19 §3, U-C3) ----------------------------------- */
 
-export interface GenreTrigger {
-	/** The function key the trigger fires — what routing resolves (§3). */
+export interface GenreAction {
+	/**
+	 * The action's own identity within its spec (R-15, U5c) — what the
+	 * *new* marker is kept against and what a widget's `invoke` names. Core
+	 * ships every action with `key === function`.
+	 */
+	key: string
+	/** The function key the action fires — what routing resolves (§3). */
 	function: string
-	kind: string
+	/**
+	 * Where a person meets it, per channel (plans/29 R-15 *venue*): the
+	 * composer's row, a message's menu, the extra tab, a widget… A venue
+	 * naming a channel appears on that channel alone; one naming none
+	 * appears on every channel. _Was_ one `venue: string` until 2026-09-16,
+	 * and `kind: button | menu` before that.
+	 */
+	venues: Venue[]
+	/** Who may see it and who may act, as participant references (R-15). */
+	audience: Audience
+	/**
+	 * Which side of the effects line (R-15 *The line*; U5d): `fiction`, or
+	 * `world` — a result reaching cards, lore, settings or permissions, which
+	 * no block may carry and no oracle may answer. The declaration's, else
+	 * `fiction`.
+	 */
+	effects: ActionEffects
+	/** The one prominence flag: primary set, or the overflow. */
+	quick: boolean
+	/** The slash name — declared, or derived by the namespace rule. */
+	slash: string
 	/** Lucide icon name, as the contributor declared it. */
 	icon?: string
 	name: string
+	description?: string
 	/** Who contributed it — the spec whose active version declares it. */
 	specSlug: string
 	/**
@@ -423,26 +504,33 @@ export interface GenreTrigger {
 	enabledByDefault: boolean
 }
 
-/** `core:input/user-message@1` → `core`. The half of an id before the colon. */
+/** @deprecated the pre-U5c name; the shape is `GenreAction`. */
+export type GenreTrigger = GenreAction
+
+/** `core:inlet/user-message@1` → `core`. The half of an id before the colon. */
 const namespaceOf = (id: string): string => {
 	const i = id.indexOf(":")
 	return i === -1 ? "" : id.slice(0, i)
 }
 
 /**
- * The contributed trigger set for a mode (19 §4) — what the session view
- * renders, from rows.
+ * The contributed action set for a genre (19 §4; R-15) — what the session
+ * view renders, from rows.
  *
  * The same criteria as `resolveFunctionSpec`'s contributed branch (published
  * status, active version), deliberately: a button whose press cannot resolve,
  * or a resolvable function with no button, would be the two halves of one
- * fact disagreeing. Retiring a spec's version removes its triggers here and
+ * fact disagreeing. Retiring a spec's version removes its actions here and
  * its routing there in the same breath — no UI code involved.
+ *
+ * Read through the SDK's `actionsOf`, which folds the pre-U5c `triggers`
+ * spelling a stored plugin version may still carry — one reader, so a
+ * document from before the rename and one from after answer the same.
  */
-export async function listGenreTriggers(
+export async function listGenreActions(
 	db: Db,
 	genreId: string
-): Promise<GenreTrigger[]> {
+): Promise<GenreAction[]> {
 	try {
 		// ⚠ Ordered. The tie-break below is "first-published", and an
 		// unordered SELECT makes that whatever order the heap returns —
@@ -458,25 +546,33 @@ export async function listGenreTriggers(
 			.select()
 			.from(schema.pipelineSpecVersions)
 			.where(eq(schema.pipelineSpecVersions.status, "published"))
-		const out: GenreTrigger[] = []
+		const out: GenreAction[] = []
 		for (const s of specs as any[]) {
 			if (s.activeVersionId == null) continue
 			const v = (versions as any[]).find(
 				(x) => x.id === s.activeVersionId
 			)
-			const triggers = (v?.contributes as any)?.triggers
-			if (!Array.isArray(triggers)) continue
-			for (const t of triggers) {
-				if ((t?.genre ?? t?.mode) !== genreId) continue
+			if (!v?.contributes) continue
+			for (const a of actionsOf({ id: s.slug, contributes: v.contributes })) {
+				if (a.genre !== genreId) continue
 				const origin =
 					namespaceOf(s.slug) === namespaceOf(genreId)
 						? "companion"
 						: "attachment"
 				out.push({
-					function: String(t.function ?? ""),
-					kind: String(t.kind ?? "button"),
-					icon: typeof t.icon === "string" ? t.icon : undefined,
-					name: en(t.i18n) || String(t.function ?? ""),
+					key: a.key,
+					function: a.function,
+					venues: a.venue,
+					audience: a.audience ?? {
+						see: [...DEFAULT_ACTION_AUDIENCE.see],
+						act: [...DEFAULT_ACTION_AUDIENCE.act]
+					},
+					effects: effectsOf(a),
+					quick: a.quick === true,
+					slash: slashNameOf(a, s.slug),
+					icon: typeof a.icon === "string" ? a.icon : undefined,
+					name: en(a.label) || a.function,
+					...(a.description ? { description: en(a.description) } : {}),
 					specSlug: s.slug,
 					origin,
 					enabledByDefault: origin === "companion"
@@ -489,6 +585,9 @@ export async function listGenreTriggers(
 	}
 }
 
+/** @deprecated the pre-U5c name of `listGenreActions`; one release. */
+export const listGenreTriggers = listGenreActions
+
 /**
  * The event a function key is the same question as (24 §4).
  *
@@ -500,7 +599,7 @@ export async function listGenreTriggers(
  * refuses an event binding on an open slot for exactly that reason.
  */
 const EVENT_FOR_FUNCTION: Record<string, string> = {
-	respond: "message-respond"
+	respond: sessionEvents.messageRespond
 }
 
 /**
@@ -510,13 +609,21 @@ const EVENT_FOR_FUNCTION: Record<string, string> = {
  * versions whose entry input pins the mode's type. Every other function's
  * contributors declared themselves through `contributes.triggers` (19 §4).
  *
- * When several serve, **the binding selects** (19 §3): rows in
- * `pipeline_function_bindings`, consulted session > instance, each only
- * ever a choice *among the eligible* — a binding whose spec left the bucket
- * (retired, republished elsewhere, deleted) falls through to the next scope
- * rather than routing to something that cannot serve. With no binding, the
- * companion rule made deterministic: a contributor in the mode owner's
- * namespace first, then first-published.
+ * When several serve, **the binding selects** (19 §3), in this order (R-6,
+ * ruled 2026-09-15, built 2026-09-16): the **session's own** row in
+ * `pipeline_function_bindings`, then the session's **preset** (its event
+ * binding, for the keys that have an event — `EVENT_FOR_FUNCTION`), then the
+ * **instance's** row, then the companion rule. A session is a work, not a
+ * preference (12 §2): what a person chose for *this* session beats what an
+ * administrator chose for every session born on the preset, and the preset
+ * in turn beats the instance-wide default. Until R-6 the preset answered
+ * first and a session's own binding could never win.
+ *
+ * Every binding is only ever a choice *among the eligible* — a binding whose
+ * spec left the bucket (retired, republished elsewhere, deleted) falls
+ * through to the next layer rather than routing to something that cannot
+ * serve. With no binding, the companion rule made deterministic: a
+ * contributor in the mode owner's namespace first, then first-published.
  *
  * `spec` is null when nothing serves — including when the registry never
  * synced — so callers keep their own floor (the F29 posture: routing failing
@@ -524,7 +631,9 @@ const EVENT_FOR_FUNCTION: Record<string, string> = {
  *
  * `fallback` is the one thing that must not travel as silence: the session's
  * preset named a pipeline for this function's event and that pipeline no
- * longer answers, so the layers below chose instead (ruled 2026-09-10).
+ * longer answers, so the layers below chose instead (ruled 2026-09-10). It is
+ * only ever computed when the preset was consulted — a session whose own
+ * binding won never asked its preset, so there was no substitution to say.
  */
 export interface FunctionResolution {
 	spec: string | null
@@ -541,35 +650,21 @@ export async function resolveFunctionVerdict(
 	db: Db,
 	genreId: string,
 	functionKey: string,
-	scope?: { sessionId?: number | null }
+	scope?: {
+		sessionId?: number | null
+		/**
+		 * The spec the caller has already chosen — the one whose *action*
+		 * was pressed (U5c review, W1). The verdict is then only the
+		 * eligibility check: that spec if it currently serves the function
+		 * for this genre, else null. No binding layer is consulted, because
+		 * a binding selects among alternatives when nobody named one, and
+		 * here somebody did.
+		 */
+		spec?: string | null
+	}
 ): Promise<FunctionResolution> {
 	let fallback: PresetFallback | undefined
 	try {
-		/**
-		 * The session's preset answers first (24 §1), through the same reader
-		 * `resolveSessionEventSpec` uses — two doors onto one fact, so a reply
-		 * and a dispatched event can never route differently. Only the keys
-		 * with an event of their own; see `EVENT_FOR_FUNCTION`.
-		 *
-		 * A binding that stopped resolving carries on to the layers below and
-		 * takes its account with it (ruled 2026-09-10): the reply still
-		 * happens, on whatever the bucket would have chosen, and every surface
-		 * says which and why.
-		 */
-		const boundEvent = EVENT_FOR_FUNCTION[functionKey]
-		if (boundEvent) {
-			const verdict = await presetEventSpec(db, {
-				sessionId: scope?.sessionId,
-				genreId,
-				event: boundEvent
-			})
-			if (verdict.via === "preset") return { spec: verdict.spec }
-			if (verdict.via === "fallback") {
-				const { via: _via, spec: _spec, ...rest } = verdict
-				fallback = rest
-			}
-		}
-
 		/**
 		 * A genre id carries no `@`; a transitional input-type genre does.
 		 * Dispatch for genre ids keys on the input lock — (genre, event) as
@@ -616,7 +711,7 @@ export async function resolveFunctionVerdict(
 				if (isGenreId) {
 					if (
 						v.inputGenre !== genreId ||
-						v.inputEvent !== "message-respond"
+						v.inputEvent !== sessionEvents.messageRespond
 					)
 						continue
 				} else {
@@ -631,12 +726,12 @@ export async function resolveFunctionVerdict(
 						.from(schema.pipelineNodes)
 						.where(eq(schema.pipelineNodes.specVersionId, v.id))
 					const entry = (nodes as any[])
-						.filter((n) => n.kind === "input")
+						.filter((n) => n.kind === "inlet")
 						.sort((a, b) => a.position - b.position)[0]
 					if (
 						!entry ||
-						entry.typeId !== bareType ||
-						String(entry.typeVersion) !== versionStr
+						entry.definitionId !== bareType ||
+						String(entry.definitionVersion) !== versionStr
 					)
 						continue
 				}
@@ -650,7 +745,7 @@ export async function resolveFunctionVerdict(
 					.from(schema.pipelineNodes)
 					.where(eq(schema.pipelineNodes.specVersionId, v.id))
 				const writesAMessage = (nodes as any[]).some(
-					(n) => n.kind === "consumer" && n.typeId === CHAT_WRITE_TYPE
+					(n) => n.kind === "outlet" && n.definitionId === CHAT_WRITE_TYPE
 				)
 				if (!writesAMessage) continue
 				candidates.push({
@@ -661,13 +756,10 @@ export async function resolveFunctionVerdict(
 		} else {
 			for (const s of specs as any[]) {
 				const v = activeBySpec.get(s.id)
-				const triggers = (v?.contributes as any)?.triggers
-				if (!Array.isArray(triggers)) continue
+				if (!v?.contributes) continue
 				if (
-					triggers.some(
-						(t: any) =>
-							(t?.genre ?? t?.mode) === genreId &&
-							t?.function === functionKey
+					actionsOf({ id: s.slug, contributes: v.contributes }).some(
+						(a) => a.genre === genreId && a.function === functionKey
 					)
 				)
 					candidates.push({
@@ -677,12 +769,18 @@ export async function resolveFunctionVerdict(
 			}
 		}
 
-		if (!candidates.length)
-			return { spec: null, ...(fallback ? { fallback } : {}) }
+		// A named spec (W1): eligible, or nothing — the layers below are for
+		// a fire that named none.
+		if (scope?.spec != null)
+			return {
+				spec: candidates.some((c) => c.slug === scope.spec)
+					? scope.spec
+					: null
+			}
 
-		// The binding selects (19 §3, simplified 2026-08-24): session >
-		// instance, eligibility re-checked — a bound spec must still be a
-		// candidate to win. There is no user layer.
+		// The binding selects (19 §3). Eligibility is re-checked at every
+		// layer — a bound spec must still be a candidate to win — and there
+		// is no user layer (simplified 2026-08-24).
 		const slugBySpecId = new Map<number, string>(
 			(specs as any[]).map((s) => [s.id, s.slug])
 		)
@@ -696,22 +794,63 @@ export async function resolveFunctionVerdict(
 					eq(schema.pipelineFunctionBindings.functionKey, functionKey)
 				)
 			)) as any[]
-		const addresses: Array<{ kind: string; id: number }> = [
-			...(scope?.sessionId != null
-				? [{ kind: "session", id: scope.sessionId }]
-				: []),
-			{ kind: "instance", id: 0 }
-		]
-		for (const addr of addresses) {
+		const boundAt = (kind: string, id: number): string | null => {
 			const row = bindings.find(
-				(b) => b.scopeKind === addr.kind && b.scopeId === addr.id
+				(b) => b.scopeKind === kind && b.scopeId === id
 			)
-			if (!row) continue
-			const slug = slugBySpecId.get(row.specId)
-			if (slug && eligible.has(slug))
-				return { spec: slug, ...(fallback ? { fallback } : {}) }
+			const slug = row ? slugBySpecId.get(row.specId) : undefined
+			return slug && eligible.has(slug) ? slug : null
 		}
 
+		// 1. The session's own binding (R-6). A work, not a preference: the
+		//    person's choice for this session is the first thing consulted,
+		//    and the preset is never asked when it answers — so no fallback
+		//    account is owed either.
+		if (scope?.sessionId != null) {
+			const own = boundAt("session", scope.sessionId)
+			if (own) return { spec: own }
+		}
+
+		/**
+		 * 2. The session's preset (24 §1), through the same reader
+		 *    `resolveSessionEventSpec` uses — two doors onto one fact, so a
+		 *    reply and a dispatched event can never route differently. Only
+		 *    the keys with an event of their own; see `EVENT_FOR_FUNCTION`.
+		 *
+		 * A binding that stopped resolving carries on to the layers below and
+		 * takes its account with it (ruled 2026-09-10): the reply still
+		 * happens, on whatever the bucket would have chosen, and every surface
+		 * says which and why.
+		 *
+		 * ⚠ The lifecycle path (`runtime/sessionEvents.ts`) starts here: an
+		 * event has no per-session binding yet, so for it the preset IS the
+		 * top layer. R-6 names that gap; it is not closed by this change.
+		 */
+		const boundEvent = EVENT_FOR_FUNCTION[functionKey]
+		if (boundEvent) {
+			const verdict = await presetEventSpec(db, {
+				sessionId: scope?.sessionId,
+				genreId,
+				event: boundEvent
+			})
+			if (verdict.via === "preset") return { spec: verdict.spec }
+			if (verdict.via === "fallback") {
+				const { via: _via, spec: _spec, ...rest } = verdict
+				fallback = rest
+			}
+		}
+
+		if (!candidates.length)
+			return { spec: null, ...(fallback ? { fallback } : {}) }
+
+		// 3. The instance's binding — an administrator's default for every
+		//    session of the genre that neither chose for itself nor was born
+		//    on a preset that did.
+		const instanceWide = boundAt("instance", 0)
+		if (instanceWide)
+			return { spec: instanceWide, ...(fallback ? { fallback } : {}) }
+
+		// 4. The companion rule.
 		const companion = candidates.find((c) => c.namespace === genreNamespace)
 		return {
 			spec: (companion ?? candidates[0]!).slug,
@@ -738,7 +877,7 @@ export async function resolveFunctionSpec(
 
 // ── Which of a mode's functions a session actually has (19 §3) ─────────────────
 
-export interface SessionFunction extends GenreTrigger {
+export interface SessionFunction extends GenreAction {
 	/** The answer in force, after all three layers. */
 	enabled: boolean
 	/**
@@ -906,6 +1045,55 @@ export async function presetActionsFor(
 }
 
 /**
+ * The one action a bare function key names among what a genre is offered,
+ * or null — **exactly one declarer, of any origin** (U5c third pass, W4+W2;
+ * ruled 2026-09-16). The rule the reader (`presetIncludes`), both writers
+ * (`normalizeIncludedActions`, `promoteIncludedActions`) and migration 0137
+ * share, stated once: a key several actions carry names none of them, and
+ * an attachment that is the sole declarer IS what the key means — an admin
+ * who included it did so when it was valid, and losing it silently would be
+ * worse than keeping it.
+ */
+export function soleDeclarer(
+	offered: ReadonlyArray<GenreAction>,
+	fn: string
+): GenreAction | null {
+	const declarers = offered.filter((t) => t.function === fn)
+	return declarers.length === 1 ? declarers[0]! : null
+}
+
+/**
+ * Does a preset's included set name this action?
+ *
+ * The set stores **identities** — `<spec slug>#<key>` (U5c review, W-A;
+ * ruled 2026-09-16): a preset curates declarations, and two actions on one
+ * function are two entries. Core's message verbs, should one ever be listed,
+ * are bare (`edit`) because they are listed under the name `core`, not a
+ * row; nothing writes them today.
+ *
+ * ⏳ One release: a bare function key (`narrate`) written before identities
+ * — by `pipelines:setPresetActions` or `sessionPresets:update` — includes
+ * the action that is the genre's **sole declarer** of that function
+ * (`soleDeclarer`: exactly one, of any origin) and nothing when several
+ * carry it. Migration 0137 rewrites such keys by the same rule where it
+ * can; this fallback covers the rows it could not (no declarer, or several,
+ * at the time — the boot notice in `seedSessionPresets` lists them), and
+ * goes with the release after. `offered` is the genre's whole action list,
+ * so the count is over every declarer and not the one being asked about.
+ */
+export const presetIncludes = (
+	included: ReadonlyArray<string>,
+	t: GenreAction,
+	offered: ReadonlyArray<GenreAction>
+): boolean => {
+	const identity = actionIdentity(t)
+	if (included.includes(identity)) return true
+	if (!included.includes(t.function)) return false
+	const sole = soleDeclarer(offered, t.function)
+	return sole !== null && actionIdentity(sole) === identity
+}
+
+/**
  * The mode's functions, with each one's state on this session.
  *
  * The *available* set is the mode's contributed triggers and nothing else, so
@@ -924,7 +1112,7 @@ export async function listSessionFunctions(
 	genreId: string,
 	userId?: number | null
 ): Promise<SessionFunction[]> {
-	const available = await listGenreTriggers(db, genreId)
+	const available = await listGenreActions(db, genreId)
 	const rows = await db
 		.select()
 		.from(schema.sessionFunctions)
@@ -937,6 +1125,20 @@ export async function listSessionFunctions(
 	const stated = new Map<string, boolean>(
 		(rows as any[]).map((r) => [r.functionKey as string, !!r.enabled])
 	)
+	/**
+	 * A row is keyed by the action's identity — `<spec slug>#<key>` — so two
+	 * actions on one function switch independently (U5c review, W1).
+	 *
+	 * ⏳ One release: a row written before this keyed on the bare function
+	 * (`narrate`), and a person's off-switch must not silently revert on
+	 * upgrade. Such a row answers for every action of its function until
+	 * the next write of any of them, which stores the identity and deletes
+	 * the bare row (`setSessionFunction`). Nothing ships with such rows —
+	 * `sessions.actions.int.test.ts` asserts the seed writes none — so no
+	 * migration rewrites any; remove this fallback with the release after.
+	 */
+	const statedFor = (t: GenreAction): boolean | undefined =>
+		stated.get(actionIdentity(t)) ?? stated.get(t.function)
 
 	const preset = await presetActionsFor(db, sessionId, genreId, userId)
 
@@ -950,20 +1152,20 @@ export async function listSessionFunctions(
 			const included =
 				preset.included === null
 					? t.enabledByDefault
-					: preset.included.includes(t.function)
-			const source: SessionFunction["source"] = stated.has(t.function)
-				? "session"
-				: preset.included === null
-					? "default"
-					: "preset"
+					: presetIncludes(preset.included, t, available)
+			const own = statedFor(t)
+			const source: SessionFunction["source"] =
+				own !== undefined
+					? "session"
+					: preset.included === null
+						? "default"
+						: "preset"
 			return {
 				...t,
 				included,
 				source,
-				explicit: stated.has(t.function),
-				enabled: stated.has(t.function)
-					? stated.get(t.function)!
-					: included
+				explicit: own !== undefined,
+				enabled: own !== undefined ? own : included
 			}
 		})
 		.sort(
@@ -1022,7 +1224,13 @@ export async function setSessionFunction(
 	db: Db,
 	sessionId: number,
 	genreId: string,
-	functionKey: string,
+	/**
+	 * Which action: its identity (`<spec slug>#<key>`), or the bare
+	 * function key when exactly one action carries it (U5c review, W1).
+	 * Several actions on one function named by the bare key is refused with
+	 * their identities — a choice has to be about one thing.
+	 */
+	ref: string,
 	enabled: boolean,
 	actor?: { userId?: number | null; isAdmin?: boolean }
 ): Promise<SetSessionFunctionResult> {
@@ -1049,15 +1257,29 @@ export async function setSessionFunction(
 		genreId,
 		actor?.userId
 	)
-	const decl = available.find((t) => t.function === functionKey)
+	const parsed = parseActionIdentity(ref)
+	const named = parsed
+		? available.filter(
+				(t) => t.specSlug === parsed.specSlug && t.key === parsed.key
+			)
+		: available.filter((t) => t.function === ref)
+	if (named.length > 1)
+		return {
+			ok: false,
+			error:
+				`'${ref}' names ${named.length} actions here — ` +
+				`${named.map(actionIdentity).join(", ")}. Say which.`
+		}
+	const decl = named[0]
 	if (!decl)
 		return {
 			ok: false,
 			error:
-				`no spec contributes '${functionKey}' to ${genreId}. A session can only ` +
+				`no spec contributes '${ref}' to ${genreId}. A session can only ` +
 				`turn on what its genre was offered — install or publish a spec that ` +
 				`contributes it, and it appears here.`
 		}
+	const functionKey = actionIdentity(decl)
 
 	// The permission line (ruled 2026-08-24). Toggling an action the preset
 	// **includes** is the user's own business — it is their session, and the
@@ -1082,6 +1304,18 @@ export async function setSessionFunction(
 		eq(schema.sessionFunctions.genreId, genreId),
 		eq(schema.sessionFunctions.functionKey, functionKey)
 	)
+	// ⏳ A pre-identity row keyed on the bare function (see `statedFor`) is
+	// superseded by this write, whichever way it goes: it stops answering
+	// for every action of the function the moment one of them is chosen.
+	await db
+		.delete(schema.sessionFunctions)
+		.where(
+			and(
+				eq(schema.sessionFunctions.sessionId, sessionId),
+				eq(schema.sessionFunctions.genreId, genreId),
+				eq(schema.sessionFunctions.functionKey, decl.function)
+			)
+		)
 
 	// Reset-is-delete against the layer *below* this one — the preset's answer,
 	// or the companion rule where the preset states nothing. Comparing against
@@ -1152,23 +1386,23 @@ export async function genreOfSpec(
 			.from(schema.pipelineNodes)
 			.where(eq(schema.pipelineNodes.specVersionId, spec.activeVersionId))
 		const entry = (nodes as any[])
-			.filter((n) => n.kind === "input")
+			.filter((n) => n.kind === "inlet")
 			.sort((a, b) => a.position - b.position)[0]
 		if (!entry) return null
 
-		const genreId = `${entry.typeId}@${entry.typeVersion}`
+		const genreId = `${entry.definitionId}@${entry.definitionVersion}`
 		// Only a *shape-bearing* input type is a mode. Checked against the
 		// registry rather than assumed, so a pipeline whose entry is an
 		// ordinary input does not acquire a mode by having one.
 		const [row] = await db
-			.select({ sessionShape: schema.pipelineTypeRegistry.sessionShape })
-			.from(schema.pipelineTypeRegistry)
+			.select({ sessionShape: schema.pipelineDefinitionRegistry.sessionShape })
+			.from(schema.pipelineDefinitionRegistry)
 			.where(
 				and(
-					eq(schema.pipelineTypeRegistry.typeId, entry.typeId),
+					eq(schema.pipelineDefinitionRegistry.definitionId, entry.definitionId),
 					eq(
-						schema.pipelineTypeRegistry.version,
-						Number(entry.typeVersion)
+						schema.pipelineDefinitionRegistry.version,
+						Number(entry.definitionVersion)
 					)
 				)
 			)
@@ -1180,14 +1414,117 @@ export async function genreOfSpec(
 }
 
 /**
+ * A preset's included set as it is stored: every entry an **identity** of an
+ * action the genre is offered (W-A). The refusals are about meaning — an
+ * entry no spec contributes would put a key in the list that can never
+ * match anything, and the next person to read the row would find an answer
+ * to a question nobody asks.
+ *
+ * ⏳ A bare function key is accepted while exactly one action of any origin
+ * carries it (`soleDeclarer`), and stored as that action's identity — the
+ * same reading `presetIncludes` gives a bare key left in a row — so a
+ * client still sending the pre-identity shape lands the identity rather
+ * than the key. A bare key several actions carry is refused with the
+ * identities: a curation has to be about one thing. The strict writer; the
+ * paths that may not refuse (boot, a copy) run `promoteIncludedActions`.
+ */
+export function normalizeIncludedActions(
+	offered: ReadonlyArray<GenreAction>,
+	included: ReadonlyArray<string>
+): { ok: true; included: string[] } | { ok: false; error: string } {
+	const out: string[] = []
+	for (const entry of included) {
+		const parsed = parseActionIdentity(entry)
+		if (parsed) {
+			const named = offered.find(
+				(t) => t.specSlug === parsed.specSlug && t.key === parsed.key
+			)
+			if (!named)
+				return {
+					ok: false,
+					error:
+						`nothing contributes '${entry}' to this pipeline's genre, so ` +
+						`including it would put a key in the list that can never match.`
+				}
+			out.push(entry)
+			continue
+		}
+		const sole = soleDeclarer(offered, entry)
+		if (sole) {
+			out.push(actionIdentity(sole))
+			continue
+		}
+		// Not one, so none or several — a single declarer was promoted above.
+		const byFunction = offered.filter((t) => t.function === entry)
+		if (byFunction.length)
+			return {
+				ok: false,
+				error:
+					`'${entry}' names ${byFunction.length} actions here — ` +
+					`${byFunction.map(actionIdentity).join(", ")}. A preset includes an action by ` +
+					`its identity ('<spec slug>#<key>'). Say which.`
+			}
+		return {
+			ok: false,
+			error:
+				`nothing contributes '${entry}' to this pipeline's genre, so ` +
+				`including it would put a key in the list that can never match.`
+		}
+	}
+	return { ok: true, included: [...new Set(out)] }
+}
+
+/**
+ * The lenient half of `normalizeIncludedActions`, for the paths that may
+ * never refuse: a plugin preset projected at boot (`syncPluginPresets`) and
+ * a preset copied from another (`sessionPresets:create` with `fromPresetId`).
+ *
+ * The same promotion — a bare key becomes the identity of the genre's sole
+ * declarer of that function (`soleDeclarer`, any origin) — but a bare key
+ * that cannot be promoted is **kept bare** and returned in `bare` for the
+ * caller to report, rather than refused: a boot that refuses a manifest's
+ * preset is a boot that offers nothing, and a copy that refuses is a copy
+ * that lost a curation somebody made. Such a key is still served by
+ * `presetIncludes`' ⏳ fallback, and it has one more chance at promotion on
+ * the next sync or write. Identities pass through verbatim, deduplicated.
+ */
+export function promoteIncludedActions(
+	offered: ReadonlyArray<GenreAction>,
+	included: ReadonlyArray<string>
+): { included: string[]; bare: string[] } {
+	const out: string[] = []
+	const bare: string[] = []
+	for (const entry of included) {
+		if (parseActionIdentity(entry)) {
+			out.push(entry)
+			continue
+		}
+		const sole = soleDeclarer(offered, entry)
+		if (sole) {
+			out.push(actionIdentity(sole))
+			continue
+		}
+		out.push(entry)
+		bare.push(entry)
+	}
+	return { included: [...new Set(out)], bare: [...new Set(bare)] }
+}
+
+/**
  * Set which actions a preset includes, and whether it may be chosen.
  *
  * Admin-only at the socket; the refusals here are about meaning. An immutable
  * preset is refused because core's shipped rows are "selectable and copyable,
  * never edited in place" — the same rule the rest of the panel runs under, so
- * the answer to "why can't I edit this" is one answer everywhere. An action no
- * spec contributes to this pipeline's mode is refused by name, because storing
- * it would put a key in the list that can never match anything.
+ * the answer to "why can't I edit this" is one answer everywhere. The list is
+ * validated and stored **by identity** (`normalizeIncludedActions`): an
+ * action no spec contributes to this pipeline's mode is refused by name,
+ * because storing it would put a key in the list that can never match
+ * anything.
+ *
+ * ⏳ This writes the legacy squat on `pipeline_configs.included_actions`;
+ * `session_presets.included_actions` (`sessionPresets:update`) is the ruled
+ * home and runs the same normaliser.
  */
 export async function setPresetActions(
 	db: Db,
@@ -1209,31 +1546,24 @@ export async function setPresetActions(
 				`place. Duplicate it and edit the copy.`
 		}
 
-	if (patch.includedActions != null) {
+	let includedActions = patch.includedActions
+	if (includedActions != null) {
 		const [spec] = await db
 			.select({ slug: schema.pipelineSpecs.slug })
 			.from(schema.pipelineSpecs)
 			.where(eq(schema.pipelineSpecs.id, config.specId))
 			.limit(1)
 		const genreId = spec ? await genreOfSpec(db, spec.slug) : null
-		const offered = genreId ? await listGenreTriggers(db, genreId) : []
-		const keys = new Set(offered.map((t) => t.function))
-		const unknown = patch.includedActions.filter((k) => !keys.has(k))
-		if (unknown.length)
-			return {
-				ok: false,
-				error:
-					`nothing contributes '${unknown[0]}' to this pipeline's genre, so ` +
-					`including it would put a key in the list that can never match.`
-			}
+		const offered = genreId ? await listGenreActions(db, genreId) : []
+		const normalized = normalizeIncludedActions(offered, includedActions)
+		if (!normalized.ok) return normalized
+		includedActions = normalized.included
 	}
 
 	await db
 		.update(schema.pipelineConfigs)
 		.set({
-			...(patch.includedActions !== undefined
-				? { includedActions: patch.includedActions }
-				: {}),
+			...(includedActions !== undefined ? { includedActions } : {}),
 			...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
 			updatedAt: new Date()
 		})

@@ -2,13 +2,34 @@ import { db } from "$lib/server/db"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { user as loadUser, user } from "./users"
-import { userSettingsGet } from "./userSettings"
+import { buildUserSettingsGet } from "./userSettings"
 import type { Handler } from "$lib/shared/events"
 import {
 	bareLayouts,
 	previewContextTemplate
 } from "$lib/server/pipelines/prompt/preview"
 import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
+
+/**
+ * The config list, as one function, so the three write cascades below can be
+ * handed the BUILDER rather than the handler. `contextConfigs:list` is gated, so
+ * a write made from anywhere but the admin list pays for no re-read. Skipping
+ * the emit alone would save nothing; the query is the cost.
+ *
+ * No admin check here — that belongs to the handlers, which are the surface a
+ * client can reach, and every cascade below has already made it.
+ */
+async function buildContextConfigsList(): Promise<Sockets.ContextConfigs.List.Response> {
+	const contextConfigsList = await db.query.contextConfigs.findMany({
+		columns: {
+			id: true,
+			name: true,
+			isImmutable: true
+		},
+		orderBy: (c, { asc, desc }) => [desc(c.isImmutable), asc(c.name)]
+	})
+	return { contextConfigsList }
+}
 
 export const contextConfigsListHandler: Handler<
 	Sockets.ContextConfigs.List.Params,
@@ -26,15 +47,7 @@ export const contextConfigsListHandler: Handler<
 			)
 		}
 
-		const contextConfigsList = await db.query.contextConfigs.findMany({
-			columns: {
-				id: true,
-				name: true,
-				isImmutable: true
-			},
-			orderBy: (c, { asc, desc }) => [desc(c.isImmutable), asc(c.name)]
-		})
-		const res: Sockets.ContextConfigs.List.Response = { contextConfigsList }
+		const res = await buildContextConfigsList()
 		emitToUser("contextConfigs:list", res)
 		return res
 	}
@@ -110,7 +123,8 @@ export const contextConfigsCreate: Handler<
 			.insert(schema.contextConfigs)
 			.values(contextConfigValues)
 			.returning()
-		await contextConfigsListHandler.handler(socket, {}, emitToUser)
+		// Lazy — see `buildContextConfigsList`.
+		await emitToUser("contextConfigs:list", () => buildContextConfigsList())
 		const res: Sockets.ContextConfigs.Create.Response = { contextConfig }
 		emitToUser("contextConfigs:create", res)
 		return res
@@ -162,7 +176,8 @@ export const contextConfigsUpdate: Handler<
 						.returning()
 				)[0]
 			: currentConfig!
-		await contextConfigsListHandler.handler(socket, {}, emitToUser)
+		// Lazy — see `buildContextConfigsList`.
+		await emitToUser("contextConfigs:list", () => buildContextConfigsList())
 		const res: Sockets.ContextConfigs.Update.Response = { contextConfig }
 		emitToUser("contextConfigs:update", res)
 		await user(socket, {}, emitToUser)
@@ -210,7 +225,8 @@ export const contextConfigsDelete: Handler<
 		await db
 			.delete(schema.contextConfigs)
 			.where(eq(schema.contextConfigs.id, params.id))
-		await contextConfigsListHandler.handler(socket, {}, emitToUser)
+		// Lazy — see `buildContextConfigsList`.
+		await emitToUser("contextConfigs:list", () => buildContextConfigsList())
 		const res: Sockets.ContextConfigs.Delete.Response = {
 			success: "Context config deleted successfully"
 		}
@@ -267,9 +283,13 @@ export const contextConfigsSetUserActive: Handler<
 			})
 			.where(eq(schema.userSettings.userId, currentUser.id))
 
-		// You may want to emit the user and contextConfig updates here as in the original
+		// Two cross-family refreshes, both lazy: the user row and this user's
+		// settings, which is where the active config actually lives. Both go
+		// through `emitToUser`, so both answer to the gate.
 		await loadUser(socket, {}, emitToUser)
-		await userSettingsGet.handler(socket, {}, emitToUser)
+		await emitToUser("userSettings:get", () =>
+			buildUserSettingsGet(currentUser.id)
+		)
 
 		// Get the updated user to return in response
 		const updatedUser = await db.query.users.findFirst({

@@ -110,10 +110,13 @@ beforeAll(async () => {
 			name: "Live Ollama",
 			type: "ollama",
 			baseUrl: OLLAMA,
-			model,
 			promptFormat: "vicuna",
 			tokenCounter: "estimate"
 		})
+		.returning()
+	const [liveModel] = await db
+		.insert(schema.connectionModels)
+		.values({ connectionId: connection.id, model, name: model })
 		.returning()
 
 	const [sampling] = await db.select().from(schema.samplingConfigs).limit(1)
@@ -128,6 +131,7 @@ beforeAll(async () => {
 	)
 	await setCapabilityDefault(db, "text->text", {
 		connectionId: connection.id,
+		connectionModelId: liveModel.id,
 		samplingConfigId: sampling?.id ?? null
 	})
 
@@ -143,10 +147,10 @@ beforeAll(async () => {
 	characterId = character.id
 
 	const [persona] = await db
-		.insert(schema.personas)
+		.insert(schema.characters)
 		.values({
 			userId,
-			isDefault: false,
+			isPersona: true,
 			name: "Rell",
 			description: "A cartographer."
 		})

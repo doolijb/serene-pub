@@ -41,8 +41,9 @@ beforeEach(async () => {
 	db = await createTestDb()
 }, 60_000)
 
-/** A saved embedding connection with a default model row, as the app makes one. */
+/** A saved embedding connection with an explicit model row, as the app makes one. */
 async function connection(values: Record<string, any>) {
+	const { model, ...endpoint } = values
 	const [conn] = await db
 		.insert(schema.connections)
 		.values({
@@ -50,25 +51,46 @@ async function connection(values: Record<string, any>) {
 			modality: "embeddings",
 			extraJson: {},
 			capabilities: {},
-			...values
+			...endpoint
 		} as any)
 		.returning()
-	if (values.model) {
-		await db.insert(schema.connectionModels).values({
-			connectionId: conn.id,
-			model: values.model,
-			name: values.model,
-			isDefault: true
-		})
+	let modelId: number | null = null
+	if (model) {
+		const [m] = await db
+			.insert(schema.connectionModels)
+			.values({
+				connectionId: conn.id,
+				model,
+				name: model
+			})
+			.returning()
+		modelId = m.id
 	}
-	return conn
+	return Object.assign(conn, { modelId })
 }
 
-async function star(connectionId: number | null) {
+async function star(
+	connectionId: number | null,
+	connectionModelId?: number | null
+) {
 	await db.delete(schema.connectionDefaults)
+	let mid: number | null | undefined = connectionModelId
+	if (connectionId != null && mid === undefined) {
+		const [m] = await db
+			.select()
+			.from(schema.connectionModels)
+			.where(eq(schema.connectionModels.connectionId, connectionId))
+			.limit(1)
+		mid = m?.id ?? null
+	}
 	await db
 		.insert(schema.connectionDefaults)
-		.values({ input: "text", output: "embedding", connectionId })
+		.values({
+			input: "text",
+			output: "embedding",
+			connectionId,
+			connectionModelId: mid ?? null
+		})
 }
 
 describe("no star", () => {
@@ -91,15 +113,27 @@ describe("no star", () => {
 		expect(await embeddingsEnabled(db)).toBe(false)
 	}, 60_000)
 
-	it("is what a star pointing at a row that is gone resolves to", async () => {
+	it("is what an endpoint-only registration resolves to", async () => {
+		// No per-connection default model: a registration naming only the
+		// endpoint is incomplete, and the lane treats it as off rather than
+		// guessing a model.
 		const conn = await connection({
 			type: CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS,
 			model: "Xenova/all-MiniLM-L6-v2"
 		})
-		await star(conn.id)
+		await star(conn.id, null)
+		expect(await resolveEmbeddingTarget(db)).toBeNull()
+	}, 60_000)
+
+	it("is what a star pointing at a row that is gone resolves to", async () => {
+		const conn2 = await connection({
+			type: CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS,
+			model: "Xenova/all-MiniLM-L6-v2"
+		})
+		await star(conn2.id)
 		await db
 			.delete(schema.connections)
-			.where(eq(schema.connections.id, conn.id))
+			.where(eq(schema.connections.id, conn2.id))
 		expect(await resolveEmbeddingTarget(db)).toBeNull()
 	}, 60_000)
 })
@@ -193,8 +227,8 @@ describe("a starred API connection", () => {
 		expect(target.apiKey ?? null).toBeNull()
 	}, 60_000)
 
-	it("takes the model the star NAMES, not the endpoint's default", async () => {
-		// The pair rule (0114): a registration names `(connection, model)`, and
+	it("takes the model the star NAMES", async () => {
+		// The pair rule: a registration names `(connection, model)`, and
 		// the model half is what an endpoint hosting several is for.
 		const conn = await connection({
 			type: CONNECTION_TYPE.OPENAI_EMBEDDINGS,
@@ -206,8 +240,7 @@ describe("a starred API connection", () => {
 			.values({
 				connectionId: conn.id,
 				model: "text-embedding-3-large",
-				name: "large",
-				isDefault: false
+				name: "large"
 			})
 			.returning()
 		await db.delete(schema.connectionDefaults)

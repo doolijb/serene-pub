@@ -24,9 +24,13 @@
  * The prune is confined to the widget ids actually being synced. Core boot syncs
  * only `CORE_WIDGETS`, so it prunes only core widgets' stale presets and leaves
  * a plugin's system rows alone (that plugin prunes its own on its next sync).
- * A whole widget removed from the synced set is NOT pruned here (its ids aren't
- * in scope) — its orphaned system rows are harmless (unreferenced pins fall back
- * to the default) and are cleaned when the widget's owner is uninstalled.
+ *
+ * A caller syncing the COMPLETE set — core boot is the one that can say that —
+ * passes `pruneUndeclared`, and then a widget id absent from the decls has its
+ * system rows removed too. It is opt-in because the claim is the caller's: a
+ * plugin syncing its own three widgets would otherwise sweep away every other
+ * widget's rows, which is the same footgun the scoping above exists to prevent.
+ * A user row is out of scope either way.
  */
 import { and, eq, inArray, notInArray } from "drizzle-orm"
 import { db } from "."
@@ -59,6 +63,16 @@ function shippedStylesFrom(decls: WidgetDecl[]): ShippedStyle[] {
 	return out
 }
 
+/** How much of the table a sync speaks for (see "Prune scope" above). */
+export interface SyncWidgetStylesOptions {
+	/**
+	 * These decls are the COMPLETE set of widgets with system styles, so system
+	 * rows for any other widget id are orphans and go. Only a caller that owns
+	 * every declaration may say this; core boot does.
+	 */
+	pruneUndeclared?: boolean
+}
+
 /**
  * Reconcile the given widgets' shipped presets against the `widget_styles`
  * table. Idempotent: safe to run every boot. `version` is stamped as provenance
@@ -66,7 +80,8 @@ function shippedStylesFrom(decls: WidgetDecl[]): ShippedStyle[] {
  */
 export async function syncWidgetStyles(
 	decls: WidgetDecl[],
-	version: string
+	version: string,
+	options: SyncWidgetStylesOptions = {}
 ): Promise<void> {
 	const shipped = shippedStylesFrom(decls)
 	const widgetIds = decls.map((d) => d.id)
@@ -135,6 +150,28 @@ export async function syncWidgetStyles(
 					shippedSlugs.length
 						? notInArray(schema.widgetStyles.slug, shippedSlugs)
 						: undefined
+				)
+			)
+	}
+
+	// The wider prune, for the caller that speaks for the whole table: system
+	// rows belonging to a widget id nobody declares any more. A widget that is
+	// gone takes its shipped skins with it — the pass above can only reach ids
+	// that are still in the decls, so without this a retired widget's rows sit
+	// in the picker for good. Still `source = 'system'`: a user's own style for
+	// that widget is theirs, and an uninstall is what removes it.
+	//
+	// An EMPTY decl set is declined rather than read as "nothing is declared":
+	// the query would then carry no widget predicate at all and take every
+	// system row in the table with it, which is a truncate wearing a sync's
+	// name. A caller with nothing to declare has nothing to reconcile.
+	if (options.pruneUndeclared && widgetIds.length) {
+		await db
+			.delete(schema.widgetStyles)
+			.where(
+				and(
+					eq(schema.widgetStyles.source, "system"),
+					notInArray(schema.widgetStyles.widgetSlug, widgetIds)
 				)
 			)
 	}

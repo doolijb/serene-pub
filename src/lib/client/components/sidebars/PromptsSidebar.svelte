@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
-	import { getContext, onDestroy, onMount } from "svelte"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
+	import { getContext, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import PromptConfigUnsavedChangesModal from "../modals/PromptConfigUnsavedChangesModal.svelte"
 	import ConnectionSamplingPicker from "../ConnectionSamplingPicker.svelte"
@@ -820,109 +821,181 @@
 		samplingList = msg.samplingConfigsList
 	}
 
+	/**
+	 * Every config family this sidebar edits, on the interest registry.
+	 *
+	 * All BARE: none of these events is in `SCOPED_EVENTS` — each `:get` is
+	 * answered on its own event name and the handler takes whatever row came
+	 * back, exactly as it did before — and a `#<id>` key for an unscoped event
+	 * would match no payload at all.
+	 *
+	 * All STANDING: every list here is a cascade target, and the create,
+	 * update and set-default writes answer ONLY through their family's list,
+	 * so a view that can write has to hold that key for as long as it is open.
+	 *
+	 * The ordinary app-wide registry, not `adminInterest`: that context exists
+	 * only under `/admin`, and none of these families is a restricted prefix.
+	 */
+
+	// Session prompts
+	useInterest<"promptConfigs:list">(
+		"promptConfigs:list",
+		handlePromptConfigsList
+	)
+	useInterest<"promptConfigs:get">(
+		"promptConfigs:get",
+		handlePromptConfigsGet
+	)
+	useInterest<"promptConfigs:create">(
+		"promptConfigs:create",
+		handlePromptConfigsCreate
+	)
+	useInterest<"promptConfigs:update">(
+		"promptConfigs:update",
+		handlePromptConfigsUpdate
+	)
+	useInterest<"promptConfigs:setUserActive">(
+		"promptConfigs:setUserActive",
+		handlePromptConfigsSetUserActive
+	)
+	useInterest<"promptConfigs:setUserActive:error">(
+		"promptConfigs:setUserActive:error",
+		handlePromptConfigsSetUserActiveError
+	)
+
+	// Narrator prompts
+	useInterest<"narratorPromptConfigs:list">(
+		"narratorPromptConfigs:list",
+		handleNarratorPromptConfigsList
+	)
+	useInterest<"narratorPromptConfigs:get">(
+		"narratorPromptConfigs:get",
+		handleNarratorPromptConfigsGet
+	)
+	useInterest<"narratorPromptConfigs:create">(
+		"narratorPromptConfigs:create",
+		handleNarratorPromptConfigsCreate
+	)
+	useInterest<"narratorPromptConfigs:update">(
+		"narratorPromptConfigs:update",
+		handleNarratorPromptConfigsUpdate
+	)
+	useInterest<"narratorPromptConfigs:setUserActive">(
+		"narratorPromptConfigs:setUserActive",
+		handleNarratorPromptConfigsSetUserActive
+	)
+	useInterest<"narratorPromptConfigs:setUserActive:error">(
+		"narratorPromptConfigs:setUserActive:error",
+		handleNarratorPromptConfigsSetUserActiveError
+	)
+
+	// World summarize
+	useInterest<"worldSummarizeConfigs:list">(
+		"worldSummarizeConfigs:list",
+		handleWorldSummarizeConfigsList
+	)
+	useInterest<"worldSummarizeConfigs:get">(
+		"worldSummarizeConfigs:get",
+		handleWorldSummarizeConfigsGet
+	)
+	useInterest<"worldSummarizeConfigs:create">(
+		"worldSummarizeConfigs:create",
+		handleWorldSummarizeConfigsCreate
+	)
+	useInterest<"worldSummarizeConfigs:update">(
+		"worldSummarizeConfigs:update",
+		handleWorldSummarizeConfigsUpdate
+	)
+	useInterest<"worldSummarizeConfigs:setUserActive">(
+		"worldSummarizeConfigs:setUserActive",
+		handleWorldSummarizeConfigsSetUserActive
+	)
+
+	// Graph build
+	useInterest<"graphBuildConfigs:list">(
+		"graphBuildConfigs:list",
+		handleGraphBuildConfigsList
+	)
+	useInterest<"graphBuildConfigs:get">(
+		"graphBuildConfigs:get",
+		handleGraphBuildConfigsGet
+	)
+	useInterest<"graphBuildConfigs:create">(
+		"graphBuildConfigs:create",
+		handleGraphBuildConfigsCreate
+	)
+	useInterest<"graphBuildConfigs:update">(
+		"graphBuildConfigs:update",
+		handleGraphBuildConfigsUpdate
+	)
+	useInterest<"graphBuildConfigs:setDefault">(
+		"graphBuildConfigs:setDefault",
+		handleGraphBuildConfigsSetDefault
+	)
+
+	// Scene summarize
+	useInterest<"sceneSummarizeConfigs:list">(
+		"sceneSummarizeConfigs:list",
+		handleSceneSummarizeConfigsList
+	)
+	useInterest<"sceneSummarizeConfigs:get">(
+		"sceneSummarizeConfigs:get",
+		handleSceneSummarizeConfigsGet
+	)
+	useInterest<"sceneSummarizeConfigs:create">(
+		"sceneSummarizeConfigs:create",
+		handleSceneSummarizeConfigsCreate
+	)
+	useInterest<"sceneSummarizeConfigs:update">(
+		"sceneSummarizeConfigs:update",
+		handleSceneSummarizeConfigsUpdate
+	)
+	useInterest<"sceneSummarizeConfigs:setUserActive">(
+		"sceneSummarizeConfigs:setUserActive",
+		handleSceneSummarizeConfigsSetUserActive
+	)
+
+	/**
+	 * The sampling picker's list — same terms: bare, and standing because a
+	 * sampling config saved in its own sidebar re-sends the list this picker
+	 * renders.
+	 */
+	useInterest<"samplingConfigs:list">(
+		"samplingConfigs:list",
+		handleSamplingConfigsListForPickers
+	)
+
+	// Character summarize
+	useInterest<"characterSummarizeConfigs:list">(
+		"characterSummarizeConfigs:list",
+		handleCharacterSummarizeConfigsList
+	)
+	useInterest<"characterSummarizeConfigs:get">(
+		"characterSummarizeConfigs:get",
+		handleCharacterSummarizeConfigsGet
+	)
+	useInterest<"characterSummarizeConfigs:create">(
+		"characterSummarizeConfigs:create",
+		handleCharacterSummarizeConfigsCreate
+	)
+	useInterest<"characterSummarizeConfigs:update">(
+		"characterSummarizeConfigs:update",
+		handleCharacterSummarizeConfigsUpdate
+	)
+	useInterest<"characterSummarizeConfigs:setUserActive">(
+		"characterSummarizeConfigs:setUserActive",
+		handleCharacterSummarizeConfigsSetUserActive
+	)
+
+	/**
+	 * The endpoint picker's list — bare, and standing because a connection
+	 * saved anywhere re-sends it. `connections:` is a MIXED family rather than
+	 * restricted interest, so this key is declared for every user, exactly as
+	 * the picker is rendered for every user.
+	 */
+	useInterest<"connections:list">("connections:list", handleConnectionsList)
+
 	onMount(() => {
-		// Session listeners
-		socket.on("promptConfigs:list", handlePromptConfigsList)
-		socket.on("promptConfigs:get", handlePromptConfigsGet)
-		socket.on("promptConfigs:create", handlePromptConfigsCreate)
-		socket.on("promptConfigs:update", handlePromptConfigsUpdate)
-
-		// Narrator listeners
-		socket.on("narratorPromptConfigs:list", handleNarratorPromptConfigsList)
-		socket.on("narratorPromptConfigs:get", handleNarratorPromptConfigsGet)
-		socket.on(
-			"narratorPromptConfigs:create",
-			handleNarratorPromptConfigsCreate
-		)
-		socket.on(
-			"narratorPromptConfigs:update",
-			handleNarratorPromptConfigsUpdate
-		)
-
-		// World listeners
-		socket.on("worldSummarizeConfigs:list", handleWorldSummarizeConfigsList)
-		socket.on("worldSummarizeConfigs:get", handleWorldSummarizeConfigsGet)
-		socket.on(
-			"worldSummarizeConfigs:create",
-			handleWorldSummarizeConfigsCreate
-		)
-		socket.on(
-			"worldSummarizeConfigs:update",
-			handleWorldSummarizeConfigsUpdate
-		)
-
-		// Character listeners
-		socket.on(
-			"characterSummarizeConfigs:list",
-			handleCharacterSummarizeConfigsList
-		)
-		socket.on(
-			"characterSummarizeConfigs:get",
-			handleCharacterSummarizeConfigsGet
-		)
-		socket.on(
-			"characterSummarizeConfigs:create",
-			handleCharacterSummarizeConfigsCreate
-		)
-		socket.on(
-			"characterSummarizeConfigs:update",
-			handleCharacterSummarizeConfigsUpdate
-		)
-
-		// Graph Build listeners
-		socket.on("graphBuildConfigs:list", handleGraphBuildConfigsList)
-		socket.on("graphBuildConfigs:get", handleGraphBuildConfigsGet)
-		socket.on("graphBuildConfigs:create", handleGraphBuildConfigsCreate)
-		socket.on("graphBuildConfigs:update", handleGraphBuildConfigsUpdate)
-		socket.on(
-			"graphBuildConfigs:setDefault",
-			handleGraphBuildConfigsSetDefault
-		)
-
-		// Scene listeners
-		socket.on("sceneSummarizeConfigs:list", handleSceneSummarizeConfigsList)
-		socket.on("sceneSummarizeConfigs:get", handleSceneSummarizeConfigsGet)
-		socket.on(
-			"sceneSummarizeConfigs:create",
-			handleSceneSummarizeConfigsCreate
-		)
-		socket.on(
-			"sceneSummarizeConfigs:update",
-			handleSceneSummarizeConfigsUpdate
-		)
-
-		socket.on(
-			"promptConfigs:setUserActive",
-			handlePromptConfigsSetUserActive
-		)
-		socket.on(
-			"promptConfigs:setUserActive:error",
-			handlePromptConfigsSetUserActiveError
-		)
-		socket.on(
-			"narratorPromptConfigs:setUserActive",
-			handleNarratorPromptConfigsSetUserActive
-		)
-		socket.on(
-			"narratorPromptConfigs:setUserActive:error",
-			handleNarratorPromptConfigsSetUserActiveError
-		)
-		socket.on(
-			"worldSummarizeConfigs:setUserActive",
-			handleWorldSummarizeConfigsSetUserActive
-		)
-		socket.on(
-			"characterSummarizeConfigs:setUserActive",
-			handleCharacterSummarizeConfigsSetUserActive
-		)
-		socket.on(
-			"sceneSummarizeConfigs:setUserActive",
-			handleSceneSummarizeConfigsSetUserActive
-		)
-
-		socket.on("connections:list", handleConnectionsList)
-		socket.on("samplingConfigs:list", handleSamplingConfigsListForPickers)
-
 		// Initial fetches
 		socket.emit("promptConfigs:list", {})
 		socket.emit("narratorPromptConfigs:list", {})
@@ -934,106 +1007,6 @@
 		socket.emit("samplingConfigs:list", {})
 
 		onclose = handleOnClose
-	})
-
-	onDestroy(() => {
-		socket.off("connections:list", handleConnectionsList)
-		socket.off("samplingConfigs:list", handleSamplingConfigsListForPickers)
-		socket.off("promptConfigs:list", handlePromptConfigsList)
-		socket.off("promptConfigs:get", handlePromptConfigsGet)
-		socket.off("promptConfigs:create", handlePromptConfigsCreate)
-		socket.off("promptConfigs:update", handlePromptConfigsUpdate)
-		socket.off(
-			"promptConfigs:setUserActive",
-			handlePromptConfigsSetUserActive
-		)
-		socket.off(
-			"promptConfigs:setUserActive:error",
-			handlePromptConfigsSetUserActiveError
-		)
-		socket.off(
-			"narratorPromptConfigs:list",
-			handleNarratorPromptConfigsList
-		)
-		socket.off("narratorPromptConfigs:get", handleNarratorPromptConfigsGet)
-		socket.off(
-			"narratorPromptConfigs:create",
-			handleNarratorPromptConfigsCreate
-		)
-		socket.off(
-			"narratorPromptConfigs:update",
-			handleNarratorPromptConfigsUpdate
-		)
-		socket.off(
-			"narratorPromptConfigs:setUserActive",
-			handleNarratorPromptConfigsSetUserActive
-		)
-		socket.off(
-			"narratorPromptConfigs:setUserActive:error",
-			handleNarratorPromptConfigsSetUserActiveError
-		)
-		socket.off(
-			"worldSummarizeConfigs:list",
-			handleWorldSummarizeConfigsList
-		)
-		socket.off("worldSummarizeConfigs:get", handleWorldSummarizeConfigsGet)
-		socket.off(
-			"worldSummarizeConfigs:create",
-			handleWorldSummarizeConfigsCreate
-		)
-		socket.off(
-			"worldSummarizeConfigs:update",
-			handleWorldSummarizeConfigsUpdate
-		)
-		socket.off(
-			"worldSummarizeConfigs:setUserActive",
-			handleWorldSummarizeConfigsSetUserActive
-		)
-		socket.off(
-			"characterSummarizeConfigs:list",
-			handleCharacterSummarizeConfigsList
-		)
-		socket.off(
-			"characterSummarizeConfigs:get",
-			handleCharacterSummarizeConfigsGet
-		)
-		socket.off(
-			"characterSummarizeConfigs:create",
-			handleCharacterSummarizeConfigsCreate
-		)
-		socket.off(
-			"characterSummarizeConfigs:update",
-			handleCharacterSummarizeConfigsUpdate
-		)
-		socket.off(
-			"characterSummarizeConfigs:setUserActive",
-			handleCharacterSummarizeConfigsSetUserActive
-		)
-		socket.off(
-			"sceneSummarizeConfigs:list",
-			handleSceneSummarizeConfigsList
-		)
-		socket.off("sceneSummarizeConfigs:get", handleSceneSummarizeConfigsGet)
-		socket.off("graphBuildConfigs:list", handleGraphBuildConfigsList)
-		socket.off("graphBuildConfigs:get", handleGraphBuildConfigsGet)
-		socket.off("graphBuildConfigs:create", handleGraphBuildConfigsCreate)
-		socket.off("graphBuildConfigs:update", handleGraphBuildConfigsUpdate)
-		socket.off(
-			"graphBuildConfigs:setDefault",
-			handleGraphBuildConfigsSetDefault
-		)
-		socket.off(
-			"sceneSummarizeConfigs:create",
-			handleSceneSummarizeConfigsCreate
-		)
-		socket.off(
-			"sceneSummarizeConfigs:update",
-			handleSceneSummarizeConfigsUpdate
-		)
-		socket.off(
-			"sceneSummarizeConfigs:setUserActive",
-			handleSceneSummarizeConfigsSetUserActive
-		)
 	})
 </script>
 

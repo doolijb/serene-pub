@@ -24,8 +24,8 @@
 	 *   every receipt they happen to click.
 	 */
 	import * as Icons from "@lucide/svelte"
-	import { onDestroy, onMount } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 
 	interface Props {
@@ -71,14 +71,26 @@
 		if (res?.error) toaster.error({ title: res.error })
 	}
 
-	onMount(() => {
-		socket.on("pipelines:sessionEntryUsage", onUsage)
-		socket.on("pipelines:sessionEntryUsage:error", showRefusal)
-	})
-	onDestroy(() => {
-		socket.off("pipelines:sessionEntryUsage", onUsage)
-		socket.off("pipelines:sessionEntryUsage:error", showRefusal)
-	})
+	/**
+	 * Both keys BARE and STANDING, declared for the panel's whole life rather
+	 * than folded into the request below with `requestWithInterest`.
+	 *
+	 * The reveal effect reads `requestedFor` and writes it, so it re-runs once
+	 * immediately after it asks — which would tear a request-scoped interest
+	 * down in the same flush, long before the answer came back. Neither event
+	 * is in `SCOPED_EVENTS`, so `onUsage`'s own `res.sessionId !== sessionId`
+	 * check stays the filter.
+	 */
+	useInterest<"pipelines:sessionEntryUsage">(
+		"pipelines:sessionEntryUsage",
+		onUsage
+	)
+	// Never gated (plan ruling 2 — an error is not an output to skip), but the
+	// registry is the only listener path, so it is declared like the reply.
+	useInterest<"pipelines:sessionEntryUsage:error">(
+		"pipelines:sessionEntryUsage:error",
+		showRefusal
+	)
 
 	/**
 	 * Ask on every reveal, not just the first.

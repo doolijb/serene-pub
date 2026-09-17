@@ -49,8 +49,7 @@ const EXAMPLE_DIALOGUE = "Wren: I know the fog roads."
 const promptPipeline = () =>
 	compile(
 		spec("core:spec/post-history-block", { version: "1.0.0" })
-			.on("core:event/message-created@1")
-			.input("input", C.userMessage.v1())
+			.inlet("input", C.userMessage.v1())
 			.query("history", ($) =>
 				C.sessionHistory.v1({ scope: $.input.sessionScope })
 			)
@@ -84,7 +83,7 @@ const promptPipeline = () =>
 					connection: slot.connectionOf("generate")
 				})
 			)
-			.provider("generate", ($) =>
+			.oracle("generate", ($) =>
 				C.generateText.v1({ context: $.prompt.context })
 			)
 			.build()
@@ -113,12 +112,12 @@ beforeAll(async () => {
 	characterId = character.id
 
 	const [persona] = await db
-		.insert(schema.personas)
+		.insert(schema.characters)
 		.values({
 			userId,
+			isPersona: true,
 			name: "Bob",
-			description: "A traveller.",
-			isDefault: false
+			description: "A traveller."
 		})
 		.returning()
 
@@ -171,12 +170,16 @@ beforeAll(async () => {
 			name: "Chat Under Test",
 			type: "ollama",
 			baseUrl: "http://localhost:11434",
-			model: "test",
 			tokenCounter: "estimate"
 		})
 		.returning()
+	const [chatModel] = await db
+		.insert(schema.connectionModels)
+		.values({ connectionId: connection.id, model: "test", name: "test" })
+		.returning()
 	await setCapabilityDefault(db, "text->text", {
-		connectionId: connection.id
+		connectionId: connection.id,
+		connectionModelId: chatModel.id
 	})
 }, 60_000)
 

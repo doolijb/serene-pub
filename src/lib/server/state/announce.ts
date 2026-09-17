@@ -18,7 +18,7 @@ import { broadcastToSessionUsers } from "$lib/server/sockets/utils/broadcastHelp
 /** Whether any `set-state` node in this run applied or proposed something. */
 export function stateMoved(receipt: Receipt): boolean {
 	return receipt.nodes.some((node) => {
-		if (!String(node.typeId ?? "").startsWith("core:task/set-state"))
+		if (!String(node.definitionId ?? "").startsWith("core:task/set-state"))
 			return false
 		const out = node.output as
 			| { applied?: unknown[]; proposed?: unknown[] }

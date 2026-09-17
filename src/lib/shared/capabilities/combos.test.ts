@@ -14,15 +14,15 @@ import { ADAPTER_MANIFEST } from "$lib/shared/connectionAdapters/manifest"
 import {
 	aggregateCombos,
 	servableTransforms,
-	type RegistryTypeRow
+	type RegistryDefinitionRow
 } from "./combos"
 
-/** A registry row, as `pipeline_type_registry` stores one. */
+/** A registry row, as `pipeline_definition_registry` stores one. */
 const type = (
-	typeId: string,
+	definitionId: string,
 	slots: Record<string, unknown>,
 	version = 1
-): RegistryTypeRow => ({ typeId, version, slots })
+): RegistryDefinitionRow => ({ definitionId, version, slots })
 
 describe("servableTransforms", () => {
 	test("it is the union across manifest entries, not one entry's list", () => {
@@ -61,7 +61,7 @@ describe("servableTransforms", () => {
 
 describe("aggregateCombos — the union is necessary in both directions", () => {
 	test("manifest-only would drop what core demands and no adapter serves", () => {
-		// The real case: `core:provider/speak@1` requires `text->audio`, no
+		// The real case: `core:oracle/speak@1` requires `text->audio`, no
 		// manifest entry declares it and nothing implements `synthesizeSpeech`,
 		// so a list built from the manifest alone offers no way to register a
 		// default for a capability core will ask for.
@@ -75,10 +75,10 @@ describe("aggregateCombos — the union is necessary in both directions", () => 
 		expect(servableTransforms()).toContain("text->embedding")
 
 		const combos = aggregateCombos([
-			type("core:provider/speak", {
+			type("core:oracle/speak", {
 				connection: { kind: "connection", requires: ["text->audio"] }
 			}),
-			type("core:provider/embed-text", {
+			type("core:oracle/embed-text", {
 				connection: {
 					kind: "connection",
 					requires: ["text->embedding"]
@@ -90,7 +90,7 @@ describe("aggregateCombos — the union is necessary in both directions", () => 
 		expect(speech!.demanded).toBe(true)
 		expect(speech!.servable).toBe(false)
 		expect(speech!.requiredBy).toEqual([
-			{ typeId: "core:provider/speak", version: 1, slot: "connection" }
+			{ definitionId: "core:oracle/speak", version: 1, slot: "connection" }
 		])
 
 		const embed = combos.find((c) => c.id === "text->embedding")
@@ -116,17 +116,17 @@ describe("aggregateCombos — the union is necessary in both directions", () => 
 describe("aggregateCombos — provenance", () => {
 	test("requiredBy names every demanding site, not just the first", () => {
 		const combos = aggregateCombos([
-			type("core:provider/generate-text", {
+			type("core:oracle/generate-text", {
 				connection: { kind: "connection", requires: ["text->text"] }
 			}),
-			type("core:provider/graph-extract", {
+			type("core:oracle/graph-extract", {
 				connection: { kind: "connection", requires: ["text->text"] }
 			})
 		])
 		const chat = combos.find((c) => c.id === "text->text")!
-		expect(chat.requiredBy.map((r) => r.typeId)).toEqual([
-			"core:provider/generate-text",
-			"core:provider/graph-extract"
+		expect(chat.requiredBy.map((r) => r.definitionId)).toEqual([
+			"core:oracle/generate-text",
+			"core:oracle/graph-extract"
 		])
 	})
 
@@ -135,7 +135,7 @@ describe("aggregateCombos — provenance", () => {
 		// would put a permanent "unset" complaint on the screen for something
 		// no run will ever need.
 		const combos = aggregateCombos([
-			type("core:provider/generate-text", {
+			type("core:oracle/generate-text", {
 				connection: {
 					kind: "connection",
 					requires: ["text->text"],
@@ -148,7 +148,7 @@ describe("aggregateCombos — provenance", () => {
 		expect(vision.requiredBy).toEqual([])
 		expect(vision.optionalFor).toEqual([
 			{
-				typeId: "core:provider/generate-text",
+				definitionId: "core:oracle/generate-text",
 				version: 1,
 				slot: "connection"
 			}
@@ -160,7 +160,7 @@ describe("aggregateCombos — provenance", () => {
 		// would USE it needs somewhere to be pointed, and a capability an admin
 		// cannot register is a capability the instance does not have.
 		const combos = aggregateCombos([
-			type("plugin:provider/clip", {
+			type("plugin:oracle/clip", {
 				connection: { kind: "connection", optional: ["text->video"] }
 			})
 		])
@@ -172,7 +172,7 @@ describe("aggregateCombos — provenance", () => {
 
 	test("a feature in requires is skipped, and does not become a combo", () => {
 		const combos = aggregateCombos([
-			type("core:provider/generate-text", {
+			type("core:oracle/generate-text", {
 				connection: {
 					kind: "connection",
 					requires: ["text->text", "json_schema"]
@@ -188,7 +188,7 @@ describe("aggregateCombos — provenance", () => {
 		// union over an OPEN id space. A hardcoded array is what this replaces,
 		// and its failure mode is exactly this row silently missing.
 		const combos = aggregateCombos([
-			type("plugin:provider/dub", {
+			type("plugin:oracle/dub", {
 				connection: { kind: "connection", requires: ["audio->audio"] }
 			})
 		])
@@ -213,11 +213,11 @@ describe("aggregateCombos — provenance", () => {
 
 	test("the same capability from two versions of a type is two sites", () => {
 		const combos = aggregateCombos([
-			type("core:provider/generate-text", {
+			type("core:oracle/generate-text", {
 				connection: { kind: "connection", requires: ["text->text"] }
 			}),
 			type(
-				"core:provider/generate-text",
+				"core:oracle/generate-text",
 				{
 					connection: { kind: "connection", requires: ["text->text"] }
 				},

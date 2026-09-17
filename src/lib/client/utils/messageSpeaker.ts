@@ -18,9 +18,33 @@ export interface MessageSpeakerSource {
 	}[]
 	sessionPersonas?: {
 		personaId?: number | null
-		persona?: SelectPersona | null
+		/** A persona IS a character the user voices — same row shape. */
+		persona?: SelectCharacter | null
 		removedName?: string | null
 	}[]
+	/**
+	 * The session's envoys (plans/29 R-18; U5g), off `sessions:view` —
+	 * display text already in the viewer's language. An envoy's row names
+	 * it by reference (`metadata.speaker = envoy:<slug>`) and holds no
+	 * `characterId`, so this list is where its name and image come from.
+	 */
+	envoys?: {
+		slug: string
+		name: string
+		description?: string
+		image?: string
+	}[]
+}
+
+/** The slug of an envoy's message — `metadata.speaker` as `envoy:<slug>` — or null. */
+export function messageEnvoySlug(msg: {
+	metadata?: unknown
+}): string | null {
+	const ref = (msg.metadata as { speaker?: unknown } | null | undefined)
+		?.speaker
+	return typeof ref === "string" && ref.startsWith("envoy:")
+		? ref.slice("envoy:".length)
+		: null
 }
 
 /**
@@ -38,8 +62,26 @@ export interface MessageSpeakerSource {
  */
 export function messageSpeaker(
 	session: MessageSpeakerSource | null | undefined,
-	msg: { characterId?: number | null; personaId?: number | null }
-): SelectCharacter | SelectPersona | undefined {
+	msg: {
+		characterId?: number | null
+		personaId?: number | null
+		metadata?: unknown
+	}
+): SelectCharacter | undefined {
+	// An envoy's line (U5g): no row to link, so the face is the declaration's
+	// — synthesised in the character's shape so every render site reads it
+	// as it reads a character. `avatar` is a URL or data: URI `avatarSrc`
+	// hands back verbatim. A slug absent from the view's list (the genre
+	// stopped declaring it) renders under its slug rather than as "Unknown".
+	const envoySlug = messageEnvoySlug(msg)
+	if (envoySlug) {
+		const envoy = session?.envoys?.find((e) => e.slug === envoySlug)
+		return {
+			name: envoy?.name ?? envoySlug,
+			description: envoy?.description ?? "",
+			...(envoy?.image ? { avatar: envoy.image } : {})
+		} as unknown as SelectCharacter
+	}
 	if (msg.personaId) {
 		const cp = session?.sessionPersonas?.find(
 			(p) => p.personaId === msg.personaId
@@ -47,7 +89,7 @@ export function messageSpeaker(
 		return (
 			cp?.persona ??
 			(cp?.removedName
-				? ({ name: cp.removedName } as SelectPersona)
+				? ({ name: cp.removedName } as SelectCharacter)
 				: undefined)
 		)
 	} else if (msg.characterId) {

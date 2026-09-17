@@ -113,11 +113,19 @@ async function instanceWithWindow(contextTokens: number, messages: number) {
 			enabled: ["contextTokens", "responseTokens"]
 		} as any)
 		.returning()
+	// The MODEL half of the pair. A registration names both halves — an
+	// endpoint on its own is incomplete and every step refuses — and the merge
+	// is what puts the identifier on the row the adapter is handed.
+	const { ensureConnectionModel } = await import(
+		"$lib/server/connections/models"
+	)
+	const model = await ensureConnectionModel(db, connection.id, "fake-7b")
 	const { setCapabilityDefault } = await import(
 		"$lib/server/connections/capabilityDefaults"
 	)
 	await setCapabilityDefault(db, "text->text", {
 		connectionId: connection.id,
+		connectionModelId: model!.id,
 		samplingConfigId: sampling.id
 	})
 

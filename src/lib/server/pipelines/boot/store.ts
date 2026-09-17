@@ -11,7 +11,7 @@
  * identity, and the canonical hash is stable across the trip.** It is
  * conformance requirement C1, and it is checked here against real rows rather
  * than fixtures, because the interesting failures are all in the column mapping
- * — a dropped `blockChain`, a preset value that round-trips as a string instead
+ * — a dropped `clauseChain`, a preset value that round-trips as a string instead
  * of a number — and no fixture catches those.
  *
  * Nothing in the running app reads these tables yet. The pipeline path is built
@@ -22,10 +22,21 @@
 import { and, asc, eq, ne } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
+	actionDocumentFindings,
+	actionsOf,
 	canonicalHash,
+	ENVOY_CONFIG_PREFIX,
+	envoyConfigKeysOf,
+	envoyFindings,
+	envoysFindings,
 	importDocument,
+	sessionEvents,
+	slashCollisions,
+	type EnvoyDecl,
 	type SpecDocument
 } from "@serene-pub/sdk"
+import { invalidateDeclaredEnvoys } from "$lib/server/pipelines/entities/envoys"
+import { getSessionGenre } from "$lib/server/pipelines/entities/sessionGenres"
 
 /** What `saveDocument` reports back — the ids core needs to reference the version. */
 export interface SavedSpec {
@@ -55,17 +66,31 @@ export interface SavedSpec {
  * Without the hash in the key an edited document has nowhere to land but on top
  * of the row those three are naming — which leaves only two answers, destroying
  * it or skipping the edit, and skipping means the edit reaches no install that
- * has already booted. See `docs/pipelines.md`, *Specs and types are
- * content-addressed*.
+ * has already booted. See `docs/pipelines.md`, *Specs and node definitions
+ * are content-addressed*.
  */
 export async function saveDocument(
 	db: Db,
 	doc: SpecDocument,
-	opts: { name?: string; sourcePluginId?: number; publish?: boolean } = {}
+	opts: {
+		name?: string
+		sourcePluginId?: number
+		publish?: boolean
+		/**
+		 * The slugs a batch is republishing together (U5c review, S2). Their
+		 * *current* active versions are excluded from the install-wide slash
+		 * check this publish runs — a release that swaps two names between
+		 * two specs is refused one spec at a time otherwise, because the
+		 * first to land meets the second's old claim. The caller then runs
+		 * `assertInstallSlashNamesFree` once the whole batch has landed.
+		 */
+		batch?: ReadonlySet<string>
+	} = {}
 ): Promise<SavedSpec> {
 	const hash = canonicalHash(doc)
 
-	return await db.transaction(async (tx: Db) => {
+	const saved = await db.transaction(async (tx: Db) => {
+		await assertEnvoysSound(tx, doc, opts.batch)
 		const existing = await tx
 			.select()
 			.from(schema.pipelineSpecs)
@@ -103,7 +128,7 @@ export async function saveDocument(
 			// Publishing an already-stored document is a pointer move and
 			// nothing else — the rows below it are the same rows.
 			if (opts.publish && spec.activeVersionId !== stored.id)
-				await publishVersion(tx, spec.id, stored.id)
+				await publishVersion(tx, spec.id, stored.id, opts.batch)
 			return {
 				specId: spec.id,
 				specVersionId: stored.id,
@@ -137,19 +162,19 @@ export async function saveDocument(
 				.returning()
 		)[0]
 
-		if (doc.blocks.length)
-			await tx.insert(schema.pipelineBlocks).values(
-				doc.blocks.map((b) => ({
+		if (doc.clauses.length)
+			await tx.insert(schema.pipelineClauses).values(
+				doc.clauses.map((b) => ({
 					specVersionId: version.id,
-					blockId: b.id,
+					clauseId: b.id,
 					kind: b.kind,
-					parentBlockId: b.blockId ?? null,
+					parentClauseId: b.clauseId ?? null,
 					mode: b.mode ?? null,
 					max: b.max ?? null,
 					overRef: (b.over as Record<string, any>) ?? null,
 					repeatWhile: (b.repeatWhile as Record<string, any>) ?? null,
 					onRef: (b.on as Record<string, any>) ?? null,
-					routes: (b.routes as Record<string, any>) ?? null,
+					branches: (b.branches as Record<string, any>) ?? null,
 					position: b.position
 				}))
 			)
@@ -161,13 +186,13 @@ export async function saveDocument(
 					specVersionId: version.id,
 					nodeKey: n.key,
 					kind: n.kind,
-					typeId: n.typeId,
-					typeVersion: n.typeVersion,
+					definitionId: n.definitionId,
+					definitionVersion: n.definitionVersion,
 					config: n.config,
 					resolvedRefs: n.resolvedRefs ?? null,
-					blockId: n.blockId ?? null,
-					blockKind: n.blockKind ?? null,
-					blockChain: n.blockChain ?? null,
+					clauseId: n.clauseId ?? null,
+					clauseKind: n.clauseKind ?? null,
+					clauseChain: n.clauseChain ?? null,
 					position: n.position
 				}))
 			)
@@ -181,35 +206,36 @@ export async function saveDocument(
 				r.id
 			])
 		)
-		// A block's aggregate output is a legal edge source: `map` and `async`
-		// publish `branch-results@1`, and a spec consuming it names the block.
+		// A clause's aggregate output is a legal edge source: `each` and `gather`
+		// publish `branch-results@1`, and a spec consuming it names the clause.
 		// Resolved here so the error below still fires for a genuine typo.
-		const blockIds = new Set((doc.blocks ?? []).map((b: any) => b.id))
+		const clauseIds = new Set((doc.clauses ?? []).map((b: any) => b.id))
 
-		// So is a map or loop iteration's item — `block.$item`, the per-iteration
-		// value the executor scopes in. Block-shaped rather than node-shaped: it
-		// has no node row to FK, and the load side hands the key back verbatim.
+		// So is an each or loop iteration's item — `clause.$item`, the
+		// per-iteration value the executor scopes in. Clause-shaped rather than
+		// node-shaped: it has no node row to FK, and the load side hands the key
+		// back verbatim.
 		const itemSourceOf = (from: string): string | null => {
 			const m = /^(.+)\.\$item$/.exec(from)
-			return m && blockIds.has(m[1]!) ? from : null
+			return m && clauseIds.has(m[1]!) ? from : null
 		}
 
 		if (doc.edges.length)
 			await tx.insert(schema.pipelineEdges).values(
 				doc.edges.map((e) => {
 					const from = idOf.get(e.from)
-					const fromBlock = blockIds.has(e.from)
+					const fromClause = clauseIds.has(e.from)
 						? e.from
 						: itemSourceOf(e.from)
 					const to = idOf.get(e.to)
-					if ((from === undefined && !fromBlock) || to === undefined)
+					if ((from === undefined && !fromClause) || to === undefined)
 						throw new Error(
 							`edge ${e.from}.${e.fromPort} → ${e.to}.${e.toPort} references a node this version does not contain`
 						)
 					return {
 						specVersionId: version.id,
-						fromNodeId: fromBlock ? null : from,
-						fromBlockId: fromBlock,
+						fromNodeId: fromClause ? null : from,
+						fromClauseId: fromClause,
 						fromPort: e.fromPort,
 						toNodeId: to,
 						toPort: e.toPort,
@@ -254,17 +280,8 @@ export async function saveDocument(
 				)
 		}
 
-		if (doc.subscribes.length)
-			await tx.insert(schema.pipelineEventSubscriptions).values(
-				doc.subscribes.map((ref) => ({
-					eventRef: ref,
-					eventSlug: stripVersion(ref),
-					eventVersion: versionOf(ref),
-					specVersionId: version.id
-				}))
-			)
-
-		if (opts.publish) await publishVersion(tx, spec.id, version.id)
+		if (opts.publish)
+			await publishVersion(tx, spec.id, version.id, opts.batch)
 
 		return {
 			specId: spec.id,
@@ -273,6 +290,11 @@ export async function saveDocument(
 			written: true
 		}
 	})
+	// Once more after the commit: `publishVersion` cleared the cache inside
+	// the transaction, and a read between that and the commit would have
+	// cached the rows as they stood before it.
+	if (opts.publish) invalidateDeclaredEnvoys()
+	return saved
 }
 
 /**
@@ -294,8 +316,13 @@ export async function saveDocument(
 async function publishVersion(
 	tx: Db,
 	specId: number,
-	versionId: number
+	versionId: number,
+	batch?: ReadonlySet<string>
 ): Promise<void> {
+	await assertSlashNamesFree(tx, specId, versionId, batch)
+	await assertActionEnvoyKeysFree(tx, specId, versionId, batch)
+	// The one writer of the rows `declaredEnvoys` caches (U5g review, S4).
+	invalidateDeclaredEnvoys()
 	await tx
 		.update(schema.pipelineSpecVersions)
 		.set({ status: "retired" })
@@ -314,6 +341,298 @@ async function publishVersion(
 		.update(schema.pipelineSpecs)
 		.set({ activeVersionId: versionId })
 		.where(eq(schema.pipelineSpecs.id, specId))
+}
+
+/**
+ * One slash name means one function across the install (R-15, U5c).
+ *
+ * The SDK makes a collision across owners impossible by grammar — core's
+ * names are bare, a plugin's are `<plugin>.<action>` — and refuses one
+ * inside a document or a package at authoring. What neither can see is two
+ * specs of one namespace, published separately, claiming one name for two
+ * different functions on the same genre: that is only visible where every
+ * published spec is, which is here, at the pointer move. Refused with the
+ * sentence the SDK's `slashCollisions` writes, so boot and a plugin install
+ * fail loudly rather than seeding a palette where `/roll` means two things.
+ *
+ * Two specs offering the **same** function under one name are alternatives
+ * the binding selects among (19 §3), not a collision — the rule is the
+ * SDK's, applied to the install's rows.
+ *
+ * `batch` (U5c review, S2): the slugs being republished together. Their
+ * current versions are left out of "the install as it stands", because they
+ * are about to be replaced — a release swapping `/cast` and `/zap` between
+ * two specs would otherwise be refused on whichever landed first. The
+ * batch's caller owes one `assertInstallSlashNamesFree` afterwards.
+ */
+async function assertSlashNamesFree(
+	tx: Db,
+	specId: number,
+	versionId: number,
+	batch?: ReadonlySet<string>
+): Promise<void> {
+	const [incoming] = await tx
+		.select({ contributes: schema.pipelineSpecVersions.contributes })
+		.from(schema.pipelineSpecVersions)
+		.where(eq(schema.pipelineSpecVersions.id, versionId))
+		.limit(1)
+	if (!incoming?.contributes) return
+	const [spec] = await tx
+		.select({ slug: schema.pipelineSpecs.slug })
+		.from(schema.pipelineSpecs)
+		.where(eq(schema.pipelineSpecs.id, specId))
+		.limit(1)
+	const mine = actionsOf({ id: spec!.slug, contributes: incoming.contributes })
+	if (!mine.length) return
+	// Every OTHER spec's active version — the install as it stands, less the
+	// batch-mates whose versions are on their way out.
+	const others = await installedActions(tx, (o) => o.id !== specId)
+	const installed = others.filter((a) => !batch?.has(a.specId))
+	const collisions = slashCollisions([...installed, ...mine])
+	if (collisions.length)
+		throw new Error(
+			`'${spec!.slug}' cannot be published: ` + collisions.join("; ")
+		)
+}
+
+/**
+ * The whole install's rule, run once: every active version's actions
+ * together (U5c review, S2). What a batch publish owes after its last
+ * pointer move — the per-publish check let each batch-mate through against
+ * the others' *old* claims, and this is where the *new* ones meet.
+ */
+export async function assertInstallSlashNamesFree(db: Db): Promise<void> {
+	const collisions = slashCollisions(await installedActions(db, () => true))
+	if (collisions.length)
+		throw new Error(
+			"the install's published specs collide on a slash name: " +
+				collisions.join("; ")
+		)
+	const envoys = actionEnvoyCollisions(await installedActions(db, () => true))
+	if (envoys.length)
+		throw new Error(
+			"the install's published specs collide on an action envoy: " +
+				envoys.join("; ")
+		)
+}
+
+/**
+ * The envoys a document declares, checked where it lands as rows (U5g
+ * review, W4) — the host's half of the check the SDK's `genre()` and
+ * `compile()` run at authoring. Needed because a plugin's genre is one the
+ * SDK's registry never saw: `compile()` cannot check a reference to it, and
+ * says so. Three things, each refused with the SDK's own sentences:
+ *
+ *  1. the genre's `envoys` (`envoysFindings`: shape, unique keys, at most
+ *     one default, an `<img>`-only image);
+ *  2. each contributed action's `envoy` (`envoyFindings`, `on-action` only);
+ *  3. every `envoy:<key>` a node reads config through must be a key the
+ *     genre the spec serves declares — this document's own declaration when
+ *     it is the create spec, else the *published* one. A genre nothing has
+ *     published yet (the create spec later in the same batch) cannot be
+ *     judged here and is not, and neither is one whose create spec is a
+ *     batch-mate: its published declaration is the OLD one, and a release
+ *     that adds an envoy and the first reference to it together would be
+ *     refused on whichever landed first. The same "checked when known" rule
+ *     the SDK applies, for the same reason.
+ *
+ * ⏳ Only the core catalog reaches this today (`seed.ts` is the one caller);
+ * a plugin publish path lands here by construction when it is built.
+ */
+async function assertEnvoysSound(
+	tx: Db,
+	doc: SpecDocument,
+	batch?: ReadonlySet<string>
+): Promise<void> {
+	const findings: string[] = []
+	const genre = ((doc.genre as Record<string, unknown> | undefined) ??
+		((doc as any).mode as Record<string, unknown> | undefined)) as
+		| { envoys?: unknown }
+		| undefined
+	if (genre?.envoys !== undefined)
+		findings.push(...envoysFindings(genre.envoys, `${doc.id}.genre.envoys`))
+	// The builder refuses a colon in a node key at `.add()` (S2) — but a raw
+	// document (a plugin's, or hand-built as in tests) never went through the
+	// builder, so the same check is re-run here with the same sentence.
+	if (doc.nodes.some((n) => n.key.includes(":")))
+		for (const n of doc.nodes)
+			if (n.key.includes(":"))
+				findings.push(
+					`node key '${n.key}' contains ':' — a colon marks a synthetic config address ` +
+						"(`envoy:<key>`), which a node key must never be mistaken for"
+				)
+	// The RAW entries, not `actionsOf`'s: normalisation stamps `speaks:
+	// 'on-action'` on every action envoy, so a declaration saying `in-turn`
+	// would be judged on what it became rather than on what it said.
+	const contributes = doc.contributes as
+		| { actions?: unknown[]; triggers?: unknown[] }
+		| undefined
+	for (const raw of [...(contributes?.actions ?? []), ...(contributes?.triggers ?? [])]) {
+		const a = raw as { key?: unknown; envoy?: unknown } | null
+		if (a?.envoy !== undefined)
+			findings.push(
+				...envoyFindings(
+					a.envoy,
+					`${doc.id}.contributes.actions[${typeof a.key === "string" ? a.key : "?"}].envoy`,
+					"action"
+				)
+			)
+	}
+	// The action model's own rules, at the publish (U5d): the venue set, the
+	// slash grammar, the locale maps and — the effects line — a `world`
+	// action in a venue or with an audience it may not have. The builder
+	// refuses these at construction; a document that reached here another
+	// way (an import, a hand-built JSON, a patched row) gets the same answer.
+	findings.push(...actionDocumentFindings(doc))
+	if (findings.length)
+		throw new Error(`'${doc.id}' cannot be saved: ${findings.join("; ")}`)
+
+	const referenced = envoyConfigKeysOf(doc).map((k) =>
+		k.slice(ENVOY_CONFIG_PREFIX.length)
+	)
+	if (!referenced.length) return
+	const genreId = doc.input?.genre
+	if (!genreId) return // `compile()` already refused a genre-less reference
+	let declared: readonly EnvoyDecl[] | null = null
+	if (doc.input?.event === sessionEvents.sessionCreated)
+		declared = (genre?.envoys as EnvoyDecl[] | undefined) ?? []
+	else {
+		const published = await getSessionGenre(tx, genreId)
+		if (!published) return // not yet known here: nothing to judge against
+		if (batch?.has(await genreCreateSpecSlug(tx, genreId))) return
+		declared = published.envoys ?? []
+	}
+	const keys = new Set(declared.map((e) => e.key))
+	const missing = referenced.filter((k) => !keys.has(k))
+	if (missing.length)
+		throw new Error(
+			`'${doc.id}' cannot be saved: it reads the prompts of ${missing
+				.map((k) => `envoy '${k}'`)
+				.join(", ")}, which '${genreId}' does not declare` +
+				(keys.size
+					? ` — it declares ${[...keys].map((k) => `'${k}'`).join(", ")}`
+					: " — it declares no envoys")
+		)
+}
+
+/** The slug of the published create spec declaring a genre — its row is the declaration. */
+async function genreCreateSpecSlug(tx: Db, genreId: string): Promise<string> {
+	const [row] = await tx
+		.select({ slug: schema.pipelineSpecs.slug })
+		.from(schema.pipelineSpecs)
+		.innerJoin(
+			schema.pipelineSpecVersions,
+			eq(schema.pipelineSpecVersions.id, schema.pipelineSpecs.activeVersionId)
+		)
+		.where(
+			and(
+				eq(schema.pipelineSpecVersions.inputGenre, genreId),
+				eq(
+					schema.pipelineSpecVersions.inputEvent,
+					sessionEvents.sessionCreated
+				)
+			)
+		)
+		.limit(1)
+	return row?.slug ?? ""
+}
+
+/**
+ * One action-envoy key means one envoy across a namespace (U5g review, S5).
+ *
+ * An action's envoy is addressed as `<plugin>.<key>` — the spec's namespace,
+ * not the spec — so two specs of one namespace each declaring an envoy under
+ * the same key would seat one slug for two declarations, and a cast row
+ * could not say which. The SDK cannot see across specs; this is where every
+ * published spec is, so it is refused here, at the pointer move, on the
+ * `assertSlashNamesFree` pattern: the incoming version against every other
+ * spec's active one, less the batch-mates on their way out, and the whole
+ * install once after a batch.
+ */
+async function assertActionEnvoyKeysFree(
+	tx: Db,
+	specId: number,
+	versionId: number,
+	batch?: ReadonlySet<string>
+): Promise<void> {
+	const [incoming] = await tx
+		.select({ contributes: schema.pipelineSpecVersions.contributes })
+		.from(schema.pipelineSpecVersions)
+		.where(eq(schema.pipelineSpecVersions.id, versionId))
+		.limit(1)
+	if (!incoming?.contributes) return
+	const [spec] = await tx
+		.select({ slug: schema.pipelineSpecs.slug })
+		.from(schema.pipelineSpecs)
+		.where(eq(schema.pipelineSpecs.id, specId))
+		.limit(1)
+	const mine = actionsOf({ id: spec!.slug, contributes: incoming.contributes })
+	if (!mine.some((a) => a.envoy)) return
+	const others = await installedActions(tx, (o) => o.id !== specId)
+	const installed = others.filter((a) => !batch?.has(a.specId))
+	const collisions = actionEnvoyCollisions([...installed, ...mine])
+	if (collisions.length)
+		throw new Error(
+			`'${spec!.slug}' cannot be published: ` + collisions.join("; ")
+		)
+}
+
+/** The namespace of a spec id — `acme:spec/dice` → `acme`; empty when it has none. */
+const namespaceOf = (specId: string): string => {
+	const i = specId.indexOf(":")
+	return i === -1 ? "" : specId.slice(0, i)
+}
+
+/**
+ * Two specs of one namespace declaring an action envoy under one key. One
+ * spec declaring the same key on two of its actions is not a collision: the
+ * envoy is the same one, posting through either.
+ */
+function actionEnvoyCollisions(
+	actions: ReadonlyArray<ReturnType<typeof actionsOf>[number]>
+): string[] {
+	const claims = new Map<string, string>()
+	const out: string[] = []
+	for (const a of actions) {
+		if (!a.envoy) continue
+		const slug = `${namespaceOf(a.specId)}.${a.envoy.key}`
+		const prior = claims.get(slug)
+		if (prior === undefined) {
+			claims.set(slug, a.specId)
+			continue
+		}
+		if (prior === a.specId) continue
+		out.push(
+			`the action envoy '${slug}' is declared by both '${prior}' and '${a.specId}' — ` +
+				`one key means one envoy across a namespace; rename one of them`
+		)
+	}
+	return out
+}
+
+/** Every active version's contributed actions, tagged with its spec's slug. */
+async function installedActions(
+	db: Db,
+	keep: (spec: { id: number; slug: string }) => boolean
+): Promise<ReturnType<typeof actionsOf>> {
+	const rows = await db
+		.select({
+			id: schema.pipelineSpecs.id,
+			slug: schema.pipelineSpecs.slug,
+			contributes: schema.pipelineSpecVersions.contributes
+		})
+		.from(schema.pipelineSpecs)
+		.innerJoin(
+			schema.pipelineSpecVersions,
+			eq(schema.pipelineSpecVersions.id, schema.pipelineSpecs.activeVersionId)
+		)
+	return rows
+		.filter((r) => keep(r))
+		.flatMap((o) =>
+			o.contributes
+				? actionsOf({ id: o.slug, contributes: o.contributes })
+				: []
+		)
 }
 
 /**
@@ -360,13 +679,13 @@ export async function loadDocument(
 		.where(eq(schema.pipelineEdges.specVersionId, specVersionId))
 		.orderBy(asc(schema.pipelineEdges.id))
 
-	const blockRows = await db
+	const clauseRows = await db
 		.select()
-		.from(schema.pipelineBlocks)
-		.where(eq(schema.pipelineBlocks.specVersionId, specVersionId))
+		.from(schema.pipelineClauses)
+		.where(eq(schema.pipelineClauses.specVersionId, specVersionId))
 		.orderBy(
-			asc(schema.pipelineBlocks.position),
-			asc(schema.pipelineBlocks.id)
+			asc(schema.pipelineClauses.position),
+			asc(schema.pipelineClauses.id)
 		)
 
 	const includeRows = await db
@@ -380,14 +699,6 @@ export async function loadDocument(
 		.from(schema.pipelinePresets)
 		.where(eq(schema.pipelinePresets.specVersionId, specVersionId))
 		.orderBy(asc(schema.pipelinePresets.id))
-
-	const subscriptionRows = await db
-		.select()
-		.from(schema.pipelineEventSubscriptions)
-		.where(
-			eq(schema.pipelineEventSubscriptions.specVersionId, specVersionId)
-		)
-		.orderBy(asc(schema.pipelineEventSubscriptions.id))
 
 	const presets = []
 	for (const p of presetRows) {
@@ -425,7 +736,6 @@ export async function loadDocument(
 			: {}),
 		...(version.contributes ? { contributes: version.contributes } : {}),
 		...(version.taxonomy ? { taxonomy: version.taxonomy } : {}),
-		subscribes: subscriptionRows.map((s: any) => s.eventRef),
 		includes: includeRows.map((i: any) => ({
 			key: i.key,
 			fragmentId: i.fragmentId
@@ -434,17 +744,17 @@ export async function loadDocument(
 		nodes: nodeRows.map((n: any) => ({
 			key: n.nodeKey,
 			kind: n.kind,
-			typeId: n.typeId,
-			typeVersion: n.typeVersion,
+			definitionId: n.definitionId,
+			definitionVersion: n.definitionVersion,
 			config: n.config,
 			...(n.resolvedRefs ? { resolvedRefs: n.resolvedRefs } : {}),
-			...(n.blockId ? { blockId: n.blockId } : {}),
-			...(n.blockKind ? { blockKind: n.blockKind } : {}),
-			...(n.blockChain ? { blockChain: n.blockChain } : {}),
+			...(n.clauseId ? { clauseId: n.clauseId } : {}),
+			...(n.clauseKind ? { clauseKind: n.clauseKind } : {}),
+			...(n.clauseChain ? { clauseChain: n.clauseChain } : {}),
 			position: n.position
 		})),
 		edges: edgeRows.map((e: any) => ({
-			from: e.fromBlockId ?? keyOf.get(e.fromNodeId)!,
+			from: e.fromClauseId ?? keyOf.get(e.fromNodeId)!,
 			fromPort: e.fromPort,
 			to: keyOf.get(e.toNodeId)!,
 			toPort: e.toPort,
@@ -452,19 +762,19 @@ export async function loadDocument(
 			...(e.streaming === null ? {} : { streaming: e.streaming }),
 			...(e.implicit === null ? {} : { implicit: e.implicit })
 		})),
-		blocks: blockRows.map((b: any) => ({
-			id: b.blockId,
+		clauses: clauseRows.map((b: any) => ({
+			id: b.clauseId,
 			kind: b.kind,
 			mode: b.mode,
 			...(b.overRef ? { over: b.overRef } : {}),
 			...(b.max !== null ? { max: b.max } : {}),
 			...(b.repeatWhile ? { repeatWhile: b.repeatWhile } : {}),
 			...(b.onRef ? { on: b.onRef } : {}),
-			...(b.routes ? { routes: b.routes } : {}),
-			chains: chainsOf(nodeRows, b.blockId),
-			...(b.parentBlockId ? { blockId: b.parentBlockId } : {}),
+			...(b.branches ? { branches: b.branches } : {}),
+			chains: chainsOf(nodeRows, b.clauseId),
+			...(b.parentClauseId ? { clauseId: b.parentClauseId } : {}),
 			position: b.position
-		})) as SpecDocument["blocks"]
+		})) as SpecDocument["clauses"]
 	}
 
 	// Through the SDK's importer rather than returned raw: import is where a
@@ -474,20 +784,18 @@ export async function loadDocument(
 }
 
 /**
- * A block's chains are derivable from its member nodes, so they are not stored.
+ * A clause's chains are derivable from its member nodes, so they are not stored.
  * Storing them would create a second place for the same fact to be wrong.
  */
-function chainsOf(nodeRows: any[], blockId: string): string[] {
+function chainsOf(nodeRows: any[], clauseId: string): string[] {
 	const seen: string[] = []
 	for (const n of nodeRows)
 		if (
-			n.blockId === blockId &&
-			n.blockChain &&
-			!seen.includes(n.blockChain)
+			n.clauseId === clauseId &&
+			n.clauseChain &&
+			!seen.includes(n.clauseChain)
 		)
-			seen.push(n.blockChain)
+			seen.push(n.clauseChain)
 	return seen
 }
 
-const stripVersion = (slug: string) => slug.replace(/@\d+$/, "")
-const versionOf = (slug: string) => Number(/@(\d+)$/.exec(slug)?.[1] ?? 1)

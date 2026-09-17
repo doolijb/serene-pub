@@ -15,8 +15,10 @@
 	 * recorded still deserves the account that does exist.
 	 */
 	import type { Snippet } from "svelte"
-	import { onDestroy, onMount } from "svelte"
-	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import {
+		requestWithInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
 	import RetrievalExplanation from "./RetrievalExplanation.svelte"
 
 	interface Props {
@@ -30,8 +32,6 @@
 	}
 
 	let { messageId, fallback }: Props = $props()
-
-	const socket = useTypedSocket()
 
 	type Explanation = NonNullable<
 		Sockets.Pipelines.RunExplain.Response["explanation"]
@@ -74,22 +74,33 @@
 		if (res?.error) refusal = res.error
 	}
 
-	onMount(() => {
-		socket.on("pipelines:messageExplain", onExplain)
-		socket.on("pipelines:messageExplain:error", showRefusal)
-	})
-	onDestroy(() => {
-		socket.off("pipelines:messageExplain", onExplain)
-		socket.off("pipelines:messageExplain:error", showRefusal)
-	})
+	// Never gated (plan ruling 2 — an error is not an output to skip), but the
+	// registry is the only listener path, so it is declared like the reply.
+	useInterest<"pipelines:messageExplain:error">(
+		"pipelines:messageExplain:error",
+		showRefusal
+	)
 
+	/**
+	 * The explanation, asked for and listened for in one: the interest sync
+	 * naming `pipelines:messageExplain` leaves ahead of the request (ruling 3),
+	 * and the release is the effect's teardown, so a report moved to another
+	 * reply drops the old interest as it takes the new one.
+	 *
+	 * BARE — the event has no entry in `SCOPED_EVENTS`; `onExplain`'s own
+	 * `res.messageId !== messageId` check stays the filter.
+	 */
 	$effect(() => {
 		const id = messageId
 		explanation = null
 		refusal = null
 		if (!id) return
 		loading = true
-		socket.emit("pipelines:messageExplain", { messageId: id })
+		return requestWithInterest(
+			"pipelines:messageExplain",
+			{ messageId: id },
+			onExplain
+		)
 	})
 </script>
 

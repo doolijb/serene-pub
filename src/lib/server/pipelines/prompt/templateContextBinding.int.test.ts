@@ -55,12 +55,12 @@ beforeAll(async () => {
 	caraId = cara.id
 
 	const [bob] = await db
-		.insert(schema.personas)
+		.insert(schema.characters)
 		.values({
 			userId,
+			isPersona: true,
 			name: "Bob",
-			description: "A traveller.",
-			isDefault: false
+			description: "A traveller."
 		})
 		.returning()
 
@@ -98,8 +98,8 @@ const queryCtx = (scopeSessionId = sessionId) => ({
 			q,
 			{
 				key: "cast",
-				typeId: "core:query/session-cast",
-				typeVersion: 1,
+				definitionId: "core:query/session-cast",
+				definitionVersion: 1,
 				kind: "query"
 			}
 		),
@@ -127,7 +127,10 @@ const buildFrom = (cast: unknown, input: any = {}, random?: () => number) =>
 	bindings["core:task/build-template-context@1"]!(
 		{
 			cast,
-			promptConfig: { systemPrompt: "Be brief." },
+			// The node's declared `prompts` slot, as `resolveInput` hands it
+			// over. (`promptConfig` is the resolver's word one layer down; the
+			// binding reads only the declared spelling — R-12.)
+			prompts: { systemPrompt: "Be brief." },
 			currentCharacterId: aliceId,
 			...input
 		},

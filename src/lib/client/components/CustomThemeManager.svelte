@@ -1,8 +1,9 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
-	import { onMount, onDestroy, getContext } from "svelte"
+	import { onMount, getContext } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { Theme } from "$lib/client/consts/Theme"
 	import { toaster } from "$lib/client/utils/toaster"
 	import BackgroundPicker from "$lib/client/components/backgrounds/BackgroundPicker.svelte"
@@ -29,7 +30,7 @@
 	})
 
 	$effect(() => {
-		selectedTheme = userSettingsCtx.settings?.theme ?? "hamlindigo"
+		selectedTheme = userSettingsCtx.settings?.theme ?? "lamplight"
 	})
 
 	$effect(() => {
@@ -65,10 +66,12 @@
 		socket.emit("customThemes:list", {})
 	}
 
-	// Named so `off` can name them too. A bare `socket.off("customThemes:list")`
-	// removes EVERY listener for that event — including other components
-	// listening for the same event — which then stops updating for the rest
-	// of the session.
+	// Declared through the interest registry below, which counts subscribers
+	// per key and owns one raw listener per event — Layout and the editor want
+	// `customThemes:list` at the same time as this panel, and no teardown can
+	// silence another's. The hazard that replaces is a bare
+	// `socket.off("customThemes:list")`, which removes EVERY listener for that
+	// event across the whole app.
 	function handleCustomThemesList(msg: Sockets.CustomThemes.List.Response) {
 		isLoading = false
 		myThemes = msg.myThemes
@@ -104,27 +107,33 @@
 		}
 	}
 
+	/**
+	 * All four BARE — nothing in either family is in `SCOPED_EVENTS`. The list
+	 * is STANDING because saving or deleting a theme in the child editor
+	 * answers only through a fresh `customThemes:list`, which is how this
+	 * panel's rows change without asking again; the two `userSettings:` write
+	 * replies are standing for the same reason the toggles can be pressed more
+	 * than once.
+	 */
+	useInterest<"customThemes:list">(
+		"customThemes:list",
+		handleCustomThemesList
+	)
+	useInterest<"customThemes:list:error">(
+		"customThemes:list:error",
+		handleCustomThemesListError
+	)
+	useInterest<"userSettings:updateDarkMode">(
+		"userSettings:updateDarkMode",
+		handleUserSettingsUpdateDarkMode
+	)
+	useInterest<"userSettings:updateTheme">(
+		"userSettings:updateTheme",
+		handleUserSettingsUpdateTheme
+	)
+
 	onMount(() => {
-		socket.on("customThemes:list", handleCustomThemesList)
-		socket.on("customThemes:list:error", handleCustomThemesListError)
 		loadList()
-
-		socket.on(
-			"userSettings:updateDarkMode",
-			handleUserSettingsUpdateDarkMode
-		)
-
-		socket.on("userSettings:updateTheme", handleUserSettingsUpdateTheme)
-	})
-
-	onDestroy(() => {
-		socket.off("customThemes:list", handleCustomThemesList)
-		socket.off("customThemes:list:error", handleCustomThemesListError)
-		socket.off(
-			"userSettings:updateDarkMode",
-			handleUserSettingsUpdateDarkMode
-		)
-		socket.off("userSettings:updateTheme", handleUserSettingsUpdateTheme)
 	})
 
 	function onSaved(theme: ThemeMeta) {

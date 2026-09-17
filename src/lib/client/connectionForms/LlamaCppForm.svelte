@@ -5,8 +5,9 @@
 	import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import Select from "$lib/client/components/inputs/Select.svelte"
-	import { onMount, onDestroy } from "svelte"
+	import { onMount } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { z } from "zod"
 
 	interface ExtraFieldData {
@@ -65,9 +66,10 @@
 	let llamaCppFields: ExtraFieldData | undefined = $state()
 	let validationErrors: ValidationErrors = $state({})
 
-	// Named so `off` can name it too. A bare `socket.off("connections:test")`
-	// removes EVERY listener for that event — including the parent sidebar's,
-	// which then stops updating for the rest of the session.
+	// Standing interest in the test result, held by the registry for as long as
+	// this form is mounted and released with it. The registry keeps ONE raw
+	// listener for the event and fans it out, so the parent sidebar's own
+	// interest is untouched by this form coming and going.
 	const onConnectionsTest = (msg: Sockets.Connections.Test.Response) => {
 		testResult = {
 			ok: msg.ok,
@@ -75,7 +77,7 @@
 			models: msg.models
 		}
 	}
-	socket.on("connections:test", onConnectionsTest)
+	useInterest<"connections:test">("connections:test", onConnectionsTest)
 
 	let testResult: { ok: boolean; error?: string; models?: any[] } | null =
 		$state(null)
@@ -114,8 +116,7 @@
 		return (
 			connection &&
 			connection.type === CONNECTION_TYPE.LLAMACPP &&
-			connection.baseUrl &&
-			connection.model
+			connection.baseUrl
 		)
 	})
 
@@ -170,13 +171,11 @@
 			llamaCppFields = extraJsonToExtraFields(defaultExtraJson)
 		}
 	})
-
-	onDestroy(() => {
-		socket.off("connections:test", onConnectionsTest)
-	})
 </script>
 
 {#if connection}
+	<!-- No model picker here: connections have no default model. Models live
+	     in the Models section below. -->
 	<div class="mt-4 flex gap-2">
 		<button
 			type="button"

@@ -3,7 +3,7 @@
  *
  * A type slug is an indirection to a content hash (ruling 2026-09-10): the
  * registry row for `id@version` carries whichever declaration the slug resolves
- * to now, `pipeline_type_declarations` keeps every one it has ever resolved to,
+ * to now, `pipeline_definition_declarations` keeps every one it has ever resolved to,
  * and a boot that finds a changed declaration publishes it and moves the
  * pointer. So an edited descriptor no longer stops anything — which removes the
  * *disaster* this file was written for and leaves the *question* it exists to
@@ -33,13 +33,13 @@
 
 import { describe, it, expect } from "vitest"
 import {
-	allTypes,
-	allScriptTypes,
+	allDefinitions,
+	allScriptKinds,
 	snapshotRegistry,
 	declarationHash,
 	DESCRIPTOR_DISPLAY_KEYS
 } from "@serene-pub/sdk"
-import { typeContentHash } from "$lib/server/pipelines/boot/registrySync"
+import { definitionContentHash } from "$lib/server/pipelines/boot/registrySync"
 // Importing the contracts is what registers them — the same fact-about-the-code
 // route `bootstrapPipelines` takes, rather than a list maintained beside it.
 //
@@ -102,24 +102,65 @@ import "@serene-pub/core-catalog"
  * The two MCP nodes are deliberately absent: no transform id is true of a tool
  * server, so they keep filtering by `shape` alone and their hashes did not move.
  */
+/**
+ * ## The one-shot rename (2026-09-16; plans/30 §U3, migration 0134) — answer 3, thirty-two entries at once
+ *
+ * `kind` is in the hashed material, so every inlet, oracle and outlet moved
+ * when `input · provider · consumer` became `inlet · oracle · outlet` (R-13):
+ * the four inlets, the eighteen oracles, the nine outlets and the comfy example.
+ * `create-message@1` and `seed-greetings@1` also gained the `channel` in-port
+ * the host was already reading (U2 residual). Query and task definitions did
+ * not move — nothing in their material changed. The ids themselves moved too
+ * (`core:input/…` → `core:inlet/…`), which is why the KEYS below read
+ * differently from the previous commit; migration 0134 renamed the registry
+ * rows and recorded the old slug in `renamed_from`. `core:input/message-created@1`
+ * is gone: culled (R-4), no spec used it and nothing emitted it.
+ */
 const PUBLISHED_HASHES: Record<string, string> = {
-	"chariot.comfy:render-image@1": "8cab45abdf9c1",
+	"chariot.comfy:render-image@1": "92b7d5f3c1248",
 	"chariot.dice-tray:roll@1": "b7457cf04e36d",
 	"chariot.recall:rank-recall@1": "17b9069e6e0b65",
-	"core:consumer/attach-audio@1": "2a3ce393ac3d8",
-	"core:consumer/attach-image@1": "dce5f172a6edb",
-	"core:consumer/create-lore-entry@1": "f8eff8031562c",
+	"core:outlet/attach-audio@1": "c499561b77704",
+	"core:outlet/attach-image@1": "1427daa9dd3b33",
+	"core:outlet/create-lore-entry@1": "c745cab165e22",
 	// Re-projected by 0174: a `media` in-port, so an image can be posted AS a new
 	// message. `attach-image` could not do it — a message created inside a run is
 	// not a valid target for a later node — which left no path at all from a
 	// render to a posted image.
-	"core:consumer/create-message@1": "14a3a9a68ea88d",
-	"core:consumer/emit-socket@1": "7658edce87c6",
-	"core:consumer/graph-proposal@1": "437560532d042",
-	"core:consumer/save-plugin-data@1": "1548f67cc814f",
-	"core:consumer/update-message@1": "f912a25836fda",
-	"core:input/message-created@1": "f90c5108c7e82",
-	"core:input/summarize-request@1": "118295257093fb",
+	// Moved (09-B B4, R-17, 2026-09-15): the pipeline owns its row. Six new
+	// in-ports — `characterId`, `speaker`, `generating`, `narration`,
+	// `instructions`, `row` — make this the reply's placeholder outlet;
+	// `liveRow: true` names its row as where an oracle's stream lands, and
+	// `reviewDefault: 'off'` puts the gate on the update (R-21 (3)).
+	// (was "14a3a9a68ea88d")
+	// Moved (U5a, R-18 (3), 2026-09-16): the side-character fact's in-port is
+	// `sideCharacter` (was `speaker`) — that word is the participant
+	// reference now, one meaning. The stored key `metadata.speaker` is
+	// unchanged. (was "2d8c3cc53d940")
+	// Moved (U5g, R-18 (3), 2026-09-16): a `speaker` in-port — the
+	// participant reference, `character:<id>` | `envoy:<slug>` — stored as
+	// `metadata.speaker`; the side-character fact moves to
+	// `metadata.sideCharacter` (migration 0138). An envoy's row has no
+	// `characterId`, so this is its only identity. (was "118098d1e63e40")
+	// Moved (U5d, R-15 *Forms*, 2026-09-17): a `blocks` in-port — a
+	// MessageBlock list posted with the row, validated, stamped with the
+	// writing spec's action identity and a block id, stored as a
+	// `core:blocks` part; a form among them addressed to the AI is recorded
+	// as `form-addressed`. `review.fields: ['text']` declared too, outside
+	// the hash. (was "198a9cc1f85286")
+	"core:outlet/create-message@1": "7fc3e8b44f28",
+	"core:outlet/emit-socket@1": "a085c19a92e28",
+	"core:outlet/graph-proposal@1": "b0e989f10de1c",
+	"core:outlet/save-plugin-data@1": "1a5ed3c57c13cf",
+	// Moved (09-B B4, 2026-09-15): a `thinking` in-port, so the reply's
+	// reasoning trace lands on the row it fills; the `target` port now takes
+	// the placeholder's write result (`write-result@1` is assignable to
+	// `row-ids@1` since the same ruling).
+	// (was "f912a25836fda")
+	// Moved (U5d, 2026-09-17): a `blocks` in-port, appended after the text
+	// lands — see `create-message`. (was "1df0cd729ce38f")
+	"core:outlet/update-message@1": "17018030a55f5d",
+	"core:inlet/summarize-request@1": "156561d0dff248",
 	// Gained the `greeting` field on its sessionShape (20, migration 0151) —
 	// the default greeting-on-creation behaviour stated, not changed.
 	//
@@ -129,8 +170,57 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// `graph-build` and `narrate` share this input type and wire nothing to the
 	// new port, so a port nothing wires is never resolved and none of their
 	// documents move. Only `respond` reads it.
-	"core:input/user-message@1": "1a8550b1c61c38",
-	"core:input/session-created@1": "18daad12cc8870",
+	//
+	// Moved (09-B B4, R-17, 2026-09-15): a `messageId` out-port — the row a
+	// regenerate, swipe or continue re-drives, for the placeholder outlet to
+	// claim instead of inserting. Additive on the same terms as the port
+	// above: only the reply specs wire it.
+	// (was "1a8550b1c61c38")
+	// Moved (U5a, R-18 (3), 2026-09-16): a `speaker` out-port carrying a
+	// participant reference — `character:<id>` or `envoy:<slug>` — beside
+	// the now-deprecated bare `characterId`. Additive: only `respond` wires
+	// it (into its turn strategy). (was "16a8548c6bdd16")
+	// Moved (U5b, R-15, 2026-09-16): a `changes` out-port — what the
+	// built-ins did to the session since the last reply, published by
+	// `runTurn` and consumed by the run that receives it. Additive: no spec
+	// wires it yet, so no document moves. (was "5d3b5ec58fca9")
+	// Moved (U5b review S4, 2026-09-16): that port renamed `sessionChanges`
+	// — `changes` is the state ledger's word on `resolve-state-changes@1`
+	// and `set-state@1` (R1). Still unwired by any spec, so no document
+	// moves. (was "b5adca2b8e1c2")
+	// Moved (U5d, R-15 *Forms*, 2026-09-17): two out-ports — `payload`, what
+	// an action's fire sent (the host always supplied it, undeclared), and
+	// `form`, the block facts a press on a form carries, read off the row.
+	// (was "2099748049ba8")
+	"core:inlet/user-message@1": "1bc7a6568eb294",
+	/**
+	 * Forms (U5d, R-15 *Forms*, 2026-09-17). NEW types — a line each: the
+	 * inlet `core:event/form-addressed@1` lands on; the task that turns the
+	 * form into a prompt context and a JSON Schema; the task that turns an
+	 * oracle's `{ question, options, addressee }` into a `choices` block; the
+	 * task that takes a press apart for the action it fires; and the outlet
+	 * that commits an oracle's answer exactly as a click would (`effects:
+	 * 'write'`, `reviewDefault: 'off'`, `review.fields: ['answer']`,
+	 * `causesEvent: form-answered`).
+	 */
+	"core:inlet/form-addressed@1": "b0258a5d76514",
+	"core:task/form-context@1": "b972bd4ddb74d",
+	"core:task/make-choices@1": "be5d083f614f8",
+	"core:task/read-answer@1": "148221a6207dc4",
+	"core:outlet/answer-form@1": "118beb40f685e4",
+	/**
+	 * The built-in writes (U5b, R-15, 2026-09-16). NEW types — a line each:
+	 * the request inlet every `core:spec/builtin-*` starts with, and the
+	 * five write outlets, each `effects: 'write'` with `reviewDefault: 'off'`
+	 * and a `causesEvent` naming its `core:event/message-*` / `session-branched`.
+	 */
+	"core:inlet/built-in-request@1": "31c1702ff0275",
+	"core:outlet/delete-message@1": "bee519f606bda",
+	"core:outlet/hide-message@1": "1d3c6e30114b3b",
+	"core:outlet/edit-message@1": "5eb425cbf386a",
+	"core:outlet/swipe-message@1": "1e1efecb2e5476",
+	"core:outlet/branch-session@1": "187975ebe6f833",
+	"core:inlet/session-created@1": "42fd6a589d374",
 	// The side-character turn (ruling 2026-09-07). A NEW type — no migration,
 	// just a line: it inserts a row and conflicts with nothing.
 	//
@@ -141,9 +231,26 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// new-name fact as declared `extras` on its scripts hook — which is what
 	// lets a script read "the lorebook has never heard of this name" through
 	// the one dispatch core scripts and extension hooks already share.
-	"core:input/side-character-turn@1": "aae12bf9be9a8",
+	//
+	// Moved (U1 review C1, 2026-09-16): a `messageId` out-port, on the same
+	// terms as `user-message@1`'s — a verb on a side character's line routes
+	// back to `narrate-character`, whose placeholder claims the verb's row
+	// through it instead of inserting a second one. Additive: only that spec
+	// wires it.
+	// (was "aae12bf9be9a8")
+	// Moved (U5a, R-18 (3), 2026-09-16): `speaker` is the participant
+	// reference — `character:<id>`, null for a free-form name — and the
+	// whole fact `{ name, characterId, known, character }` moved to
+	// `sideCharacter`, because a fact carrying a typed name is not a
+	// reference to anybody. `narrate-character` follows the rename.
+	// (was "4a78161fc4b7")
+	// Moved (U5b, R-15, 2026-09-16): the `changes` out-port, on the same
+	// terms as `user-message@1`'s. (was "1f362f9aad444")
+	// Moved (U5b review S4, 2026-09-16): `changes` → `sessionChanges`, on the
+	// same terms as `user-message@1`'s. (was "4078fdc5d681e")
+	"core:inlet/side-character-turn@1": "1f499d06ada149",
 	"core:query/session-greetings@1": "5c57ecc64e730",
-	"core:consumer/seed-greetings@1": "1247e34e381a2f",
+	"core:outlet/seed-greetings@1": "13de9feb88a07f",
 	// Re-projected by **0201** (policy answer 3): the node is `optional`, which
 	// in the executor turns an error into an empty `ok` with `recoveredAsEmpty`
 	// on the receipt. It is wired into a shipped spec for the first time in
@@ -154,12 +261,20 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// disables a path*), so the guarantee is structural here rather than a
 	// `try` in one binding. It also earns the node its "Use this source"
 	// switch, which is the zero-cost way to turn the semantic mechanism off.
-	"core:provider/embed-text@1": "16825493af627c",
+	// Moved (R-7 P2 refined, 2026-09-16 — U3b): `enabled` is marked `shared`,
+	// so the loser embed node's `slot.params({ node })` still resolves it at
+	// the owner under the field-level rule. Same value, same default.
+	// (was "335574a52f09f")
+	"core:oracle/embed-text@1": "171e22960612c5",
 	// Gained its two script hooks in 0.6-preview (migration 0146): `scripts`
 	// before over `content`, `castScripts` after over `cast` — the paste-rung
 	// half of replaceable cast extraction (ruling of 2026-08-26). Replacing
 	// the extractor itself stays a node rebind, never a script.
-	"core:provider/extract-cast@1": "972921f6b6931",
+	// Moved (R-12, 2026-09-16): the `messages` in-port is culled — `summarize` wired
+	// the transcript into it and the handler never read it; the extractor
+	// works from `content`. No shipped spec runs this node (the extraction is
+	// on ice), so no document moves with it. (was "972921f6b6931")
+	"core:oracle/extract-cast@1": "58606505551e4",
 	// Gained `currentCharacterId` in 0.6-preview (migration 0134): the §27l
 	// stop-string exclusion follows the next-speaker node's output through
 	// the host's payload-wins seam (19 §5).
@@ -170,16 +285,27 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// request is sent as a stream, beside `stopSequences`. Additive with a
 	// declared default, so a config that has never held the address resolves
 	// `auto` and every existing pipeline sends what it sent.
-	"core:provider/generate-text@1": "867d5d06400c5",
-	"core:provider/graph-node-description@1": "175a464ce58684",
-	"core:provider/graph-node-resolution@1": "15e22620687cf1",
-	"core:provider/graph-perspective@1": "200c0141d4ebf",
-	"core:provider/graph-pre-filter@1": "f017bf224984f",
-	"core:provider/graph-state-detection@1": "16d24f04ed08c0",
+	// Moved (09-B B4, 2026-09-15): a `thinking` out-port, declared now that
+	// `update-message` takes it — the binding has published it since it first
+	// stripped a trace.
+	// (was "867d5d06400c5")
+	// Moved (R-12, 2026-09-16): the `prompts` slot (`system`, `postHistory`) is culled.
+	// No handler read it — the instructions travel inside `context`, through
+	// `assemble@2`'s own `prompts` slot — and every spec wired it as
+	// `slot.prompts({ node: 'context' })` only so the panel would not render
+	// a second copy. Behaviour-preserving: nothing consumed the value on any
+	// run. The same slot leaves `generate-with-tools@1` and `generate-json@1`.
+	// (was "1a083045eaf4b")
+	"core:oracle/generate-text@1": "51c2035e57795",
+	"core:oracle/graph-node-description@1": "1e0af65455ad8b",
+	"core:oracle/graph-node-resolution@1": "59f8009f61382",
+	"core:oracle/graph-perspective@1": "33a10939bd4b4",
+	"core:oracle/graph-pre-filter@1": "f8d2c9d143dd",
+	"core:oracle/graph-state-detection@1": "ea704ada5f952",
 	// Re-pinned when 14 was built out (the draft stub's hash never reached an
 	// install — 0141's core wipe re-projects every row at boot).
-	"core:provider/mcp-tool@1": "2a4ceca243862",
-	"core:provider/mcp-resource@1": "9d9890414a3d8",
+	"core:oracle/mcp-tool@1": "1e7c0f4288ac2b",
+	"core:oracle/mcp-resource@1": "6abee9a7077a",
 	// Re-projected by **0113** (policy answer 3), with the two summarize steps
 	// below: a `loreType` in-port (D-I). `summarizeSpec` writes it as a literal
 	// into the node's config, in the same map as `content` and `batch`, and
@@ -188,12 +314,27 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// port is what it is. Declared rather than made a parameter, which would
 	// have put "which kind of entry this pipeline writes" in the panel as
 	// something a user could tune their scene summarizer into a world one with.
-	"core:provider/name-entry@1": "ae679fda6bf0",
-	"core:provider/speak@1": "e36fdde93956d",
+	"core:oracle/name-entry@1": "17d9cd3e31b5b4",
+	"core:oracle/speak@1": "16373de5b23bda",
 	// Re-projected by **0113** — `loreType`, on the same terms as `name-entry`
 	// above.
-	"core:provider/summarize-batch@1": "fcd1efb71d68",
-	"core:provider/summarize-synth@1": "17543b07afc2ac",
+	// Moved (R-11, 2026-09-16 — U4): its `each-draft` interior point declares
+	// `accepts: ['core:script:text/transform@1']` — the one kind the broker
+	// used to hardcode for every point, now the point's own declaration and,
+	// like a port hook's `accepts`, part of the hashed contract. The same
+	// change stripped the point's display text from the hash (the comment
+	// promised it; the code did not), so `i18n` → `label` on the point moves
+	// nothing further. Behaviour-preserving: the applier is offered the list
+	// it was always offered. The only definition with a point, so the only
+	// pin that moves.
+	//
+	// ⚠ **Not moved by R-9**, deliberately: every optional or gated definition
+	// gained a projected `settings` slot on its registry row the same day, and
+	// none of their pins moved — `definitionContentMaterial` hashes
+	// `authoredSlots()` only. See `registrySync.ts` for why.
+	// (was "1f87aae843e9b8")
+	"core:oracle/summarize-batch@1": "14d037b2f733fd",
+	"core:oracle/summarize-synth@1": "16b03175f600a9",
 	"core:query/session-cast@1": "142e94006413af",
 	// Re-projected by 0186 (policy answer 3), together with `history-entries`
 	// below — one hash, because the three lore gather branches share a slot declaration
@@ -252,8 +393,19 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// 10, while it set the presence window for character-lore co-occurrence and
 	// the term-frequency window for tf-idf. Declared at 10, which is what every
 	// scan has silently run at, so it is behaviour-preserving by construction.
-	"core:query/world-lore@1": "e252379dcbac9",
-	"core:query/character-lore@1": "e252379dcbac9",
+	// Moved (R-12, 2026-09-16): the `text` in-port is culled on all three lanes and on
+	// `lorebook-triggers` — filled by no spec, read by no handler; the scan
+	// derives its window from `scope`. Behaviour-preserving by construction.
+	// (was "e252379dcbac9")
+	// Moved (R-7 P5, 2026-09-16 — U3b): each lane declares its own `share`,
+	// `maxEntries` and `priority` — the band intent it publishes at the head
+	// of its candidates — at the numbers the ranker's map held (0.1667 / 20,
+	// 0.1667 / 15, 0.1666 / 10), and the seven scan knobs are marked `shared`.
+	// The three hashes differ now because the intent's defaults and labels
+	// do. Behaviour-preserving by construction; migration 0135 moves stored
+	// values. (was "b2dd2f1b3f043" ×3)
+	"core:query/world-lore@1": "1467c76938099b",
+	"core:query/character-lore@1": "c469fd1ae6088",
 	// Gained the `channel` param in 0.6-preview (migration 0149, 20 §7);
 	// default 'main' reproduces the legacy read byte-for-byte.
 	//
@@ -265,7 +417,16 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// wired without moving a single install's transcript window; changing the
 	// number is a separate decision against the measure corpus.
 	// (was "2272f3cfb8f4b")
-	"core:query/session-history@1": "24ce875b04648",
+	// Moved (R-12, 2026-09-16): the `budget` in-port is culled — declared, wired by no
+	// spec and read by nothing; the window this node fetches is
+	// `params.limit`, and fitting history to a token budget is the ranker's.
+	// `params.priority` stays declared and unread, allow-listed in
+	// `boot/declaredReads.ts` until P5 moves it onto the source (U3).
+	// (was "24ce875b04648")
+	// Moved (R-7 P5, 2026-09-16 — U3b): the conversation's band intent —
+	// `share` 0.5, `maxEntries` 50, `minEntries` 6, `priority` read at last —
+	// and a `band` out-port carrying it to the ranker. (was "c9d269db28ae0")
+	"core:query/session-history@1": "16a2cac2f8f36b",
 	"core:query/session-state@1": "138a9731c106d9",
 	// ⚠ `core:query/graph-context@1` was here, and is gone rather than frozen.
 	// It split into the two below, because one node emitting both directions of
@@ -318,7 +479,10 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// re-projected: it has never been published, and the two above are
 	// untouched. It reuses their `relationshipSlots`, so the ceiling means the
 	// same three things here as it does there.
-	"core:query/relationship-search@1": "1a07eb0bde9fac",
+	// Moved (R-7 P5, 2026-09-16 — U3b): `share` (0, the band's switch) and
+	// `priority` beside the ceiling; the ceiling is the band's, absent =
+	// uncapped. (was "1a07eb0bde9fac")
+	"core:query/relationship-search@1": "acd77e5ab001e",
 	"core:query/graph-scenes@1": "93cf67e05eb1",
 	// The third gather branch, added in 0.6 after its absence was found: the
 	// split into world and character lore left `history` with no node, so those
@@ -328,7 +492,10 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// the other two gather branches; see the note there.
 	// Re-projected a fifth time by **0099** with its two siblings, for
 	// `guaranteedMessages`; see their note.
-	"core:query/history-entries@1": "e252379dcbac9",
+	// Moved with its two siblings above (R-12): `text` culled. (was "e252379dcbac9")
+	// Moved with its two siblings (R-7 P5, U3b): its own intent at 0.1666 / 10.
+	// (was "b2dd2f1b3f043")
+	"core:query/history-entries@1": "1074e88838b900",
 	"core:query/lorebook-probabilistic@1": "6ac9faa6efbb8",
 	// Re-projected by 0186: the same `scanDepth` correction, on this type's own
 	// duplicate declaration of the field. Deliberately still a separate schema
@@ -371,7 +538,22 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// runs its lore through this type and reaches the same `keywordQuery` from
 	// the same seam, so a window that exists on the reply pipeline and not on
 	// the narrator is a difference no user could discover a reason for.
-	"core:query/lorebook-triggers@1": "74f456fa99d6a",
+	// Moved (R-12, 2026-09-16): `text` in-port culled, with the three lanes
+	// above. (was "74f456fa99d6a")
+	// Moved (R-7 P5, 2026-09-16 — U3b review W1): the node produces three
+	// lore bands through one port and now declares an intent per band,
+	// namespaced — `worldLoreShare` / `worldLoreMaxEntries` /
+	// `worldLorePriority` and the same for `characterLore` and `history` —
+	// from the one `LORE_BANDS` table the three lanes read, so the numbers
+	// and labels are the lanes' own. Its handler publishes three band intents
+	// at the head of `main`/`hits`. Behaviour-preserving by construction: the
+	// defaults are the ranker's fallback numbers, which is what every
+	// `lorebook-triggers` spec (narrate, narrate-character, adventure-look)
+	// ran on while this node declared nothing. Migration 0135 moves a stored
+	// lore member on those specs' rankers here. The three spec hashes do NOT
+	// move — their documents wire `params: slot.params()` already; only the
+	// declaration behind the slot grew. (was "13604832d9dbd")
+	"core:query/lorebook-triggers@1": "73ddcc1d71670",
 	// A **new** type, so no migration and no bump — policy's own sentence,
 	// "adding a new type is safe and needs no migration". Nothing else in this
 	// table moved when it landed, which is the check that says the declaration
@@ -414,6 +596,10 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// **new** type id, so the registry inserts it and nothing conflicts: no
 	// re-projection migration, on the same terms as the tool-calling pair below.
 	"core:query/entity-search@1": "b8050d92df823",
+	// Documentation search (U5g, R-18, 2026-09-16) — the guide genre's one
+	// retrieval mechanism: the compiled docs' sections, scored against the
+	// newest messages, published in the `worldLore` band. A **new** type id.
+	"core:query/docs-search@1": "3fe0abab9fec7",
 	// The fifth mechanism (retrieval plan phase 4), added 2026-09-06 —
 	// retrieval by *description*: a second named vector space holding one
 	// vector per name, queried with the descriptive references the scene used
@@ -469,7 +655,7 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// example of what a moved hash costs now. There is no migration beside it
 	// and there is no version bump: the slug's pointer moves to the new
 	// declaration at the next boot, the declaration it moved off stays in
-	// `pipeline_type_declarations`, and a receipt naming the old hash still
+	// `pipeline_definition_declarations`, and a receipt naming the old hash still
 	// resolves. All that is required is this line, changed in the same commit
 	// as the edit, which is what keeps the move visible in review.
 	//
@@ -478,7 +664,12 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// selectable for the story string. Handlebars stays first, which is what
 	// a new template here is still written in — the parity corpus is
 	// byte-identical and no shipped row changes pool.
-	"core:task/assemble@2": "1d97d036a0a3e4",
+	// Moved (R-12, 2026-09-16): `params.truncation` (`oldest-first | lowest-weight`) is
+	// culled — declared, rendered, read by nothing. Assemble drops nothing;
+	// what fits is the ranker's `select`, per band, so a second drop rule here
+	// had no place to act. Behaviour-preserving: no run ever consulted it.
+	// (was "1d97d036a0a3e4")
+	"core:task/assemble@2": "7711867ef8c2",
 	// Tool calling's pure halves (20 §9), added 2026-08-26. New types — a
 	// row inserts and conflicts with nothing.
 	"core:task/advertise-tools@1": "b3b15a945f7e2",
@@ -491,22 +682,26 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// a spec; `join-text` is the reduce a repeated block has always needed —
 	// `map` and `loop` publish a list and every write takes a scalar.
 	"core:query/available-tools@1": "426517ae42329",
-	"core:provider/run-tool@1": "cc2a5c5df7d10",
+	"core:oracle/run-tool@1": "cb03acea6cca6",
 	"core:task/join-text@1": "1d3d05a12133fa",
-	// The native door (20 §9). `core:provider/generate-text@1` is published and
+	// The native door (20 §9). `core:oracle/generate-text@1` is published and
 	// frozen, so a `tools` in-port and a `toolCall` out-port are a NEW pin
 	// rather than two more lines on that one — which would move its hash and
 	// need a re-projection on every install, for a capability most connections
 	// do not have. One binding serves both.
 	// Gained `params.streaming` with the other three providers.
-	"core:provider/generate-with-tools@1": "b8e60704bfb8e",
+	// Moved (R-12, 2026-09-16): `prompts` slot culled — see `generate-text@1`.
+	// (was "b8e60704bfb8e")
+	"core:oracle/generate-with-tools@1": "168d0d14958026",
 	// The structured door, on the same terms as the tools one above and for the
 	// same reason: `generate-text@1` is published and frozen, and this node does
 	// not make the same request anyway. It asks a question rather than taking a
 	// turn, so it declares no speaker and no attachments, takes a `schema`, and
 	// publishes the parsed document instead of prose.
 	// Gained `params.streaming` with the other three providers.
-	"core:provider/generate-json@1": "7bac9bd9068a5",
+	// Moved (R-12, 2026-09-16): `prompts` slot culled — see `generate-text@1`.
+	// (was "7bac9bd9068a5")
+	"core:oracle/generate-json@1": "a9d0633b49a7d",
 	// Re-projected by **0102** (policy answer 3): a `sampling` slot, so the cut
 	// can be clamped to the window the batch is actually sent against — the
 	// binding read no sampling config at all, and there is no truncation on
@@ -534,7 +729,7 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// context builders inherit from the shared shape. Character-lore
 	// visibility is decided by the host read, which keys on the run's scope —
 	// so a speaker id arriving on this node's port could change whose voice
-	// the prompt is in without changing whose lore it was handed. `speaker`
+	// the prompt is in without changing whose lore it was handed. `sideCharacter`
 	// carries the name and the card; the id stays where the host can act on
 	// it. (Its absence is also what keeps it out of `UNFILLED_IN_PORTS` —
 	// there is no port to excuse.)
@@ -542,7 +737,10 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// pipeline that had this node first (`core:spec/narrate-character`), so
 	// nothing it does changes. A voice built with no place in front of it
 	// answered from whatever the transcript suggested.
-	"core:task/build-side-character-context@1": "4db3df67c3a47",
+	// Moved (U5a, 2026-09-16): the fact's in-port is `sideCharacter` (was
+	// `speaker`) — see `side-character-turn@1`. Same handler, same reads.
+	// (was "4db3df67c3a47")
+	"core:task/build-side-character-context@1": "2314a96fa5a1c",
 	// Gained the `variables` slot in 0.6-preview (migration 0107), a
 	// `speakerRelationships` layout when the graph query was wired in
 	// (migration 0111), and lost `narratorName` from its `prompts` slot when
@@ -568,7 +766,12 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// widening the shared map would give it ports it must leave empty forever.
 	// Moved by the `state` in-port: templates read `state.world.weather` off
 	// the resolved session state, which nothing could supply before.
-	"core:task/build-template-context@1": "6b960498d9527",
+	// Moved (U5g, R-18, 2026-09-16): a `speaker` in-port — the participant
+	// reference — so an envoy's card (name, description off the genre's
+	// declaration the cast read carries) compiles where a cast member's
+	// would, through the `speakerName`/`speakerCharacter` seam. A
+	// `character:` reference changes nothing. (was "6b960498d9527")
+	"core:task/build-template-context@1": "1536fb0197a841",
 	/**
 	 * The Adventure genre's three agent surfaces onto that same builder.
 	 *
@@ -599,7 +802,11 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// — a required part of the plan's schema that no node read, so a turn that
 	// planned a location left the world strip empty.
 	"core:query/resolve-state-changes@1": "16e758af287e3d",
-	"core:task/context-budget@1": "efdd9a915c681",
+	// Moved (R-8, 2026-09-15): a `connection` slot, shared with the generating
+	// step in every shipped spec, so the ONE window computation reads the
+	// model's own window (0114) off the same pair the request goes out on.
+	// (was "efdd9a915c681")
+	"core:task/context-budget@1": "1755b6318f4090",
 	"core:task/first-json@1": "13093e6bda129",
 	// Re-projected by 0191 (policy answer 3). Two changes, one hash move: the
 	// dead `strategy` and `dedup` parameters are gone — the binding read
@@ -642,7 +849,11 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// alternative is a second copy of the whole rank slot declaration, and 0195
 	// records why `lorebook-triggers` keeping its own duplicate is tolerable
 	// only because the two overlap in a single field name.
-	"core:task/rank-by-recency@1": "aae1563fa43a3",
+	// Moved (R-7 P5, 2026-09-16 — U3b): its `params` slot is gone. It wore the
+	// per-source maps only because `rankSlots` was spread onto every ranker;
+	// with those on the sources it has nothing cross-source to declare.
+	// (was "aae1563fa43a3")
+	"core:task/rank-by-recency@1": "1121f90c32b126",
 	// Both re-projected by migration 0146. rank-hybrid gained the nine
 	// signal-weight fields — the tuning matrix `weights.ts` always held but
 	// nothing declared; rank-semantic gained `sourceBudget` and
@@ -722,17 +933,32 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// re-projected: the port is spread onto this type alone, like
 	// `SIGNAL_WEIGHT_FIELDS` and the `scripts` hook. Neither computes per-band
 	// usage, and a port they cannot fill would be a promise neither keeps.
-	"core:task/rank-hybrid@1": "a4ba08bbc5618",
-	"core:task/rank-semantic@1": "d3849f48f8442",
+	// Moved (R-7 P5, 2026-09-16 — U3b): `share`, `maxEntries` and
+	// `minEntries` — the five-band maps 16 §5a rejected — are gone from the
+	// ranker and declared on the five sources; `shareNormalisation` (relative,
+	// the shipped arithmetic) joins the cross-source set. Migration 0135 moves
+	// the stored maps. (was "a4ba08bbc5618")
+	"core:task/rank-hybrid@1": "15ebe8358b7fa0",
+	// Moved (R-12, 2026-09-16): `params.currentWindow` / `recentWindow` are culled from
+	// the ranker — they size the two windows `query-windows@1` cuts and
+	// declares as its own; here they were rendered twice and read once.
+	// `withDefaults` still fills both for the `SemanticParams` shape, so the
+	// ranker's arithmetic is byte-identical. (was "d3849f48f8442")
+	"core:task/rank-semantic@1": "188d7e834f2b04",
 	"core:task/render-entries@1": "7541eb6256ba5",
 	// The four next-speaker strategies (19 §5, U-C4) — one implementation,
 	// four ids, and one hash: the content hash strips display text, and what
 	// remains (ports, timeout) is identical across the family, exactly like
 	// the three lore gather branches above.
-	"core:task/turn-round-robin@1": "cadef103232f2",
-	"core:task/turn-random@1": "cadef103232f2",
-	"core:task/turn-manual@1": "cadef103232f2",
-	"core:task/turn-none@1": "cadef103232f2",
+	// Moved, all four (U5a, R-18 (3), 2026-09-16): a `speaker` in-port — the
+	// explicit pick as a participant reference, which is the only way an
+	// envoy can be picked — and a `speaker` out-port beside `characterId`,
+	// so the receipt and the wiring carry the reference; the bare id stays
+	// for the context and generation readers. (was "cadef103232f2")
+	"core:task/turn-round-robin@1": "1e667e415a1009",
+	"core:task/turn-random@1": "1e667e415a1009",
+	"core:task/turn-manual@1": "1e667e415a1009",
+	"core:task/turn-none@1": "1e667e415a1009",
 	"core:task/to-candidates@1": "174b5c86bb414b",
 	// The `test:` fixtures are published by the same module as everything else,
 	// so a running instance has rows for them and they freeze on exactly the same
@@ -760,7 +986,7 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Gained a `params` slot, holding `streaming` alone — the node had none, so
 	// the slot moves with the parameter. `off` means one request with no
 	// progress polling and no previews.
-	"core:provider/generate-image@1": "13b10d1a1ac974",
+	"core:oracle/generate-image@1": "607862735ca56",
 	// ── Entry types (Part 1) ────────────────────────────────────────────
 	//
 	// A lorebook row's kind, declared and versioned instead of being the table
@@ -782,15 +1008,15 @@ const PUBLISHED_HASHES: Record<string, string> = {
  *
  * Script types are included, and have to be: they are published into the same
  * registry under the same freeze rule (18 §2), so a guard that only walked
- * `allTypes()` would let a script contract move without anyone noticing —
+ * `allDefinitions()` would let a script contract move without anyone noticing —
  * which is the one thing this file exists to prevent.
  */
 const current = (): Record<string, string> => {
 	const out: Record<string, string> = {}
-	for (const entry of snapshotRegistry([...allTypes(), ...allScriptTypes()], {
+	for (const entry of snapshotRegistry([...allDefinitions(), ...allScriptKinds()], {
 		release: "test"
 	}))
-		out[`${entry.id}@${entry.version}`] = typeContentHash(entry)
+		out[`${entry.id}@${entry.version}`] = definitionContentHash(entry)
 	return out
 }
 
@@ -848,14 +1074,65 @@ describe("published type content hashes", () => {
 		// `i18n`/`description` leaked into the hash, every copyedit would read as
 		// a contract change and the three tests above would cry wolf until someone
 		// stopped reading them.
-		const [entry] = snapshotRegistry(allTypes(), { release: "test" })
-		const before = typeContentHash(entry)
-		const after = typeContentHash({
+		const [entry] = snapshotRegistry(allDefinitions(), { release: "test" })
+		const before = definitionContentHash(entry)
+		const after = definitionContentHash({
 			...entry,
 			i18n: { name: { en: "Something else entirely" } },
 			description: "and a different explanation"
 		} as any)
 		expect(after).toBe(before)
+	})
+
+	it("leaves the substrate's settings slot out, so declaring the switch moved no pin", () => {
+		// R-9 (2026-09-16): the projection adds a `settings` slot to every
+		// optional or gated row — `enabled`, `review` — for the panel to read
+		// like any slot. It is derived from `optional` and `effects`, which are
+		// hashed already, so digesting it too would have moved forty-one pins
+		// above for a change nobody authored. The row carries it; the hash does
+		// not. Both halves asserted, because a strip that also dropped it from
+		// the row would pass the second and break the panel.
+		const entries = snapshotRegistry(allDefinitions(), { release: "test" })
+		const withSlot = entries.filter((e) => "settings" in e.slots)
+		expect(withSlot.length).toBeGreaterThan(0)
+		for (const e of withSlot) {
+			expect(!!e.optional || e.effects === "write" || e.effects === "external").toBe(true)
+			const { settings: _settings, ...authored } = e.slots
+			expect(definitionContentHash({ ...e, slots: authored })).toBe(
+				definitionContentHash(e)
+			)
+		}
+		// And the other direction: a definition with no switch gets no slot,
+		// so nothing is projected that the substrate does not read.
+		for (const e of entries.filter((e) => !("settings" in e.slots)))
+			expect(!e.optional && e.effects !== "write" && e.effects !== "external").toBe(true)
+	})
+
+	it("strips a script point's display text, and hashes what it accepts", () => {
+		// R-11 (2026-09-16). `accepts` on a point is contract for the reason a
+		// port hook's is (S3); its label never was, and until this change the
+		// material carried it anyway.
+		const entry = snapshotRegistry(allDefinitions(), { release: "test" }).find(
+			(e) => e.scriptPoints?.length
+		)!
+		expect(entry, "no shipped definition declares a point").toBeTruthy()
+		const relabelled = {
+			...entry,
+			scriptPoints: entry.scriptPoints!.map((p) => ({
+				...p,
+				label: { en: "Jeder Entwurf" },
+				description: { en: "anders" }
+			}))
+		}
+		expect(definitionContentHash(relabelled)).toBe(definitionContentHash(entry))
+		const widened = {
+			...entry,
+			scriptPoints: entry.scriptPoints!.map((p) => ({
+				...p,
+				accepts: [...p.accepts, "core:script:text/stop@1"]
+			}))
+		}
+		expect(definitionContentHash(widened)).not.toBe(definitionContentHash(entry))
 	})
 
 	/**
@@ -888,7 +1165,7 @@ describe("published type content hashes", () => {
 	 * mean "answers the same for everything".
 	 */
 	it("strips a parameter's display text at every level, and agrees with the SDK about which words those are", () => {
-		const withParams = allTypes().find(
+		const withParams = allDefinitions().find(
 			(t: any) =>
 				t.slots?.params?.schema &&
 				Object.keys(t.slots.params.schema).length > 0
@@ -907,7 +1184,7 @@ describe("published type content hashes", () => {
 			return copy
 		}
 		const coreHash = (d: unknown) =>
-			typeContentHash(
+			definitionContentHash(
 				snapshotRegistry([d as any], { release: "test" })[0]!
 			)
 		const sdkHash = (d: unknown) =>

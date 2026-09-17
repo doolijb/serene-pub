@@ -3,13 +3,9 @@ import * as schema from "$lib/server/db/schema"
 import { and, eq, inArray, sql } from "drizzle-orm"
 import {
 	resolveOrCreateBindingRow,
-	syncLorebookBindingsForCharacter,
-	syncLorebookBindingsForPersona
+	syncLorebookBindingsForCharacter
 } from "$lib/server/utils/characterBindingSync"
-import {
-	canViewCharacter,
-	canViewPersona
-} from "$lib/server/utils/sessionAccess"
+import { canViewCharacter } from "$lib/server/utils/sessionAccess"
 import {
 	mapImportedEntry,
 	entryTypeIdOf,
@@ -37,7 +33,7 @@ import {
 	personaFieldsFromParsedData,
 	createPersonaFromParsedData,
 	overwritePersonaFromParsedData
-} from "./personas"
+} from "$lib/server/utils/personaCard"
 import { writeSceneCast } from "$lib/server/utils/sceneCast"
 import {
 	CHARACTER_LORE_TYPE_ID,
@@ -139,65 +135,92 @@ async function processLorebookTags(
 	}
 }
 
+/**
+ * Every lorebook this user owns, with the counts and tags its card shows.
+ *
+ * Split out of the handler below so the six cascades that re-send the list
+ * (create, update, delete, duplicate, import, importResolve) can hand it to
+ * `emitToUser` as a thunk: ONE source of truth for the payload, and the
+ * multi-relation read behind it — every book with its entry ids, its binding
+ * ids and its tags — is paid only when some socket declared the key
+ * (socket-interest plan, ruling 4). The handler's own reply stays eager: the
+ * caller asked for it.
+ */
+async function buildLorebooksList(
+	userId: number
+): Promise<Sockets.Lorebooks.List.Response> {
+	if (!userId) return { lorebookList: [] }
+	const books = await db.query.lorebooks.findMany({
+		where: (l, { eq }) => eq(l.userId, userId),
+		orderBy: (l, { desc }) => desc(l.name),
+		with: {
+			lorebookEntries: {
+				columns: {
+					id: true,
+					typeId: true
+				}
+			},
+			lorebookBindings: {
+				columns: {
+					id: true
+				}
+			},
+			lorebookTags: {
+				with: {
+					tag: true
+				}
+			}
+		}
+	})
+
+	// Transform lorebook tags to include tags as string array. The three
+	// entry lists are id-only and exist for the card's counts, so they are
+	// split back out of the one relation rather than fetched three times.
+	const booksWithTags = books.map((book) => {
+		const { lorebookEntries, ...rest } = book
+		const idsOf = (typeId: string) =>
+			lorebookEntries
+				.filter((e) => e.typeId === typeId)
+				.map((e) => ({ id: e.id }))
+		return {
+			...rest,
+			worldLoreEntries: idsOf(WORLD_LORE_TYPE_ID),
+			characterLoreEntries: idsOf(CHARACTER_LORE_TYPE_ID),
+			historyEntries: idsOf(HISTORY_TYPE_ID),
+			tags:
+				book.lorebookTags?.map(
+					(lt: SelectLorebookTag & { tag: SelectTag }) => lt.tag.name
+				) || []
+		}
+	})
+
+	return { lorebookList: booksWithTags }
+}
+
+/**
+ * The lorebook list, re-sent to the caller after a mutation that changed it.
+ *
+ * The LAZY form (socket-interest plan, ruling 4): these are pushes, not
+ * replies, so a create, a rename or an import made from a surface that shows
+ * no lorebook list pays for no re-list at all. Skipping the emit alone would
+ * save nothing; the query is the cost.
+ */
+function relistLorebooks(
+	socket: any,
+	emitToUser: (event: string, data: any) => void
+) {
+	return emitToUser("lorebooks:list", () =>
+		buildLorebooksList(socket.user!.id)
+	)
+}
+
 export const lorebooksListHandler: Handler<
 	Sockets.Lorebooks.List.Params,
 	Sockets.Lorebooks.List.Response
 > = {
 	event: "lorebooks:list",
 	async handler(socket, params, emitToUser) {
-		// Fetch all lorebooks for the user
-		const userId = socket.user!.id
-		if (!userId) {
-			const res = { lorebookList: [] }
-			emitToUser("lorebooks:list", res)
-			return res
-		}
-		const books = await db.query.lorebooks.findMany({
-			where: (l, { eq }) => eq(l.userId, userId),
-			orderBy: (l, { desc }) => desc(l.name),
-			with: {
-				lorebookEntries: {
-					columns: {
-						id: true,
-						typeId: true
-					}
-				},
-				lorebookBindings: {
-					columns: {
-						id: true
-					}
-				},
-				lorebookTags: {
-					with: {
-						tag: true
-					}
-				}
-			}
-		})
-
-		// Transform lorebook tags to include tags as string array. The three
-		// entry lists are id-only and exist for the card's counts, so they are
-		// split back out of the one relation rather than fetched three times.
-		const booksWithTags = books.map((book) => {
-			const { lorebookEntries, ...rest } = book
-			const idsOf = (typeId: string) =>
-				lorebookEntries
-					.filter((e) => e.typeId === typeId)
-					.map((e) => ({ id: e.id }))
-			return {
-				...rest,
-				worldLoreEntries: idsOf(WORLD_LORE_TYPE_ID),
-				characterLoreEntries: idsOf(CHARACTER_LORE_TYPE_ID),
-				historyEntries: idsOf(HISTORY_TYPE_ID),
-				tags:
-					book.lorebookTags?.map(
-						(lt: SelectLorebookTag & { tag: SelectTag }) =>
-							lt.tag.name
-					) || []
-			}
-		})
-
-		const res = { lorebookList: booksWithTags }
+		const res = await buildLorebooksList(socket.user!.id)
 		emitToUser("lorebooks:list", res)
 		return res
 	}
@@ -217,14 +240,12 @@ export const lorebooksCreateHandler: Handler<
 				.values({ name: params.name, userId })
 				.returning()
 
-			// Refresh lorebook list
 			if (emitToUser) {
-				const lorebookListResult = await lorebooksListHandler.handler(
-					socket,
-					{},
-					emitToUser
-				)
-				emitToUser("lorebooks:list", lorebookListResult)
+				// The refreshed list, lazily — and exactly ONE of it.
+				// `relistLorebooks` emits `lorebooks:list` itself, so a second
+				// `emitToUser("lorebooks:list", …)` beside this call puts the same
+				// payload on the wire twice. One stood here; it is gone.
+				await relistLorebooks(socket, emitToUser)
 				emitToUser("lorebooks:create", { lorebook })
 			}
 
@@ -259,9 +280,15 @@ export const lorebooksGetHandler: Handler<
 			})
 
 			if (!book) {
+				// ⚠ `lorebookId` beside the null, the same treatment as
+				// `sessions:get`'s not-found reply: there is no lorebook for the
+				// scope extractor to read an id off, so without it this reply has
+				// no **interest scope** and only a BARE `lorebooks:get` key could
+				// receive it — a key that matches every OTHER book's reply too.
 				const res: Sockets.Lorebooks.Get.Response = {
 					lorebook: null,
-					entries: []
+					entries: [],
+					lorebookId: params.id
 				}
 				emitToUser("lorebooks:get", res)
 				return res
@@ -333,7 +360,7 @@ export const lorebooksUpdateHandler: Handler<
 				lorebook: updated
 			}
 			emitToUser("lorebooks:update", res)
-			await lorebooksListHandler.handler(socket, {}, emitToUser) // Refresh list
+			await relistLorebooks(socket, emitToUser) // Refresh list
 			return res
 		} catch (error: any) {
 			console.error("Error updating lorebook:", error)
@@ -368,7 +395,7 @@ export const lorebooksDeleteHandler: Handler<
 				success: "Lorebook deleted successfully"
 			}
 			emitToUser("lorebooks:delete", res)
-			await lorebooksListHandler.handler(socket, {}, emitToUser) // Refresh list
+			await relistLorebooks(socket, emitToUser) // Refresh list
 			return res
 		} catch (error: any) {
 			console.error("Error deleting lorebook:", error)
@@ -437,8 +464,7 @@ export async function syncLorebookBindings({
 				db.insert(schema.lorebookBindings).values({
 					lorebookId,
 					binding: fb, // Use preferred {{char:#}} syntax
-					characterId: null,
-					personaId: null
+					characterId: null
 				}) as any as () => Promise<any>
 			)
 			// This binding wasn't minted via deriveNextBindingToken's atomic
@@ -476,36 +502,77 @@ export async function syncLorebookBindings({
 /**
  * Type-safe handler for listing lorebook bindings
  */
+/**
+ * One lorebook's cast, with each binding's character and persona attached.
+ *
+ * Split out of the handler below for the reason `buildLorebooksList` is: six
+ * call sites re-send this list after a write (three in this file, plus
+ * `entries.ts`' `afterWrite`, the session binding check and the summarizer),
+ * and every one of them is a push. As a thunk the three-way join is paid only
+ * when a socket is actually showing the cast.
+ *
+ * Ownership is re-checked here rather than trusted from the caller — the read
+ * is scoped by `userId` in the same statement that fetches the rows, so a
+ * book belonging to somebody else is "not found" rather than "found but
+ * refused".
+ */
+export async function buildLorebookBindingList(
+	userId: number,
+	lorebookId: number
+): Promise<Sockets.Lorebooks.BindingList.Response> {
+	const book = await db.query.lorebooks.findFirst({
+		where: (l, { and, eq }) =>
+			and(eq(l.id, lorebookId), eq(l.userId, userId)),
+		columns: {
+			id: true
+		},
+		with: {
+			lorebookBindings: {
+				with: {
+					character: true
+				}
+			}
+		}
+	})
+
+	if (!book) throw new Error("Lorebook not found.")
+
+	return {
+		lorebookId: book.id,
+		lorebookBindingList: book.lorebookBindings
+	}
+}
+
+/**
+ * The cast, re-sent to the caller after a write that could have changed it.
+ *
+ * The lazy counterpart of the handler below, and the ONE spelling of this
+ * event name for every cascade — exported because three of the six live in
+ * other files.
+ *
+ * ⚠ A build that THROWS is logged by `emitToUser` and emits nothing, which
+ * is right for a push the caller's own reply does not depend on.
+ */
+export function relistBindings(
+	socket: any,
+	lorebookId: number,
+	emitToUser: (event: string, data: any) => void
+) {
+	return emitToUser("lorebooks:bindingList", () =>
+		buildLorebookBindingList(socket.user!.id, lorebookId)
+	)
+}
+
 export const lorebookBindingListHandler: Handler<
 	Sockets.Lorebooks.BindingList.Params,
 	Sockets.Lorebooks.BindingList.Response
 > = {
 	event: "lorebooks:bindingList",
 	handler: async (socket, params, emitToUser) => {
-		const userId = socket.user!.id
-
-		const book = await db.query.lorebooks.findFirst({
-			where: (l, { and, eq }) =>
-				and(eq(l.id, params.lorebookId), eq(l.userId, userId)),
-			columns: {
-				id: true
-			},
-			with: {
-				lorebookBindings: {
-					with: {
-						character: true,
-						persona: true
-					}
-				}
-			}
-		})
-
-		if (!book) throw new Error("Lorebook not found.")
-
-		const res: Sockets.Lorebooks.BindingList.Response = {
-			lorebookId: book.id,
-			lorebookBindingList: book.lorebookBindings
-		}
+		const res = await buildLorebookBindingList(
+			socket.user!.id,
+			params.lorebookId
+		)
 
 		if (emitToUser) {
 			emitToUser("lorebooks:bindingList", res)
@@ -594,12 +661,12 @@ export const lorebookBindingsForCharacterHandler: Handler<
  * Type-safe handler for creating lorebook binding
  */
 // A lorebook binding resolves a placeholder like {{char:1}} to a real
-// character/persona's name/data — without this check, any characterId or
-// personaId could be supplied regardless of who it belongs to, and the
-// bound entity's name/aliases/summary would later be disclosed through the
-// binding (and copied into narrative-graph nodes derived from it).
+// character's name/data — without this check, any characterId could be
+// supplied regardless of who it belongs to, and the bound entity's
+// name/aliases/summary would later be disclosed through the binding (and
+// copied into narrative-graph nodes derived from it).
 export async function verifyBindingTargetAccess(
-	binding: { characterId?: number | null; personaId?: number | null },
+	binding: { characterId?: number | null },
 	userId: number
 ): Promise<boolean> {
 	if (binding.characterId) {
@@ -609,16 +676,9 @@ export async function verifyBindingTargetAccess(
 		})
 		if (!character) return false
 		if (character.userId === userId) return true
+		// Checks BOTH member tables, so a character somebody else voices in a
+		// session the caller is in is bindable too.
 		return await canViewCharacter(binding.characterId, userId)
-	}
-	if (binding.personaId) {
-		const persona = await db.query.personas.findFirst({
-			where: eq(schema.personas.id, binding.personaId),
-			columns: { userId: true }
-		})
-		if (!persona) return false
-		if (persona.userId === userId) return true
-		return await canViewPersona(binding.personaId, userId)
 	}
 	return true
 }
@@ -660,9 +720,7 @@ export const createLorebookBindingHandler: Handler<
 		// embedding/embeddingModel/vectorizedAt/absorbedAliases/createdAt/
 		// updatedAt are never client-writable either — all server-derived
 		// or pipeline-owned.
-		const isBound =
-			!!params.lorebookBinding.characterId ||
-			!!params.lorebookBinding.personaId
+		const isBound = !!params.lorebookBinding.characterId
 		const {
 			binding: _ignoredBinding,
 			embedding: _ignoredEmbedding,
@@ -683,7 +741,7 @@ export const createLorebookBindingHandler: Handler<
 		)
 
 		// One binding per person per book (ruling 2026-09-12). A second
-		// create for a character or persona this book already holds answers
+		// create for a character this book already holds answers
 		// with the row it already has rather than minting a rival: a rival
 		// row shows one person twice in the cast panel and splits their lore
 		// across two anchors.
@@ -693,7 +751,7 @@ export const createLorebookBindingHandler: Handler<
 		// the bound entity. An existing row is returned untouched — that is
 		// what returning it means.
 		//
-		// A background row (both ids null) has no entity to resolve through
+		// A background row (no character) has no entity to resolve through
 		// and keeps the bare insert: names are deduped for those by
 		// lorebooks:resolveOrCreateBindingByName, which is the path binding
 		// suggestions use.
@@ -703,8 +761,7 @@ export const createLorebookBindingHandler: Handler<
 			const { id, created } = await resolveOrCreateBindingRow(
 				{
 					lorebookId: params.lorebookBinding.lorebookId,
-					characterId: params.lorebookBinding.characterId ?? null,
-					personaId: params.lorebookBinding.personaId ?? null
+					characterId: params.lorebookBinding.characterId ?? null
 				},
 				db
 			)
@@ -716,7 +773,6 @@ export const createLorebookBindingHandler: Handler<
 				const {
 					lorebookId: _lorebookId,
 					characterId: _characterId,
-					personaId: _personaId,
 					...rest
 				} = safeInsert as Record<string, unknown>
 				const extra = Object.fromEntries(
@@ -750,15 +806,11 @@ export const createLorebookBindingHandler: Handler<
 			})
 		}
 
-		// Refresh binding list
-		if (emitToUser) {
-			const listResult = await lorebookBindingListHandler.handler(
-				socket,
-				{ lorebookId: book.id },
-				emitToUser
-			)
-			emitToUser("lorebooks:bindingList", listResult)
-		}
+		// The refreshed cast, lazily — and exactly ONE of it.
+		// `relistBindings` emits `lorebooks:bindingList` itself, so a second
+		// emit of its result beside this call is the same payload twice. One
+		// stood here; it is gone.
+		if (emitToUser) await relistBindings(socket, book.id, emitToUser)
 
 		const res: Sockets.Lorebooks.CreateBinding.Response = {
 			lorebookBinding: binding,
@@ -816,7 +868,7 @@ export const updateLorebookBindingHandler: Handler<
 		// `binding` is never client-writable here either — an existing token
 		// is never rewritten (decision 1's preservation guarantee). `name`/
 		// `aliases` are only stripped when the row is (or is becoming, via
-		// this same update) bound to a real character/persona — that case's
+		// this same update) bound to a real character — that case's
 		// name/aliases only ever come from the entity sync below. A row
 		// that's unbound both before and after this update has no entity to
 		// sync from, so its name is exactly what the client supplies here —
@@ -824,14 +876,11 @@ export const updateLorebookBindingHandler: Handler<
 		const willBeBound =
 			(params.lorebookBinding.characterId !== undefined
 				? params.lorebookBinding.characterId
-				: existingBinding.characterId) != null ||
-			(params.lorebookBinding.personaId !== undefined
-				? params.lorebookBinding.personaId
-				: existingBinding.personaId) != null
+				: existingBinding.characterId) != null
 		// lorebookId is deliberately excluded too — ownership is only
 		// verified against the binding's *current* lorebook above; a
 		// client-supplied replacement value here would let a user relocate
-		// their own binding (and any bound character/persona) into a
+		// their own binding (and any bound character) into a
 		// lorebook they don't own with no re-validation.
 		// embedding/embeddingModel/vectorizedAt/absorbedAliases/createdAt/
 		// updatedAt are never client-writable either — all server-derived
@@ -859,7 +908,7 @@ export const updateLorebookBindingHandler: Handler<
 			.where(eq(schema.lorebookBindings.id, params.lorebookBinding.id!))
 			.returning()
 
-		// Attach-time sync: a fresh characterId/personaId attachment should
+		// Attach-time sync: a fresh characterId attachment should
 		// pull in that entity's name/aliases immediately, not wait for an
 		// unrelated future edit to that entity. Re-fetch afterward so the
 		// response/emitted row reflects the synced name/aliases rather than
@@ -870,23 +919,14 @@ export const updateLorebookBindingHandler: Handler<
 				.select()
 				.from(schema.lorebookBindings)
 				.where(eq(schema.lorebookBindings.id, updatedBinding.id))
-		} else if (updatedBinding.personaId) {
-			await syncLorebookBindingsForPersona(updatedBinding.personaId)
-			;[updatedBinding] = await db
-				.select()
-				.from(schema.lorebookBindings)
-				.where(eq(schema.lorebookBindings.id, updatedBinding.id))
 		}
 
-		// Refresh binding list
-		if (emitToUser) {
-			const listResult = await lorebookBindingListHandler.handler(
-				socket,
-				{ lorebookId: existingBinding.lorebookId },
-				emitToUser
-			)
-			emitToUser("lorebooks:bindingList", listResult)
-		}
+		// The refreshed cast, lazily — and exactly ONE of it.
+		// `relistBindings` emits `lorebooks:bindingList` itself, so a second
+		// emit of its result beside this call is the same payload twice. One
+		// stood here; it is gone.
+		if (emitToUser)
+			await relistBindings(socket, existingBinding.lorebookId, emitToUser)
 
 		const res: Sockets.Lorebooks.UpdateBinding.Response = {
 			lorebookBinding: updatedBinding
@@ -929,14 +969,12 @@ export const resolveOrCreateBindingByNameHandler: Handler<
 
 		// A matched-existing result changed nothing, so only a genuinely new
 		// row needs to push a binding-list refresh to other viewers.
-		if (created && emitToUser) {
-			const listResult = await lorebookBindingListHandler.handler(
-				socket,
-				{ lorebookId: params.lorebookId },
-				emitToUser
-			)
-			emitToUser("lorebooks:bindingList", listResult)
-		}
+		// The refreshed cast, lazily — and exactly ONE of it.
+		// `relistBindings` emits `lorebooks:bindingList` itself, so a second
+		// emit of its result beside this call is the same payload twice. One
+		// stood here; it is gone.
+		if (created && emitToUser)
+			await relistBindings(socket, params.lorebookId, emitToUser)
 
 		const res: Sockets.Lorebooks.ResolveOrCreateBindingByName.Response = {
 			lorebookBindingId: id,
@@ -1102,25 +1140,19 @@ async function restoreBoundEntities(
 ): Promise<{
 	bindingLocalIdToRealId: Map<number, number>
 	syncCharacterIds: Set<number>
-	syncPersonaIds: Set<number>
-	boundEntityByRealId: Map<
-		number,
-		{ characterId: number | null; personaId: number | null }
-	>
+	boundEntityByRealId: Map<number, { characterId: number | null }>
 }> {
 	const bindingLocalIdToRealId = new Map<number, number>()
 	const syncCharacterIds = new Set<number>()
-	const syncPersonaIds = new Set<number>()
 	const boundEntityByRealId = new Map<
 		number,
-		{ characterId: number | null; personaId: number | null }
+		{ characterId: number | null }
 	>()
 	const rawBindings = serenepub?.bindings
 	if (!Array.isArray(rawBindings)) {
 		return {
 			bindingLocalIdToRealId,
 			syncCharacterIds,
-			syncPersonaIds,
 			boundEntityByRealId
 		}
 	}
@@ -1160,17 +1192,21 @@ async function restoreBoundEntities(
 				? (personaLocalIdToRealId.get(binding.personaLocalId) ?? null)
 				: null
 
+		// One column: an embedded persona card restores as a character with
+		// `isPersona`, so both halves of the wire format land on
+		// `character_id`. `characterId` wins when a malformed document names
+		// both.
+		const boundCharacterId = characterId ?? personaId
 		const [row] = await dbOrTx
 			.insert(schema.lorebookBindings)
 			.values({
 				lorebookId,
-				characterId,
-				personaId,
+				characterId: boundCharacterId,
 				binding: binding.bindingText || "{{char:1}}"
 			})
 			.returning()
 		bindingLocalIdToRealId.set(binding.localId, row.id)
-		boundEntityByRealId.set(row.id, { characterId, personaId })
+		boundEntityByRealId.set(row.id, { characterId: boundCharacterId })
 
 		// Every other bound-insert site syncs name/aliases from the entity
 		// immediately (see characterBindingSync.ts) — without this, an
@@ -1182,17 +1218,12 @@ async function restoreBoundEntities(
 		// (characterBindingSync.ts) already uses for this exact call: the
 		// sync writes rows this transaction has not committed yet, so they
 		// have to see it landed.
-		if (characterId) {
-			syncCharacterIds.add(characterId)
-		} else if (personaId) {
-			syncPersonaIds.add(personaId)
-		}
+		if (boundCharacterId) syncCharacterIds.add(boundCharacterId)
 	}
 
 	return {
 		bindingLocalIdToRealId,
 		syncCharacterIds,
-		syncPersonaIds,
 		boundEntityByRealId
 	}
 }
@@ -1243,10 +1274,10 @@ async function resolveOrOverwriteEmbeddedPersona(
 ) {
 	const incomingUuid = extractPersonaUuid(cardData)
 	if (incomingUuid) {
-		const existing = await dbOrTx.query.personas.findFirst({
+		const existing = await dbOrTx.query.characters.findFirst({
 			where: and(
-				eq(schema.personas.uuid, incomingUuid),
-				eq(schema.personas.userId, userId)
+				eq(schema.characters.uuid, incomingUuid),
+				eq(schema.characters.userId, userId)
 			)
 		})
 		if (existing) {
@@ -1522,7 +1553,7 @@ async function restoreNarrativeGraph(
 	entryRefs: RestoredEntryRefs,
 	boundEntityByRealId: Map<
 		number,
-		{ characterId: number | null; personaId: number | null }
+		{ characterId: number | null }
 	>
 ) {
 	try {
@@ -1593,8 +1624,7 @@ async function restoreNarrativeGraph(
 					// aliases, so the graph node's copy is all that survives
 					// and must be applied.
 					const boundEntity = boundEntityByRealId.get(boundRealId)
-					const isEntityLinked =
-						!!boundEntity?.characterId || !!boundEntity?.personaId
+					const isEntityLinked = !!boundEntity?.characterId
 					const { name, aliases, ...rest } = nodeFields
 					const fieldsToApply = isEntityLinked ? rest : nodeFields
 					const [row] = await db
@@ -1610,7 +1640,6 @@ async function restoreNarrativeGraph(
 						.values({
 							lorebookId,
 							characterId: null,
-							personaId: null,
 							binding: token,
 							...nodeFields
 						})
@@ -1771,7 +1800,6 @@ async function createLorebookFromParsedCard(
 		bindingLocalIdToRealId,
 		entryRefs,
 		syncCharacterIds,
-		syncPersonaIds,
 		boundEntityByRealId
 	} = await db.transaction(async (tx) => {
 		const uuidToStamp = await claimIncomingLorebookUuid(uuid, userId, tx)
@@ -1796,7 +1824,6 @@ async function createLorebookFromParsedCard(
 		const {
 			bindingLocalIdToRealId,
 			syncCharacterIds,
-			syncPersonaIds,
 			boundEntityByRealId
 		} = await restoreBoundEntities(
 			book.id,
@@ -1815,16 +1842,12 @@ async function createLorebookFromParsedCard(
 			bindingLocalIdToRealId,
 			entryRefs,
 			syncCharacterIds,
-			syncPersonaIds,
 			boundEntityByRealId
 		}
 	})
 
 	for (const characterId of syncCharacterIds) {
 		await syncLorebookBindingsForCharacter(characterId)
-	}
-	for (const personaId of syncPersonaIds) {
-		await syncLorebookBindingsForPersona(personaId)
 	}
 	await restoreNarrativeGraph(
 		book.id,
@@ -1860,7 +1883,6 @@ async function overwriteLorebookFromParsedCard(
 		bindingLocalIdToRealId,
 		entryRefs,
 		syncCharacterIds,
-		syncPersonaIds,
 		boundEntityByRealId
 	} = await db.transaction(async (tx) => {
 		await tx
@@ -1893,7 +1915,6 @@ async function overwriteLorebookFromParsedCard(
 		const {
 			bindingLocalIdToRealId,
 			syncCharacterIds,
-			syncPersonaIds,
 			boundEntityByRealId
 		} = await restoreBoundEntities(
 			existingId,
@@ -1911,16 +1932,12 @@ async function overwriteLorebookFromParsedCard(
 			bindingLocalIdToRealId,
 			entryRefs,
 			syncCharacterIds,
-			syncPersonaIds,
 			boundEntityByRealId
 		}
 	})
 
 	for (const characterId of syncCharacterIds) {
 		await syncLorebookBindingsForCharacter(characterId)
-	}
-	for (const personaId of syncPersonaIds) {
-		await syncLorebookBindingsForPersona(personaId)
 	}
 	await restoreNarrativeGraph(
 		existingId,
@@ -2021,14 +2038,10 @@ export const lorebookImportHandler: Handler<
 				incomingUuid
 			)
 
-			if (emitToUser) {
-				const lorebookListResult = await lorebooksListHandler.handler(
-					socket,
-					{ userId },
-					emitToUser
-				)
-				emitToUser("lorebooks:list", lorebookListResult)
-			}
+			// Lazily, and exactly once: `relistLorebooks` emits `lorebooks:list`
+			// itself, so a second emit of its result beside this call is the same
+			// payload twice. One stood here; it is gone.
+			if (emitToUser) await relistLorebooks(socket, emitToUser)
 
 			const res: Sockets.Lorebooks.Import.Response = {
 				status: "created",
@@ -2085,7 +2098,7 @@ export const lorebooksDuplicateHandler: Handler<
 				userId
 			)
 
-			await lorebooksListHandler.handler(socket, {}, emitToUser)
+			await relistLorebooks(socket, emitToUser)
 
 			const res: Sockets.Lorebooks.Duplicate.Response = {
 				lorebook: completedBook
@@ -2159,14 +2172,10 @@ export const lorebookImportResolveHandler: Handler<
 				)
 			}
 
-			if (emitToUser) {
-				const lorebookListResult = await lorebooksListHandler.handler(
-					socket,
-					{ userId },
-					emitToUser
-				)
-				emitToUser("lorebooks:list", lorebookListResult)
-			}
+			// Lazily, and exactly once: `relistLorebooks` emits `lorebooks:list`
+			// itself, so a second emit of its result beside this call is the same
+			// payload twice. One stood here; it is gone.
+			if (emitToUser) await relistLorebooks(socket, emitToUser)
 
 			const res: Sockets.Lorebooks.ImportResolve.Response = {
 				lorebook: completedBook

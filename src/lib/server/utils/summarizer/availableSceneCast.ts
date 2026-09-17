@@ -12,7 +12,7 @@
  * extraction), so every character a prior scene ever mentioned already has
  * a binding row, already covered by the single query below.
  *
- * Real characters/personas (characterId/personaId set) are always in scope
+ * Real characters (characterId set) are always in scope
  * regardless of timeline. Background/NPC bindings (neither set) are only
  * in scope once their own historyEntryId/sceneId position is at or before
  * the scene being extracted for — matching how narrativeNodes' timeline
@@ -356,11 +356,6 @@ export async function buildSceneCastList(
 			.filter((b) => b.characterId != null)
 			.map((b) => [b.characterId!, b])
 	)
-	const bindingByPersonaId = new Map(
-		allBindings
-			.filter((b) => b.personaId != null)
-			.map((b) => [b.personaId!, b])
-	)
 
 	const skipDedup = allBindings.length > MAX_BINDINGS_FOR_SCENE_CAST
 	if (skipDedup) {
@@ -411,7 +406,9 @@ export async function buildSceneCastList(
 		for (const cp of sessionPersonas) {
 			const persona = (cp as any).persona
 			if (!persona?.name) continue
-			const binding = bindingByPersonaId.get(persona.id)
+			// Same map as the cast: a voiced character's binding IS a
+			// character binding.
+			const binding = bindingByCharacterId.get(persona.id)
 			const name = binding ? binding.name || persona.name : persona.name
 			const aliases = (persona.aliases ?? []).filter(
 				(a: string) => !namesMatch(a, name)
@@ -420,10 +417,10 @@ export async function buildSceneCastList(
 		}
 	}
 
-	// ── Every binding: real characters/personas always in scope,
+	// ── Every binding: real characters always in scope,
 	// background/NPC bindings only once chronologically eligible ────────────
 	for (const binding of allBindings) {
-		const isReal = binding.characterId != null || binding.personaId != null
+		const isReal = binding.characterId != null
 
 		if (!isReal) {
 			const he = (binding as any).historyEntry
@@ -612,7 +609,6 @@ export async function resolveCharacterNamesToBindingIds(
 				.values({
 					lorebookId,
 					characterId: null,
-					personaId: null,
 					binding: token,
 					name
 				})
@@ -686,7 +682,6 @@ export async function resolveOrCreateBindingByName(
 			.values({
 				lorebookId,
 				characterId: null,
-				personaId: null,
 				binding: token,
 				name: trimmed
 			})

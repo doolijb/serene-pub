@@ -1,14 +1,19 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import { onMount, onDestroy } from "svelte"
 	import { Dialog, Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { dragHandleZone, dragHandle } from "svelte-dnd-action"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import { declareInterest } from "$lib/client/sockets/interest.svelte"
+	import { interestKey } from "$lib/shared/sockets/interest"
 	import { toaster } from "$lib/client/utils/toaster"
 	import EntityGalleryViewModal from "$lib/client/components/sessionMessages/EntityGalleryViewModal.svelte"
 
 	interface Props {
-		entityType: "character" | "persona"
+		/**
+		 * The gallery is a CHARACTER's. It had a second `entityType` branch for
+		 * personas; a persona is a character now, so the branch was a second
+		 * socket family for one row and it is gone rather than made optional.
+		 */
 		entityId: number
 		entityName: string
 		isOwner: boolean
@@ -19,13 +24,7 @@
 		currentAvatarMediaId: number | null
 	}
 
-	let {
-		entityType,
-		entityId,
-		entityName,
-		isOwner,
-		currentAvatarMediaId
-	}: Props =
+	let { entityId, entityName, isOwner, currentAvatarMediaId }: Props =
 		$props()
 
 	const socket = useTypedSocket()
@@ -82,19 +81,11 @@
 
 		isUploading = true
 		const buffer = await file.arrayBuffer()
-		if (entityType === "character") {
-			socket.emit("characters:uploadGalleryImage", {
-				characterId: entityId,
-				imageFile: new Uint8Array(buffer) as any,
-				mimeType: file.type
-			})
-		} else {
-			socket.emit("personas:uploadGalleryImage", {
-				personaId: entityId,
-				imageFile: new Uint8Array(buffer) as any,
-				mimeType: file.type
-			})
-		}
+		socket.emit("characters:uploadGalleryImage", {
+			characterId: entityId,
+			imageFile: new Uint8Array(buffer) as any,
+			mimeType: file.type
+		})
 	}
 
 	function openLightbox(path: string) {
@@ -108,14 +99,10 @@
 
 	function setAsAvatar(mediaId: number) {
 		menuOpenFor = null
-		if (entityType === "character") {
-			socket.emit("characters:setAvatar", {
-				characterId: entityId,
-				mediaId
-			})
-		} else {
-			socket.emit("personas:setAvatar", { personaId: entityId, mediaId })
-		}
+		socket.emit("characters:setAvatar", {
+			characterId: entityId,
+			mediaId
+		})
 	}
 
 	function requestDelete(id: number) {
@@ -125,17 +112,10 @@
 
 	function confirmDelete() {
 		if (pendingDeleteId === null) return
-		if (entityType === "character") {
-			socket.emit("characters:deleteGalleryImage", {
-				characterId: entityId,
-				mediaId: pendingDeleteId
-			})
-		} else {
-			socket.emit("personas:deleteGalleryImage", {
-				personaId: entityId,
-				mediaId: pendingDeleteId
-			})
-		}
+		socket.emit("characters:deleteGalleryImage", {
+			characterId: entityId,
+			mediaId: pendingDeleteId
+		})
 		pendingDeleteId = null
 	}
 
@@ -150,104 +130,92 @@
 	function handleFinalize(e: CustomEvent<{ items: Tile[] }>) {
 		tiles = e.detail.items
 		const mediaIds = tiles.map((t) => t.id)
-		if (entityType === "character") {
-			socket.emit("characters:reorderGallery", {
-				characterId: entityId,
-				mediaIds
-			})
-		} else {
-			socket.emit("personas:reorderGallery", {
-				personaId: entityId,
-				mediaIds
-			})
-		}
+		socket.emit("characters:reorderGallery", {
+			characterId: entityId,
+			mediaIds
+		})
 	}
 
-	function matchesEntity(msg: { characterId?: number; personaId?: number }) {
-		return entityType === "character"
-			? msg.characterId === entityId
-			: msg.personaId === entityId
+	function matchesEntity(msg: { characterId?: number }) {
+		return msg.characterId === entityId
 	}
 
 	function handleList(msg: {
 		images: Sockets.Media[]
 		characterId?: number
-		personaId?: number
 	}) {
 		if (!matchesEntity(msg)) return
 		isLoading = false
 		images = msg.images
 	}
-	function handleUploadOk(msg: {
-		success: boolean
-		characterId?: number
-		personaId?: number
-	}) {
+	function handleUploadOk(msg: { success: boolean; characterId?: number }) {
 		if (!matchesEntity(msg)) return
 		isUploading = false
 		if (msg.success) toaster.success({ title: "Image uploaded" })
 		else toaster.error({ title: "Upload failed" })
 	}
-	function handleUploadErr(msg: {
-		characterId?: number
-		personaId?: number
-	}) {
+	function handleUploadErr(msg: { characterId?: number }) {
 		if (!matchesEntity(msg)) return
 		isUploading = false
 		toaster.error({ title: "Upload failed" })
 	}
-	function handleDeleteOk(msg: { characterId?: number; personaId?: number }) {
+	function handleDeleteOk(msg: { characterId?: number }) {
 		if (!matchesEntity(msg)) return
 		toaster.success({ title: "Image deleted" })
 	}
-	function handleSetAvatarOk(msg: {
-		character?: { id: number }
-		persona?: { id: number }
-	}) {
-		const id =
-			entityType === "character" ? msg.character?.id : msg.persona?.id
-		if (id !== entityId) return
+	function handleSetAvatarOk(msg: { character?: { id: number } }) {
+		if (msg.character?.id !== entityId) return
 		toaster.success({ title: "Avatar updated" })
 	}
 
-	onMount(() => {
-		if (entityType === "character") {
-			socket.on("characters:listGallery", handleList)
-			socket.on("characters:uploadGalleryImage", handleUploadOk)
-			socket.on(
-				"characters:uploadGalleryImage:error" as any,
+	/**
+	 * This gallery's five replies, declared and asked for in one effect so a
+	 * tab re-pointed at another character releases the old keys as it takes the
+	 * new ones — the `useInterest` form reads its key once and would keep the
+	 * first id.
+	 *
+	 * All five are STANDING, not one-shot: `listGallery` is re-sent after an
+	 * upload, a delete and a reorder, and `setAvatar` is an `emitToUser` push
+	 * another tab's "Set as Avatar" provokes.
+	 *
+	 * Scoped where the shared `SCOPED_EVENTS` table says the payload carries
+	 * the id — `listGallery`, `uploadGalleryImage` and `deleteGalleryImage`
+	 * (`characterId`). The `:error` twins and `setAvatar` are NOT in that
+	 * table, so they stay BARE: a scoped key for an event the table does not
+	 * know would match nothing at all. `matchesEntity` is what filters those,
+	 * exactly as before.
+	 */
+	$effect(() => {
+		const id = entityId
+		const releases: (() => void)[] = [
+			declareInterest<"characters:listGallery">(
+				interestKey("characters:listGallery", id),
+				handleList
+			),
+			declareInterest<"characters:uploadGalleryImage">(
+				interestKey("characters:uploadGalleryImage", id),
+				handleUploadOk
+			),
+			// `characters:uploadGalleryImage:error` is missing from
+			// `SocketEventMap`, hence the `any` — the cast the raw
+			// `socket.on` needed, moved onto the registry call.
+			declareInterest<any>(
+				"characters:uploadGalleryImage:error",
 				handleUploadErr
+			),
+			declareInterest<"characters:deleteGalleryImage">(
+				interestKey("characters:deleteGalleryImage", id),
+				handleDeleteOk
+			),
+			declareInterest<"characters:setAvatar">(
+				"characters:setAvatar",
+				handleSetAvatarOk
 			)
-			socket.on("characters:deleteGalleryImage", handleDeleteOk)
-			socket.on("characters:setAvatar", handleSetAvatarOk)
-			socket.emit("characters:listGallery", { characterId: entityId })
-		} else {
-			socket.on("personas:listGallery", handleList)
-			socket.on("personas:uploadGalleryImage", handleUploadOk)
-			socket.on(
-				"personas:uploadGalleryImage:error" as any,
-				handleUploadErr
-			)
-			socket.on("personas:deleteGalleryImage", handleDeleteOk)
-			socket.on("personas:setAvatar", handleSetAvatarOk)
-			socket.emit("personas:listGallery", { personaId: entityId })
+		]
+		socket.emit("characters:listGallery", { characterId: id })
+		return () => {
+			for (const release of releases) release()
 		}
-	})
-
-	onDestroy(() => {
-		socket.off("characters:listGallery", handleList)
-		socket.off("characters:uploadGalleryImage", handleUploadOk)
-		socket.off(
-			"characters:uploadGalleryImage:error" as any,
-			handleUploadErr
-		)
-		socket.off("characters:deleteGalleryImage", handleDeleteOk)
-		socket.off("characters:setAvatar", handleSetAvatarOk)
-		socket.off("personas:listGallery", handleList)
-		socket.off("personas:uploadGalleryImage", handleUploadOk)
-		socket.off("personas:uploadGalleryImage:error" as any, handleUploadErr)
-		socket.off("personas:deleteGalleryImage", handleDeleteOk)
-		socket.off("personas:setAvatar", handleSetAvatarOk)
 	})
 </script>
 
@@ -301,7 +269,7 @@
 		</div>
 	{:else}
 		<div
-			class="grid grid-cols-2 gap-2 sm:grid-cols-3"
+			class="grid grid-cols-[repeat(auto-fill,minmax(112px,1fr))] gap-2"
 			use:dragHandleZone={{
 				items: tiles,
 				flipDurationMs: 150,
@@ -400,9 +368,7 @@
 													type="button"
 													class="btn btn-sm popover-menu-btn hover:preset-filled-error-500"
 													onclick={() =>
-														requestDelete(
-															tile.id
-														)}
+														requestDelete(tile.id)}
 												>
 													<Icons.Trash2
 														size={16}
@@ -489,7 +455,7 @@
 	bind:open={lightboxOpen}
 	onOpenChange={(e) => (lightboxOpen = e.open)}
 	entity={{
-		type: entityType,
+		type: "character",
 		id: entityId,
 		name: entityName,
 		avatar: lightboxPath

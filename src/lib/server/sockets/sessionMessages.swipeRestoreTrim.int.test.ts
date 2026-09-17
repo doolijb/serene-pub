@@ -46,6 +46,13 @@ beforeAll(async () => {
 
 	const dbModule = await import("$lib/server/db")
 	testDb = dbModule.db as unknown as TestDb
+	// The verb is a built-in now (R-15, 2026-09-16): the handler runs
+	// `core:spec/builtin-swipe` through the executor, and the spec has to be
+	// published for that — boot publishes it, as on an install.
+	const { bootstrapPipelines } = await import(
+		"$lib/server/pipelines/boot/bootstrap"
+	)
+	await bootstrapPipelines(testDb)
 }, 60_000)
 
 afterAll(async () => {

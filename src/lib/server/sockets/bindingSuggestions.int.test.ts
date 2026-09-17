@@ -62,6 +62,29 @@ afterAll(async () => {
 const fakeSocket = (userId: number) => ({ user: { id: userId } }) as any
 const noEmit = () => {}
 
+/**
+ * An `emitToUser` that keeps what was emitted, resolving the LAZY form.
+ *
+ * ⚠ The three mutators no longer RETURN the refreshed list. It is a push,
+ * and a push is a thunk the real `emitToUser` runs only when some socket
+ * declared the key (socket-interest plan, ruling 4) — so the payload the
+ * assertions below read is taken off the wire rather than off a return value
+ * that would have cost a derive-and-read pass nobody asked for.
+ */
+function collect() {
+	const emits: Array<{ event: string; data: any }> = []
+	const emitToUser = async (event: string, data: any) => {
+		emits.push({
+			event,
+			data: typeof data === "function" ? await data() : data
+		})
+	}
+	/** The last payload emitted for an event — the refreshed list. */
+	const last = (event: string) =>
+		[...emits].reverse().find((e) => e.event === event)?.data
+	return { emits, emitToUser, last }
+}
+
 let seq = 0
 
 /**
@@ -257,11 +280,13 @@ describe("ignoring suppresses re-suggestion without hiding the decision", () => 
 		const { bindingSuggestionsIgnoreHandler } = await import(
 			"./bindingSuggestions"
 		)
-		const after = await bindingSuggestionsIgnoreHandler.handler(
+		const sink = collect()
+		await bindingSuggestionsIgnoreHandler.handler(
 			fakeSocket(user.id),
 			{ id: target.id },
-			noEmit
+			sink.emitToUser
 		)
+		const after = sink.last("bindingSuggestions:list")
 		return { user, lorebook, target, after }
 	}
 
@@ -303,15 +328,19 @@ describe("ignoring suppresses re-suggestion without hiding the decision", () => 
 			"./bindingSuggestions"
 		)
 
-		const restored = await bindingSuggestionsUnignoreHandler.handler(
+		const sink = collect()
+		await bindingSuggestionsUnignoreHandler.handler(
 			fakeSocket(user.id),
 			{ id: target.id },
-			noEmit
+			sink.emitToUser
 		)
+		const restored = sink.last("bindingSuggestions:list")
 
 		expect(restored.restoredId).toBe(target.id)
 		expect(pendingNames(restored)).toContain("emberfall")
-		const row = restored.suggestions.find((s) => s.name === "emberfall")!
+		const row = restored.suggestions.find(
+			(s: any) => s.name === "emberfall"
+		)!
 		expect(row.status).toBe("pending")
 		expect(row.decidedAt).toBeNull()
 
@@ -330,14 +359,16 @@ describe("ignoring suppresses re-suggestion without hiding the decision", () => 
 		const { bindingSuggestionsUnignoreHandler } = await import(
 			"./bindingSuggestions"
 		)
-		const res = await bindingSuggestionsUnignoreHandler.handler(
+		const sink = collect()
+		await bindingSuggestionsUnignoreHandler.handler(
 			fakeSocket(user.id),
 			{ id: target.id },
-			noEmit
+			sink.emitToUser
 		)
-		expect(res.suggestions.find((s) => s.id === target.id)!.status).toBe(
-			"pending"
-		)
+		const res = sink.last("bindingSuggestions:list")
+		expect(
+			res.suggestions.find((s: any) => s.id === target.id)!.status
+		).toBe("pending")
 	}, 60_000)
 })
 
@@ -353,11 +384,13 @@ describe("adding creates the binding and records that it did", () => {
 		const { bindingSuggestionsAddHandler } = await import(
 			"./bindingSuggestions"
 		)
-		const res = await bindingSuggestionsAddHandler.handler(
+		const sink = collect()
+		await bindingSuggestionsAddHandler.handler(
 			fakeSocket(user.id),
 			{ id: target.id, name: "Emberfall" },
-			noEmit
+			sink.emitToUser
 		)
+		const res = sink.last("bindingSuggestions:list")
 
 		const bindings = await db
 			.select()
@@ -365,14 +398,14 @@ describe("adding creates the binding and records that it did", () => {
 			.where(eq(schema.lorebookBindings.lorebookId, lorebook.id))
 		const minted = bindings.find((b) => b.name === "Emberfall")
 		expect(minted).toBeTruthy()
-		// Background: no character, no persona. The open tier says a name was
-		// used, not that a character sheet exists behind it.
+		// Background: no character (a persona is a character row). The open
+		// tier says a name was used, not that a character sheet exists behind
+		// it.
 		expect(minted!.characterId).toBeNull()
-		expect(minted!.personaId).toBeNull()
 		// The token is server-derived, never the empty string the client sent.
 		expect(minted!.binding).toBeTruthy()
 
-		const row = res.suggestions.find((s) => s.id === target.id)!
+		const row = res.suggestions.find((s: any) => s.id === target.id)!
 		expect(row.status).toBe("added")
 		expect(row.resolvedBindingId).toBe(minted!.id)
 		expect(row.decidedAt).not.toBeNull()

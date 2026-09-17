@@ -39,6 +39,18 @@ vi.mock("$lib/server/utils/resolveNarratorPromptConfig", () => ({
 	resolveNarratorPromptConfig: async () => null
 }))
 
+// The reply road is mocked: the pipeline owns its row since 09-B B4, so the
+// handler inserts nothing itself — what it does behind the lock is START the
+// run. The order in which that happens relative to the lock holder is the
+// whole subject.
+const started: any[] = []
+vi.mock("$lib/server/utils/runReply", () => ({
+	runReply: async (args: any) => {
+		started.push(args)
+		return { ok: true }
+	}
+}))
+
 beforeAll(async () => {
 	dataDir = await fs.mkdtemp(
 		path.join(os.tmpdir(), "serene-pub-narrator-lock-int-test-")
@@ -109,13 +121,10 @@ describe("sessions:triggerNarratorResponse — generation lock (Round-12 audit f
 			})
 
 		// Give any unlocked/immediate execution path a chance to run — if the
-		// fix regressed (lock not held), the narrator message would already
-		// be inserted by now.
+		// fix regressed (lock not held), the run would already have started
+		// by now.
 		await new Promise((r) => setTimeout(r, 20))
-		const midFlightCount = await testDb.query.sessionMessages.findMany({
-			where: eq(schema.sessionMessages.sessionId, session.id)
-		})
-		expect(midFlightCount.length).toBe(0) // still queued behind the lock
+		expect(started.filter((g) => g.sessionId === session.id).length).toBe(0) // still queued behind the lock
 
 		releaseLock()
 		await lockHolder
@@ -127,11 +136,11 @@ describe("sessions:triggerNarratorResponse — generation lock (Round-12 audit f
 			"trigger-done"
 		])
 
-		const after = await testDb.query.sessionMessages.findMany({
-			where: eq(schema.sessionMessages.sessionId, session.id)
-		})
-		expect(after.length).toBe(1) // narrator message inserted, after the lock freed
-		expect(after[0].isNarratorResponse).toBe(true)
+		// The run started after the lock freed — as narration, which is the
+		// spec whose placeholder outlet writes the row.
+		const mine = started.filter((g) => g.sessionId === session.id)
+		expect(mine.length).toBe(1)
+		expect(mine[0].turn.kind).toBe("narrate")
 	})
 
 	test("a second trigger on the same session sees 'already generating' once the first has inserted its message", async () => {
@@ -163,6 +172,7 @@ describe("sessions:triggerNarratorResponse — generation lock (Round-12 audit f
 		const rows = await testDb.query.sessionMessages.findMany({
 			where: eq(schema.sessionMessages.sessionId, session.id)
 		})
-		expect(rows.length).toBe(1) // no second message inserted
+		expect(rows.length).toBe(1) // no second message
+		expect(started.some((g) => g.sessionId === session.id)).toBe(false)
 	})
 })

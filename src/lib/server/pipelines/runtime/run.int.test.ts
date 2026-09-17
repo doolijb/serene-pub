@@ -29,12 +29,11 @@ let userId: number
 const readAndWrite = () =>
 	compile(
 		spec("core:spec/echo-turn", { version: "1.0.0" })
-			.on("core:event/message-created@1")
-			.input("input", C.userMessage.v1())
+			.inlet("input", C.userMessage.v1())
 			.query("history", ($) =>
 				C.sessionHistory.v1({ scope: $.input.sessionScope })
 			)
-			.consume("save", ($) => C.createMessage.v1({ text: $.input.text }))
+			.outlet("save", ($) => C.createMessage.v1({ text: $.input.text }))
 			.build()
 	)
 
@@ -149,8 +148,8 @@ describe("running a pipeline in core", () => {
 				{ sessionId: sessionId + 999 },
 				{
 					key: "history",
-					typeId: "core:query/session-history",
-					typeVersion: 1,
+					definitionId: "core:query/session-history",
+					definitionVersion: 1,
 					kind: "query"
 				}
 			)
@@ -160,14 +159,14 @@ describe("running a pipeline in core", () => {
 	it("an unbound type halts with a reason rather than failing like a bug", async () => {
 		const doc = compile(
 			spec("core:spec/needs-assemble", { version: "1.0.0" })
-				.input("input", C.userMessage.v1())
+				.inlet("input", C.userMessage.v1())
 				.query("history", ($) =>
 					C.sessionHistory.v1({ scope: $.input.sessionScope })
 				)
 				.task("prompt", ($) =>
 					C.assemble.v2({ candidates: $.history.messages })
 				)
-				.provider("generate", ($) =>
+				.oracle("generate", ($) =>
 					C.generateText.v1({
 						context: $.prompt.context,
 						connection: slot.connection()

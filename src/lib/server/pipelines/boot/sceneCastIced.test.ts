@@ -17,10 +17,10 @@
 
 import { describe, expect, it } from "vitest"
 import { CORE_SPECS } from "@serene-pub/core-catalog"
-import { allTypes } from "@serene-pub/sdk"
+import { allDefinitions } from "@serene-pub/sdk"
 import "@serene-pub/contracts"
 
-const CAST_TYPE = "core:provider/extract-cast"
+const CAST_TYPE = "core:oracle/extract-cast"
 
 const documentFor = (slug: string) => {
 	const entry = CORE_SPECS.find((s) => s.slug === slug)
@@ -29,17 +29,17 @@ const documentFor = (slug: string) => {
 }
 
 const typeIdsOf = (slug: string) =>
-	documentFor(slug).nodes.map((n: { typeId: string }) => n.typeId)
+	documentFor(slug).nodes.map((n: { definitionId: string }) => n.definitionId)
 
 describe("the scene cast extraction is on ice", () => {
 	it("is not wired into the scene summarize document", () => {
 		const ids = typeIdsOf("core:spec/summarize-scene")
 		// Sanity that we are looking at the right document at all — otherwise
 		// "no cast node" would pass against an empty list.
-		// Node `typeId`s in a compiled document are UNVERSIONED — the pin lives
+		// Node `definitionId`s in a compiled document are UNVERSIONED — the pin lives
 		// on the node's own `version` field — so this matches on the prefix
 		// everywhere rather than on a pin that only reads like one.
-		expect(ids).toContain("core:provider/summarize-synth")
+		expect(ids).toContain("core:oracle/summarize-synth")
 		expect(ids.filter((id: string) => id.startsWith(CAST_TYPE))).toEqual([])
 	})
 
@@ -60,7 +60,7 @@ describe("the scene cast extraction is on ice", () => {
 		// The type is what makes this ice rather than a deletion: its
 		// declaration, its script hooks and its seeded prompt all survive, so
 		// restoring `extractsCast: true` in the catalog is the whole revival.
-		const published = allTypes().map((t: { id: string }) => t.id)
+		const published = allDefinitions().map((t: { id: string }) => t.id)
 		expect(published).toContain(`${CAST_TYPE}@1`)
 	})
 })

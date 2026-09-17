@@ -3,21 +3,28 @@
 	import * as Icons from "@lucide/svelte"
 	import Avatar from "$lib/client/components/Avatar.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
-	import { onMount } from "svelte"
+	import { declareInterest } from "$lib/client/sockets/interest.svelte"
+	import { interestKey } from "$lib/shared/sockets/interest"
 
 	interface EntityInfo {
+		/**
+		 * Which link put this row on the list. A persona IS a character, so
+		 * this never picks an event — it only keeps a character who is BOTH
+		 * in the cast and somebody's persona as two distinct rows (and two
+		 * distinct `entityKey`s).
+		 */
 		type: "character" | "persona"
 		id: number
 		name: string
 		avatar: string | null | undefined
-		entity: SelectCharacter | SelectPersona
+		entity: SelectCharacter
 	}
 
 	interface Props {
 		sessionCharacters: (SelectSessionCharacter & {
 			character: SelectCharacter
 		})[]
-		sessionPersonas: (SelectSessionPersona & { persona: SelectPersona })[]
+		sessionPersonas: (SelectSessionPersona & { persona: SelectCharacter })[]
 		leftImage: string | null
 		rightImage: string | null
 	}
@@ -71,11 +78,7 @@
 		expandedKey = key
 		if (!galleryCache[key]) {
 			pendingGalleryKey = key
-			if (e.type === "character") {
-				socket.emit("characters:listGallery", { characterId: e.id })
-			} else {
-				socket.emit("personas:listGallery", { personaId: e.id })
-			}
+			socket.emit("characters:listGallery", { characterId: e.id })
 		}
 	}
 
@@ -92,34 +95,38 @@
 		rightImage = null
 	}
 
-	onMount(() => {
-		const charHandler = (data: Sockets.Characters.ListGallery.Response) => {
-			if (pendingGalleryKey?.startsWith("character:")) {
-				galleryCache = {
-					...galleryCache,
-					[pendingGalleryKey]: data.images
-				}
-				pendingGalleryKey = null
+	const charHandler = (data: Sockets.Characters.ListGallery.Response) => {
+		// The pending key is `character:<id>` or `persona:<id>` and both name
+		// the same character, so the ID half is what identifies the reply.
+		if (pendingGalleryKey?.endsWith(`:${data.characterId}`)) {
+			galleryCache = {
+				...galleryCache,
+				[pendingGalleryKey]: data.images
 			}
+			pendingGalleryKey = null
 		}
-		const personaHandler = (
-			data: Sockets.Personas.ListGallery.Response
-		) => {
-			if (pendingGalleryKey?.startsWith("persona:")) {
-				galleryCache = {
-					...galleryCache,
-					[pendingGalleryKey]: data.images
-				}
-				pendingGalleryKey = null
-			}
-		}
+	}
 
-		socket.on("characters:listGallery", charHandler)
-		socket.on("personas:listGallery", personaHandler)
-
+	/**
+	 * One SCOPED `characters:listGallery#<id>` key per cast member (from the
+	 * shared `SCOPED_EVENTS` table), declared for as long as this tab shows
+	 * that member. One family, because a persona is a character.
+	 *
+	 * Standing, and declared here rather than inside `toggleGallery`, because
+	 * the request goes out synchronously from the click: a key declared at
+	 * that moment would still be on its way when its own reply was decided.
+	 * The keys move with `entities`, which is why this is an effect and not
+	 * `useInterest` — that reads its key once.
+	 */
+	$effect(() => {
+		const releases = entities.map((e) =>
+			declareInterest<"characters:listGallery">(
+				interestKey("characters:listGallery", e.id),
+				charHandler
+			)
+		)
 		return () => {
-			socket.off("characters:listGallery", charHandler)
-			socket.off("personas:listGallery", personaHandler)
+			for (const release of releases) release()
 		}
 	})
 </script>

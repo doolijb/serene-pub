@@ -9,13 +9,10 @@ import {
 	reconcileSuggestedNames,
 	resolveCharacterRefs
 } from "$lib/server/utils/summarizer/availableSceneCast"
-import { lorebookBindingListHandler } from "./lorebooks"
+import { relistBindings } from "./lorebooks"
 import { withSessionTriggerLock } from "$lib/server/utils/sessionTriggerLock"
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
-import {
-	DEFAULT_CHANNEL,
-	channelWhere
-} from "$lib/server/messages/channels"
+import { DEFAULT_CHANNEL, channelWhere } from "$lib/server/messages/channels"
 import { activityError, activityStore } from "$lib/server/utils/activityStore"
 
 export const sessionsSummarizeHandler: Handler<
@@ -30,8 +27,7 @@ export const sessionsSummarizeHandler: Handler<
 			messageIds,
 			loreType,
 			topic,
-			lorebookBindingCharacterId,
-			lorebookBindingPersonaId
+			lorebookBindingCharacterId
 		} = params
 
 		// topic is re-interpolated into every batch prompt plus the synthesis
@@ -221,9 +217,12 @@ export const sessionsSummarizeHandler: Handler<
 				// so the total is not known up front; the count ticking upward
 				// is still an honest "it is working, this far along".
 				let batchesSeen = 0
+				/** The last frame sent, so a status change re-sends its phase. */
+				let lastFrame: Sockets.Sessions.Summarize.Progress | undefined
 				const progress = (
 					data: Sockets.Sessions.Summarize.Progress
 				) => {
+					lastFrame = data
 					activityStore.updateSessionSummarize(activityId, {
 						phase: data.phase,
 						batch: data.batch,
@@ -237,6 +236,12 @@ export const sessionsSummarizeHandler: Handler<
 					sessionId,
 					userId,
 					specId,
+					// So the status relay pushes `sessions:runStatus` beside
+					// the modal's own progress frame (R-19) — a summarize run
+					// announces like every other run does. No live row here
+					// (`preview: { atNode: "save" }` below), so this only
+					// ever reaches the session list, never a message.
+					io: socket.io,
 					input: {
 						scope: { sessionId },
 						request: {
@@ -255,7 +260,7 @@ export const sessionsSummarizeHandler: Handler<
 					onNode: (e) => {
 						if (e.phase !== "start") return
 						if (
-							e.typeId.startsWith("core:provider/summarize-batch")
+							e.definitionId.startsWith("core:oracle/summarize-batch")
 						)
 							progress({
 								phase: "drafting",
@@ -264,7 +269,7 @@ export const sessionsSummarizeHandler: Handler<
 								totalBatches: batchesSeen
 							})
 						else if (
-							e.typeId.startsWith("core:provider/summarize-synth")
+							e.definitionId.startsWith("core:oracle/summarize-synth")
 						)
 							progress({
 								phase: "synthesizing",
@@ -273,7 +278,7 @@ export const sessionsSummarizeHandler: Handler<
 								totalBatches: 1
 							})
 						else if (
-							e.typeId.startsWith("core:provider/name-entry")
+							e.definitionId.startsWith("core:oracle/name-entry")
 						)
 							progress({
 								phase: "naming",
@@ -282,7 +287,7 @@ export const sessionsSummarizeHandler: Handler<
 								totalBatches: 1
 							})
 						else if (
-							e.typeId.startsWith("core:provider/extract-cast")
+							e.definitionId.startsWith("core:oracle/extract-cast")
 						)
 							progress({
 								phase: "extracting",
@@ -290,6 +295,28 @@ export const sessionsSummarizeHandler: Handler<
 								batch: 1,
 								totalBatches: 1
 							})
+					},
+					// The run's status (R-19) — *summarising part 2 of 5*,
+					// *merging the drafts* — onto the modal's own progress frame,
+					// beside the phase the node events derived. The drafting
+					// count comes off the status's variables where it has them:
+					// the each clause knows its total, and `batchesSeen` never
+					// could.
+					onStatus: (_nodeKey, status) => {
+						const vars = status.vars ?? {}
+						const n = Number(vars.n)
+						const total = Number(vars.total)
+						const counted =
+							Number.isFinite(n) && Number.isFinite(total) && total > 0
+						progress({
+							phase: lastFrame?.phase ?? "drafting",
+							partial: {},
+							batch: counted ? n : (lastFrame?.batch ?? 0),
+							totalBatches: counted
+								? total
+								: (lastFrame?.totalBatches ?? 1),
+							status
+						})
 					}
 				})
 
@@ -317,7 +344,7 @@ export const sessionsSummarizeHandler: Handler<
 					raw: content,
 					batchCount: receipt.nodes.filter((n: any) =>
 						String(n.typeId ?? "").startsWith(
-							"core:provider/summarize-batch"
+							"core:oracle/summarize-batch"
 						)
 					).length,
 					participantCharacters: castOut?.participants as
@@ -335,14 +362,12 @@ export const sessionsSummarizeHandler: Handler<
 
 				// For character lore, resolve or create the lorebook binding
 				let lorebookBindingId: number | null = null
-				if (
-					loreType === "character" &&
-					(lorebookBindingCharacterId || lorebookBindingPersonaId)
-				) {
+				if (loreType === "character" && lorebookBindingCharacterId) {
+					// One column — a voiced character resolves to the same
+					// binding kind as a cast member.
 					lorebookBindingId = await resolveOrCreateBinding({
 						lorebookId: session.lorebookId!,
-						characterId: lorebookBindingCharacterId,
-						personaId: lorebookBindingPersonaId
+						characterId: lorebookBindingCharacterId
 					})
 				}
 
@@ -387,7 +412,7 @@ export const sessionsSummarizeHandler: Handler<
 						senderBindingIds.add(
 							await resolveOrCreateBinding({
 								lorebookId: session.lorebookId!,
-								personaId
+								characterId: personaId
 							})
 						)
 					}
@@ -408,13 +433,12 @@ export const sessionsSummarizeHandler: Handler<
 				// names are now deferred suggestions, not eager rows) — push a fresh
 				// list to the client now, before sessions:summarize:complete, so the
 				// modal's dropdown/chip names are warm.
-				if (emitToUser) {
-					await lorebookBindingListHandler.handler(
+				if (emitToUser)
+					await relistBindings(
 						socket,
-						{ lorebookId: session.lorebookId! },
+						session.lorebookId!,
 						emitToUser
 					)
-				}
 
 				const response: Sockets.Sessions.Summarize.Response = {
 					content: result.content ?? result.raw,

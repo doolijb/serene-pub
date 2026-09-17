@@ -37,6 +37,10 @@ import { getConnectionAdapter } from "$lib/server/utils/getConnectionAdapter"
 import { composeStopsFor } from "$lib/server/connections/stops"
 import { resolveSampling } from "$lib/server/utils/resolveSampling"
 import { runQueuedLLMCall } from "$lib/server/utils/runQueuedLLMCall"
+import {
+	contextWindowFrom,
+	replyReserveFrom
+} from "$lib/server/pipelines/runtime/contextWindow"
 import { TokenCounters } from "$lib/server/utils/TokenCounterManager"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { SessionTypes } from "$lib/shared/constants/SessionTypes"
@@ -130,8 +134,8 @@ export async function dispatchStep(
 	// This used to resolve its own fallback — `connectionId ?? system
 	// .defaultConnectionId`, the column that no longer exists — and then ask
 	// `capabilityRefusal` separately. Both moved into `resolveCapabilityTarget`,
-	// which walks `capability default → pipeline config → session override` and
-	// hands back either a row or the sentence. The slot value arrives here
+	// which walks `capability default → pipeline config` — the whole chain since
+	// 0130 — and hands back either a row or the sentence. The slot value arrives here
 	// already collapsed by the executor's scope chain, so it enters as the
 	// pipelineConfig tier; the capability default underneath it is read from
 	// `connection_defaults` in there, never here.
@@ -163,45 +167,25 @@ export async function dispatchStep(
 	const values = resolveSampling(sampling)
 
 	// The context window comes with the sampling config — it is a parameter of
-	// the config, never a knob on the node (17 §1a). A step pointed at a config
+	// the config, never a knob on the node (17 §1a) — capped by the model's own
+	// window where the model states one (0114). A step pointed at a config
 	// with a different Context Tokens than its neighbours makes a local backend
 	// reload the model between steps, which is why the shipped configs point
 	// every step at the same one.
 	//
-	// ⚠ It used to read `(connection as any).tokenLimit ?? (connection as
-	// any).contextSize` first. `connections` has never had either column, so
-	// both were `undefined` on every row and the expression always fell through
-	// to exactly the two terms left here — the reads were dead, and the cast is
-	// what let them survive. Removing them changes nothing at runtime.
-	// `summarizer/index.ts` and `graphBuilder.ts` carried the same dead pair
-	// and have since had it removed too. What's left is why THIS file still
-	// needs the fallback at all: `dispatchStep` injects a compiled prompt, and
-	// `compilePrompt` returns early on `injectedPrompt` before it overwrites
-	// `this.tokenLimit` with `getContextTokenLimit()` — so `dispatchStep` must
-	// supply the real limit itself, whereas the summarizer's value is
-	// superseded before any prompt is built.
+	// THE one computation (R-8, `runtime/contextWindow.ts`): the same function
+	// the budget node sizes with and the reply dispatch sends with. This file
+	// used to spell it for itself — `connection.contextWindow ?? values
+	// .contextTokens ?? 4096` — which agreed with the budget's spelling only
+	// until somebody set a model window, which the budget never read.
 	//
-	// ⚠ The cast is what the dead reads were hiding, not something they fixed:
-	// `ResolvedSampling` is `Record<string, unknown>` because
-	// `resolveSamplingValues` passes stored values through untouched (coercion
-	// is the WRITE path's, in `normalizeSamplingRow`), so this key is only a
-	// number by the write path's convention. Asserted rather than guarded, to
-	// keep behaviour byte-identical: a `typeof` test would send 4096 where a
-	// row storing "8192" used to send the string on, which is a different
-	// prompt budget and a decision for the sampling contract to make — the same
-	// laundering `summarizer/index.ts` does with `: number` on the same value.
-	//
-	// ⚠ And ABOVE it, the MODEL's own window (0114) where one is set. That is
-	// not a fourth knob on the node — 17 §1a's rule is that a step does not get
-	// its own window, and a model having one is a fact about the model. It is
-	// null on every row the 0114 backfill created, so this is byte-identical
-	// until somebody sets one, and it is the ONE place the column is read:
-	// `summarizer/index.ts` and `graphBuilder.ts` pin 4096 outright and their
-	// own comments say widening them is a decision for those contracts.
-	const tokenLimit: number = (connection.contextWindow ??
-		values.contextTokens ??
-		4096) as number
-	const maxTokens = values.responseTokens ?? 512
+	// Why `dispatchStep` needs the limit at all: it injects a compiled prompt,
+	// and `compilePrompt` returns early on `injectedPrompt` before it overwrites
+	// `this.tokenLimit` with `getContextTokenLimit()` — so the real limit has
+	// to be supplied here, whereas the summarizer's value is superseded before
+	// any prompt is built.
+	const tokenLimit = contextWindowFrom(values, connection)
+	const maxTokens = replyReserveFrom(values)
 
 	// The connection's own configured tokenizer, not a global default — the
 	// identical fix `generateResponse.ts` and `graphBuilder.ts` both carry. A

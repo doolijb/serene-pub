@@ -1,7 +1,9 @@
 <script lang="ts">
-	import { onDestroy, onMount } from "svelte"
+	import { onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { declareInterest } from "$lib/client/sockets/interest.svelte"
+	import { interestKey } from "$lib/shared/sockets/interest"
 	import LoreContentField from "$lib/client/components/lorebookForms/LoreContentField.svelte"
 	import { WORLD_LORE_TYPE_ID } from "$lib/shared/entries/types"
 
@@ -57,13 +59,22 @@
 		bindings = msg.lorebookBindingList
 	}
 
-	onMount(() => {
-		socket.on("lorebooks:bindingList", handleBindingList)
-		socket.emit("lorebooks:bindingList", { lorebookId })
-	})
+	/**
+	 * The book's cast, for the content field's `{{char:N}}` slots.
+	 *
+	 * An effect rather than `useInterest` because the key moves with the
+	 * `lorebookId` prop, and `useInterest` keeps the key it was first given.
+	 * Declared above `onMount` so the interest exists before the request.
+	 */
+	$effect(() =>
+		declareInterest<"lorebooks:bindingList">(
+			interestKey("lorebooks:bindingList", lorebookId),
+			handleBindingList
+		)
+	)
 
-	onDestroy(() => {
-		socket.off("lorebooks:bindingList", handleBindingList)
+	onMount(() => {
+		socket.emit("lorebooks:bindingList", { lorebookId })
 	})
 </script>
 

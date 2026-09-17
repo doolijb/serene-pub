@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, getContext } from "svelte"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { page } from "$app/state"
 	import { goto } from "$app/navigation"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
@@ -78,20 +79,33 @@
 		announce(error)
 	}
 
+	/**
+	 * The roster this form picks its row out of, and the two writes it sends.
+	 * All BARE — `users:` has no `SCOPED_EVENTS` entry, so a key naming the id
+	 * would match no payload at all; the `find` in `handleUsersList` is the
+	 * filter — and all STANDING, exactly what the `onMount` pair they replace
+	 * held: `users:list` is re-emitted by the server after every account
+	 * write, and the update and delete answer whenever the person submits.
+	 * Both `:error` halves are never gated (plan ruling 2).
+	 *
+	 * Declared at init so every key is held before `load()` asks: the typed
+	 * `emit` flushes the interest sync ahead of the request (plan ruling 3).
+	 */
+	useInterest<"users:list">("users:list", handleUsersList)
+	useInterest<"users:update">("users:update", handleUsersUpdate)
+	useInterest<"users:update:error">(
+		"users:update:error",
+		handleUsersUpdateError
+	)
+	useInterest<"users:delete">("users:delete", handleUsersDelete)
+	useInterest<"users:delete:error">(
+		"users:delete:error",
+		handleUsersDeleteError
+	)
+
 	onMount(() => {
-		socket.on("users:list", handleUsersList)
-		socket.on("users:update", handleUsersUpdate)
-		socket.on("users:update:error", handleUsersUpdateError)
-		socket.on("users:delete", handleUsersDelete)
-		socket.on("users:delete:error", handleUsersDeleteError)
+		// Every listener on this page is an interest, declared above.
 		load()
-		return () => {
-			socket.off("users:list", handleUsersList)
-			socket.off("users:update", handleUsersUpdate)
-			socket.off("users:update:error", handleUsersUpdateError)
-			socket.off("users:delete", handleUsersDelete)
-			socket.off("users:delete:error", handleUsersDeleteError)
-		}
 	})
 </script>
 

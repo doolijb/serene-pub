@@ -314,29 +314,40 @@ export const widgetStylesList: Handler<
 > = {
 	event: "widgetStyles:list",
 	handler: async (socket, params, emitToUser) => {
-		const userId = socket.user!.id
 		const widgetSlug =
 			typeof params?.widgetSlug === "string"
 				? params.widgetSlug
 				: undefined
-		const rows = await db
-			.select()
-			.from(schema.widgetStyles)
-			.where(
-				widgetSlug
-					? and(
-							usableBy(userId),
-							eq(schema.widgetStyles.widgetSlug, widgetSlug)
-						)
-					: usableBy(userId)
-			)
-			.orderBy(asc(schema.widgetStyles.id))
-		const res: Sockets.WidgetStyles.List.Response = {
-			styles: rows.map(toRow)
-		}
+		const res = await listResponse(socket.user!.id, widgetSlug)
 		emitToUser("widgetStyles:list", res)
 		return res
 	}
+}
+
+/**
+ * The usable set as the client reads it.
+ *
+ * Split out of the handler so the post-mutation re-list can be handed to
+ * `emitToUser` as a thunk — see `relist`. Eager here on purpose: this one IS
+ * the request's own reply, so the caller declared interest in it before asking.
+ */
+async function listResponse(
+	userId: number,
+	widgetSlug: string | undefined
+): Promise<Sockets.WidgetStyles.List.Response> {
+	const rows = await db
+		.select()
+		.from(schema.widgetStyles)
+		.where(
+			widgetSlug
+				? and(
+						usableBy(userId),
+						eq(schema.widgetStyles.widgetSlug, widgetSlug)
+					)
+				: usableBy(userId)
+		)
+		.orderBy(asc(schema.widgetStyles.id))
+	return { styles: rows.map(toRow) }
 }
 
 /**
@@ -350,7 +361,15 @@ async function relist(
 	socket: any,
 	emitToUser: (event: string, data: any) => void
 ) {
-	await widgetStylesList.handler(socket, {}, emitToUser)
+	// The LAZY form (socket-interest plan, ruling 4): `widgetStyles:list` is a
+	// gated event, and the whole usable set is a table scan — so a mutation
+	// made from a surface that shows no styles (the layout editor saving a
+	// pin, a script) pays for no re-list at all. Awaited, because the client's
+	// reducer needs the refreshed rows BEFORE the create reply that names the
+	// new one (`onCreated` resolves the row it just pinned out of them).
+	await emitToUser("widgetStyles:list", () =>
+		listResponse(socket.user!.id, undefined)
+	)
 }
 
 export const widgetStylesCreate: Handler<

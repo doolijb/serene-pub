@@ -13,8 +13,10 @@
 	 * The props and the name are unchanged, so the receipt reader that mounts
 	 * this is untouched.
 	 */
-	import { onDestroy, onMount } from "svelte"
-	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import {
+		requestWithInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import RetrievalExplanation from "./RetrievalExplanation.svelte"
 
@@ -24,8 +26,6 @@
 	}
 
 	let { runId }: Props = $props()
-
-	const socket = useTypedSocket()
 
 	type Explanation = NonNullable<
 		Sockets.Pipelines.RunExplain.Response["explanation"]
@@ -53,21 +53,32 @@
 		if (res?.error) toaster.error({ title: res.error })
 	}
 
-	onMount(() => {
-		socket.on("pipelines:runExplain", onExplain)
-		socket.on("pipelines:runExplain:error", showExplainRefusal)
-	})
-	onDestroy(() => {
-		socket.off("pipelines:runExplain", onExplain)
-		socket.off("pipelines:runExplain:error", showExplainRefusal)
-	})
+	// Never gated (plan ruling 2 — an error is not an output to skip), but the
+	// registry is the only listener path, so it is declared like the reply.
+	useInterest<"pipelines:runExplain:error">(
+		"pipelines:runExplain:error",
+		showExplainRefusal
+	)
 
+	/**
+	 * The explanation, asked for and listened for in one: the interest sync
+	 * naming `pipelines:runExplain` leaves ahead of the request (ruling 3).
+	 *
+	 * BARE — the event has no entry in `SCOPED_EVENTS`, so a `#<runId>` key
+	 * would match nothing; `onExplain`'s own `res.runId !== runId` check stays
+	 * the filter. The release is the effect's teardown, so a reader moved to
+	 * another receipt drops the old interest as it takes the new one.
+	 */
 	$effect(() => {
 		const id = runId
 		explanation = null
 		if (!id) return
 		loading = true
-		socket.emit("pipelines:runExplain", { runId: id })
+		return requestWithInterest(
+			"pipelines:runExplain",
+			{ runId: id },
+			onExplain
+		)
 	})
 </script>
 

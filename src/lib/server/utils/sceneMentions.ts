@@ -157,7 +157,6 @@ export async function deriveSceneMentions(
 			messageId: schema.messageAnnotations.messageId,
 			entityKey: schema.messageAnnotations.entityKey,
 			characterId: schema.messageAnnotations.characterId,
-			personaId: schema.messageAnnotations.personaId,
 			extractorVersion: schema.messageAnnotations.extractorVersion,
 			sourceHash: schema.messageAnnotations.sourceHash,
 			gazetteerHash: schema.messageAnnotations.gazetteerHash,
@@ -176,11 +175,8 @@ export async function deriveSceneMentions(
 
 	/** Messages whose annotation is fresh — examined, whatever it found. */
 	const freshMessages = new Set<number>()
-	/** `messageId -> the character/persona ids its text names.` */
-	const namedBy = new Map<
-		number,
-		{ characters: Set<number>; personas: Set<number> }
-	>()
+	/** `messageId -> the character ids its text names.` */
+	const namedBy = new Map<number, { characters: Set<number> }>()
 	for (const row of annotationRows) {
 		if (row.extractorVersion !== EXTRACTOR_VERSION) continue
 		if (row.gazetteerHash !== vocabulary.hash) continue
@@ -189,18 +185,17 @@ export async function deriveSceneMentions(
 		// Counted before anything is read off the row: the empty-extraction
 		// sentinel means "examined, named nobody", which is coverage, not a hit.
 		freshMessages.add(row.messageId)
-		if (row.characterId == null && row.personaId == null) continue
+		if (row.characterId == null) continue
 		let named = namedBy.get(row.messageId)
 		if (!named) {
-			named = { characters: new Set(), personas: new Set() }
+			named = { characters: new Set() }
 			namedBy.set(row.messageId, named)
 		}
-		if (row.characterId != null) named.characters.add(row.characterId)
-		if (row.personaId != null) named.personas.add(row.personaId)
+		named.characters.add(row.characterId)
 	}
 
 	/**
-	 * character/persona → the binding that IS them in this lorebook.
+	 * character → the binding that IS them in this lorebook.
 	 *
 	 * Scoped to the lorebook because the cast is: a character bound in two
 	 * books has a row in each, and a scene's cast names the one in its own.
@@ -208,17 +203,14 @@ export async function deriveSceneMentions(
 	const bindingRows = await db
 		.select({
 			id: schema.lorebookBindings.id,
-			characterId: schema.lorebookBindings.characterId,
-			personaId: schema.lorebookBindings.personaId
+			characterId: schema.lorebookBindings.characterId
 		})
 		.from(schema.lorebookBindings)
 		.where(eq(schema.lorebookBindings.lorebookId, lorebookId))
 	const bindingByCharacter = new Map<number, number>()
-	const bindingByPersona = new Map<number, number>()
 	for (const row of bindingRows) {
 		if (row.characterId != null)
 			bindingByCharacter.set(row.characterId, row.id)
-		if (row.personaId != null) bindingByPersona.set(row.personaId, row.id)
 	}
 
 	// Present beats mentioned — the stored half of the cast, which this file
@@ -254,11 +246,6 @@ export async function deriveSceneMentions(
 			if (!named) continue
 			for (const characterId of named.characters) {
 				const bindingId = bindingByCharacter.get(characterId)
-				if (bindingId != null && !present?.has(bindingId))
-					ids.add(bindingId)
-			}
-			for (const personaId of named.personas) {
-				const bindingId = bindingByPersona.get(personaId)
 				if (bindingId != null && !present?.has(bindingId))
 					ids.add(bindingId)
 			}

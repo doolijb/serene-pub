@@ -30,7 +30,7 @@ import {
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import { byCapability } from "$lib/server/connections/capabilityDefaults"
 import * as schema from "$lib/server/db/schema"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
@@ -153,6 +153,21 @@ const imageConnections = () =>
 			CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE
 		)
 	})
+
+const modelsForConnection = (connectionId: number) =>
+	testDb
+		.select()
+		.from(schema.connectionModels)
+		.where(eq(schema.connectionModels.connectionId, connectionId))
+
+const connectionsServing = async (model: string) => {
+	const rows = await testDb
+		.select({ connectionId: schema.connectionModels.connectionId })
+		.from(schema.connectionModels)
+		.where(eq(schema.connectionModels.model, model))
+	const ids = new Set(rows.map((r) => r.connectionId))
+	return (await imageConnections()).filter((c) => ids.has(c.id))
+}
 
 const imageDefault = () =>
 	testDb.query.connectionDefaults.findFirst({
@@ -550,7 +565,10 @@ describe("koboldcpp:connectImageModel — one image model, one connection", () =
 
 		expect(res.success).toBeTruthy()
 		const [conn] = await imageConnections()
-		expect(conn.model).toBe(filename)
+		// The endpoint row carries no model: the identifier lives on a
+		// `connection_models` row hanging off it.
+		const models = await modelsForConnection(conn.id)
+		expect(models.map((m) => m.model)).toContain(filename)
 		expect(conn.modality).toBe("image-gen")
 		expect((conn.capabilities as any).resolved["text->image"]).toBe(1)
 	})
@@ -580,11 +598,22 @@ describe("koboldcpp:connectImageModel — one image model, one connection", () =
 
 		await connectImageModel(filename)
 
-		const rows = (await imageConnections()).filter(
-			(c) => c.model === filename
-		)
+		const rows = await connectionsServing(filename)
 		expect(rows.length).toBe(1)
 		expect((await imageDefault())!.connectionId).toBe(rows[0].id)
+		// And the registration names the model row outright — connections
+		// have no default model to mean.
+		const [modelRow] = await testDb
+			.select({ id: schema.connectionModels.id })
+			.from(schema.connectionModels)
+			.where(
+				and(
+					eq(schema.connectionModels.connectionId, rows[0].id),
+					eq(schema.connectionModels.model, filename)
+				)
+			)
+			.limit(1)
+		expect((await imageDefault())!.connectionModelId).toBe(modelRow.id)
 	})
 
 	test("a text model is refused rather than pointed at sdmodel", async () => {
@@ -598,20 +627,14 @@ describe("koboldcpp:connectImageModel — one image model, one connection", () =
 		const res = await connectImageModel(filename)
 
 		expect(res.error).toMatch(/text model/i)
-		expect(
-			(await imageConnections()).some((c) => c.model === filename)
-		).toBe(false)
+		expect(await connectionsServing(filename)).toEqual([])
 	})
 
 	test("a model that isn't installed is refused rather than connected", async () => {
 		const res = await connectImageModel("never-heard-of-it.gguf")
 
 		expect(res.error).toMatch(/isn't installed/i)
-		expect(
-			(await imageConnections()).some(
-				(c) => c.model === "never-heard-of-it.gguf"
-			)
-		).toBe(false)
+		expect(await connectionsServing("never-heard-of-it.gguf")).toEqual([])
 	})
 
 	test("a model still sitting in a legacy flat directory is accepted", async () => {
@@ -625,9 +648,7 @@ describe("koboldcpp:connectImageModel — one image model, one connection", () =
 		const res = await connectImageModel(filename)
 
 		expect(res.success).toBeTruthy()
-		expect(
-			(await imageConnections()).some((c) => c.model === filename)
-		).toBe(true)
+		expect(await connectionsServing(filename)).not.toEqual([])
 	})
 
 	test("a model whose file has gone is refused rather than connected", async () => {
@@ -674,17 +695,13 @@ describe("koboldcpp:deleteModel — the connections that named the file", () => 
 			kindSource: "user"
 		})
 		await connectImageModel(filename)
-		expect(
-			(await imageConnections()).some((c) => c.model === filename)
-		).toBe(true)
+		expect(await connectionsServing(filename)).not.toEqual([])
 
 		const res = await deleteModel(filename)
 
 		expect(res.success).toBe(true)
 		expect(await modelRow(filename)).toBeUndefined()
-		expect(
-			(await imageConnections()).some((c) => c.model === filename)
-		).toBe(false)
+		expect(await connectionsServing(filename)).toEqual([])
 		// ON DELETE SET NULL releases the slot rather than stranding it at an id
 		// nothing answers to.
 		expect((await imageDefault())?.connectionId ?? null).toBeNull()

@@ -23,6 +23,21 @@ import type { ShutdownMarker } from "./shutdownMarker"
 /** Repo-relative, so it is findable in a checkout, a zip, or the Docker image. */
 export const TROUBLESHOOTING_DOC = "docs/troubleshooting.md#database-wont-open"
 
+/**
+ * ⚠ This link stays a GitHub URL, never
+ * `docsHref("troubleshooting", "database-wont-open")`.
+ *
+ * Every consumer of this constant renders only while the database will not
+ * open, and in that state `src/hooks.server.ts` answers *every* path except
+ * `/recovery*` with the unopenable page — by design, so no request reaches an
+ * app that cannot run. An in-app `/docs/...` link from here would therefore
+ * re-render this same page instead of the guide. Making it work would mean
+ * letting SvelteKit routes through that guard, which is a ruling about the
+ * DB-down surface and not a link change.
+ *
+ * The app's own copy of the same page is at `/docs/troubleshooting`, once the
+ * database opens.
+ */
 export const TROUBLESHOOTING_URL =
 	"https://github.com/doolijb/serene-pub/blob/main/docs/troubleshooting.md#database-wont-open"
 

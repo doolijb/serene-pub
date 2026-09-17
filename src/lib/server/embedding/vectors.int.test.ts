@@ -52,9 +52,9 @@ async function seedVectors(model = "Xenova/all-MiniLM-L6-v2") {
 		embeddingModel: model,
 		vectorizedAt: new Date()
 	} as any)
-	await db.insert(schema.personas).values({
+	await db.insert(schema.characters).values({
 		userId: 1,
-		isDefault: false,
+		isPersona: true,
 		name: "Me",
 		description: "d",
 		embedding: VEC,
@@ -126,13 +126,16 @@ describe("the store list", () => {
 		const names = EMBEDDED_STORES.map((s) => s.table)
 		for (const expected of [
 			"session_messages",
+			// One entry for characters AND the personas among them: a persona
+			// is a character, so a second store would clear the same stamps
+			// twice.
 			"characters",
-			"personas",
 			"lorebook_bindings",
 			"narrative_relationships",
 			"lorebook_entry_vectors"
 		])
 			expect(names).toContain(expected)
+		expect(names).not.toContain("personas")
 	}, 60_000)
 
 	it("names the same stores the queue counts as work", async () => {
@@ -152,7 +155,6 @@ describe("the store list", () => {
 		for (const drizzleName of [
 			"sessionMessages",
 			"characters",
-			"personas",
 			"lorebookBindings",
 			"narrativeRelationships"
 		])

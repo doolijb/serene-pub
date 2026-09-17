@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest"
 import {
 	PluginEventRegistry,
 	compareSubscriptions,
-	eventHooksOf,
+	eventListenersOf,
 	subscriptionsOf,
 	EVENT_FANOUT_BUDGET_MS,
 	EVENT_HOOK_TIMEOUT_MS,
@@ -118,19 +118,19 @@ const subsOf = (row: {
 		]
 	})
 
-describe("eventHooksOf", () => {
+describe("eventListenersOf", () => {
 	it("reads the array, tolerant of its json being anything", () => {
 		expect(
-			eventHooksOf({ eventHooks: [{ event: EVENT, hook: "h" }] })
+			eventListenersOf({ eventHooks: [{ event: EVENT, hook: "h" }] })
 		).toEqual([{ event: EVENT, hook: "h" }])
-		expect(eventHooksOf({})).toEqual([])
-		expect(eventHooksOf(null)).toEqual([])
-		expect(eventHooksOf("nope")).toEqual([])
+		expect(eventListenersOf({})).toEqual([])
+		expect(eventListenersOf(null)).toEqual([])
+		expect(eventListenersOf("nope")).toEqual([])
 		// A map where an array belongs is not half-read into one.
-		expect(eventHooksOf({ eventHooks: { a: "b" } })).toEqual([])
+		expect(eventListenersOf({ eventHooks: { a: "b" } })).toEqual([])
 		// Non-object entries are dropped; the rest of the array survives them.
 		expect(
-			eventHooksOf({ eventHooks: [1, null, ["x"], { event: EVENT }] })
+			eventListenersOf({ eventHooks: [1, null, ["x"], { event: EVENT }] })
 		).toEqual([{ event: EVENT }])
 	})
 })

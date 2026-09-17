@@ -3,7 +3,7 @@
  *
  * An **option** is a `(nodeKey, slot, path)` address resolved through the scope
  * chain, presented to a caller as an opaque id and a label. A **Decl** is the
- * other side of it: what the type registry says *can* be configured, before any
+ * other side of it: what the definition registry says *can* be configured, before any
  * user value is applied. Everything else in this directory produces, resolves,
  * or writes one of these.
  *
@@ -114,8 +114,8 @@ export interface ConfigOption {
 			/** What the adapter sends — the tooltip, when the two differ. */
 			model: string
 			enabled: boolean
-			/** Which one a slot naming no model resolves to. */
-			isDefault: boolean
+			/** Set while the host has stopped listing it — offered greyed, with the reason. */
+			missingSince: string | null
 		}>
 	}>
 	/**
@@ -138,7 +138,7 @@ export interface ConfigOption {
 		 * put all five editors on all five steps: twenty-five boxes for five
 		 * texts, and every step offering to edit the other four.
 		 *
-		 * Now that a prompt is pooled per `(node type, slot)` the graph steps
+		 * Now that a prompt is pooled per `(node definition, slot)` the graph steps
 		 * hold five separate rows rather than one shared five-field one, so this
 		 * is usually the whole field set — but it stays the authority, because a
 		 * row written against @1 outlives the slot that dropped a field in @2.
@@ -182,7 +182,7 @@ export interface ConfigOption {
 	 * and a picker showing "Default" says nothing at all about what the prompt
 	 * will look like.
 	 *
-	 * `nodeTypeId` is deliberately **not** here, for the reason the variable id
+	 * `nodeDefinitionId` is deliberately **not** here, for the reason the variable id
 	 * is not: it is a node-shaped string the payload scan reads as topology,
 	 * and the client never needs it — every write is addressed by the option's
 	 * own handle.
@@ -404,6 +404,13 @@ export interface NamespaceView extends NamespaceSummary {
 	 */
 	canSelectConfig: boolean
 	steps: ConfigStep[]
+	/**
+	 * An envoy's settings (plans/29 R-18 (2); U5g) — genuine steps in nothing
+	 * that runs, so they are not counted or numbered among `steps`. Rendered
+	 * after them, under their own small heading ("Also configured here"),
+	 * same `ConfigStep` shape as the rest.
+	 */
+	alsoConfigured: ConfigStep[]
 	writeScope: WriteScope
 }
 
@@ -564,7 +571,7 @@ export interface Decl {
 	 */
 	variableId?: string
 	/**
-	 * The node type this option's row pool is keyed by, version stripped.
+	 * The node definition this option's row pool is keyed by, version stripped.
 	 *
 	 * For `context-template-ref`: the node whose context the template renders.
 	 * For `prompts-ref`: the node that consumes the prose — with `slot`, which
@@ -576,7 +583,7 @@ export interface Decl {
 	 * it. Server-side only — it is a node-shaped string the payload scan reads
 	 * as topology, and the client addresses every write by option handle.
 	 */
-	nodeTypeId?: string
+	nodeDefinitionId?: string
 	/**
 	 * For a `scripts-chain` option: the script types this hook accepts, as
 	 * pinned ids (18 §4a). The whole attachment rule — the picker offers rows

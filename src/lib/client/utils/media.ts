@@ -84,8 +84,8 @@ export interface AvatarMedia {
 	frame?: MediaFrame | null
 }
 
-/** Anything that points at an avatar — a character, a persona, or one of the
- *  lightweight view objects the session views build out of them. */
+/** Anything that points at an avatar — a character (a persona is one) or one of
+ *  the lightweight view objects the session views build out of them. */
 export interface HasAvatar {
 	avatarMediaId?: number | null
 	/** The avatar file's uuid and cache token, joined by the server. Absent on
@@ -162,7 +162,7 @@ export interface MediaRevision {
  * The same entity with its avatar re-addressed at a media row that changed in
  * place, or the entity itself when it wears something else.
  *
- * A rev bump writes nothing to the character or persona row, so an open view is
+ * A rev bump writes nothing to the character row, so an open view is
  * holding a correct `avatarMediaId` and stale pixels. Only a different URL
  * string dislodges them, and this is what changes it.
  *

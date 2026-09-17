@@ -1,7 +1,12 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import { onDestroy, onMount } from "svelte"
+	import { onMount } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import {
+		declareInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
+	import { interestKey } from "$lib/shared/sockets/interest"
 	import { toaster } from "$lib/client/utils/toaster"
 
 	/**
@@ -36,8 +41,6 @@
 		} satisfies Sockets.NarrativeGraph.ListMergeLogs.Params)
 	}
 
-	// Named so `off` can name them too: a bare off() removes every listener for
-	// the event, including any other open lorebooks UI.
 	function handleCandidates(
 		msg: Sockets.NarrativeGraph.DuplicateCandidates.Response
 	) {
@@ -89,19 +92,39 @@
 		candidates = candidates.filter((c) => c !== candidate)
 	}
 
-	onMount(() => {
-		socket.on("narrativeGraph:duplicateCandidates", handleCandidates)
-		socket.on("narrativeGraph:listMergeLogs", handleMergeLogs)
-		socket.on("narrativeGraph:mergeNode", handleMergeNode)
-		socket.on("narrativeGraph:undoMerge", handleUndoMerge)
-		fetchAll()
-	})
+	/**
+	 * The two reads are about this book, so they are scoped to it; the two
+	 * writes answer with a survivor/restored node and carry no book, so they
+	 * stay BARE — neither has an entry in `SCOPED_EVENTS`, and a scoped key for
+	 * an unscoped event would match nothing at all.
+	 *
+	 * Effects rather than `useInterest` for the pair whose key moves with the
+	 * `lorebookId` prop; declared above `onMount` so both exist before
+	 * `fetchAll` asks.
+	 */
+	$effect(() =>
+		declareInterest<"narrativeGraph:duplicateCandidates">(
+			interestKey("narrativeGraph:duplicateCandidates", lorebookId),
+			handleCandidates
+		)
+	)
+	$effect(() =>
+		declareInterest<"narrativeGraph:listMergeLogs">(
+			interestKey("narrativeGraph:listMergeLogs", lorebookId),
+			handleMergeLogs
+		)
+	)
+	useInterest<"narrativeGraph:mergeNode">(
+		"narrativeGraph:mergeNode",
+		handleMergeNode
+	)
+	useInterest<"narrativeGraph:undoMerge">(
+		"narrativeGraph:undoMerge",
+		handleUndoMerge
+	)
 
-	onDestroy(() => {
-		socket.off("narrativeGraph:duplicateCandidates", handleCandidates)
-		socket.off("narrativeGraph:listMergeLogs", handleMergeLogs)
-		socket.off("narrativeGraph:mergeNode", handleMergeNode)
-		socket.off("narrativeGraph:undoMerge", handleUndoMerge)
+	onMount(() => {
+		fetchAll()
 	})
 </script>
 

@@ -1,12 +1,14 @@
 <script lang="ts">
-	import { onMount, getContext } from "svelte"
+	import { getContext } from "svelte"
 	import { page } from "$app/state"
 	import { goto } from "$app/navigation"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { getInterestContext } from "$lib/client/sockets/interest.svelte"
 	import { announce } from "$lib/client/accessibility/state.svelte"
 	import { GroupReplyStrategies } from "$lib/shared/constants/GroupReplyStrategies"
 
 	const socket = useTypedSocket()
+	const interest = getInterestContext()
 	let systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
 
 	let name = $state("")
@@ -18,12 +20,12 @@
 	let characters: Sockets.Characters.List.Response["characterList"] = $state(
 		[]
 	)
-	let personas: Sockets.Personas.List.Response["personaList"] = $state([])
+	/** A persona is a character the user voices — one list, narrowed below. */
+	let personas = $derived(characters.filter((c) => c.isPersona))
 	let selectedCharacters: (Partial<SelectCharacter> & { id: number })[] =
 		$state([])
-	let selectedPersonas: (Partial<SelectPersona> & { id: number })[] = $state(
-		[]
-	)
+	let selectedPersonas: (Partial<SelectCharacter> & { id: number })[] =
+		$state([])
 	let addCharacterId: number | "" = $state("")
 	let addPersonaId: number | "" = $state("")
 	let tagInput = $state("")
@@ -110,7 +112,6 @@
 				scenario: scenario.trim(),
 				groupReplyStrategy,
 				lorebookId: null,
-				connectionId: null,
 				samplingConfigId: null,
 				promptConfigId: null,
 				narratorPromptConfigId: null
@@ -140,9 +141,6 @@
 			}
 		}
 	}
-	function handlePersonasList(msg: Sockets.Personas.List.Response) {
-		personas = msg.personaList || []
-	}
 	function handleSessionsCreate(msg: any) {
 		saving = false
 		if (msg.session) goto(`/document-view/sessions/${msg.session.id}`)
@@ -152,20 +150,33 @@
 		error = msg.error || "Failed to create session."
 	}
 
-	onMount(() => {
-		socket.on("characters:list", handleCharactersList)
-		socket.on("personas:list", handlePersonasList)
-		socket.on("sessions:create", handleSessionsCreate)
-		socket.on("sessions:create:error", handleSessionsCreateError)
-		socket.emit("characters:list", {})
-		socket.emit("personas:list", {})
-		return () => {
-			socket.off("characters:list", handleCharactersList)
-			socket.off("personas:list", handlePersonasList)
-			socket.off("sessions:create", handleSessionsCreate)
-			socket.off("sessions:create:error", handleSessionsCreateError)
-		}
-	})
+	/**
+	 * The create reply and its refusal, both BARE: the session the form is
+	 * about does not exist yet, so there is no id to scope either to. The
+	 * request is sent from the submit handler above.
+	 */
+	interest.useInterest<"sessions:create">(
+		"sessions:create",
+		handleSessionsCreate
+	)
+	interest.useInterest<"sessions:create:error">(
+		"sessions:create:error",
+		handleSessionsCreateError
+	)
+
+	/**
+	 * Both participant pickers, off ONE list: a persona is a character
+	 * carrying `isPersona`. BARE — this is the user's whole cast list — and
+	 * STANDING, because the server re-emits it as a cascade after any
+	 * character write.
+	 */
+	$effect(() =>
+		interest.requestWithInterest(
+			"characters:list",
+			{},
+			handleCharactersList
+		)
+	)
 </script>
 
 <svelte:head>

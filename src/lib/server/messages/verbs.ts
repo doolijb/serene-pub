@@ -1,45 +1,40 @@
 /**
- * Message verbs (20 §4): core owns the mechanics; the mode declares
- * availability; the check happens server-side at the verb — the
- * `triggerFunction` doctrine, applied to messages: hiding a button is
- * presentation, refusing the fire is what makes "removed" mean removed.
+ * Message verbs (20 §4; R-15, ruled 2026-09-15): core owns the mechanics;
+ * the genre declares availability; the check happens server-side at the
+ * verb — the `triggerFunction` doctrine, applied to messages: hiding a
+ * button is presentation, refusing the fire is what makes "removed" mean
+ * removed.
  *
- * **The floors are not in this file's vocabulary on purpose.** Delete and
- * hide are unconditionally the session owner's; `SessionShape.messageVerbs`
- * cannot express forbidding them, and no code path consults anything before
- * honouring them beyond ownership. What this module resolves is only the
- * forbiddable set: retry, continue, edit, stepBack.
+ * **The floors are not in this file's vocabulary on purpose.** Stop, branch
+ * and edit are present in every genre: `SessionShape.messageVerbs` cannot
+ * express forbidding them (the SDK refuses a declaration that tries, at
+ * registration), and no code path consults anything before honouring them
+ * beyond ownership. What this module resolves is the forbiddable set — the
+ * genre-declared content actions (`retry`, `continue`, `stepBack`) and the
+ * opt-in built-ins (`delete`, `hide`, `swipe`), which a genre may switch off
+ * and never re-implement.
  */
 
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { MESSAGE_VERBS, type MessageVerb } from "@serene-pub/sdk"
 
-export interface MessageVerbPolicy {
-	retry: boolean
-	continue: boolean
-	edit: boolean
-	stepBack: boolean
-}
+/** Availability of every forbiddable verb. The floors are not here. */
+export type MessageVerbPolicy = Record<MessageVerb, boolean>
 
-const ALL_ON: MessageVerbPolicy = {
-	retry: true,
-	continue: true,
-	edit: true,
-	stepBack: true
-}
+const ALL_ON: MessageVerbPolicy = Object.freeze(
+	Object.fromEntries(MESSAGE_VERBS.map((v) => [v, true]))
+) as MessageVerbPolicy
 
 export function resolveMessageVerbs(shape: unknown): MessageVerbPolicy {
 	const declared =
 		shape && typeof shape === "object"
 			? ((shape as any).messageVerbs ?? null)
 			: null
-	if (!declared || typeof declared !== "object") return ALL_ON
-	return {
-		retry: declared.retry !== false,
-		continue: declared.continue !== false,
-		edit: declared.edit !== false,
-		stepBack: declared.stepBack !== false
-	}
+	if (!declared || typeof declared !== "object") return { ...ALL_ON }
+	return Object.fromEntries(
+		MESSAGE_VERBS.map((v) => [v, declared[v] !== false])
+	) as MessageVerbPolicy
 }
 
 /**
@@ -67,8 +62,8 @@ export async function verbRefusal(
 		if (!mode) return null
 		if (resolveMessageVerbs(mode.shape)[verb]) return null
 		return (
-			`This session's mode ('${mode.name}') does not offer ${verb} on ` +
-			`messages — what happened stands. Deleting or hiding is always yours.`
+			`This session's genre ('${mode.name}') does not offer ${verb} on ` +
+			`messages — what happened stands. Stopping, branching and editing are always yours.`
 		)
 	} catch {
 		return null
@@ -93,16 +88,21 @@ export async function verbRefusal(
  * whatever connection is behind it, and telling somebody to change their wire
  * mode when the mode would refuse anyway sends them to a screen that cannot help.
  *
- * ## The connection is resolved the way the TURN resolves it
+ * ## The connection is resolved the way the TURN resolves it — nearly
  *
- * Through `resolveTaskConfig`, which is the same call `generateResponse` makes —
- * session override → prompt config → the instance's `text->text` default. A
- * shortcut that read only `sessions.connection_id` would be right until somebody
- * set a connection on their prompt config, and then would disable a button that
- * works (or, worse, enable one that does not).
+ * Through `resolveTaskConfig`: prompt config → the instance's `text->text`
+ * default. A shortcut that read the instance default alone would be right
+ * until somebody set a connection on their prompt config, and then would
+ * disable a button that works (or, worse, enable one that does not).
+ *
+ * ⏳ Since the one road (09-B B4, R-8) the turn itself resolves through the
+ * scope data (`config/world.ts`), which also carries the pipeline panel's pick
+ * on the generate node; this affordance check does not read that pick, so it
+ * can disagree with the run when a per-node connection differs from the prompt
+ * config's. An affordance, not a write — the turn's own resolution wins.
  *
  * ⚠ A resolution FAILURE is not this function's refusal. "No connection is set"
- * is a different problem with a different sentence, and `generateResponse` writes
+ * is a different problem with a different sentence, and the reply road writes
  * that one onto the message row where a person can see it; answering it here
  * would grey out Continue on an instance whose real fault is that nothing is
  * configured at all. Null — let the turn refuse, in its own words.

@@ -36,7 +36,11 @@
  * truth, which is exactly the sort of thing browser storage should hold.
  */
 import { DEFAULT_LANGUAGE } from "$lib/shared/i18n/languages"
-import { getSocket } from "$lib/client/sockets/socketInstance"
+import {
+	declareInterest,
+	requestWithInterest
+} from "$lib/client/sockets/interest.svelte"
+import { renderStatusText, type StatusText } from "@serene-pub/sdk"
 
 const CACHE_PREFIX = "sp-i18n-"
 
@@ -88,11 +92,19 @@ function flush() {
 	const sources = queued
 	queued = []
 	if (sources.length === 0 || language === DEFAULT_LANGUAGE) return
-	// No socket yet means the app is still starting. These sources stay in
-	// `asked`, so they are not re-requested; the next *new* string to reach the
-	// screen carries the request that fills them in, and until then the English
-	// shows. Retrying here would be a timer racing socket setup.
-	getSocket()?.emit("language:catalog", { sources })
+	// Through the interest registry, so the sync naming `language:catalog`
+	// reaches the server before the request does — the event is gated, and a
+	// reply nobody declared is a reply the server never builds.
+	//
+	// The release is deliberately dropped: `applyCatalog` is one reference and
+	// the registry counts subscribers by reference, so every request after the
+	// first adds nothing, and the store wants catalog answers for as long as
+	// the tab lives. No socket yet means the app is still starting — the
+	// registry attaches the listener when one appears, and these sources stay
+	// in `asked`, so the next *new* string to reach the screen carries the
+	// request that fills them in. Retrying here would be a timer racing socket
+	// setup.
+	requestWithInterest("language:catalog", { sources }, applyCatalog)
 }
 
 function request(source: string) {
@@ -120,6 +132,24 @@ export function t(source: string): string {
 		request(source)
 	}
 	return source
+}
+
+/**
+ * A run's status (R-19) as the person reads it, in their language.
+ *
+ * The text is a locale map with `{vars}` — *{speaker} is typing* with
+ * `speaker: "Jasmine"` — and the client is where the locale is resolved. Two
+ * roads, in order: a locale the author shipped for this language is used as
+ * written; otherwise the `en` TEMPLATE goes through `t()` — placeholders
+ * intact, so "{speaker} is typing" is one stable source string however many
+ * speakers there are — and the variables are substituted after. Empty for no
+ * status, so a caller can `||` its own fallback.
+ */
+export function statusText(status: StatusText | null | undefined): string {
+	if (!status) return ""
+	if (status.i18n[language] !== undefined)
+		return renderStatusText(status, language)
+	return renderStatusText({ ...status, i18n: { en: t(status.i18n.en) } })
 }
 
 /**
@@ -164,10 +194,13 @@ export function applyCatalog(res: {
  * teardown they already expect. Registered there rather than once at socket
  * setup because a listener must not outlive the component tree that renders
  * from it.
+ *
+ * A fresh closure per caller, not `applyCatalog` itself: the registry counts
+ * subscribers by reference, so two shells passing one reference would share a
+ * single count and the first teardown would take the other's listener with it.
  */
 export function registerLanguageSocket(): () => void {
-	const socket = getSocket()
-	if (!socket) return () => {}
-	socket.on("language:catalog", applyCatalog)
-	return () => socket.off("language:catalog", applyCatalog)
+	return declareInterest<"language:catalog">("language:catalog", (res) =>
+		applyCatalog(res)
+	)
 }

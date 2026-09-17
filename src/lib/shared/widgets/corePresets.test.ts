@@ -1,10 +1,10 @@
 import { describe, expect, test } from "vitest"
 import {
-	COMPOSER_STYLE_PRESETS,
 	MESSAGE_STYLE_PRESETS,
 	legacyLayoutAttr,
 	legacyPackPin,
-	withCorePresets
+	withCorePresets,
+	type LegacyStylePacks
 } from "./corePresets"
 import { systemStyleSlug, type WidgetDecl } from "./types"
 import type { ResolvableStyle } from "./resolve"
@@ -16,14 +16,12 @@ const row = (id: number, widgetSlug: string, slug: string): ResolvableStyle => (
 	widgetSlug
 })
 
-/** The rows a seeded instance holds for the two primary widgets. */
+/** The rows a seeded instance holds for the primary widget and one beside it. */
 const seeded: ResolvableStyle[] = [
 	...MESSAGE_STYLE_PRESETS.map((p, i) =>
 		row(10 + i, "messages", systemStyleSlug("messages", p.slug))
 	),
-	...COMPOSER_STYLE_PRESETS.map((p, i) =>
-		row(20 + i, "composer", systemStyleSlug("composer", p.slug))
-	),
+	row(20, "stats", systemStyleSlug("stats", "default")),
 	row(99, "messages", "user:1:messages:abc123")
 ]
 
@@ -36,12 +34,6 @@ describe("withCorePresets", () => {
 			presets: [{ slug: "default", title: "Default", css: "" }]
 		},
 		{
-			id: "composer",
-			title: "Composer",
-			surface: { kind: "native", component: "composer" },
-			presets: [{ slug: "default", title: "Default", css: "" }]
-		},
-		{
 			id: "scene-portraits",
 			title: "Scene Portraits",
 			surface: { kind: "native", component: "scene-portraits" },
@@ -49,21 +41,39 @@ describe("withCorePresets", () => {
 		}
 	]
 
-	test("attaches the eight packs to messages + composer", () => {
+	test("attaches the five packs to messages", () => {
 		const out = withCorePresets(decls)
 		expect(out.find((d) => d.id === "messages")?.presets?.map((p) => p.slug))
 			.toEqual(["default", "bubbles", "novel", "compact", "cameo"])
-		expect(out.find((d) => d.id === "composer")?.presets?.map((p) => p.slug))
-			.toEqual(["default", "minimal", "writer"])
+	})
+
+	test("the composer is a setting on messages, never a widget beside it", () => {
+		// The packs the app contributes are the MESSAGE looks and nothing else:
+		// how the field is drawn is `settings.composer` on this same widget, so
+		// a style row for a `composer` widget would have nothing to skin.
+		expect(withCorePresets(decls).some((d) => d.id === "composer")).toBe(
+			false
+		)
 	})
 
 	test("REPLACES the SDK's bare default rather than adding beside it", () => {
 		// Two rows on one slug is a unique-index fight between the reconciler
-		// and itself; the packs' own default IS the default slot.
+		// and itself; the packs' own default IS the default slot, and Stage is
+		// what fills it.
 		const messages = withCorePresets(decls).find((d) => d.id === "messages")
 		const defaults = messages!.presets!.filter((p) => p.slug === "default")
 		expect(defaults).toHaveLength(1)
-		expect(defaults[0].title).toBe("Clean")
+		expect(defaults[0].title).toBe("Stage")
+	})
+
+	test("every pack is titled, and the titles are the ones the picker shows", () => {
+		expect(MESSAGE_STYLE_PRESETS.map((p) => p.title)).toEqual([
+			"Stage",
+			"Bubbles",
+			"Novel",
+			"Compact",
+			"Dreamlit Cameo"
+		])
 	})
 
 	test("leaves a widget the app ships no packs for untouched", () => {
@@ -80,12 +90,55 @@ describe("withCorePresets", () => {
 	})
 
 	test("every pack's CSS is scope-ready — no [data-msg-layout] guards, no ancestor mode selector", () => {
-		for (const p of [...MESSAGE_STYLE_PRESETS, ...COMPOSER_STYLE_PRESETS]) {
+		for (const p of MESSAGE_STYLE_PRESETS) {
 			expect(p.css).not.toContain("data-msg-layout")
-			expect(p.css).not.toContain("data-composer-layout")
 			expect(p.css).not.toContain(".chat-core")
-			// The mode lives on <html>; a scoped skin can never select it.
+			// The mode lives on <html>; a scoped skin can never select it, so
+			// anything that differs by mode is a `light-dark()` pair instead.
 			expect(p.css).not.toContain("data-mode")
+		}
+	})
+
+	test("no pack styles the composer — how the field is drawn is a setting", () => {
+		for (const p of MESSAGE_STYLE_PRESETS) {
+			expect(p.css).not.toContain(".sp-compose")
+			expect(p.css).not.toContain(".sp-field")
+			expect(p.css).not.toContain("composer-card")
+		}
+	})
+
+	test("no pack restyles a shared message state — those are one treatment", () => {
+		// A pack may GUARD a look on the normal state (Stage's hover does), but
+		// selected / dim / editing / hidden belong to messageLayouts.css so they
+		// read the same whichever pack is on.
+		for (const p of MESSAGE_STYLE_PRESETS) {
+			for (const state of ["selected", "dim", "editing"]) {
+				expect(p.css).not.toContain(`data-msg-state="${state}"`)
+			}
+			expect(p.css).not.toContain("data-msg-hidden")
+		}
+	})
+
+	test("story prose is set in two tones, in the face the guide names", () => {
+		// STYLE-GUIDE §3.3: dialogue and narration are different colours, and
+		// the prose face is Literata via `--sp-prose`. Bubbles and Compact are
+		// the two that are deliberately Sans.
+		for (const p of MESSAGE_STYLE_PRESETS) {
+			expect(p.css).toContain("--sp-body:")
+			expect(p.css).toContain("--sp-quote:")
+		}
+		for (const slug of ["default", "novel", "cameo"]) {
+			const pack = MESSAGE_STYLE_PRESETS.find((p) => p.slug === slug)!
+			expect(pack.css).toContain("var(--sp-prose)")
+		}
+	})
+
+	test("anything that differs by mode is a light/dark pair", () => {
+		// The surface ladder is ONE ladder — `--color-surface-950` is night
+		// indigo under a light theme too — so a bare dark stop on a ground or a
+		// text tone is a bug even though it looks right today.
+		for (const p of MESSAGE_STYLE_PRESETS) {
+			expect(p.css).toContain("light-dark(")
 		}
 	})
 })
@@ -97,25 +150,26 @@ describe("legacyPackPin — the pre-style-system choice, derived", () => {
 		expect(pin?.id).toBe(seeded.find((r) => r.slug === pin!.slug)!.id)
 	})
 
-	test("clean and classic map to the `default` slot they now fill", () => {
+	test("clean maps to the `default` slot it now fills", () => {
 		expect(legacyPackPin("messages", { chat: "clean" }, seeded)?.slug).toBe(
 			systemStyleSlug("messages", "default")
 		)
-		expect(
-			legacyPackPin("composer", { composer: "classic" }, seeded)?.slug
-		).toBe(systemStyleSlug("composer", "default"))
 	})
 
-	test("each widget reads only its OWN slot", () => {
-		// A composer choice must never become the messages widget's pin.
-		expect(
-			legacyPackPin("messages", { composer: "minimal" }, seeded)
-		).toBeUndefined()
+	test("messages is the only widget with a slot to read", () => {
+		// The blob's other slot named a composer look, which is a setting on
+		// the messages widget rather than a style row — there is nothing for a
+		// pin to point at, and it must never become the messages widget's pin.
+		const olderBlob: LegacyStylePacks & { composer?: string } = {
+			composer: "minimal"
+		}
+		expect(legacyPackPin("messages", olderBlob, seeded)).toBeUndefined()
 		expect(
 			legacyPackPin("composer", { chat: "bubbles" }, seeded)
 		).toBeUndefined()
-		expect(legacyPackPin("composer", { composer: "writer" }, seeded)?.slug)
-			.toBe(systemStyleSlug("composer", "writer"))
+		expect(
+			legacyPackPin("stats", { chat: "bubbles" }, seeded)
+		).toBeUndefined()
 	})
 
 	test("no choice, an unknown pack, or another widget → no pin", () => {
@@ -165,12 +219,13 @@ describe("legacyLayoutAttr — the transitional data-*-layout value", () => {
 		expect(
 			legacyLayoutAttr("messages", systemStyleSlug("messages", "cameo"))
 		).toBe("cameo")
+	})
+
+	test("a widget with no bridge answers with the preset slug it was given", () => {
+		// `default` has no legacy name outside messages, so the slug stands.
 		expect(
-			legacyLayoutAttr("composer", systemStyleSlug("composer", "default"))
-		).toBe("classic")
-		expect(
-			legacyLayoutAttr("composer", systemStyleSlug("composer", "minimal"))
-		).toBe("minimal")
+			legacyLayoutAttr("stats", systemStyleSlug("stats", "default"))
+		).toBe("default")
 	})
 
 	test("a user's own style writes no pack attribute — no pack is active", () => {
@@ -189,7 +244,7 @@ describe("legacyLayoutAttr — the transitional data-*-layout value", () => {
 
 	test("another widget's slug is not this widget's attribute", () => {
 		expect(
-			legacyLayoutAttr("messages", systemStyleSlug("composer", "minimal"))
+			legacyLayoutAttr("messages", systemStyleSlug("stats", "default"))
 		).toBeUndefined()
 	})
 })

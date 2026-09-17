@@ -1,0 +1,152 @@
+/**
+ * The admin sections, as data.
+ *
+ * Two things read this list: the admin shell's own rail
+ * (`routes/admin/+layout.svelte`) and the Jump overlay, which offers the same
+ * pages as an **Admin pages** group. It lives here rather than in the route so
+ * the second reader does not have to import a `+layout.svelte`, and so nobody
+ * is tempted to keep a second copy of it in step by hand — a jump that opens a
+ * page the rail has renamed, or misses one the rail has gained, is exactly the
+ * rot a duplicated table produces.
+ *
+ * `icon` is a name from the app's lucide set, resolved by each reader
+ * (`Icons[item.icon]`), so this module carries no component imports and stays
+ * cheap for the shell to load.
+ */
+
+import type * as Icons from "@lucide/svelte"
+
+export interface AdminNavItem {
+	href: string
+	label: string
+	icon: keyof typeof Icons
+}
+
+export interface AdminNavGroup {
+	group: string
+	items: AdminNavItem[]
+}
+
+/** The path the Users section lives at; see `adminNavFor`. */
+export const ADMIN_USERS_HREF = "/admin/users"
+
+export const ADMIN_NAV: AdminNavGroup[] = [
+	{
+		group: "System",
+		items: [
+			{
+				href: "/admin/settings",
+				label: "Settings",
+				icon: "Settings"
+			},
+			{ href: "/admin/servers", label: "Servers", icon: "Server" },
+			{
+				href: "/admin/sampling",
+				label: "Sampling",
+				icon: "SlidersHorizontal"
+			},
+			// Between Sampling and Connections because it is the thing
+			// that JOINS them: a connection and a sampling config are the
+			// two halves of one capability's default. It reads in the
+			// order the work happens — configure the parts, then say what
+			// the instance uses them for.
+			{
+				href: "/admin/defaults",
+				label: "Defaults",
+				icon: "Target"
+			},
+			{
+				href: "/admin/connections",
+				label: "Connections",
+				icon: "Cable"
+			}
+		]
+	},
+	{
+		group: "Access",
+		items: [{ href: ADMIN_USERS_HREF, label: "Users", icon: "Users" }]
+	},
+	{
+		group: "Sessions",
+		items: [
+			{
+				href: "/admin/session-genres",
+				label: "Genres",
+				icon: "Shapes"
+			},
+			{
+				href: "/admin/session-presets",
+				label: "Presets",
+				icon: "Ticket"
+			},
+			{
+				href: "/admin/sessions",
+				label: "Sessions",
+				icon: "MessagesSquare"
+			}
+		]
+	},
+	{
+		group: "Content",
+		items: [
+			{
+				href: "/admin/pipelines",
+				label: "Pipelines",
+				icon: "Workflow"
+			},
+			{
+				href: "/admin/configurations",
+				label: "Configurations",
+				icon: "SlidersVertical"
+			},
+			{
+				href: "/admin/prompts",
+				label: "Prompts",
+				icon: "MessageSquareText"
+			},
+			{
+				href: "/admin/context-templates",
+				label: "Context templates",
+				icon: "LayoutTemplate"
+			},
+			// Beside the context templates because they are the two halves
+			// of one rendered prompt: that one is the words, this one is
+			// what wraps each block of them.
+			{
+				href: "/admin/completion-templates",
+				label: "Completion templates",
+				icon: "Brackets"
+			},
+			{
+				href: "/admin/variable-templates",
+				label: "Variable templates",
+				icon: "Braces"
+			},
+			{
+				href: "/admin/scripts",
+				label: "Scripts",
+				icon: "SquareCode"
+			},
+			{ href: "/admin/plugins", label: "Plugins", icon: "Puzzle" }
+		]
+	}
+]
+
+/**
+ * With accounts off there is no roster to manage: the Users section (and its
+ * handlers, server-side) exists only when accounts do. Filtering the nav model
+ * keeps empty groups from rendering a bare label — and keeps the Jump overlay
+ * from offering a page that is not there.
+ */
+export function adminNavFor(accountsEnabled: boolean): AdminNavGroup[] {
+	if (accountsEnabled) return ADMIN_NAV
+	return ADMIN_NAV.map((s) => ({
+		...s,
+		items: s.items.filter((i) => i.href !== ADMIN_USERS_HREF)
+	})).filter((s) => s.items.length > 0)
+}
+
+/** Every section as one flat list, which is what a search wants. */
+export function adminNavItems(accountsEnabled: boolean): AdminNavItem[] {
+	return adminNavFor(accountsEnabled).flatMap((s) => s.items)
+}

@@ -30,20 +30,19 @@
 	function getLabel(tag: string) {
 		const binding = lorebookBindingList.find((b) => b.binding == tag)
 		return (
-			binding?.character?.nickname ||
-			binding?.character?.name ||
-			binding?.persona?.name ||
-			tag
+			binding?.character?.nickname || binding?.character?.name || tag
 		)
 	}
 
+	/**
+	 * A tag names a character card or nothing. A persona is a character, so
+	 * "persona" is a card the reader has flagged as one of their own rather
+	 * than a different kind of binding.
+	 */
 	function getCharType(tag: string): "character" | "persona" | "unknown" {
 		const binding = lorebookBindingList.find((b) => b.binding == tag)
-		return binding?.characterId
-			? "character"
-			: binding?.personaId
-				? "persona"
-				: "unknown"
+		if (!binding?.characterId) return "unknown"
+		return binding.character?.isPersona ? "persona" : "character"
 	}
 
 	function updateToolbarStates() {
@@ -188,12 +187,12 @@
 								Insert a cast member
 							</div>
 							{#each lorebookBindingList as binding}
-								{@const char =
-									binding.character || binding.persona}
+								{@const char = binding.character}
 								<button
 									class="btn"
-									class:preset-filled-primary-500={!!binding.characterId}
-									class:preset-filled-surface-500={!!binding.personaId}
+									class:preset-filled-primary-500={!!binding.characterId &&
+										!char?.isPersona}
+									class:preset-filled-surface-500={!!char?.isPersona}
 									class:preset-filled-warning-500={!char}
 									onclick={() => {
 										editor.commands.insertLorebookBindingTag(

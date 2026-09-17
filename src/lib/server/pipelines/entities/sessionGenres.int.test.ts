@@ -33,6 +33,7 @@ import {
 	shapeViolations,
 	upgradeSessionGenre
 } from "$lib/server/pipelines/entities/sessionGenres"
+import { sessionEvents } from "@serene-pub/sdk"
 import { NARRATE_SPEC_ID } from "$lib/server/pipelines/specs/narrate"
 import { RESPOND_SPEC_ID } from "$lib/server/pipelines/specs/respond"
 
@@ -65,7 +66,7 @@ describe("the picker", () => {
 		})
 		// Non-mode input types are not modes: summarize-request has no shape.
 		expect(
-			modes.some((m) => m.genreId.startsWith("core:input/summarize"))
+			modes.some((m) => m.genreId.startsWith("core:inlet/summarize"))
 		).toBe(false)
 	})
 })
@@ -130,6 +131,40 @@ describe("existing sessions", () => {
 		const facts = await sessionShapeFacts(db, session.id)
 		expect(shapeViolations(mode!.shape, facts)).toEqual([])
 	})
+
+	it("a removed persona seat does not count toward the shape (U5g review, W2)", async () => {
+		const [user] = await db
+			.insert(schema.users)
+			.values({ username: "persona-removed-test", isAdmin: false })
+			.returning()
+		const [active, departed] = await db
+			.insert(schema.characters)
+			.values([
+				{
+					userId: user.id,
+					isPersona: true,
+					name: "Active Persona",
+					description: "Still here."
+				},
+				{
+					userId: user.id,
+					isPersona: true,
+					name: "Departed Persona",
+					description: "Not any more."
+				}
+			])
+			.returning()
+		const [session] = await db
+			.insert(schema.sessions)
+			.values({ userId: user.id, isGroup: false })
+			.returning()
+		await db.insert(schema.sessionPersonas).values([
+			{ sessionId: session.id, personaId: active!.id },
+			{ sessionId: session.id, personaId: departed!.id, removedAt: new Date() }
+		])
+		const facts = await sessionShapeFacts(db, session.id)
+		expect(facts.personas).toBe(1)
+	})
 })
 
 describe("function routing (19 §3, U-C3)", () => {
@@ -161,7 +196,7 @@ describe("function routing (19 §3, U-C3)", () => {
 		expect(
 			await resolveFunctionSpec(
 				db,
-				"chariot.dungeon:input/crawl@1",
+				"chariot.dungeon:inlet/crawl@1",
 				"respond"
 			)
 		).toBe(null)
@@ -173,10 +208,10 @@ describe("the fields round-trip (19 §1, U-C2)", () => {
 		// A mode is a registry row, and rows are data: a synthetic
 		// shape-bearing input stands in for the extension that would
 		// declare one.
-		await db.insert(schema.pipelineTypeRegistry).values({
-			typeId: "chariot.dungeon:input/crawl",
+		await db.insert(schema.pipelineDefinitionRegistry).values({
+			definitionId: "chariot.dungeon:inlet/crawl",
 			version: 1,
-			kind: "input",
+			kind: "inlet",
 			ports: { out: {} },
 			slots: {},
 			i18n: {
@@ -202,7 +237,7 @@ describe("the fields round-trip (19 §1, U-C2)", () => {
 			.values({
 				userId: user.id,
 				isGroup: false,
-				genreId: "chariot.dungeon:input/crawl@1",
+				genreId: "chariot.dungeon:inlet/crawl@1",
 				genreFields: {
 					difficulty: "hard",
 					torchCount: 3,
@@ -222,7 +257,7 @@ describe("the fields round-trip (19 §1, U-C2)", () => {
 		// An extension mode's card text takes the same road as core's.
 		const crawl = await getSessionGenre(
 			db,
-			"chariot.dungeon:input/crawl@1"
+			"chariot.dungeon:inlet/crawl@1"
 		)
 		expect(crawl!.description).toBe("Torchlit. One persona, no cast.")
 	})
@@ -247,7 +282,7 @@ describe("the fields round-trip (19 §1, U-C2)", () => {
 describe("the swap list (19 §5, U-C4)", () => {
 	it("lists core's four strategies, by shape rather than by list", async () => {
 		const strategies = await listSpeakerStrategies(db)
-		expect(strategies.map((s) => s.typeId)).toEqual(
+		expect(strategies.map((s) => s.definitionId)).toEqual(
 			expect.arrayContaining([
 				"core:task/turn-round-robin@1",
 				"core:task/turn-random@1",
@@ -257,13 +292,13 @@ describe("the swap list (19 §5, U-C4)", () => {
 		)
 		// Non-strategy tasks are not in the dropdown.
 		expect(
-			strategies.some((s) => s.typeId.startsWith("core:task/assemble"))
+			strategies.some((s) => s.definitionId.startsWith("core:task/assemble"))
 		).toBe(false)
 	})
 
 	it("an extension-shaped strategy appears by being registered — no registration step", async () => {
-		await db.insert(schema.pipelineTypeRegistry).values({
-			typeId: "chariot.council:task/turn-seniority",
+		await db.insert(schema.pipelineDefinitionRegistry).values({
+			definitionId: "chariot.council:task/turn-seniority",
 			version: 1,
 			kind: "task",
 			ports: {
@@ -276,7 +311,7 @@ describe("the swap list (19 §5, U-C4)", () => {
 		const strategies = await listSpeakerStrategies(db)
 		expect(
 			strategies.find(
-				(s) => s.typeId === "chariot.council:task/turn-seniority@1"
+				(s) => s.definitionId === "chariot.council:task/turn-seniority@1"
 			)?.name
 		).toBe("By seniority")
 	})
@@ -289,14 +324,20 @@ describe("the trigger set (19 §4, U-C5)", () => {
 		// contributes a button lands here too, and this test is about narrate's
 		// row being a ROW — whole-list equality would make every new spec a
 		// failure in a test that has nothing to say about it.
+		// The action model's shape (R-15, U5c): a key, a venue LIST, the
+		// audience defaults, `quick`, and the slash name derived from the key.
 		expect(triggers.find((t) => t.function === "narrate")).toEqual({
+			key: "narrate",
 			function: "narrate",
-			kind: "button",
+			venues: [{ kind: "composer" }],
+			audience: { see: ["participant"], act: ["owner"] },
+			quick: true,
+			slash: "narrate",
 			icon: "book-open-text",
 			name: "Narrate",
 			specSlug: NARRATE_SPEC_ID,
 			// Classified where it is read, not where it is used (19 §3):
-			// `core:spec/narrate` contributing to `core:input/user-message@1`
+			// `core:spec/narrate` contributing to `core:inlet/user-message@1`
 			// is the mode owner's own namespace, so a companion — present by
 			// default. A foreign spec's would be an attachment, opt-in.
 			origin: "companion",
@@ -314,8 +355,12 @@ describe("the trigger set (19 §4, U-C5)", () => {
 		// there is no way for a person to reach any of it.
 		const triggers = await listGenreTriggers(db, STANDARD_GENRE_ID)
 		expect(triggers.find((t) => t.function === "generate-image")).toEqual({
+			key: "generate-image",
 			function: "generate-image",
-			kind: "button",
+			venues: [{ kind: "composer" }],
+			audience: { see: ["participant"], act: ["owner"] },
+			quick: true,
+			slash: "generate-image",
 			icon: "image",
 			name: "Image",
 			specSlug: "core:spec/generate-image",
@@ -358,10 +403,10 @@ describe("mode lifecycle (19 §6, ruled 2026-08-23)", () => {
 	it("there is no mid-session swap; a mode upgrades along its own type, shape-checked", async () => {
 		// The crawl mode grows a v2 — same bare type, higher version, one
 		// more field. Rows are data.
-		await db.insert(schema.pipelineTypeRegistry).values({
-			typeId: "chariot.dungeon:input/crawl",
+		await db.insert(schema.pipelineDefinitionRegistry).values({
+			definitionId: "chariot.dungeon:inlet/crawl",
 			version: 2,
-			kind: "input",
+			kind: "inlet",
 			ports: { out: {} },
 			slots: {},
 			i18n: { name: { en: "Dungeon Crawl II" } },
@@ -381,12 +426,12 @@ describe("mode lifecycle (19 §6, ruled 2026-08-23)", () => {
 			.values({ username: "lifecycle-test", isAdmin: false })
 			.returning()
 		const [persona] = await db
-			.insert(schema.personas)
+			.insert(schema.characters)
 			.values({
 				userId: user.id,
+				isPersona: true,
 				name: "Wanderer",
-				description: "A lone traveller.",
-				isDefault: false
+				description: "A lone traveller."
 			})
 			.returning()
 		const [session] = await db
@@ -394,7 +439,7 @@ describe("mode lifecycle (19 §6, ruled 2026-08-23)", () => {
 			.values({
 				userId: user.id,
 				isGroup: false,
-				genreId: "chariot.dungeon:input/crawl@1",
+				genreId: "chariot.dungeon:inlet/crawl@1",
 				genreFields: { difficulty: "hard", torchCount: 3 }
 			} as any)
 			.returning()
@@ -415,7 +460,7 @@ describe("mode lifecycle (19 §6, ruled 2026-08-23)", () => {
 			await upgradeSessionGenre(
 				db,
 				session.id,
-				"chariot.dungeon:input/crawl@2"
+				"chariot.dungeon:inlet/crawl@2"
 			)
 		).toEqual({})
 		expect(await genreFieldsFor(db, session.id)).toEqual({
@@ -427,16 +472,16 @@ describe("mode lifecycle (19 §6, ruled 2026-08-23)", () => {
 		const down = await upgradeSessionGenre(
 			db,
 			session.id,
-			"chariot.dungeon:input/crawl@1"
+			"chariot.dungeon:inlet/crawl@1"
 		)
 		expect(down.error).toContain("versions move one way")
 
 		// An upgrade whose shape the session violates refuses with the
 		// sentences: v3 forbids personas.
-		await db.insert(schema.pipelineTypeRegistry).values({
-			typeId: "chariot.dungeon:input/crawl",
+		await db.insert(schema.pipelineDefinitionRegistry).values({
+			definitionId: "chariot.dungeon:inlet/crawl",
 			version: 3,
-			kind: "input",
+			kind: "inlet",
 			ports: { out: {} },
 			slots: {},
 			i18n: { name: { en: "Dungeon Crawl III" } },
@@ -445,7 +490,7 @@ describe("mode lifecycle (19 §6, ruled 2026-08-23)", () => {
 		const tightened = await upgradeSessionGenre(
 			db,
 			session.id,
-			"chariot.dungeon:input/crawl@3"
+			"chariot.dungeon:inlet/crawl@3"
 		)
 		expect(tightened.error).toContain("does not fit")
 		expect(tightened.error).toContain("no personas — the session has 1")
@@ -463,13 +508,13 @@ describe("mode lifecycle (19 §6, ruled 2026-08-23)", () => {
 			.values({
 				userId: user.id,
 				isGroup: false,
-				genreId: "chariot.gone:input/vanished@1"
+				genreId: "chariot.gone:inlet/vanished@1"
 			} as any)
 			.returning()
 		const check = await sessionGenreAvailable(db, orphan.id)
 		expect(check.available).toBe(false)
 		expect(check.reason).toContain("read-only")
-		expect(check.reason).toContain("chariot.gone:input/vanished@1")
+		expect(check.reason).toContain("chariot.gone:inlet/vanished@1")
 
 		// A registered custom mode is available.
 		const [crawler] = await db
@@ -477,7 +522,7 @@ describe("mode lifecycle (19 §6, ruled 2026-08-23)", () => {
 			.values({
 				userId: user.id,
 				isGroup: false,
-				genreId: "chariot.dungeon:input/crawl@1"
+				genreId: "chariot.dungeon:inlet/crawl@1"
 			} as any)
 			.returning()
 		expect(
@@ -492,6 +537,103 @@ describe("mode lifecycle (19 §6, ruled 2026-08-23)", () => {
 		expect(
 			(await sessionGenreAvailable(db, standard.id)).available
 		).toBe(true)
+	})
+})
+
+describe("a genre upgrade seats the defaults the new version brings (U5g review, W3)", () => {
+	/**
+	 * A genre is a create spec's version row (24 §3), so two versions of one
+	 * genre are two rows: `lodge@1` declaring no envoys, `lodge@2` declaring
+	 * a default `keeper`. Rows are data — inserted directly, as the registry
+	 * rows above are.
+	 */
+	const createSpecRow = async (
+		slug: string,
+		genreId: string,
+		envoys: unknown[] | undefined
+	) => {
+		const [spec] = await db
+			.insert(schema.pipelineSpecs)
+			.values({ slug, name: slug })
+			.returning()
+		const [version] = await db
+			.insert(schema.pipelineSpecVersions)
+			.values({
+				specId: spec!.id,
+				semver: "1.0.0",
+				schemaVersion: 1,
+				canonicalHash: `${slug}-hash`,
+				status: "published",
+				publishedAt: new Date(),
+				genre: {
+					name: { en: genreId },
+					family: "chat",
+					shape: { characters: { min: 0, max: 0 }, personas: { min: 0, max: 1 } },
+					...(envoys ? { envoys } : {})
+				},
+				inputGenre: genreId,
+				inputEvent: sessionEvents.sessionCreated
+			} as any)
+			.returning()
+		await db
+			.update(schema.pipelineSpecs)
+			.set({ activeVersionId: version!.id })
+			.where(eq(schema.pipelineSpecs.id, spec!.id))
+	}
+
+	it("lodge@1 → lodge@2 seats the keeper; a seat the person unseated is not revived", async () => {
+		await createSpecRow("test.lodge:spec/create-v1", "test.lodge:genre/lodge@1", undefined)
+		await createSpecRow("test.lodge:spec/create-v2", "test.lodge:genre/lodge@2", [
+			{ key: "keeper", name: { en: "Keeper" }, default: true, speaks: "in-turn" },
+			{ key: "porter", name: { en: "Porter" }, speaks: "in-turn" }
+		])
+		const { invalidateDeclaredEnvoys, seatedEnvoys, unseatEnvoy } = await import(
+			"$lib/server/pipelines/entities/envoys"
+		)
+		invalidateDeclaredEnvoys()
+
+		const [user] = await db
+			.insert(schema.users)
+			.values({ username: "lodge-upgrade", isAdmin: false })
+			.returning()
+		const [session] = await db
+			.insert(schema.sessions)
+			.values({ userId: user!.id, isGroup: false, genreId: "test.lodge:genre/lodge@1" } as any)
+			.returning()
+		const seats = () =>
+			db
+				.select({
+					envoySlug: schema.sessionCharacters.envoySlug,
+					removedAt: schema.sessionCharacters.removedAt
+				})
+				.from(schema.sessionCharacters)
+				.where(eq(schema.sessionCharacters.sessionId, session!.id))
+		expect(await seats()).toEqual([])
+
+		expect(
+			await upgradeSessionGenre(db, session!.id, "test.lodge:genre/lodge@2")
+		).toEqual({})
+		// The default is seated, the offered one is not, and the seat reads
+		// back joined to its declaration.
+		expect(await seats()).toEqual([{ envoySlug: "keeper", removedAt: null }])
+		expect(
+			(await seatedEnvoys(db, session!.id)).map((e) => [e.slug, e.default, e.speaks])
+		).toEqual([["keeper", true, "in-turn"]])
+
+		// A person's choice survives: unseated, then a third version that
+		// still declares the keeper as default does not put it back.
+		await unseatEnvoy(db, session!.id, "keeper")
+		await createSpecRow("test.lodge:spec/create-v3", "test.lodge:genre/lodge@3", [
+			{ key: "keeper", name: { en: "Keeper" }, default: true, speaks: "in-turn" }
+		])
+		invalidateDeclaredEnvoys()
+		expect(
+			await upgradeSessionGenre(db, session!.id, "test.lodge:genre/lodge@3")
+		).toEqual({})
+		const after = await seats()
+		expect(after.length).toBe(1)
+		expect(after[0]!.envoySlug).toBe("keeper")
+		expect(after[0]!.removedAt).not.toBeNull()
 	})
 })
 
@@ -547,7 +689,7 @@ describe("session actions resolve through session, preset, then default", () => 
 
 	it("starts a companion on, with the default answering", async () => {
 		const n = await narrate()
-		// core:spec/narrate contributing to core:input/user-message@1 — same
+		// core:spec/narrate contributing to core:inlet/user-message@1 — same
 		// namespace, so a companion by the mechanical rule.
 		expect(n.origin).toBe("companion")
 		expect(n.enabled).toBe(true)
@@ -620,13 +762,13 @@ describe("session actions resolve through session, preset, then default", () => 
 		const r = await setSessionFunction(
 			db,
 			sessionId,
-			"core:input/other@1",
+			"core:inlet/other@1",
 			"narrate",
 			false,
 			{ userId, isAdmin: true }
 		)
 		expect(r.ok).toBe(false)
-		expect(r.error).toMatch(/not .*core:input\/other@1|is in/)
+		expect(r.error).toMatch(/not .*core:inlet\/other@1|is in/)
 	})
 })
 
@@ -968,7 +1110,7 @@ describe("a session runs on a preset", () => {
  * Bucket membership is both ends of the pipeline (19 §0).
  *
  * ⚠ This exists because the `respond` bucket checked only the entry input.
- * `core:spec/graph-build` pins `core:input/user-message@1` — it reads a session
+ * `core:spec/graph-build` pins `core:inlet/user-message@1` — it reads a session
  * exactly the way a reply does — and writes a *graph proposal*. Without the
  * primary-write half of the signature it sat in the standard mode's respond
  * bucket, so "which pipeline answers a message" could resolve to the graph
@@ -979,6 +1121,191 @@ describe("a session runs on a preset", () => {
  * rode on an unordered SELECT: a freshly seeded database happened to return
  * the right spec first, and a long-lived one did not.
  */
+/**
+ * R-6 (ruled 2026-09-15, built 2026-09-16): a session's own binding resolves
+ * before its preset — a session is a work, not a preference (12 §2). Until
+ * this the preset answered first and the session's own row could never win,
+ * which inverted the one ordering rule the layer model states.
+ *
+ * Three pins: the session's binding beats the preset; a session binding whose
+ * spec is no longer a candidate falls through to the preset (eligibility is
+ * re-checked at every layer, as it always was); and the instance's binding
+ * still sits below the preset.
+ */
+describe("a session's own binding beats its preset (R-6)", () => {
+	const OTHER = "test:spec/respond-other"
+	let presetId: number
+	let sessionId: number
+	let otherSpecId: number
+	let graphSpecId: number
+	let respondSpecId: number
+
+	/** A second pipeline answering the same lock, so "which layer chose" is visible. */
+	async function cloneRespondSpec(slug: string): Promise<number> {
+		const [spec] = (await db
+			.insert(schema.pipelineSpecs)
+			.values({ slug, name: slug })
+			.returning()) as any[]
+		const [version] = (await db
+			.insert(schema.pipelineSpecVersions)
+			.values({
+				specId: spec.id,
+				semver: "1.0.0",
+				status: "published",
+				canonicalHash: `hash-${slug}`,
+				inputGenre: STANDARD_GENRE_ID,
+				inputEvent: "core:event/message-respond@1",
+				publishedAt: new Date()
+			})
+			.returning()) as any[]
+		// The bucket is structural at both ends (19 §0): a respond candidate
+		// must write a session message.
+		await db.insert(schema.pipelineNodes).values({
+			specVersionId: version.id,
+			nodeKey: "write",
+			kind: "outlet",
+			definitionId: "core:outlet/create-message",
+			position: 0
+		})
+		await db
+			.update(schema.pipelineSpecs)
+			.set({ activeVersionId: version.id })
+			.where(eq(schema.pipelineSpecs.id, spec.id))
+		return spec.id
+	}
+
+	const bindAt = async (
+		scopeKind: "session" | "instance",
+		scopeId: number,
+		specId: number
+	) =>
+		db.insert(schema.pipelineFunctionBindings).values({
+			scopeKind,
+			scopeId,
+			genreId: STANDARD_GENRE_ID,
+			functionKey: "respond",
+			specId
+		})
+	const unbind = async () =>
+		db
+			.delete(schema.pipelineFunctionBindings)
+			.where(eq(schema.pipelineFunctionBindings.genreId, STANDARD_GENRE_ID))
+
+	const verdict = async () => {
+		const { resolveFunctionVerdict } = await import(
+			"$lib/server/pipelines/entities/sessionGenres"
+		)
+		return resolveFunctionVerdict(db, STANDARD_GENRE_ID, "respond", {
+			sessionId
+		})
+	}
+
+	beforeAll(async () => {
+		otherSpecId = await cloneRespondSpec(OTHER)
+		const [graph] = await db
+			.select()
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, "core:spec/graph-build"))
+			.limit(1)
+		graphSpecId = graph!.id
+		const [respond] = await db
+			.select()
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+			.limit(1)
+		respondSpecId = respond!.id
+
+		// A preset binding the reply to the shipped pipeline, and a session
+		// born on it.
+		const [preset] = (await db
+			.insert(schema.sessionPresets)
+			.values({
+				name: "R-6 preset",
+				genreId: STANDARD_GENRE_ID,
+				bindings: {
+					"core:event/message-respond@1": { spec: RESPOND_SPEC_ID }
+				}
+			})
+			.returning()) as any[]
+		presetId = preset.id
+		const [u] = await db
+			.insert(schema.users)
+			.values({ username: "r6-owner", isAdmin: false })
+			.returning()
+		const [c] = (await db
+			.insert(schema.sessions)
+			.values({
+				userId: u.id,
+				isGroup: false,
+				genreId: STANDARD_GENRE_ID,
+				presetId
+			})
+			.returning()) as any[]
+		sessionId = c.id
+	}, 60_000)
+
+	it("with no binding of its own, the preset decides", async () => {
+		await unbind()
+		expect((await verdict()).spec).toBe(RESPOND_SPEC_ID)
+	})
+
+	it("a session binding beats its preset", async () => {
+		await unbind()
+		await bindAt("session", sessionId, otherSpecId)
+		try {
+			const v = await verdict()
+			expect(v.spec).toBe(OTHER)
+			// The preset was never asked, so there is no substitution to report.
+			expect(v.fallback).toBeUndefined()
+		} finally {
+			await unbind()
+		}
+	})
+
+	it("a session binding whose spec is no longer a candidate falls through to the preset", async () => {
+		// graph-build reads the standard genre's sessions but writes a
+		// proposal, so it is not in the respond bucket (19 §0): the row exists
+		// and cannot win, and the next layer — the preset — answers.
+		await unbind()
+		await bindAt("session", sessionId, graphSpecId)
+		try {
+			expect((await verdict()).spec).toBe(RESPOND_SPEC_ID)
+		} finally {
+			await unbind()
+		}
+	})
+
+	it("an instance binding still sits below the preset", async () => {
+		await unbind()
+		await bindAt("instance", 0, otherSpecId)
+		try {
+			// The preset's session: the preset wins over the instance row.
+			expect((await verdict()).spec).toBe(RESPOND_SPEC_ID)
+			// A session on no preset: the instance row is the top layer left.
+			const { resolveFunctionVerdict } = await import(
+				"$lib/server/pipelines/entities/sessionGenres"
+			)
+			expect(
+				(await resolveFunctionVerdict(db, STANDARD_GENRE_ID, "respond"))
+					.spec
+			).toBe(OTHER)
+		} finally {
+			await unbind()
+		}
+	})
+
+	it("the session's binding beats the instance's as well", async () => {
+		await unbind()
+		await bindAt("instance", 0, respondSpecId)
+		await bindAt("session", sessionId, otherSpecId)
+		try {
+			expect((await verdict()).spec).toBe(OTHER)
+		} finally {
+			await unbind()
+		}
+	})
+})
+
 describe("the respond bucket is read *and* write", () => {
 	it("resolves the standard mode to the reply pipeline", async () => {
 		const slug = await resolveFunctionSpec(
@@ -1004,15 +1331,15 @@ describe("the respond bucket is read *and* write", () => {
 		expect(
 			mine.some(
 				(n) =>
-					n.kind === "input" && n.typeId === "core:input/user-message"
+					n.kind === "inlet" && n.definitionId === "core:inlet/user-message"
 			),
 			"the fixture no longer reproduces the case"
 		).toBe(true)
 		expect(
 			mine.some(
 				(n) =>
-					n.kind === "consumer" &&
-					n.typeId === "core:consumer/create-message"
+					n.kind === "outlet" &&
+					n.definitionId === "core:outlet/create-message"
 			)
 		).toBe(false)
 

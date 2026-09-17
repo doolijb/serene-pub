@@ -95,6 +95,29 @@ async function inviteHostOptions(): Promise<Sockets.Invites.HostOption[]> {
 	return options
 }
 
+/**
+ * The invite list, as one function, so the two cascades below can be handed the
+ * BUILDER rather than the handler.
+ *
+ * It is three reads — the invites, every username to label the account ones,
+ * and the host options (which themselves read the allowlist) — and `invites:list`
+ * is gated, so with the admin Invites page closed none of them are paid at all.
+ * Skipping the emit alone would save nothing; the queries are the cost.
+ */
+async function buildInvitesList(): Promise<Sockets.Invites.List.Response> {
+	const rows = await listInvites()
+	const users = await db.query.users.findMany({
+		columns: { id: true, username: true }
+	})
+	const nameById = new Map(users.map((u) => [u.id, u.username]))
+	return {
+		invites: rows.map((r) =>
+			toView(r, r.userId ? nameById.get(r.userId) : null)
+		),
+		hostOptions: await inviteHostOptions()
+	}
+}
+
 export const invitesList: Handler<
 	Sockets.Invites.List.Params,
 	Sockets.Invites.List.Response
@@ -102,17 +125,7 @@ export const invitesList: Handler<
 	event: "invites:list",
 	handler: async (socket, _params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
-		const rows = await listInvites()
-		const users = await db.query.users.findMany({
-			columns: { id: true, username: true }
-		})
-		const nameById = new Map(users.map((u) => [u.id, u.username]))
-		const res: Sockets.Invites.List.Response = {
-			invites: rows.map((r) =>
-				toView(r, r.userId ? nameById.get(r.userId) : null)
-			),
-			hostOptions: await inviteHostOptions()
-		}
+		const res = await buildInvitesList()
 		emitToUser("invites:list", res)
 		return res
 	}
@@ -146,7 +159,9 @@ export const invitesCreate: Handler<
 				expiresAt: invite.expiresAt
 			}
 			emitToUser("invites:create", res)
-			await invitesList.handler(socket, {}, emitToUser)
+			// Lazy: the list this admin is showing is now one row short of the
+			// truth — for whoever is showing one. See `buildInvitesList`.
+			await emitToUser("invites:list", () => buildInvitesList())
 			return res
 		} catch (err) {
 			failWith("invites:create", emitToUser, err)
@@ -164,7 +179,8 @@ export const invitesRevoke: Handler<
 		await revokeInvite(params.id)
 		const res: Sockets.Invites.Revoke.Response = { success: true }
 		emitToUser("invites:revoke", res)
-		await invitesList.handler(socket, {}, emitToUser)
+		// Lazy, for the reason given in `invitesCreate` above.
+		await emitToUser("invites:list", () => buildInvitesList())
 		return res
 	}
 }

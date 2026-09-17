@@ -1,7 +1,7 @@
 <script lang="ts">
 	/**
 	 * The whole pipeline, drawn: every node, and every control-flow construct —
-	 * fan-outs, maps, loops, routes — as forks, frames, stacks, and return
+	 * gathers, for-eaches, loops, junctions — as forks, frames, stacks, and return
 	 * edges. Extracted from the workspace page (22, rebuilt 23-era) so the map
 	 * is one subject with one owner; the page composes it beside the inspector.
 	 *
@@ -55,7 +55,7 @@
 	/** Open by default: the map exists to show the whole pipeline. */
 	let expanded = $state<Record<string, boolean>>({})
 	const isOpen = (id: string) => expanded[id] ?? true
-	const allBlockIds = $derived((graph?.blocks ?? []).map((b) => b.id))
+	const allBlockIds = $derived((graph?.clauses ?? []).map((b) => b.id))
 	const anyCollapsed = $derived(allBlockIds.some((id) => !isOpen(id)))
 	function setAllExpanded(open: boolean) {
 		for (const id of allBlockIds) expanded[id] = open
@@ -68,7 +68,7 @@
 		| {
 				kind: "block"
 				id: string
-				blockKind: string
+				clauseKind: string
 				chains: { chain: string; nodes: GraphNode[] }[]
 		  }
 
@@ -77,22 +77,22 @@
 	const rows = $derived.by((): Row[] => {
 		const out: Row[] = []
 		for (const node of graph?.nodes ?? []) {
-			if (!node.blockId) {
+			if (!node.clauseId) {
 				out.push({ kind: "node", node })
 				continue
 			}
 			const last = out.at(-1)
 			const block =
-				last?.kind === "block" && last.id === node.blockId
+				last?.kind === "block" && last.id === node.clauseId
 					? last
 					: (out.push({
 							kind: "block",
-							id: node.blockId,
-							blockKind: node.blockKind ?? "async",
+							id: node.clauseId,
+							clauseKind: node.clauseKind ?? "gather",
 							chains: []
 						}),
 						out.at(-1) as Extract<Row, { kind: "block" }>)
-			const chainKey = node.blockChain ?? ""
+			const chainKey = node.clauseChain ?? ""
 			const chain = block.chains.find((c) => c.chain === chainKey)
 			if (chain) chain.nodes.push(node)
 			else block.chains.push({ chain: chainKey, nodes: [node] })
@@ -101,7 +101,7 @@
 	})
 
 	const blockOf = (id: string) =>
-		(graph?.blocks ?? []).find((b) => b.id === id)
+		(graph?.clauses ?? []).find((b) => b.id === id)
 
 	const countsFor = (step: Sockets.Pipelines.Step) => {
 		const all = [...step.options, ...step.advanced]
@@ -131,8 +131,8 @@
 	 * A route branch's predicate, as the sentence its declaration is (20 §10):
 	 * "when call = search" / "when hasText" / "otherwise".
 	 */
-	const routeWhen = (blockId: string, chain: string): string | null => {
-		const r = blockOf(blockId)?.routes?.[chain]
+	const routeWhen = (clauseId: string, chain: string): string | null => {
+		const r = blockOf(clauseId)?.branches?.[chain]
 		if (!r) return null
 		if (r.default) return "otherwise"
 		const subject = r.path ? r.path : "value"
@@ -155,24 +155,24 @@
 			.replace(/^./, (c) => c.toUpperCase())
 
 	const BLOCK_LABEL: Record<string, string> = {
-		async: "Fan-out",
-		map: "For each",
+		gather: "Gather",
+		each: "For each",
 		loop: "Loop",
-		route: "Route"
+		junction: "Junction"
 	}
 
 	const BLOCK_EDGE: Record<string, string> = {
-		async: "border-l-success-500",
-		map: "border-l-tertiary-500",
+		gather: "border-l-success-500",
+		each: "border-l-tertiary-500",
 		loop: "border-l-warning-500",
-		route: "border-l-secondary-500"
+		junction: "border-l-secondary-500"
 	}
 
 	/** The counts line: what this construct does, said in its own terms. */
 	const blockMeta = (id: string, fallbackKind: string, branches: number) => {
 		const b = blockOf(id)
 		const kind = b?.kind ?? fallbackKind
-		if (kind === "map")
+		if (kind === "each")
 			return [
 				b?.over ? `over ${b.over}` : null,
 				b?.max ? `up to ${b.max}×` : null,
@@ -188,7 +188,7 @@
 			]
 				.filter(Boolean)
 				.join(" · ")
-		if (kind === "route")
+		if (kind === "junction")
 			return [
 				b?.on ? `on ${b.on}` : null,
 				`${branches} branch${branches === 1 ? "" : "es"}`,
@@ -205,19 +205,19 @@
 	 * edge reads as a key, a wash reads as decoration.
 	 */
 	const KIND_STRIPE: Record<string, string> = {
-		input: "bg-surface-400-600",
+		inlet: "bg-surface-400-600",
 		query: "bg-success-500",
 		task: "bg-primary-500",
-		provider: "bg-warning-500",
-		consumer: "bg-error-500"
+		oracle: "bg-warning-500",
+		outlet: "bg-error-500"
 	}
 
 	const KIND_MEANING: Record<string, string> = {
-		input: "the trigger",
+		inlet: "where the run enters",
 		query: "reads data",
 		task: "transforms",
-		provider: "calls a model",
-		consumer: "writes data"
+		oracle: "calls out — a model, a tool, a person",
+		outlet: "writes, attaches or emits"
 	}
 	const legendKinds = $derived(
 		[...new Set((graph?.nodes ?? []).map((n) => n.kind))].filter(
@@ -226,13 +226,13 @@
 	)
 
 	const BLOCK_MEANING: Record<string, string> = {
-		async: "chains run side by side, results gathered",
-		map: "runs its body once per item in a list",
+		gather: "chains run side by side, results gathered",
+		each: "runs its body once per item in a list",
 		loop: "runs its body again until done (bounded)",
-		route: "branches on a value — any subset may fire"
+		junction: "branches on a value — any subset may fire"
 	}
 	const legendBlocks = $derived(
-		[...new Set((graph?.blocks ?? []).map((b) => b.kind))].filter(
+		[...new Set((graph?.clauses ?? []).map((b) => b.kind))].filter(
 			(k) => k in BLOCK_MEANING
 		)
 	)
@@ -241,18 +241,18 @@
 
 	const counts = $derived.by(() => {
 		const nodes = graph?.nodes ?? []
-		const blocks = graph?.blocks ?? []
+		const clauses = graph?.clauses ?? []
 		const branches = new Set(
 			nodes
-				.filter((n) => n.blockId)
-				.map((n) => `${n.blockId}/${n.blockChain}`)
+				.filter((n) => n.clauseId)
+				.map((n) => `${n.clauseId}/${n.clauseChain}`)
 		)
 		return {
 			steps: nodes.length,
-			fanOuts: blocks.filter((b) => b.kind === "async").length,
-			maps: blocks.filter((b) => b.kind === "map").length,
-			loops: blocks.filter((b) => b.kind === "loop").length,
-			routes: blocks.filter((b) => b.kind === "route").length,
+			gathers: clauses.filter((b) => b.kind === "gather").length,
+			eaches: clauses.filter((b) => b.kind === "each").length,
+			loops: clauses.filter((b) => b.kind === "loop").length,
+			junctions: clauses.filter((b) => b.kind === "junction").length,
 			branches: branches.size
 		}
 	})
@@ -260,15 +260,17 @@
 	const countLine = $derived(
 		[
 			`${counts.steps} steps`,
-			counts.fanOuts
-				? `${counts.fanOuts} fan-out${counts.fanOuts === 1 ? "" : "s"}`
+			counts.gathers
+				? `${counts.gathers} gather${counts.gathers === 1 ? "" : "s"}`
 				: null,
-			counts.maps ? `${counts.maps} map${counts.maps === 1 ? "" : "s"}` : null,
+			counts.eaches
+				? `${counts.eaches} for-each${counts.eaches === 1 ? "" : "es"}`
+				: null,
 			counts.loops
 				? `${counts.loops} loop${counts.loops === 1 ? "" : "s"}`
 				: null,
-			counts.routes
-				? `${counts.routes} route${counts.routes === 1 ? "" : "s"}`
+			counts.junctions
+				? `${counts.junctions} junction${counts.junctions === 1 ? "" : "s"}`
 				: null,
 			counts.branches
 				? `${counts.branches} branch${counts.branches === 1 ? "" : "es"}`
@@ -540,7 +542,7 @@
 						<div class="flex flex-col">
 							<div
 								class="border-surface-300-700 flex items-stretch self-start rounded-md border border-l-2 {BLOCK_EDGE[
-									row.blockKind
+									row.clauseKind
 								] ?? 'border-l-tertiary-500'}"
 							>
 								<button
@@ -548,8 +550,8 @@
 									class="px-2 opacity-70 hover:opacity-100"
 									aria-expanded={open}
 									aria-label={open
-										? `Collapse ${row.blockKind} group`
-										: `Expand ${row.blockKind} group, ${members.length} steps`}
+										? `Collapse ${row.clauseKind} group`
+										: `Expand ${row.clauseKind} group, ${members.length} steps`}
 									onclick={() => (expanded[row.id] = !open)}
 								>
 									<Icons.ChevronDown
@@ -575,19 +577,19 @@
 									}}
 								>
 									<span class="{LEGEND} flex items-center gap-1">
-										{#if row.blockKind === "loop" || row.blockKind === "map"}
+										{#if row.clauseKind === "loop" || row.clauseKind === "each"}
 											<Icons.Repeat
 												size={11}
 												aria-hidden="true"
 											/>
-										{:else if row.blockKind === "route"}
+										{:else if row.clauseKind === "junction"}
 											<Icons.GitBranch
 												size={11}
 												aria-hidden="true"
 											/>
 										{/if}
-										{BLOCK_LABEL[row.blockKind] ??
-											row.blockKind}
+										{BLOCK_LABEL[row.clauseKind] ??
+											row.clauseKind}
 									</span>
 									<span class="truncate text-xs font-semibold">
 										{humanizeBlockName(row.id)}
@@ -595,7 +597,7 @@
 									<span
 										class="text-surface-600-400 shrink-0 text-[11px]"
 									>
-										{blockMeta(row.id, row.blockKind, n)}
+										{blockMeta(row.id, row.clauseKind, n)}
 									</span>
 									{#if bCounts?.overridden}
 										<span
@@ -649,7 +651,7 @@
 																c.chain
 															)}
 														</span>
-														{#if row.blockKind === "route" && routeWhen(row.id, c.chain)}
+														{#if row.clauseKind === "junction" && routeWhen(row.id, c.chain)}
 															<span
 																class="text-secondary-500 truncate font-mono text-[9px]"
 															>
@@ -666,7 +668,7 @@
 															? "contents"
 															: "flex flex-1 items-center gap-2"}
 													>
-														{#if row.blockKind === "map"}
+														{#if row.clauseKind === "each"}
 															<!-- One declared node
 															     standing for many
 															     runs, drawn as a
@@ -736,7 +738,7 @@
 										</div>
 										{@render forkBar(n, "join")}
 									</div>
-									{#if row.blockKind === "loop"}
+									{#if row.clauseKind === "loop"}
 										<!-- The return edge, said typographically. -->
 										<div
 											class="text-surface-600-400 flex items-center gap-1.5 pt-1 pb-0.5 pl-1 text-[10px]"

@@ -16,13 +16,15 @@
 	 * shown and labelled, never hidden. Admin-only, checked here and again in
 	 * every handler.
 	 */
-	import { getContext, onDestroy, onMount } from "svelte"
+	import { getContext, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { goto, replaceState } from "$app/navigation"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { getInterestContext } from "$lib/client/sockets/interest.svelte"
 
 	const userCtx: { user: SelectUser } = getContext("userCtx")
 	const socket = useTypedSocket()
+	const interest = getInterestContext()
 
 	type Pipeline = Sockets.Pipelines.Namespace
 	type Run = Sockets.Pipelines.Runs.Response["runs"][number]
@@ -43,7 +45,9 @@
 		typeof window !== "undefined"
 			? new URLSearchParams(window.location.search)
 			: new URLSearchParams()
-	let selectedSlug = $state<string | null>(initialParams.get("spec"))
+	/** Read once, non-reactively: what the page opened on, not where it is now. */
+	const deepLinkSlug = initialParams.get("spec")
+	let selectedSlug = $state<string | null>(deepLinkSlug)
 
 	let specDetail = $state<Sockets.Pipelines.Detail.Response["spec"] | null>(
 		null
@@ -88,9 +92,6 @@
 		} catch {}
 	})
 
-	// Named so `off` can name them too. A bare `socket.off("pipelines:list")`
-	// removes EVERY listener for that event — including any other open
-	// page's, which then stops updating for the rest of the session.
 	const onList = (res: Sockets.Pipelines.List.Response) => {
 		list = res.pipelinesList
 		loading = false
@@ -104,28 +105,62 @@
 			goto("/")
 			return
 		}
-		socket.on("pipelines:list", onList)
-		socket.on("pipelines:runs", onRuns)
-		socket.on("pipelines:detail", onDetail)
-		socket.on("pipelines:get", onGet)
-		socket.on("sessions:genres", onModes)
-		socket.emit("pipelines:list", {})
-		socket.emit("pipelines:runs", { limit: 300 })
-		socket.emit("sessions:genres", {})
-		// A ?spec= deep link fetches its preview immediately.
-		if (selectedSlug) {
+	})
+
+	/**
+	 * Everything this page reads, each key declared before the request that
+	 * needs it goes out.
+	 *
+	 * `list` and `runs` are asked for and listened for in one — each has a
+	 * single request site here. `detail` and `get` are asked for from two (the
+	 * `?spec=` deep link below and every `select()`), so their interest stands
+	 * for as long as the page does and the requests stay plain emits. All four
+	 * BARE: none of them is about one session.
+	 *
+	 * The app-wide interest context, not `adminInterest`: `pipelines:` is a
+	 * MIXED family — most of its handlers answer every user — so these are
+	 * ordinary keys, and the admin check here is the same one the redirect
+	 * above makes. "sessions:genres" is asked for by the interest below.
+	 */
+	$effect(() => {
+		if (!userCtx.user?.isAdmin) return
+		const releases = [
+			interest.declareInterest<"pipelines:detail">(
+				"pipelines:detail",
+				onDetail
+			),
+			interest.declareInterest<"pipelines:get">("pipelines:get", onGet),
+			interest.requestWithInterest("pipelines:list", {}, onList),
+			interest.requestWithInterest(
+				"pipelines:runs",
+				{ limit: 300 },
+				onRuns
+			)
+		]
+		// A ?spec= deep link fetches its preview immediately — after the two
+		// declares above, so the keys are on the wire before the requests.
+		if (deepLinkSlug) {
 			detailLoading = true
-			socket.emit("pipelines:detail", { slug: selectedSlug })
-			socket.emit("pipelines:get", { slug: selectedSlug })
+			socket.emit("pipelines:detail", { slug: deepLinkSlug })
+			socket.emit("pipelines:get", { slug: deepLinkSlug })
+		}
+		return () => {
+			for (const release of releases) release()
 		}
 	})
 
-	onDestroy(() => {
-		socket.off("pipelines:list", onList)
-		socket.off("pipelines:runs", onRuns)
-		socket.off("pipelines:detail", onDetail)
-		socket.off("pipelines:get", onGet)
-		socket.off("sessions:genres", onModes)
+	/**
+	 * The genre list this page labels its specs with, asked for and listened for
+	 * in one. BARE — `sessions:genres` is the registry of types, not one
+	 * session's anything.
+	 *
+	 * The app-wide interest context, not `adminInterest`: `sessions:` is not a
+	 * restricted interest family, so this is an ordinary key, and the admin
+	 * check is the same one the redirect above makes.
+	 */
+	$effect(() => {
+		if (!userCtx.user?.isAdmin) return
+		return interest.requestWithInterest("sessions:genres", {}, onModes)
 	})
 
 	/* ── the facets (23 §4): claims, never parsed slugs ─────────────── */
@@ -249,14 +284,20 @@
 	const structureLine = $derived.by(() => {
 		const g = specDetail?.graph
 		if (!g) return null
-		const blocks = g.blocks ?? []
-		const c = (kind: string) => blocks.filter((b) => b.kind === kind).length
+		const clauses = g.clauses ?? []
+		const c = (kind: string) => clauses.filter((b) => b.kind === kind).length
 		return [
 			`${g.nodes.length} steps`,
-			c("async") ? `${c("async")} fan-out${c("async") === 1 ? "" : "s"}` : null,
-			c("map") ? `${c("map")} map${c("map") === 1 ? "" : "s"}` : null,
+			c("gather")
+				? `${c("gather")} gather${c("gather") === 1 ? "" : "s"}`
+				: null,
+			c("each")
+				? `${c("each")} for-each${c("each") === 1 ? "" : "es"}`
+				: null,
 			c("loop") ? `${c("loop")} loop${c("loop") === 1 ? "" : "s"}` : null,
-			c("route") ? `${c("route")} route${c("route") === 1 ? "" : "s"}` : null
+			c("junction")
+				? `${c("junction")} junction${c("junction") === 1 ? "" : "s"}`
+				: null
 		]
 			.filter(Boolean)
 			.join(" · ")

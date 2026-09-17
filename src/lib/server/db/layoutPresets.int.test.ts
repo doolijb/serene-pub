@@ -77,8 +77,7 @@ describe("a genre that ships an arrangement", () => {
 		])
 		expect(layout.widgetGrid.widgets.map((w: any) => w.id)).toEqual([
 			"world-state",
-			"messages",
-			"composer"
+			"messages"
 		])
 	}, 60_000)
 

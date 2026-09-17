@@ -54,7 +54,7 @@ export interface EmbeddingModelOption {
 
 /** What a concrete embedding-adapter module default-exports. */
 export interface EmbeddingAdapterExports {
-	Adapter: new (connection: SelectConnection) => BaseEmbeddingAdapter
+	Adapter: new (connection: AdapterConnection) => BaseEmbeddingAdapter
 	/**
 	 * What this endpoint can embed with.
 	 *
@@ -88,9 +88,9 @@ export interface BaseEmbeddingAdapter
 	extends Partial<Omit<AdapterActions, "embedText">> {}
 
 export abstract class BaseEmbeddingAdapter implements AdapterActions {
-	connection: SelectConnection
+	connection: AdapterConnection
 
-	constructor(connection: SelectConnection) {
+	constructor(connection: AdapterConnection) {
 		this.connection = connection
 	}
 

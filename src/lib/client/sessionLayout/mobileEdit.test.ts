@@ -32,7 +32,7 @@ const middle = (): GsLayout => ({
 	rows: 12,
 	items: [
 		{ id: "messages", x: 0, y: 0, w: 4, h: 9 },
-		{ id: "composer", x: 0, y: 9, w: 4, h: 3 }
+		{ id: "world-state", x: 0, y: 9, w: 4, h: 3 }
 	]
 })
 
@@ -153,12 +153,12 @@ describe("moveRow — one step up or down", () => {
 	})
 
 	it("keeps each group's own height when they differ", () => {
-		const next = moveRow(middle(), "composer", -1)
+		const next = moveRow(middle(), "world-state", -1)
 		expect(mobileRows(next).map((r) => r.key)).toEqual([
-			"composer",
+			"world-state",
 			"messages"
 		])
-		expect(next.items.find((i) => i.id === "composer")!.h).toBe(3)
+		expect(next.items.find((i) => i.id === "world-state")!.h).toBe(3)
 		expect(next.items.find((i) => i.id === "messages")!.h).toBe(9)
 	})
 
@@ -225,7 +225,7 @@ describe("round trip — byte-identical apart from the intended change", () => {
 		for (const [make, key, dir] of [
 			[side, "map", -1],
 			[side, "map", 1],
-			[middle, "composer", -1],
+			[middle, "world-state", -1],
 			[twoD, "a", 1],
 			[grouped, "solo", -1]
 		] as const) {

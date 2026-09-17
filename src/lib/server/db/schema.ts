@@ -38,6 +38,7 @@ import { SessionCharacterVisibility } from "../../shared/constants/SessionCharac
 import { SessionTypes } from "../../shared/constants/SessionTypes"
 import type { ConnectionIdentity } from "../../shared/connections/identity"
 import type { MediaFrame } from "../../shared/media/frame"
+import type { StatusText } from "@serene-pub/sdk"
 import type {
 	TunnelMode,
 	TunnelProvider,
@@ -91,7 +92,6 @@ export const userRelations = relations(users, ({ many, one }) => ({
 	sessions: many(sessions),
 	sessionGuests: many(sessionGuests),
 	tags: many(tags),
-	personas: many(personas),
 	userSettings: one(userSettings),
 	passphrases: many(passphrases)
 }))
@@ -131,12 +131,11 @@ export const userSettings = pgTable(
 		activeSummarizeSceneConfigId: integer(
 			"active_summarize_scene_config_id"
 		).references(() => sceneSummarizeConfigs.id, { onDelete: "set null" }),
-		theme: text("theme").notNull().default("hamlindigo"),
+		theme: text("theme").notNull().default("lamplight"),
 		darkMode: boolean("dark_mode").notNull().default(true),
 		showHomePageBanner: boolean("show_home_page_banner").default(true),
-		enableEasyPersonaCreation: boolean("enable_easy_persona_creation")
-			.notNull()
-			.default(true),
+		// ⚠ No `enable_easy_persona_creation`: a persona IS a character, so the
+		// one switch below governs both surfaces.
 		enableEasyCharacterCreation: boolean("enable_easy_character_creation")
 			.notNull()
 			.default(true),
@@ -545,26 +544,6 @@ export const connections = pgTable("connections", {
 	 */
 	preset: text("preset"),
 	baseUrl: text("base_url"), // Base URL or endpoint for API
-	/**
-	 * LEGACY MIRROR of the default model's identifier (0114).
-	 *
-	 * ⚠ Written by nothing but `mirrorDefaultModel()`
-	 * (`server/connections/models.ts`) and read by nothing at run time. The
-	 * endpoint/model split moved the identifier an adapter sends onto
-	 * `connection_models.model`, and the pair `(endpoint, model)` is what every
-	 * picker stores and `resolveCapabilityTarget` resolves. This column survives
-	 * the version freeze so that a downgrade, a backup restored into an older
-	 * build, and the two managed flows that still say "one connection names one
-	 * model" all keep finding the string where they have always found it.
-	 *
-	 * Kept honest by `connections/modelColumnReads.test.ts`, which greps
-	 * `$lib/server` for reads of this column and fails on any that is not the
-	 * mirror writer, the migration, or an adapter reading the ALREADY-MERGED
-	 * pair off `AdapterConnection`. A mirror nobody polices becomes a second
-	 * source of truth on the first hurried edit, and this table has already paid
-	 * for that once (`system_settings.default_connection_id`, 0181).
-	 */
-	model: text("model"),
 	// Ollama-specific options
 	extraJson: json("extra_json")
 		.notNull()
@@ -616,7 +595,20 @@ export const connections = pgTable("connections", {
 	 * same fact here, so the client normalizes blank to NULL rather than
 	 * storing two spellings of it.
 	 */
-	notes: varchar("notes", { length: 4000 })
+	notes: varchar("notes", { length: 4000 }),
+	/**
+	 * When this endpoint's model list was last reconciled against what the
+	 * service reports, and what went wrong if the last attempt could not.
+	 *
+	 * The two are a pair: `models_synced_at` moves on every attempt, and
+	 * `models_sync_error` is NULL after a successful one. A row whose error
+	 * is set therefore reads "last checked at T, and the host could not be
+	 * listed then" — the sentence the sidebar shows beside the endpoint. A
+	 * failed listing touches no model row (see `syncConnectionModels`), so
+	 * an unreachable host never marks anything missing by accident.
+	 */
+	modelsSyncedAt: timestamp("models_synced_at"),
+	modelsSyncError: text("models_sync_error")
 })
 
 /**
@@ -624,8 +616,8 @@ export const connections = pgTable("connections", {
  *
  * `connections` stays the ENDPOINT (its id, and every foreign key pointing at
  * it, is untouched — see the table above), and this table holds the models
- * reachable through it. Selection everywhere is a PAIR, and where a pair
- * names only the endpoint, `is_default` says which model it meant.
+ * reachable through it. Selection everywhere is a PAIR, and both halves are
+ * required: connections have no default model.
  *
  * Rows, not a JSON array on the connection: `connection_defaults.connection_model_id`
  * and the pipeline config's provider slot both REFERENCE a model, and a
@@ -655,9 +647,7 @@ export const connectionModels = pgTable(
 			.references(() => connections.id, { onDelete: "cascade" }),
 		/**
 		 * What the ADAPTER sends: `llama3.1:8b`, `gpt-4o`, `Mistral-7B.gguf`.
-		 *
-		 * The same string shape `connections.model` holds, so an adapter reading
-		 * `this.connection.model` off the merged pair needs no edit.
+		 * An adapter reads it off the merged pair, never off the endpoint.
 		 */
 		model: text("model").notNull(),
 		/**
@@ -674,16 +664,6 @@ export const connectionModels = pgTable(
 		 * it.
 		 */
 		enabled: boolean("enabled").notNull().default(true),
-		/**
-		 * The model a pair naming only the endpoint resolves to.
-		 *
-		 * At most one per endpoint, enforced BY THE DATABASE below rather than
-		 * by whichever handler last wrote — two defaults is not a display bug,
-		 * it is a run resolving to whichever row the query happened to order
-		 * first, which is the class of failure `system_settings`'
-		 * two-spellings-of-one-fact cost a release for.
-		 */
-		isDefault: boolean("is_default").notNull().default(false),
 		/**
 		 * This MODEL's capability layer, in the same `{resolved, overrides,
 		 * probe}` shape the endpoint's column holds (`StoredCapabilities`).
@@ -753,6 +733,26 @@ export const connectionModels = pgTable(
 			.$type<Record<string, any>>(),
 		/** Display order within the endpoint. Ties break on `name`. */
 		sortOrder: integer("sort_order").notNull().default(0),
+		/**
+		 * When the service STOPPED listing this model, or NULL while it still
+		 * does (or while nothing has ever checked).
+		 *
+		 * Set by `syncConnectionModels` when a successful listing of the
+		 * endpoint omits this identifier, kept at its FIRST value
+		 * across repeated syncs so the sidebar can say "not listed since
+		 * Tuesday" rather than "not listed as of just now", and cleared the
+		 * moment a listing names it again. A missing model is unavailable
+		 * everywhere: the resolver refuses it at dispatch, the star refuses
+		 * it, and every picker shows it greyed with the reason — the row is
+		 * kept, not deleted, so the selections and overrides naming it survive
+		 * the model coming back.
+		 *
+		 * ⚠ Only a SUCCESSFUL listing writes this. An unreachable host is a
+		 * connection problem, not evidence about any model, and marking a
+		 * whole endpoint missing because it was asleep would be exactly the
+		 * silent unconfiguring this column exists to make visible.
+		 */
+		missingSince: timestamp("missing_since"),
 		createdAt: timestamp("created_at").notNull().defaultNow(),
 		updatedAt: timestamp("updated_at")
 			.notNull()
@@ -760,17 +760,6 @@ export const connectionModels = pgTable(
 			.$onUpdate(() => new Date())
 	},
 	(t) => [
-		/**
-		 * EXACTLY ONE default per endpoint. Partial, so any number of
-		 * non-default rows coexist — the `tunnels_one_enabled_per_server`
-		 * precedent, for the same class of reason: the thing it prevents is not
-		 * cosmetic. Two defaults means "the endpoint's model" is whichever row
-		 * the planner returned first, and that answer can change between two
-		 * runs with no write in between.
-		 */
-		uniqueIndex("connection_models_one_default")
-			.on(t.connectionId)
-			.where(sql`${t.isDefault}`),
 		/**
 		 * One row per model identifier per endpoint. `importFromProbe` re-run
 		 * against the same host is the normal case, not the exotic one, and it
@@ -1505,9 +1494,8 @@ export const lorebookBindings = pgTable(
 		characterId: integer("character_id").references(() => characters.id, {
 			onDelete: "set null"
 		}),
-		personaId: integer("persona_id").references(() => personas.id, {
-			onDelete: "set null"
-		}),
+		// ⚠ No `persona_id`: a persona is a character, so a persona binding IS
+		// a character binding and `character_id` is the only bound arc.
 		binding: text("binding").notNull(), // e.g. "{{char:1}}" (preferred) or "{char:1}" (deprecated)
 		// ── Narrative-graph fields (merged in from the former narrativeNodes
 		// table — every binding is also this character's graph presence now;
@@ -1519,9 +1507,9 @@ export const lorebookBindings = pgTable(
 			(): AnyPgColumn => lorebookEntries.id,
 			{ onDelete: "set null" }
 		),
-		// Display name — kept in sync with the bound character/persona's own
-		// name when characterId/personaId is set (see syncLorebookBindings*
-		// helpers); user/LLM-set directly for unbound/background rows.
+		// Display name — kept in sync with the bound character's own name when
+		// characterId is set (see syncLorebookBindings* helpers);
+		// user/LLM-set directly for unbound/background rows.
 		name: text("name").notNull().default(""),
 		nodeState: text("node_state")
 			.notNull()
@@ -1531,12 +1519,12 @@ export const lorebookBindings = pgTable(
 			.notNull()
 			.default("normal")
 			.$type<NodeVisibility>(),
-		// Kept in sync with the bound character/persona's own aliases, same
-		// as `name` above.
+		// Kept in sync with the bound character's own aliases, same as `name`
+		// above.
 		aliases: json("aliases").notNull().default([]).$type<string[]>(),
 		// Identities absorbed via narrativeGraph:mergeNode ("absorb"), kept
 		// deliberately separate from `aliases` — `aliases` is a one-directional
-		// sync target from the bound character/persona (see above), a full
+		// sync target from the bound character (see above), a full
 		// REPLACE on every entity edit; an absorbed name written directly into
 		// `aliases` would silently vanish the next time that sync fires. This
 		// column is never touched by the sync helpers, so an absorbed identity
@@ -1569,32 +1557,25 @@ export const lorebookBindings = pgTable(
 		// arrive from the session on their own, so a second row for the same
 		// person was never a decision a user made).
 		//
-		// Two PARTIAL indexes, not one composite. The old
-		// (lorebook_id, character_id, persona_id) unique index could never
-		// fire: exactly one of the two id columns is always NULL, NULL is
-		// distinct from NULL, and the index was not declared
-		// nullsNotDistinct — so every duplicate passed it. Splitting the two
-		// bound kinds apart and excluding the NULL side is what makes the
-		// constraint real. Background rows (both ids NULL) are outside both
-		// predicates and stay unconstrained, which is correct: they are named,
-		// not bound, and their names dedupe through
+		// PARTIAL, not composite. A plain (lorebook_id, character_id) unique
+		// index could never fire for the rows that need it excluded:
+		// `character_id` is NULL on a background row, NULL is distinct from
+		// NULL, and the index is not nullsNotDistinct — so every unbound
+		// duplicate would pass it while the bound ones were constrained by
+		// accident. Excluding the NULL side is what makes the constraint real.
+		// Background rows (no character) stay unconstrained, which is correct:
+		// they are named, not bound, and their names dedupe through
 		// resolveOrCreateBindingByName.
 		uniqueCharacterBinding: uniqueIndex(
 			"lorebook_bindings_character_unique"
 		)
 			.on(table.lorebookId, table.characterId)
 			.where(sql`"character_id" IS NOT NULL`),
-		uniquePersonaBinding: uniqueIndex("lorebook_bindings_persona_unique")
-			.on(table.lorebookId, table.personaId)
-			.where(sql`"persona_id" IS NOT NULL`),
 		lorebookIdIdx: index("lorebook_bindings_lorebook_id_idx").on(
 			table.lorebookId
 		),
 		characterIdIdx: index("lorebook_bindings_character_id_idx").on(
 			table.characterId
-		),
-		personaIdIdx: index("lorebook_bindings_persona_id_idx").on(
-			table.personaId
 		)
 	})
 )
@@ -1609,10 +1590,6 @@ export const lorebookBindingsRelations = relations(
 		character: one(characters, {
 			fields: [lorebookBindings.characterId],
 			references: [characters.id]
-		}),
-		persona: one(personas, {
-			fields: [lorebookBindings.personaId],
-			references: [personas.id]
 		}),
 		/** Entries anchored to this binding — character lore's privacy anchor. */
 		anchoredEntries: many(lorebookEntries),
@@ -2065,7 +2042,6 @@ export const tagsRelations = relations(tags, ({ many, one }) => ({
 		references: [users.id]
 	}),
 	characterTags: many(characterTags),
-	personaTags: many(personaTags),
 	lorebookTags: many(lorebookTags),
 	sessionTags: many(sessionTags)
 }))
@@ -2101,29 +2077,8 @@ export const characterTagsRelations = relations(characterTags, ({ one }) => ({
 	})
 }))
 
-export const personaTags = pgTable(
-	"persona_tags",
-	{
-		personaId: integer("persona_id")
-			.notNull()
-			.references(() => personas.id, { onDelete: "cascade" }), // FK to personas.id
-		tagId: integer("tag_id")
-			.notNull()
-			.references(() => tags.id, { onDelete: "cascade" }) // FK to tags.id
-	},
-	(t) => [uniqueIndex("persona_tags_unique").on(t.personaId, t.tagId)]
-)
-
-export const personaTagsRelations = relations(personaTags, ({ one }) => ({
-	persona: one(personas, {
-		fields: [personaTags.personaId],
-		references: [personas.id]
-	}),
-	tag: one(tags, {
-		fields: [personaTags.tagId],
-		references: [tags.id]
-	})
-}))
+// ⚠ No `persona_tags`: a persona is a character, so its labels are that
+// character's labels and `character_tags` above is the only join.
 
 export const lorebookTags = pgTable(
 	"lorebook_tags",
@@ -2172,6 +2127,61 @@ export const sessionTagsRelations = relations(sessionTags, ({ one }) => ({
 		references: [tags.id]
 	})
 }))
+
+/**
+ * A user-made grouping of characters in the library.
+ *
+ * **Not a tag.** A tag is a many-to-many label and a character wears as many as
+ * it likes; a folder is exclusive — one character, at most one folder — and it
+ * is what the library list is *grouped by*. The two answer different questions
+ * and a character having both is normal.
+ *
+ * **Not the message-model metaphor.** `messages` is an *envelope* (see its
+ * note); the word folder is this table's now.
+ *
+ * Flat by ruling: no `parentId`, so a folder never holds another folder, and it
+ * holds only characters — a lorebook or a session cannot be put in one. The
+ * character side of the relation is `characters.folder_id`, `ON DELETE SET
+ * NULL`: deleting a folder returns its characters to the top level rather than
+ * deleting them, which is the only behaviour a confirm dialog can honestly
+ * promise.
+ */
+export const characterFolders = pgTable(
+	"character_folders",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		userId: integer("user_id")
+			.notNull()
+			.references(() => users.id, { onDelete: "cascade" }),
+		name: text("name").notNull(),
+		/** Ordering within the owner's library. Ties fall back to name. */
+		position: integer("position").notNull().default(0),
+		createdAt: timestamp("created_at").notNull().defaultNow(),
+		updatedAt: timestamp("updated_at")
+			.notNull()
+			.defaultNow()
+			.$onUpdate(() => new Date())
+	},
+	(table) => [
+		index("character_folders_user_id_idx").on(table.userId),
+		// Per-owner, not global — two users may each have a "Villains".
+		uniqueIndex("character_folders_user_name_unique").on(
+			table.userId,
+			table.name
+		)
+	]
+)
+
+export const characterFoldersRelations = relations(
+	characterFolders,
+	({ one, many }) => ({
+		user: one(users, {
+			fields: [characterFolders.userId],
+			references: [users.id]
+		}),
+		characters: many(characters)
+	})
+)
 
 export const characters = pgTable(
 	"characters",
@@ -2252,6 +2262,42 @@ export const characters = pgTable(
 		creator: text("creator"), // Card creator/author, per Character Card V3 spec
 		category: text("category"), // Serene Pub-specific grouping/filter tag
 		isFavorite: boolean("is_favorite").notNull().default(false), // 1 if favorite, 0 otherwise
+		/**
+		 * "One of your personas" — a character this user plays.
+		 *
+		 * **A library fact, not a session one.** This says the character is one
+		 * the user is willing to voice; WHO IS VOICING WHOM IN A SESSION is
+		 * `session_personas`, and nothing here changes a session's cast. A
+		 * character with this false can still be attached as a session's
+		 * persona — doing so sets this flag rather than being refused.
+		 *
+		 * Set automatically the first time a character is attached as a
+		 * session's persona (every `sessionPersonas` insert goes through
+		 * `markCharacterAsPersona`), on a persona-catalog import, on an ST
+		 * persona import and by the setup wizard; togglable by hand. **Never
+		 * cleared automatically** — un-flagging is always a decision the user
+		 * made, because clearing it on the last session detach would silently
+		 * empty the persona picker.
+		 */
+		isPersona: boolean("is_persona").notNull().default(false),
+		/**
+		 * The persona a new session starts with — at most one per user, by the
+		 * partial unique index below.
+		 *
+		 * Setting it also sets `isPersona` (the two move together in one
+		 * transaction that clears the user's previous default first, so the
+		 * partial index can never be tripped by the intermediate state).
+		 */
+		isDefaultPersona: boolean("is_default_persona")
+			.notNull()
+			.default(false),
+		/**
+		 * The library folder this character is filed under, or NULL for the top
+		 * level. `ON DELETE SET NULL` — deleting a folder keeps its characters.
+		 */
+		folderId: integer("folder_id").references(() => characterFolders.id, {
+			onDelete: "set null"
+		}),
 		isDeleted: boolean("is_deleted").notNull().default(false),
 		embedding: real("embedding").array(),
 		embeddingModel: text("embedding_model"),
@@ -2260,7 +2306,14 @@ export const characters = pgTable(
 	(table) => [
 		index("characters_user_id_idx").on(table.userId),
 		// Unique per-owner, not globally — see lorebooks_uuid_idx.
-		uniqueIndex("characters_uuid_idx").on(table.userId, table.uuid)
+		uniqueIndex("characters_uuid_idx").on(table.userId, table.uuid),
+		// At most one default persona per user. PARTIAL: without the
+		// predicate this would allow exactly one non-default character per
+		// user, which is the opposite constraint.
+		uniqueIndex("characters_default_persona_unique")
+			.on(table.userId)
+			.where(sql`"is_default_persona"`),
+		index("characters_folder_id_idx").on(table.folderId)
 	]
 )
 
@@ -2285,8 +2338,14 @@ export const charactersRelations = relations(characters, ({ many, one }) => ({
 		fields: [characters.avatarMediaId],
 		references: [files.id]
 	}),
+	/** The library folder this character is filed under, if any. */
+	folder: one(characterFolders, {
+		fields: [characters.folderId],
+		references: [characterFolders.id]
+	}),
 	characterTags: many(characterTags),
 	sessionCharacters: many(sessionCharacters),
+	sessionPersonas: many(sessionPersonas),
 	sessionMessages: many(sessionMessages)
 }))
 
@@ -2295,66 +2354,16 @@ export const charactersRelations = relations(characters, ({ many, one }) => ({
 // and ordered by `position`. The two tables existed only to hold that
 // ordering, and every helper in utils/index.ts was written twice to match.
 
-export const personas = pgTable(
-	"personas",
-	{
-		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-		// Stable, DB-generated identity for export/import dedup — see lorebooks.uuid.
-		uuid: uuid("uuid")
-			.notNull()
-			.default(sql`(gen_random_uuid ())`),
-		userId: integer("user_id")
-			.notNull()
-			.references(() => users.id, { onDelete: "cascade" }), // FK to users.id
-		isDefault: boolean("is_default").notNull(), // Is this the default persona for the user?
-		/** See characters.avatarMediaId — same role-not-provenance FK. */
-		avatarMediaId: integer("avatar_media_id").references(() => files.id, {
-			onDelete: "set null"
-		}),
-		name: text("name").notNull(), // e.g. 'Warren', 'Master Desir'
-		description: text("description").notNull(), // Persona description (long text)
-		position: integer("position").default(0),
-		createdAt: date("created_at")
-			.notNull()
-			.default(sql`(CURRENT_TIMESTAMP)`), // Created at timestamp
-		updatedAt: timestamp("updated_at")
-			.default(sql`(CURRENT_TIMESTAMP)`)
-			.$onUpdate(() => new Date()), // Updated at timestamp
-		lorebookId: integer("lorebook_id").references(() => lorebooks.id, {
-			onDelete: "set null"
-		}), // Optional lorebook for this persona
-		aliases: json("aliases").notNull().default([]).$type<string[]>(),
-		summary: text("summary"),
-		creator: text("creator"), // Card creator/author, per Character Card V3 spec
-		category: text("category"), // Serene Pub-specific grouping/filter tag
-		isDeleted: boolean("is_deleted").notNull().default(false),
-		embedding: real("embedding").array(),
-		embeddingModel: text("embedding_model"),
-		vectorizedAt: timestamp("vectorized_at")
-	},
-	(table) => [
-		index("personas_user_id_idx").on(table.userId),
-		// Unique per-owner, not globally — see lorebooks_uuid_idx.
-		uniqueIndex("personas_uuid_idx").on(table.userId, table.uuid)
-	]
-)
-
-export const personasRelations = relations(personas, ({ one, many }) => ({
-	user: one(users, {
-		fields: [personas.userId],
-		references: [users.id]
-	}),
-	lorebook: one(lorebooks, {
-		fields: [personas.lorebookId],
-		references: [lorebooks.id]
-	}),
-	/** See charactersRelations.avatarMedia — same join, same two columns. */
-	avatarMedia: one(files, {
-		fields: [personas.avatarMediaId],
-		references: [files.id]
-	}),
-	personaTags: many(personaTags)
-}))
+/**
+ * ⚠ THERE IS NO `personas` TABLE, and a new one would be this schema's worst
+ * duplication: a persona is not a different KIND of row, it is a character the
+ * user voices, so a second table holds the same shape twice and every reader
+ * has to be written twice with it.
+ *
+ * The word survives wherever it names the *role*: `characters.is_persona` (a
+ * library fact), `session_personas` (who is voicing whom — the fact that
+ * actually varies per session), `messages.persona_id`, `{{persona}}`.
+ */
 
 // Sessions (group or 1:1)
 export const sessions = pgTable(
@@ -2408,10 +2417,6 @@ export const sessions = pgTable(
 		lorebookId: integer("lorebook_id").references(() => lorebooks.id, {
 			onDelete: "set null"
 		}),
-		connectionId: integer("connection_id").references(
-			() => connections.id,
-			{ onDelete: "set null" }
-		),
 		samplingConfigId: integer("sampling_config_id").references(
 			() => samplingConfigs.id,
 			{ onDelete: "set null" }
@@ -2444,10 +2449,6 @@ export const sessionsRelations = relations(sessions, ({ one, many }) => ({
 	lorebook: one(lorebooks, {
 		fields: [sessions.lorebookId],
 		references: [lorebooks.id]
-	}),
-	connection: one(connections, {
-		fields: [sessions.connectionId],
-		references: [connections.id]
 	}),
 	samplingConfig: one(samplingConfigs, {
 		fields: [sessions.samplingConfigId],
@@ -2492,7 +2493,9 @@ export const sessionMessages = pgTable(
 		characterId: integer("character_id").references(() => characters.id, {
 			onDelete: "set null"
 		}), // nullable
-		personaId: integer("persona_id").references(() => personas.id, {
+		// The character the user VOICED this message as. The column name says
+		// the ROLE; the row it points at is a character.
+		personaId: integer("persona_id").references(() => characters.id, {
 			onDelete: "set null"
 		}), // nullable
 		role: text("role").notNull(), // 'user', 'character', 'system', etc
@@ -2539,7 +2542,33 @@ export const sessionMessages = pgTable(
 			narratorName?: string // Display name resolved at generation time for a Narrator response message (e.g. "Narrator")
 		}>(), // JSON for extra info
 		isGenerating: boolean("is_generating").notNull().default(false), // 1 if processing, 0 otherwise
-		generationStage: text("generation_stage"), // 'queued' | 'loading' | 'generating' | null; only meaningful while isGenerating
+		/**
+		 * ⏳ The retired stage enum — `'queued' | 'loading' | 'generating'`.
+		 * Replaced by `generationStatus` (R-19, U5h, 2026-09-16): nothing
+		 * writes it any more; the client reads it as a fallback for one
+		 * release, then the column goes.
+		 */
+		generationStage: text("generation_stage"),
+		/**
+		 * What the run filling this row is doing right now (R-19): the last
+		 * status a node set — *{speaker} is typing* — as a locale map with
+		 * its variables filled, for the client to resolve. Written by the
+		 * live row while the row generates and cleared with `isGenerating`;
+		 * only meaningful while generating. Never a stage enum: a status is
+		 * prose the pipeline chose, not a state the queue reports.
+		 */
+		generationStatus: jsonb("generation_status").$type<StatusText | null>(),
+		/**
+		 * How the last generation on this row ended, when it did not end
+		 * normally (R-15 / R-17, 2026-09-16): `stopped` — a person stopped the
+		 * reply and the row holds the partial text. Null for a reply that
+		 * finished, a row never generated, and a row a later regenerate, swipe
+		 * or continue re-drove (the claim clears it). Beside `error` rather than
+		 * inside it: a stop is not a fault. Written by the run-end finalisation
+		 * (`liveRow.finish`) and by the message's own Stop, whichever released
+		 * the row; read by the client where it marks the row stopped.
+		 */
+		generationOutcome: text("generation_outcome"), // 'stopped' | null
 		// `connection` is connection identity — see
 		// `$lib/server/connections/visibility.ts`. It is written here rather than
 		// into `message` because this row is RE-SERVED on every reload, and only a
@@ -2586,17 +2615,71 @@ export const sessionMessagesRelations = relations(
 			fields: [sessionMessages.characterId],
 			references: [characters.id]
 		}),
-		persona: one(personas, {
+		persona: one(characters, {
 			fields: [sessionMessages.personaId],
-			references: [personas.id]
+			references: [characters.id],
+			relationName: "sessionMessageVoice"
 		})
 	})
 )
 
 /**
- * The message model (20 §1, ruled 2026-08-26): a message is a *folder* —
+ * What the built-ins did to a session, for the next reply to read (R-15,
+ * ruled 2026-09-15, built 2026-09-16).
+ *
+ * Every state-altering write core implements — delete, hide, edit, swipe,
+ * branch, and the stop the run-level guarantee performs, plus a regenerate /
+ * swipe / continue's rewrite — writes one row here at the write, carrying the
+ * event it emitted and what was lost or replaced. The next reply run reads
+ * the unconsumed rows, publishes them on its inlet's `sessionChanges` port
+ * (newest fifty, oldest first) and — once it has produced a reply — marks
+ * them consumed with its run id, so a pipeline sees each change exactly once
+ * and a preview sees them without consuming. The mark also nulls the content
+ * the payload carried (`lost.content`, `previous.content`): it existed for
+ * that one reader, and the row keeps the event and the ids without holding
+ * the line indefinitely (U5b review W4).
+ *
+ * `message_id` carries no foreign key on purpose, like `pipeline_run_artifacts`:
+ * a deleted message's change is precisely the row whose subject is gone.
+ * `run_id` is the run that performed the write (the built-in's own receipt),
+ * a text uuid like `pipeline_runs.run_id`, and `consumed_by_run_id` the reply
+ * run that read it — text too, because it may be stamped before that run's
+ * receipt row exists.
+ */
+export const sessionChanges = pgTable(
+	"session_changes",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		sessionId: integer("session_id")
+			.notNull()
+			.references(() => sessions.id, { onDelete: "cascade" }),
+		/** The event id — `core:event/message-deleted@1`. */
+		event: text("event").notNull(),
+		/** The message the change was about; null for a branch. No FK — see above. */
+		messageId: integer("message_id"),
+		/** The event's payload, as the SDK's `SessionChangePayload` shapes it. */
+		payload: jsonb("payload").notNull().$type<Record<string, unknown>>(),
+		/** The run that performed the write, when one did. */
+		runId: text("run_id"),
+		at: timestamp("at").notNull().defaultNow(),
+		/** The reply run that read this change, once one has. */
+		consumedByRunId: text("consumed_by_run_id")
+	},
+	(t) => [
+		// The read: this session's unconsumed rows, newest first.
+		index("session_changes_session_unconsumed_idx").on(
+			t.sessionId,
+			t.consumedByRunId,
+			t.id
+		)
+	]
+)
+
+/**
+ * The message model (20 §1, ruled 2026-08-26): a message is an *envelope* —
  * identity, position, lane — and its content lives in `message_parts`,
- * addressed by (step, revision, ordinal).
+ * addressed by (step, revision, ordinal). ⚠ Not a *folder*: that word names the
+ * library grouping (`character_folders`), and one word cannot mean both.
  *
  *  - **step accumulates**: phases of a stepped activity render side by side.
  *  - **revision excludes**: alternatives of one step; exactly one shows.
@@ -2640,7 +2723,8 @@ export const messages = pgTable(
 		characterId: integer("character_id").references(() => characters.id, {
 			onDelete: "set null"
 		}),
-		personaId: integer("persona_id").references(() => personas.id, {
+		/** The character the user voiced this as — see `sessionMessages`. */
+		personaId: integer("persona_id").references(() => characters.id, {
 			onDelete: "set null"
 		}),
 		/** Resolved-at-write display name — retires `isNarratorResponse`. */
@@ -2735,7 +2819,7 @@ export const messageParts = pgTable(
  * written twice to keep a derivative in step. Three symptoms of one table doing
  * two jobs.
  *
- * **Provenance, not role.** The `userId`/`characterId`/`personaId`/`sessionId`/
+ * **Provenance, not role.** The `userId`/`characterId`/`sessionId`/
  * `messageId` columns say what a file *belongs to*; they never say what it is
  * *for*. Roles are read off inbound relations instead — a character's avatar is
  * `characters.avatarMediaId` pointing at a row here, an emotion sprite will be
@@ -2751,8 +2835,8 @@ export const messageParts = pgTable(
  * cascade the rows vanish and the files become an unattributable pile.
  *
  * **That ruling is about provenance, and does not reach a role pointer.**
- * `characters.avatar_media_id` and `personas.avatar_media_id` point INTO this
- * table and are real foreign keys, `ON DELETE SET NULL`. The two are
+ * `characters.avatar_media_id` points INTO this table and is a real foreign
+ * key, `ON DELETE SET NULL`. The two are
  * different kinds of fact: a provenance column is evidence and a stale one is
  * useful, whereas a role names the one file an entity currently wears and a
  * stale one is just a broken image. Read the direction before citing the
@@ -2840,8 +2924,9 @@ export const files = pgTable(
 		// query, and it replaces the old trick of leaving a thumbnail's four
 		// columns NULL so `mediaFor(character)` would not match it.
 		userId: integer("user_id").notNull(),
+		// ⚠ No `persona_id`: a persona is a character, so a persona's files are
+		// stamped with that character's id.
 		characterId: integer("character_id"),
-		personaId: integer("persona_id"),
 		sessionId: integer("session_id"),
 		messageId: integer("message_id"),
 
@@ -2891,7 +2976,7 @@ export const files = pgTable(
 		 * image nobody has cropped by hand.
 		 *
 		 * On the FILE because it describes the picture, not one encoding of
-		 * it: the character form, the persona form and the Media panel all edit
+		 * it: the character form and the Media panel both edit
 		 * this one value and every surface showing that avatar agrees.
 		 * Non-destructive — the original and display variants stay whole, so a
 		 * lightbox shows everything and re-cropping never compounds.
@@ -2930,7 +3015,6 @@ export const files = pgTable(
 		// `variant` in the key any more — a variant is not a file.
 		uniqueIndex("files_user_hash_unique").on(t.userId, t.hash),
 		index("files_character_idx").on(t.characterId),
-		index("files_persona_idx").on(t.personaId),
 		index("files_session_idx").on(t.sessionId),
 		index("files_message_idx").on(t.messageId),
 		check(
@@ -3056,28 +3140,34 @@ export const messagePartsRelations = relations(messageParts, ({ one }) => ({
 	})
 }))
 
-// Many-to-many: sessions <-> personas
+// Many-to-many: sessions <-> the characters their users voice.
+//
+// THE PERSONA FACT THAT VARIES. `characters.is_persona` says a character is one
+// the user is willing to play; this table says who is actually speaking as whom
+// in one session, which is the only question a prompt ever asks.
 export const sessionPersonas = pgTable(
 	"session_personas",
 	{
 		sessionId: integer("session_id")
 			.notNull()
 			.references(() => sessions.id, { onDelete: "cascade" }),
-		personaId: integer("persona_id").references(() => personas.id, {
+		// Column name kept: it names the ROLE (the character being voiced),
+		// which did not move when the table behind it became `characters`.
+		personaId: integer("persona_id").references(() => characters.id, {
 			onDelete: "set null"
 		}),
 		position: integer("position").default(0), // Position in the session
 		// Soft-delete: set when this participant is removed from the session so
 		// past messages can still resolve a speaker name. Null = active.
 		removedAt: timestamp("removed_at"),
-		// Snapshot of the persona's name at removal time, for the case where
-		// the persona is later deleted globally (personaId nulls out via
-		// onDelete: "set null") and no live name is available anymore.
+		// Snapshot of the voiced character's name at removal time, for the case
+		// where that character is later deleted globally (personaId nulls out
+		// via onDelete: "set null") and no live name is available anymore.
 		removedName: text("removed_name")
 	},
 	(table) => [
 		uniqueIndex("session_personas_pk").on(table.sessionId, table.personaId),
-		// canViewPersona() looks up sessionPersonas by personaId alone.
+		// canViewCharacter() looks up sessionPersonas by personaId alone.
 		index("session_personas_persona_id_idx").on(table.personaId)
 	]
 )
@@ -3089,14 +3179,23 @@ export const sessionPersonasRelations = relations(
 			fields: [sessionPersonas.sessionId],
 			references: [sessions.id]
 		}),
-		persona: one(personas, {
+		persona: one(characters, {
 			fields: [sessionPersonas.personaId],
-			references: [personas.id]
+			references: [characters.id]
 		})
 	})
 )
 
-// Many-to-many: sessions <-> characters
+// Many-to-many: sessions <-> characters — and the session's seated **envoys**.
+//
+// THE CAST. A row is one seat: a library character (`character_id`) or an
+// envoy the session's genre or an installed action brings with it
+// (`envoy_slug`; plans/29 R-18, built 2026-09-16 as U5g). Never both — the
+// CHECK says so. A genre's envoy is its bare key, an action's is
+// `<plugin>.<key>` (a dot marks the namespace), so the two never collide.
+// An envoy seat has no library row behind it: its name, image, prompts and
+// origin are the declaration's, read off the genre's create-spec row and
+// the installed actions' (`declaredEnvoys`).
 export const sessionCharacters = pgTable(
 	"session_characters",
 	{
@@ -3106,6 +3205,16 @@ export const sessionCharacters = pgTable(
 		characterId: integer("character_id").references(() => characters.id, {
 			onDelete: "set null"
 		}),
+		/**
+		 * The seated envoy's slug — `mascot` for a genre's, `acme.master` for
+		 * an action's — or null for a character's seat. ⚠ "At most one of
+		 * the two", not "exactly one": `character_id` already nulls out when
+		 * a character is deleted globally (`onDelete: set null`) on a row
+		 * that keeps `removed_name`, and a CHECK demanding one of them set
+		 * would make that cascade fail on every session the character sat
+		 * in. A row with neither is that departed character.
+		 */
+		envoySlug: text("envoy_slug"),
 		position: integer("position").default(0), // Position in the session
 		isActive: boolean("is_active").notNull().default(true), // 1 if active in session, 0 if not
 		// Character visibility optimization setting
@@ -3126,7 +3235,17 @@ export const sessionCharacters = pgTable(
 			table.characterId
 		),
 		// canViewCharacter() looks up sessionCharacters by characterId alone.
-		index("session_characters_character_id_idx").on(table.characterId)
+		index("session_characters_character_id_idx").on(table.characterId),
+		// One seat per envoy per session (NULLs are distinct, so character
+		// seats are untouched by it).
+		uniqueIndex("session_characters_envoy_idx").on(
+			table.sessionId,
+			table.envoySlug
+		),
+		check(
+			"session_characters_one_seat_check",
+			sql`NOT (${table.characterId} IS NOT NULL AND ${table.envoySlug} IS NOT NULL)`
+		)
 	]
 )
 
@@ -4122,7 +4241,7 @@ export const customThemesRelations = relations(customThemes, ({ one }) => ({
 // is why the shape here mirrors the document's shape closely enough to be
 // checked rather than argued about.
 //
-// Anything the constitution names is a column; anything a node type defines
+// Anything the constitution names is a column; anything a node definition defines
 // stays in jsonb. That line is what keeps a plugin's config out of the schema
 // while leaving every law queryable.
 
@@ -4199,6 +4318,16 @@ export const pipelineSpecVersions = pgTable(
 		 * document load. Claims, not identity: they may change on republish.
 		 */
 		taxonomy: json("taxonomy").$type<Record<string, any> | null>(),
+		/**
+		 * Set on a version row whose stored rows the one-shot rename
+		 * (2026-09-16, plans/30 §U3) rewrote in place — node kinds, definition
+		 * ids, clause kinds — while its `canonical_hash` kept naming the
+		 * document as it was hashed before. The boot after the migration
+		 * publishes the same content under its new hash and this row retires;
+		 * a receipt pinned to the old hash still opens it, and the inspector
+		 * reads this to say *renamed*, not *changed*.
+		 */
+		renamedAt: timestamp("renamed_at"),
 		createdAt: timestamp("created_at").notNull().defaultNow(),
 		publishedAt: timestamp("published_at")
 	},
@@ -4222,48 +4351,55 @@ export const pipelineSpecVersions = pgTable(
  * Blocks also nest, so a block needs a parent. Filed as a docs finding rather
  * than left as a silent divergence.
  */
-export const pipelineBlocks = pgTable(
-	"pipeline_blocks",
+/**
+ * A **clause** (R-14, ruled 2026-09-15; _was_ `pipeline_blocks`): a container
+ * of nodes with a repetition or branching rule of its own — `gather` (several
+ * chains collected; _was_ `async`), `each` (once per item; _was_ `map`), `loop`
+ * (while a predicate holds), `junction` (the branches whose predicates fired;
+ * _was_ `route`). Renamed with every stored row rewritten in one migration,
+ * 2026-09-16 (plans/30 §U3).
+ */
+export const pipelineClauses = pgTable(
+	"pipeline_clauses",
 	{
 		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
 		specVersionId: integer("spec_version_id")
 			.notNull()
 			.references(() => pipelineSpecVersions.id, { onDelete: "cascade" }),
-		blockId: text("block_id").notNull(),
-		kind: text("kind").notNull(), // async | map | loop
-		/** Nesting: a block inside a block. NULL at the spine. */
-		parentBlockId: text("parent_block_id"),
-		mode: text("mode"), // parallel | sequential, for async
-		/** Mandatory for map and loop — repetition without a bound is not expressible (F9). */
+		clauseId: text("clause_id").notNull(),
+		kind: text("kind").notNull(), // gather | each | loop | junction
+		/** Nesting: a clause inside a clause. NULL at the spine. */
+		parentClauseId: text("parent_clause_id"),
+		mode: text("mode"), // parallel | sequential, for gather
+		/** Mandatory for each and loop — repetition without a bound is not expressible (F9). */
 		max: integer("max"),
-		/** For map: where the items come from. For loop: the predicate port. */
+		/** For each: where the items come from. For loop: the predicate port. */
 		overRef: json("over_ref").$type<Record<string, any> | null>(),
 		repeatWhile: json("repeat_while").$type<Record<string, any> | null>(),
-		/** route only — the routed value, a stored port reference (20 §10). */
+		/** junction only — the value the branches are chosen on, a stored port reference (20 §10). */
 		onRef: json("on_ref").$type<Record<string, any> | null>(),
-		/** route only — each chain's declared predicate, keyed by chain name. */
-		routes: json("routes").$type<Record<string, any> | null>(),
+		/** junction only — each branch's declared predicate, keyed by chain name. */
+		branches: json("branches").$type<Record<string, any> | null>(),
 		position: integer("position").notNull().default(0)
 	},
 	(t) => [
-		uniqueIndex("pipeline_blocks_version_block_idx").on(
+		uniqueIndex("pipeline_clauses_version_clause_idx").on(
 			t.specVersionId,
-			t.blockId
+			t.clauseId
 		),
 		check(
-			"pipeline_blocks_kind_check",
-			sql`${t.kind} IN ('async', 'map', 'loop', 'route')`
+			"pipeline_clauses_kind_check",
+			sql`${t.kind} IN ('gather', 'each', 'loop', 'junction')`
 		),
 		// Repetition without a bound is not expressible (F9, 13 §1). Enforced
 		// here as well as at publish, because the row is the system of record
 		// and an unbounded loop reaching it through any other path is the one
-		// failure the whole design refuses to allow. Async and route are
-		// exempt because neither repeats: a fan-out runs each branch once, a
-		// route fires a subset of its branches once (20 §10) — the constraint
-		// predated route blocks and refused every routed spec at the row.
+		// failure the whole design refuses to allow. Gather and junction are
+		// exempt because neither repeats: a gather runs each chain once, a
+		// junction fires a subset of its branches once (20 §10).
 		check(
-			"pipeline_blocks_bounded_check",
-			sql`${t.kind} IN ('async', 'route') OR ${t.max} IS NOT NULL`
+			"pipeline_clauses_bounded_check",
+			sql`${t.kind} IN ('gather', 'junction') OR ${t.max} IS NOT NULL`
 		)
 	]
 )
@@ -4281,10 +4417,16 @@ export const pipelineNodes = pgTable(
 		 * every user's tuning the first time a node is inserted above (F21).
 		 */
 		nodeKey: text("node_key").notNull(),
-		/** The closed taxonomy, enforced by the database rather than by review (F1). */
+		/**
+		 * The closed taxonomy, enforced by the database rather than by review
+		 * (F1): `inlet · query · task · oracle · outlet` (R-13, ruled
+		 * 2026-09-14; _was_ `input · provider · consumer` until the one-shot
+		 * rename of 2026-09-16).
+		 */
 		kind: text("kind").notNull(),
-		typeId: text("type_id").notNull(),
-		typeVersion: integer("type_version").notNull().default(1),
+		/** The node definition's slug, `core:query/vector-search` (_was_ `type_id`). */
+		definitionId: text("definition_id").notNull(),
+		definitionVersion: integer("definition_version").notNull().default(1),
 		config: json("config")
 			.notNull()
 			.default({})
@@ -4294,9 +4436,9 @@ export const pipelineNodes = pgTable(
 			string,
 			string
 		> | null>(),
-		blockId: text("block_id"),
-		blockKind: text("block_kind"),
-		blockChain: text("block_chain"),
+		clauseId: text("clause_id"),
+		clauseKind: text("clause_kind"),
+		clauseChain: text("clause_chain"),
 		toggleable: boolean("toggleable").notNull().default(false),
 		enabledDefault: boolean("enabled_default").notNull().default(true),
 		budgetTokens: integer("budget_tokens"),
@@ -4310,9 +4452,10 @@ export const pipelineNodes = pgTable(
 		),
 		// F1 in the database. The five kinds are closed; a sixth is a schema
 		// change and a constitutional argument, not a row somebody inserts.
+		// (`entry` is the registry's non-pipeline member and never a node.)
 		check(
 			"pipeline_nodes_kind_check",
-			sql`${t.kind} IN ('input', 'query', 'task', 'provider', 'consumer')`
+			sql`${t.kind} IN ('inlet', 'query', 'task', 'oracle', 'outlet')`
 		)
 	]
 )
@@ -4331,25 +4474,25 @@ export const pipelineEdges = pgTable(
 		/**
 		 * The node an edge leaves, where it leaves a node.
 		 *
-		 * Nullable since blocks became referenceable. A `map` or `async` block
+		 * Nullable since clauses became referenceable. An `each` or `gather` clause
 		 * publishes an aggregate result (`branch-results@1`), and a spec that
 		 * consumes it — a summarize pipeline merging its drafts, for instance —
-		 * writes an edge whose source is the **block**, not any node inside it. The
+		 * writes an edge whose source is the **clause**, not any node inside it. The
 		 * document model always allowed that; this table could not store it, so the
-		 * first spec to consume a map output failed at publish with a message about
-		 * a node that does not exist. See `from_block_id`.
+		 * first spec to consume an each's output failed at publish with a message
+		 * about a node that does not exist. See `from_clause_id`.
 		 */
 		fromNodeId: integer("from_node_id").references(() => pipelineNodes.id, {
 			onDelete: "cascade"
 		}),
 		/**
-		 * The block an edge leaves, for a block's aggregate output.
+		 * The clause an edge leaves, for a clause's aggregate output.
 		 *
-		 * The block *id* rather than a row id, matching how `pipeline_nodes` and
-		 * every other block reference key on the authored id (F21): blocks belong to
-		 * a spec version, and an edge is re-resolved from the document on publish.
+		 * The clause *id* rather than a row id, matching how `pipeline_nodes` and
+		 * every other clause reference key on the authored id (F21): clauses belong
+		 * to a spec version, and an edge is re-resolved from the document on publish.
 		 */
-		fromBlockId: text("from_block_id"),
+		fromClauseId: text("from_clause_id"),
 		fromPort: text("from_port").notNull(),
 		toNodeId: integer("to_node_id")
 			.notNull()
@@ -4374,7 +4517,7 @@ export const pipelineEdges = pgTable(
 		// that the column is nullable.
 		check(
 			"pipeline_edges_one_source_check",
-			sql`(${t.fromNodeId} IS NULL) <> (${t.fromBlockId} IS NULL)`
+			sql`(${t.fromNodeId} IS NULL) <> (${t.fromClauseId} IS NULL)`
 		)
 	]
 )
@@ -4712,7 +4855,14 @@ export const sessionFunctions = pgTable(
 			.references(() => sessions.id, { onDelete: "cascade" }),
 		/** The full genre id the choice was made under. */
 		genreId: text("genre_id").notNull(),
-		/** The function key — `narrate`, `summarize-scene`, … (19 §3). */
+		/**
+		 * The action's identity — `<spec slug>#<key>`, `core:spec/narrate#narrate`
+		 * (U5c review, W1): enablement is per action, so two actions on one
+		 * function switch independently. ⏳ A row written before 2026-09-16
+		 * holds the bare function key (`narrate`) and is read as answering for
+		 * every action of that function until the next write replaces it;
+		 * the column keeps its name for that one release.
+		 */
 		functionKey: text("function_key").notNull(),
 		enabled: boolean("enabled").notNull(),
 		createdAt: timestamp("created_at").notNull().defaultNow(),
@@ -4725,6 +4875,37 @@ export const sessionFunctions = pgTable(
 			t.functionKey
 		)
 	]
+)
+
+/**
+ * The actions a person has met — the *new* marker's memory (plans/29 R-15
+ * `quick`; plans/30 U5c, built 2026-09-16).
+ *
+ * A newly installed action lands in its venue's overflow with a *new* mark
+ * and is never silently hidden; the mark clears once the person has opened
+ * the overflow (or the `/` palette) that listed it. Per **user**, not per
+ * session: an action is new to a person until they have seen it anywhere,
+ * and a mark that came back in every session would teach nothing.
+ *
+ * A row *is* the fact "this person has seen this action"; there is no
+ * un-seeing, so no `enabled` column and delete is the only reset. Keyed by
+ * `<spec slug>#<action key>` — the action's identity across installs — so
+ * a spec republished under a new hash keeps its mark clear, and a spec
+ * removed and reinstalled is not new again. Core's own verbs are never
+ * marked (they were always there) and never written here.
+ */
+export const seenActions = pgTable(
+	"seen_actions",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		userId: integer("user_id")
+			.notNull()
+			.references(() => users.id, { onDelete: "cascade" }),
+		/** `<spec slug>#<action key>` — `core:spec/narrate#narrate`. */
+		actionKey: text("action_key").notNull(),
+		seenAt: timestamp("seen_at").notNull().defaultNow()
+	},
+	(t) => [uniqueIndex("seen_actions_user_action_idx").on(t.userId, t.actionKey)]
 )
 
 /**
@@ -4785,7 +4966,7 @@ export const pipelineFunctionBindings = pgTable(
  * pinned type — the swap-list membership rule made a load-time check), so a
  * stale rebind degrades to the pinned type rather than mis-wiring the run.
  *
- * `typeId` carries the full pin (`ns:kind/name@N`) as text rather than a
+ * `definitionId` carries the full pin (`ns:kind/name@N`) as text rather than a
  * registry-row FK: the registry re-projects pre-1.0 (rows are deleted and
  * re-inserted at boot), and a rebind must survive that the way spec pins do.
  */
@@ -4799,8 +4980,8 @@ export const pipelineNodeRebinds = pgTable(
 		scopeKind: text("scope_kind").notNull(), // instance | user | session
 		scopeId: integer("scope_id").notNull().default(0),
 		nodeKey: text("node_key").notNull(),
-		/** The substitute's pinned type id, e.g. `core:task/turn-round-robin@1`. */
-		typeId: text("type_id").notNull(),
+		/** The substitute's pinned definition id, e.g. `core:task/turn-round-robin@1`. */
+		definitionId: text("definition_id").notNull(),
 		updatedBy: integer("updated_by").references(() => users.id, {
 			onDelete: "set null"
 		}),
@@ -4900,13 +5081,13 @@ export const pipelineConfigValues = pgTable(
  * This reverses the earlier rule, which namespaced a prompt to its spec on the
  * reasoning that a reply's wording has no business in a summarizer's picker.
  * That conclusion was right and the mechanism was wrong: the separation it
- * wanted falls out of the node type by construction — `build-template-context`
+ * wanted falls out of the node definition by construction — `build-template-context`
  * and `summarize-batch` are different types, so reply wording can never reach a
  * summarizer — while spec scoping *also* severed the reuse the tier exists for,
  * and forced a shipped prompt to be a per-pipeline BUNDLE whose fields belonged
- * to four different node types.
+ * to four different node definitions.
  *
- * The pool is `(node_type_id, slot)`. Selection refuses across it, and
+ * The pool is `(node_definition_id, slot)`. Selection refuses across it, and
  * `created_for_spec_id` sorts the picker without ever refusing — the same split
  * `pipeline_context_templates` makes, for the same reason.
  *
@@ -4929,7 +5110,7 @@ export const pipelinePrompts = pgTable(
 		 * strand every prompt a user wrote. Normalize through `poolKeyFor` on
 		 * every write.
 		 */
-		nodeTypeId: text("node_type_id").notNull(),
+		nodeDefinitionId: text("node_definition_id").notNull(),
 		/**
 		 * In the key because a type may declare more than one prompts slot,
 		 * each with its own field set. One pool for both would offer each the
@@ -4984,10 +5165,10 @@ export const pipelinePrompts = pgTable(
 		updatedAt: timestamp("updated_at").notNull().defaultNow()
 	},
 	(t) => [
-		index("pipeline_prompts_pool_idx").on(t.nodeTypeId, t.slot),
+		index("pipeline_prompts_pool_idx").on(t.nodeDefinitionId, t.slot),
 		index("pipeline_prompts_spec_idx").on(t.createdForSpecId),
 		uniqueIndex("pipeline_prompts_pool_name_idx").on(
-			t.nodeTypeId,
+			t.nodeDefinitionId,
 			t.slot,
 			t.name
 		)
@@ -5008,7 +5189,7 @@ export const pipelinePromptsRelations = relations(
  * User-authored scripts — the fourth paradigm's rows (18 §2).
  *
  * A script is typed text: the row holds the source and the *type* holds the
- * contract, projected into `pipeline_type_registry` with `kind: 'script'`. The
+ * contract, projected into `pipeline_definition_registry` with `kind: 'script'`. The
  * same entity pattern as prompts — a chain stores this row's id, never a copy
  * of its text — with one deliberate difference: **keyed by the script type,
  * not by a spec.** A slop filter is a statement about text, not about which
@@ -5138,7 +5319,7 @@ export const pipelineVariableTemplates = pgTable(
  *
  * ## Keyed by the node whose context it renders, not by the pipeline
  *
- * `node_type_id` is the compatibility rule, and it is the same move
+ * `node_definition_id` is the compatibility rule, and it is the same move
  * `pipeline_variable_templates` makes with `variable_id`: a row is keyed by
  * *what it renders against*, never by who happened to be rendering. Session reply
  * and the narrator both run `core:task/assemble`, so one template genuinely
@@ -5162,12 +5343,12 @@ export const pipelineVariableTemplates = pgTable(
  *
  * ## The engine is half the pool key, and NOT NULL
  *
- * A node type is not enough to say "this template fits". `core:task/assemble`
+ * A node definition is not enough to say "this template fits". `core:task/assemble`
  * has a Handlebars template slot; a plugin's assembler may declare a Jinja one
- * on the same type. Keyed by node type alone, the picker offers each the
+ * on the same type. Keyed by node definition alone, the picker offers each the
  * other's rows — the selection stores cleanly and the model receives a prompt
  * full of raw `{% %}` markup, which reads as a bad model rather than a bad
- * pick. So the pool is `(node_type_id, engine)` and there is deliberately NO
+ * pick. So the pool is `(node_definition_id, engine)` and there is deliberately NO
  * cross-engine fallback: an empty pool offers nothing, never a source in the
  * wrong language.
  *
@@ -5182,10 +5363,10 @@ export const pipelineContextTemplates = pgTable(
 	{
 		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
 		/**
-		 * The node type whose context this renders, unversioned — e.g.
+		 * The node definition whose context this renders, unversioned — e.g.
 		 * `core:task/assemble`. The hard compatibility rule.
 		 */
-		nodeTypeId: text("node_type_id").notNull(),
+		nodeDefinitionId: text("node_definition_id").notNull(),
 		/**
 		 * Where it was authored, for grouping only. NULL for core's own and for
 		 * anything migrated across, neither of which belongs to one pipeline.
@@ -5224,12 +5405,12 @@ export const pipelineContextTemplates = pgTable(
 		updatedAt: timestamp("updated_at").notNull().defaultNow()
 	},
 	(t) => [
-		index("pipeline_context_templates_node_type_idx").on(t.nodeTypeId),
+		index("pipeline_context_templates_node_definition_idx").on(t.nodeDefinitionId),
 		index("pipeline_context_templates_spec_idx").on(t.createdForSpecId),
-		/** The pool the picker reads: node type AND language. */
-		index("pipeline_context_templates_pool_idx").on(t.nodeTypeId, t.engine),
-		uniqueIndex("pipeline_context_templates_node_type_name_idx").on(
-			t.nodeTypeId,
+		/** The pool the picker reads: node definition AND language. */
+		index("pipeline_context_templates_pool_idx").on(t.nodeDefinitionId, t.engine),
+		uniqueIndex("pipeline_context_templates_node_definition_name_idx").on(
+			t.nodeDefinitionId,
 			t.engine,
 			t.name
 		),
@@ -5330,7 +5511,7 @@ export const pipelineConfigValuesRelations = relations(
 )
 
 /**
- * Materialized host knowledge about node types (02 §2).
+ * Materialized host knowledge about node definitions (02 §2).
  *
  * As rows rather than a module, every pin in every spec becomes joinable — and
  * more importantly, install-time validation can decide whether a plugin fits
@@ -5402,15 +5583,29 @@ export const pipelineRuns = pgTable(
 		 * A preview produced nothing.
 		 *
 		 * ⚠ **Derived from the artifacts, never from `receipt.preview` alone.**
-		 * The reply path runs `runTurn({ preview: true })` because the ADAPTER
-		 * makes the provider call — so the executor genuinely halts early and a
-		 * real message is written anyway. `Boolean(receipt.preview)` on its own
-		 * therefore recorded every reply in the product as a preview. The rule
-		 * is `Boolean(receipt.preview) && artifacts.length === 0`: a run that
-		 * left something behind is not a preview, whatever the executor was
-		 * asked to do. See `saveReceipt`.
+		 * The rule is `Boolean(receipt.preview) && artifacts.length === 0`: a
+		 * run that left something behind is not a preview, whatever the
+		 * executor was asked to do. Since 09-B B4 a preview is a dry run and
+		 * commits nothing, so the two halves agree by construction — the rule
+		 * stays stated because this column is what three readers filter on.
+		 * See `saveReceipt`.
 		 */
 		isPreview: boolean("is_preview").notNull().default(false),
+		/**
+		 * Lineage (01 §8; R-21 (5); built 2026-09-17 as U5d): the run that
+		 * dispatched this one and the root of the tree, as `run_id` text,
+		 * and how deep. A run nothing dispatched — every reply, every action
+		 * a person fired — has neither and stands at depth 0; a
+		 * `form-addressed` answer is a child of the run that wrote the form,
+		 * and the action it fires is a grandchild. **No foreign key**, for the
+		 * reason `spec_version_id` has none: a parent run's row may be pruned
+		 * and the child still happened. The per-root caps the dispatcher
+		 * enforces (`runtime/lineage.ts`) are counted in memory while the tree
+		 * is in flight and written here for the receipt's reader.
+		 */
+		parentRunId: text("parent_run_id"),
+		rootRunId: text("root_run_id"),
+		depth: integer("depth").notNull().default(0),
 		startedAt: timestamp("started_at").notNull(),
 		endedAt: timestamp("ended_at").notNull(),
 		elapsedMs: integer("elapsed_ms").notNull().default(0),
@@ -5419,7 +5614,11 @@ export const pipelineRuns = pgTable(
 		receipt: json("receipt").notNull().$type<Record<string, any>>(),
 		createdAt: timestamp("created_at").notNull().defaultNow()
 	},
-	(t) => [index("pipeline_runs_session_idx").on(t.sessionId, t.id)]
+	(t) => [
+		index("pipeline_runs_session_idx").on(t.sessionId, t.id),
+		/** The tree a root run fathered — the inspector's "what did this ask" and the descendant count. */
+		index("pipeline_runs_root_idx").on(t.rootRunId)
+	]
 )
 
 /**
@@ -5439,8 +5638,13 @@ export const pipelineRunNodes = pgTable(
 			.references(() => pipelineRuns.id, { onDelete: "cascade" }),
 		seq: integer("seq").notNull(),
 		nodeKey: text("node_key").notNull(),
+		/**
+		 * As the run recorded them. ⚠ A receipt is never rewritten: rows from
+		 * before the 2026-09-16 rename say `input`/`provider`/`consumer` and
+		 * `core:inlet/…`; the registry's `renamed_from` resolves the old id.
+		 */
 		kind: text("kind").notNull(),
-		typeId: text("type_id").notNull(),
+		definitionId: text("definition_id").notNull(),
 		result: text("result").notNull(), // ok | halt | err
 		reason: text("reason"),
 		elapsedMs: integer("elapsed_ms").notNull().default(0),
@@ -5455,7 +5659,7 @@ export const pipelineRunNodes = pgTable(
  *
  * `pipeline_runs.message_id` was a single nullable column, so a run could
  * record exactly one message and nothing else. That was wrong in both
- * directions and provably so: `core:consumer/seed-greetings` writes **N**
+ * directions and provably so: `core:outlet/seed-greetings` writes **N**
  * messages and the column recorded none of them, `generate-image` writes N
  * `files` and N `variants` with no run id stored anywhere, `create-lore-entry`
  * writes an entry the run was invisible to, and `create-message` posts media
@@ -5737,13 +5941,30 @@ export const pluginHookInvocations = pgTable(
 	]
 )
 
-export const pipelineTypeRegistry = pgTable(
-	"pipeline_type_registry",
+/**
+ * The **node definition registry** (_was_ `pipeline_type_registry`; *node type*
+ * retired 2026-09-14, NOMENCLATURE §5 — the table and its `type_id` column
+ * moved in the one-shot rename of 2026-09-16, plans/30 §U3). One row per
+ * `definition_id@version`, carrying the declaration the slug resolves to now;
+ * entry types and script kinds ride the same rows (`kind: 'entry' | 'script'`).
+ */
+export const pipelineDefinitionRegistry = pgTable(
+	"pipeline_definition_registry",
 	{
 		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-		typeId: text("type_id").notNull(),
+		definitionId: text("definition_id").notNull(),
 		version: integer("version").notNull().default(1),
 		kind: text("kind").notNull(),
+		/**
+		 * **Superseded by rename.** The slug this row was known by before the
+		 * one-shot rename moved it (`core:inlet/user-message` →
+		 * `core:inlet/user-message`), and when. A receipt pins the old id
+		 * string beside its hash; a reader resolving that string finds the row
+		 * through this column, and the inspector can say *renamed 2026-09-16*
+		 * rather than *changed*. NULL on every row the rename did not touch.
+		 */
+		renamedFrom: text("renamed_from"),
+		renamedAt: timestamp("renamed_at"),
 		ownerPluginId: integer("owner_plugin_id"),
 		status: text("status").notNull().default("live"), // live | deprecated | removed
 		transport: text("transport").notNull().default("node"), // node | process
@@ -5768,8 +5989,8 @@ export const pipelineTypeRegistry = pgTable(
 		 * links return — `transform` folds into the flowing variable bag,
 		 * `verdict` is consumed by the hook and reduced (18 §5).
 		 *
-		 * NULL on every node type, which is not a default standing in for a
-		 * value: a node type has no chain semantics to have. Stored rather than
+		 * NULL on every node definition, which is not a default standing in for a
+		 * value: a node definition has no chain semantics to have. Stored rather than
 		 * read off the descriptor for the reason `slots` is — the panel renders
 		 * from rows and never loads the plugin that owns a type (F6), and a
 		 * `transport: 'process'` script type has no descriptor in this process
@@ -5777,7 +5998,7 @@ export const pipelineTypeRegistry = pgTable(
 		 */
 		semantics: text("semantics"),
 		/**
-		 * Interior script points (18 §4e), for node types that declare them.
+		 * Interior script points (18 §4e), for node definitions that declare them.
 		 * Stored for the reason `slots` is — the panel offers one chain option
 		 * per point and renders from rows, never from an in-process descriptor
 		 * (F6). Keys are hashed contract; labels refresh like slot text.
@@ -5820,12 +6041,12 @@ export const pipelineTypeRegistry = pgTable(
 		release: text("release"),
 		/**
 		 * **The slug's current pointer** (ruling 2026-09-10, content-addressed
-		 * types).
+		 * definitions).
 		 *
-		 * One row per `type_id@version`, and the hash on it names which
+		 * One row per `definition_id@version`, and the hash on it names which
 		 * declaration that slug resolves to *now*. Every declaration the slug
-		 * has ever resolved to is kept in `pipeline_type_declarations`, keyed by
-		 * this hash, so moving the pointer loses nothing.
+		 * has ever resolved to is kept in `pipeline_definition_declarations`,
+		 * keyed by this hash, so moving the pointer loses nothing.
 		 *
 		 * Nullable only because it has always been: a row written before the
 		 * column existed carries NULL, and the next boot heals it. Nothing may
@@ -5835,19 +6056,20 @@ export const pipelineTypeRegistry = pgTable(
 		contentHash: text("content_hash")
 	},
 	(t) => [
-		uniqueIndex("pipeline_type_registry_type_version_idx").on(
-			t.typeId,
+		uniqueIndex("pipeline_definition_registry_definition_version_idx").on(
+			t.definitionId,
 			t.version
 		)
 	]
 )
 
 /**
- * Every declaration a type slug has ever resolved to, keyed by content hash.
+ * Every declaration a definition slug has ever resolved to, keyed by content hash
+ * (_was_ `pipeline_type_declarations`, renamed 2026-09-16).
  *
  * ## The rule
  *
- * A slug is an **indirection** (ruling 2026-09-10): `pipeline_type_registry`
+ * A slug is an **indirection** (ruling 2026-09-10): `pipeline_definition_registry`
  * holds one row per slug carrying the declaration it currently resolves to, and
  * this table holds the declaration itself under its hash. Publishing a changed
  * declaration inserts a row here if the hash is unseen and moves the pointer.
@@ -5856,24 +6078,29 @@ export const pipelineTypeRegistry = pgTable(
  *
  * That retention is what lets an edited declaration publish at all: without a
  * home for the declaration a slug moves off, the only safe answers are refusing
- * the boot or a migration per edit. See `docs/pipelines.md`, *Specs and types
+ * the boot or a migration per edit. See `docs/pipelines.md`, *Specs and node definitions
  * are content-addressed*.
  *
  * ## Why `material` rather than a copy of the registry's columns
  *
- * `material` is the exact object `typeContentHash` digests — not a projection
+ * `material` is the exact object `definitionContentHash` digests — not a projection
  * of it, and not the columns spread out a second time. Two consequences, both
  * wanted: the table is self-verifying (re-hash `material`, you must get
  * `content_hash`), and a declaration shape that grows a field does not grow this
  * table by a column. The registry row stays the shape readers query; this stays
  * the shape the hash was taken over.
  */
-export const pipelineTypeDeclarations = pgTable(
-	"pipeline_type_declarations",
+export const pipelineDefinitionDeclarations = pgTable(
+	"pipeline_definition_declarations",
 	{
 		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-		/** The slug this declaration was published under — an attribute, not the key. */
-		typeId: text("type_id").notNull(),
+		/**
+		 * The slug this declaration was published under — an attribute, not the
+		 * key. The rename rewrote it to the new spelling on every row (the
+		 * registry row's `renamed_from` keeps the old one); `material` is NOT
+		 * rewritten, so re-hashing it still yields `content_hash`.
+		 */
+		definitionId: text("definition_id").notNull(),
 		version: integer("version").notNull().default(1),
 		kind: text("kind").notNull(),
 		/** The digest of `material`. The key, and what a receipt would pin. */
@@ -5892,7 +6119,7 @@ export const pipelineTypeDeclarations = pgTable(
 		 * Whether the material was recorded at publish or reconstructed.
 		 *
 		 * `declared` — written by a boot that held the declaration.
-		 * `adopted` — reconstructed at boot from a `pipeline_type_registry` row
+		 * `adopted` — reconstructed at boot from a `pipeline_definition_registry` row
 		 * that predates this table, whose stored columns *are* the declaration
 		 * material (the registry round trip is lossless, and
 		 * `registrySync.int.test.ts` pins that). An adopted row's hash is the
@@ -5902,19 +6129,28 @@ export const pipelineTypeDeclarations = pgTable(
 		firstSeenAt: timestamp("first_seen_at").notNull().defaultNow()
 	},
 	(t) => [
-		uniqueIndex("pipeline_type_declarations_hash_idx").on(
-			t.typeId,
+		uniqueIndex("pipeline_definition_declarations_hash_idx").on(
+			t.definitionId,
 			t.version,
 			t.contentHash
 		),
-		index("pipeline_type_declarations_slug_idx").on(t.typeId, t.version)
+		index("pipeline_definition_declarations_slug_idx").on(
+			t.definitionId,
+			t.version
+		)
 	]
 )
 
 /**
- * Core-defined events. Plugins cannot define events in 0.6 (F8, 13 §7g), and
- * the column is reserved rather than absent so reopening that is a permission
- * rather than a migration.
+ * Core-defined events — a projection of the SDK's `CORE_EVENTS`, the one event
+ * registry (R-4, 2026-09-16): the genre's session events and the data events
+ * core's outlets cause, by id. Plugins cannot define events in 0.6 (F8, 13 §7g),
+ * and the column is reserved rather than absent so reopening that is a
+ * permission rather than a migration.
+ *
+ * `pipeline_event_subscriptions` stood beside this until 2026-09-16 and was
+ * dropped: nothing read it at dispatch, and the inlet lock
+ * (`pipeline_spec_versions.input_event`) is the only subscription there is.
  */
 export const pipelineEventRegistry = pgTable("pipeline_event_registry", {
 	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
@@ -5922,9 +6158,9 @@ export const pipelineEventRegistry = pgTable("pipeline_event_registry", {
 	version: integer("version").notNull().default(1),
 	/**
 	 * DATA events describe a change and carry write-target mappings, so they
-	 * participate in the cycle check. ACTION events (`ui-action`,
-	 * `schedule-tick`) have no write targets and drop out of it by
-	 * construction, rather than needing an exception (13 §7g).
+	 * participate in the cycle check. ACTION events (`session-created`,
+	 * `message-respond`, `schedule-tick`) have no write targets and drop out of
+	 * it by construction, rather than needing an exception (13 §7g).
 	 */
 	family: text("family").notNull().default("data"), // data | action
 	payloadShape: json("payload_shape").$type<Record<string, any> | null>(),
@@ -5936,34 +6172,6 @@ export const pipelineEventRegistry = pgTable("pipeline_event_registry", {
 		any
 	> | null>()
 })
-
-export const pipelineEventSubscriptions = pgTable(
-	"pipeline_event_subscriptions",
-	{
-		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-		/**
-		 * The reference exactly as the document wrote it, `core:event/x@1`. Stored
-		 * verbatim because a subscription is a pin, and re-deriving the string from
-		 * its parts silently rewrites a document on the way back out — the version
-		 * suffix was the first thing C1 caught.
-		 */
-		eventRef: text("event_ref").notNull(),
-		/** Split out for joins and the cycle check. `eventRef` is never rebuilt from it. */
-		eventSlug: text("event_slug").notNull(),
-		eventVersion: integer("event_version").notNull().default(1),
-		specVersionId: integer("spec_version_id")
-			.notNull()
-			.references(() => pipelineSpecVersions.id, { onDelete: "cascade" }),
-		presetId: integer("preset_id").references(() => pipelinePresets.id, {
-			onDelete: "set null"
-		}),
-		depthBound: integer("depth_bound"),
-		enabled: boolean("enabled").notNull().default(true),
-		createdBy: integer("created_by").references(() => users.id, {
-			onDelete: "set null"
-		})
-	}
-)
 
 export const pipelineSpecsRelations = relations(pipelineSpecs, ({ many }) => ({
 	versions: many(pipelineSpecVersions)
@@ -5978,7 +6186,7 @@ export const pipelineSpecVersionsRelations = relations(
 		}),
 		nodes: many(pipelineNodes),
 		edges: many(pipelineEdges),
-		blocks: many(pipelineBlocks),
+		clauses: many(pipelineClauses),
 		includes: many(pipelineIncludes),
 		presets: many(pipelinePresets)
 	})
@@ -6294,7 +6502,7 @@ export const sessionPresets = pgTable(
 		 * core's own and for anything an admin made.
 		 *
 		 * `plugins.id` rather than the string `plugin_id`, matching
-		 * `pipeline_type_registry.owner_plugin_id`. No foreign key, for the
+		 * `pipeline_definition_registry.owner_plugin_id`. No foreign key, for the
 		 * reason `withdrawn_at` exists: uninstalling a plugin must not take the
 		 * presets sessions are running on with it.
 		 */
@@ -6667,7 +6875,7 @@ export const accountInvitesRelations = relations(accountInvites, ({ one }) => ({
 // World lore, character lore and history live in three near-identical tables
 // with no discriminator column anywhere: **the subtype is the table**. These two
 // tables are what that collapses into — engine-contract columns plus a declared
-// `fields` half, discriminated by a real foreign key into the type registry.
+// `fields` half, discriminated by a real foreign key into the definition registry.
 //
 // ⚠ NOTHING READS THEM YET. The three legacy tables are untouched and still
 // authoritative; this step creates the storage and fills it, and each reader
@@ -6675,7 +6883,7 @@ export const accountInvitesRelations = relations(accountInvites, ({ one }) => ({
 // its own separately-verifiable step.
 //
 // **Placement.** Down here rather than beside `lorebooks`, and not by taste: the
-// composite foreign key names `pipelineTypeRegistry`'s columns, and a
+// composite foreign key names `pipelineDefinitionRegistry`'s columns, and a
 // `pgTable`'s extras callback runs the moment `pgTable` is called — so a
 // definition above the registry's would read a `const` in its temporal dead
 // zone and throw at import.
@@ -6709,7 +6917,7 @@ export const lorebookEntries = pgTable(
 
 		/**
 		 * The declared type, and its version, as a real foreign key into
-		 * `pipeline_type_registry` — never a free string.
+		 * `pipeline_definition_registry` — never a free string.
 		 *
 		 * Without the constraint the discriminator is a column anybody can
 		 * misspell, and a misspelt one is a row that no reader will ever ask
@@ -6720,7 +6928,7 @@ export const lorebookEntries = pgTable(
 		 *
 		 * ⚠ The constraint is added `NOT VALID` by the migration and validated
 		 * by the boot projection, because migrations run *before*
-		 * `syncTypeRegistry` — at backfill time the registry rows the
+		 * `syncDefinitionRegistry` — at backfill time the registry rows the
 		 * backfilled entries point at do not exist yet. Same discipline as the
 		 * CHECK constraints, for the same reason: new writes are protected
 		 * immediately, existing rows are never destroyed by an ordering.
@@ -6907,7 +7115,7 @@ export const lorebookEntries = pgTable(
 
 		/**
 		 * The type-specific half, validated against the declared schema in
-		 * `pipeline_type_registry.config_schema`.
+		 * `pipeline_definition_registry.config_schema`.
 		 *
 		 * ⚠ Merge, never replace — see the table's own note. And note what
 		 * `absent` has to keep meaning: `priority` is read for every row, and
@@ -6937,8 +7145,8 @@ export const lorebookEntries = pgTable(
 			name: "lorebook_entries_type_fk",
 			columns: [t.typeId, t.typeVersion],
 			foreignColumns: [
-				pipelineTypeRegistry.typeId,
-				pipelineTypeRegistry.version
+				pipelineDefinitionRegistry.definitionId,
+				pipelineDefinitionRegistry.version
 			]
 		}),
 		/**
@@ -7130,7 +7338,7 @@ export const lorebookEntryVectorsRelations = relations(
  *
  * ## The resolved reference is the point of tier one
  *
- * `character_id` / `persona_id` / `ref_entry_id` are the exclusive arc: at most
+ * `character_id` / `ref_entry_id` are the exclusive arc: at most
  * one is set, and only for a **gazetteer** hit — a name the world already knows,
  * matched on a word boundary and resolved to the row it names. That is what
  * makes `Alice` and her nickname `Al` one entity rather than two. An **open**
@@ -7186,9 +7394,6 @@ export const entryAnnotations = pgTable(
 		/** `gazetteer` | `open` | `none` (the sentinel). */
 		tier: text("tier").notNull(),
 		characterId: integer("character_id").references(() => characters.id, {
-			onDelete: "set null"
-		}),
-		personaId: integer("persona_id").references(() => personas.id, {
 			onDelete: "set null"
 		}),
 		/** The lorebook entry this name resolves to — an entry titled after it. */
@@ -7260,9 +7465,6 @@ export const messageAnnotations = pgTable(
 		normalized: text("normalized").notNull().default(""),
 		tier: text("tier").notNull(),
 		characterId: integer("character_id").references(() => characters.id, {
-			onDelete: "set null"
-		}),
-		personaId: integer("persona_id").references(() => personas.id, {
 			onDelete: "set null"
 		}),
 		refEntryId: integer("ref_entry_id").references(

@@ -75,6 +75,8 @@ class FakeAdapter implements FakeTextAdapter {
 	constructor(params: any) {
 		seen.constructedWith = params
 	}
+	/** The queue's pre-send hook — a managed backend loads its model here. */
+	async preflight() {}
 	/** The composed stop list. Recorded so a test can assert what was handed over. */
 	stops: any
 	/** Filled while the stream runs, like the real adapters fill it. */
@@ -321,17 +323,43 @@ vi.mock("$lib/server/media", () => ({
 	getMediaByUuid: async (_db: any, uuid: string) => mediaRows[uuid] ?? null,
 	readMedia: async (_db: any, id: number) => mediaBytes[id] ?? null
 }))
-/** What the resolver was ASKED for — tier 2 arrives in these params. */
+/**
+ * What the resolver was ASKED for — the run's own resolution arrives as
+ * `pipelineConfig` (R-8: dispatch consumes it and re-walks nothing).
+ */
 let resolveArgs: any = null
-vi.mock("$lib/server/utils/resolveTaskConfig", () => ({
-	resolveTaskConfig: async (params: any) => {
-		resolveArgs = params
-		return {
-			connection: connectionForRun,
-			sampling: { id: 1, temperature: 1 }
+vi.mock("$lib/server/connections/capabilityTarget", async (importOriginal) => {
+	const real: any = await importOriginal()
+	return {
+		...real,
+		resolveCapabilityTarget: async (_db: any, req: any) => {
+			resolveArgs = {
+				pipelineConnectionId: req.pipelineConfig?.connectionId ?? null,
+				pipelineConnectionModelId:
+					req.pipelineConfig?.connectionModelId ?? null,
+				pipelineSamplingId: req.pipelineConfig?.samplingConfigId ?? null
+			}
+			return connectionForRun
+				? {
+						ok: true,
+						capability: req.capability,
+						connection: connectionForRun,
+						sampling: { id: 1, temperature: 1 },
+						connectionVia: "pipelineConfig",
+						samplingVia: "pipelineConfig"
+					}
+				: {
+						ok: false,
+						problem: {
+							kind: "unset",
+							capability: req.capability,
+							message:
+								"no AI connection is configured, so there is nothing to send this prompt to."
+						}
+					}
 		}
 	}
-}))
+})
 vi.mock("$lib/server/utils/getUserConfigurations", () => ({
 	getUserConfigurations: async () => ({
 		sampling: { id: 1 },
@@ -814,16 +842,20 @@ describe("what dispatch refuses to hand back", () => {
 	it("keeps the connection out of the binding's result too", async () => {
 		const bindings = coreBindings()
 		const host = createHost(fakeDb, { sessionId: 7, userId: 1 })
-		const r: any = await bindings["core:provider/generate-text@1"]!(
-			{ compiledPrompt: compiled },
+		const r: any = await bindings["core:oracle/generate-text@1"]!(
+			{ context: compiled },
 			{
 				call: (payload: unknown) =>
-					host.call!(payload, {
-						key: "generate",
-						typeId: "core:provider/generate-text",
-						typeVersion: 1,
-						kind: "provider"
-					}),
+					host.call!(
+						payload,
+						{
+							key: "generate",
+							definitionId: "core:oracle/generate-text",
+							definitionVersion: 1,
+							kind: "oracle"
+						},
+						{ dry: false }
+					),
 				signal: new AbortController().signal,
 				progress: () => {},
 				log: () => {}
@@ -852,16 +884,20 @@ describe("what dispatch refuses to hand back", () => {
 		]
 		const bindings = coreBindings()
 		const host = createHost(fakeDb, { sessionId: 7, userId: 1 })
-		const r: any = await bindings["core:provider/generate-text@1"]!(
-			{ compiledPrompt: compiled },
+		const r: any = await bindings["core:oracle/generate-text@1"]!(
+			{ context: compiled },
 			{
 				call: (payload: unknown) =>
-					host.call!(payload, {
-						key: "generate",
-						typeId: "core:provider/generate-text",
-						typeVersion: 1,
-						kind: "provider"
-					}),
+					host.call!(
+						payload,
+						{
+							key: "generate",
+							definitionId: "core:oracle/generate-text",
+							definitionVersion: 1,
+							kind: "oracle"
+						},
+						{ dry: false }
+					),
 				signal: new AbortController().signal,
 				progress: () => {},
 				log: () => {}
@@ -959,27 +995,32 @@ describe("reasoning never reaches the port as markup", () => {
 describe("the generate-text binding", () => {
 	const bindings = coreBindings()
 
-	const runWith = (scope: any, input: any = { compiledPrompt: compiled }) => {
+	// `context` is the node's declared in-port; the binding reads no alias for
+	// it (R-12 swept `input.compiledPrompt` and `input.main`).
+	const runWith = (scope: any, input: any = { context: compiled }) => {
 		const host = createHost(fakeDb, scope)
-		return bindings["core:provider/generate-text@1"]!(input, {
+		return bindings["core:oracle/generate-text@1"]!(input, {
 			call: (payload: unknown) =>
-				host.call!(payload, {
-					key: "generate",
-					typeId: "core:provider/generate-text",
-					typeVersion: 1,
-					kind: "provider"
-				}),
+				host.call!(
+					payload,
+					{
+						key: "generate",
+						definitionId: "core:oracle/generate-text",
+						definitionVersion: 1,
+						kind: "oracle"
+					},
+					{ dry: false }
+				),
 			signal: new AbortController().signal,
 			progress: () => {},
 			log: () => {}
 		} as any) as any
 	}
 
-	it("takes the assemble node's output without a shim in between", async () => {
-		const r = await runWith(
-			{ sessionId: 7 },
-			{ main: compiled, allocations: [], budget: {} }
-		)
+	it("takes the assemble node's `context` output without a shim in between", async () => {
+		// What `$.prompt.context` carries: the allocation and the render, one
+		// object. Forwarded whole as the call's `compiledPrompt`.
+		const r = await runWith({ sessionId: 7 }, { context: compiled })
 		expect(r.kind).toBe("ok")
 		expect(seen.compiledPrompt).toBe(compiled)
 	})
@@ -994,7 +1035,7 @@ describe("the generate-text binding", () => {
 		await runWith(
 			{ sessionId: 7 },
 			{
-				compiledPrompt: compiled,
+				context: compiled,
 				connection: { id: 42 },
 				sampling: { id: 99 }
 			}
@@ -1018,7 +1059,7 @@ describe("the generate-text binding", () => {
 		const r = await runWith(
 			{ sessionId: 7, userId: 1 },
 			{
-				compiledPrompt: compiled,
+				context: compiled,
 				attachments: [{ uuid: OWNED_BY_SESSION }]
 			}
 		)
@@ -1063,7 +1104,7 @@ describe("the generate-text binding", () => {
 	it("carries `off` from the node's params slot to the adapter", async () => {
 		await runWith(
 			{ sessionId: 7 },
-			{ compiledPrompt: compiled, params: { streaming: "off" } }
+			{ context: compiled, params: { streaming: "off" } }
 		)
 		expect(seen.streaming).toBe("off")
 	})
@@ -1074,7 +1115,7 @@ describe("the generate-text binding", () => {
 		// default this seam exists to keep in one place.
 		await runWith(
 			{ sessionId: 7 },
-			{ compiledPrompt: compiled, params: { streaming: "auto" } }
+			{ context: compiled, params: { streaming: "auto" } }
 		)
 		expect(seen.streaming).toBeUndefined()
 	})

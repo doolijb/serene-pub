@@ -1,6 +1,7 @@
 import { dev } from "$app/environment"
 import { io as connect } from "socket.io-client"
 import { setSocket } from "./socketInstance"
+import { resyncOnConnect } from "./interest.svelte"
 
 /**
  * Get authentication token from cookies via API endpoint
@@ -57,6 +58,11 @@ export async function loadSocketsClient({
 			// Listen for successful connection
 			io.on("connect", () => {
 				clearTimeout(connectionTimeout)
+				// A reconnect hands the server a socket with an empty
+				// interest set, so every view already open would go dark on
+				// any gated event without this. The registry replays its
+				// whole key list on every connect, first one included.
+				resyncOnConnect()
 				if (dev) {
 					console.log(
 						"Socket client connected successfully",

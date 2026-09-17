@@ -3,7 +3,7 @@
  *
  * Three things, and they are not the same kind of thing:
  *
- * 1. **The type registry** — every node type core knows about, hashed, so a
+ * 1. **The definition registry** — every node definition core knows about, hashed, so a
  *    stored document that names a type gets the same type back on the next boot
  *    or refuses to load (F3, U2). This is a *fact* about the running code.
  * 2. **The event registry** — core's closed event set, materialized so that
@@ -36,10 +36,10 @@
  * `registrySync.ts`.
  */
 
-import { allTypes, allScriptTypes } from "@serene-pub/sdk"
+import { allDefinitions, allScriptKinds } from "@serene-pub/sdk"
 // Core's **entry** types are declared in the catalog rather than the
 // contracts, and declaring one registers it — so this import is what puts
-// them in `allTypes()` below. The catalog is already loaded by way of
+// them in `allDefinitions()` below. The catalog is already loaded by way of
 // `specs/respond`; naming it here is the difference between a dependency
 // and a coincidence, and the failure it prevents is quiet (a fresh install
 // with no entry rows and nothing saying why).
@@ -62,7 +62,7 @@ export {
 } from "$lib/server/pipelines/specs/respond"
 import { RESPOND_VERSION } from "$lib/server/pipelines/specs/respond"
 import { loadDocument } from "$lib/server/pipelines/boot/store"
-import { syncTypeRegistry } from "$lib/server/pipelines/boot/registrySync"
+import { syncDefinitionRegistry } from "$lib/server/pipelines/boot/registrySync"
 import {
 	projectEntryConstraints,
 	type EntryProjectionReport
@@ -151,7 +151,7 @@ export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 		assertHookCompleteness()
 
 		// The same check one construct over, and for the identical reason:
-		// core declares its node types in the contracts and implements them in
+		// core declares its node definitions in the contracts and implements them in
 		// `bindings.ts`, and a binding key is a **string literal no compiler
 		// checks** — so a renamed type leaves its handler bound to nothing,
 		// and the node halts with "no binding registered" pointing at the
@@ -200,14 +200,14 @@ export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 		// Every type the running build knows about. Importing the contracts is
 		// what registers them, so this is a fact about the code rather than a
 		// list anyone maintains.
-		const synced = await syncTypeRegistry(
+		const synced = await syncDefinitionRegistry(
 			db,
 			// Script types go through the same sync, and that is the design
 			// rather than a convenience: 18 §2 puts them "under the same sync
-			// and publishing rules as node types", so a second projection path
+			// and publishing rules as node definitions", so a second projection path
 			// would be a second set of rules to keep in step.
 			// `snapshotRegistry` branches on the id.
-			[...allTypes(), ...allScriptTypes()],
+			[...allDefinitions(), ...allScriptKinds()],
 			{ release: RESPOND_VERSION }
 		)
 		report.types = {

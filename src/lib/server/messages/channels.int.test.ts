@@ -44,10 +44,10 @@ let phoneSessionId: number
 /** A session whose genre declares a channel that will carry several lanes. */
 let textSessionId: number
 
-const PHONE_GENRE = "test:input/phone-mode@1"
-const TEXT_GENRE = "test:input/texting-mode@1"
+const PHONE_GENRE = "test:inlet/phone-mode@1"
+const TEXT_GENRE = "test:inlet/texting-mode@1"
 
-const node = { key: "history", typeId: "core:query/session-history@1" } as any
+const node = { key: "history", definitionId: "core:query/session-history@1" } as any
 
 const history = async (
 	sessionId: number,
@@ -70,10 +70,10 @@ beforeAll(async () => {
 
 	// The transitional genre route: a live input type carrying a session
 	// shape. Lighter than a whole create spec and read by the same function.
-	await db.insert(schema.pipelineTypeRegistry).values({
-		typeId: "test:input/phone-mode",
+	await db.insert(schema.pipelineDefinitionRegistry).values({
+		definitionId: "test:inlet/phone-mode",
 		version: 1,
-		kind: "input",
+		kind: "inlet",
 		status: "live",
 		sessionShape: { channels: ["phone"] } as any
 	})
@@ -84,10 +84,10 @@ beforeAll(async () => {
 		.returning()
 	chatSessionId = chat.id
 
-	await db.insert(schema.pipelineTypeRegistry).values({
-		typeId: "test:input/texting-mode",
+	await db.insert(schema.pipelineDefinitionRegistry).values({
+		definitionId: "test:inlet/texting-mode",
 		version: 1,
-		kind: "input",
+		kind: "inlet",
 		status: "live",
 		sessionShape: { channels: ["text-messages"] } as any
 	})
@@ -283,7 +283,7 @@ describe("a history read", () => {
 describe("a summary read", () => {
 	const summaryNode = {
 		key: "source",
-		typeId: "core:query/summarize-source@1"
+		definitionId: "core:query/summarize-source@1"
 	} as any
 
 	it("draws from one lane unless a person picked the messages", async () => {
@@ -335,7 +335,7 @@ describe("the native list", () => {
 describe("writing a message to a channel", () => {
 	const writeNode = {
 		key: "reply",
-		typeId: "core:consumer/create-message"
+		definitionId: "core:outlet/create-message"
 	} as any
 
 	const write = async (sessionId: number, payload: Record<string, unknown>) =>
@@ -548,7 +548,7 @@ describe("reading a channel with more than one lane", () => {
 	it("reads the whole channel from a bare slug, and one lane from `slug:n`", async () => {
 		const laneNode = {
 			key: "history",
-			typeId: "core:query/session-history@1"
+			definitionId: "core:query/session-history@1"
 		} as any
 		const read = async (channel?: string) =>
 			(
@@ -588,7 +588,7 @@ describe("reading a channel with more than one lane", () => {
 	it("refuses a lane of a channel the genre never declared", async () => {
 		const writeNode = {
 			key: "reply",
-			typeId: "core:consumer/create-message"
+			definitionId: "core:outlet/create-message"
 		} as any
 		// The slug is what a genre declares; the lane is not. So the refusal
 		// has to fire on the slug and stay silent about the number.
@@ -610,7 +610,7 @@ describe("reading a channel with more than one lane", () => {
 	it("stores a write in canonical form, whatever spelling reached it", async () => {
 		const writeNode = {
 			key: "reply",
-			typeId: "core:consumer/create-message"
+			definitionId: "core:outlet/create-message"
 		} as any
 		const write = async (channel: string) => {
 			const res: any = await createHost(db, {

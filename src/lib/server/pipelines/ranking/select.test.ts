@@ -206,6 +206,74 @@ describe("select", () => {
 	})
 })
 
+describe("a band whose priority is `always`", () => {
+	const always = () =>
+		withDefaults({
+			groups: {
+				priority: { ...DEFAULT_RANKING.groups.priority, worldLore: "always" },
+				maxEntries: { ...DEFAULT_RANKING.groups.maxEntries, worldLore: 2 }
+			}
+		})
+
+	it("is reserved ahead of the scored fill, in score order, up to the band's cap — the rest leave with the cap's reason (U3b S1)", () => {
+		// Four entries, a cap of 2, and a window that could hold all four:
+		// `always` is a promise about the band, not a way past its ceiling,
+		// whose own label says it applies "whatever its share".
+		const sel = select(
+			[
+				lore({ id: "c", tokens: 1, signals: { keyword: 0.3 } }),
+				lore({ id: "a", tokens: 1, signals: { keyword: 1 } }),
+				lore({ id: "d", tokens: 1, signals: { keyword: 0.2 } }),
+				lore({ id: "b", tokens: 1, signals: { keyword: 0.9 } })
+			],
+			{ availableTokens: 100_000, params: always() }
+		)
+		expect(sel.included.map((d) => [d.candidate.id, d.reason])).toEqual([
+			["a", "reserved_priority"],
+			["b", "reserved_priority"]
+		])
+		expect(sel.excluded.map((d) => [d.candidate.id, d.reason])).toEqual([
+			["c", "excluded_budget"],
+			["d", "excluded_budget"]
+		])
+		expect(sel.excluded[0]!.why).toMatch(
+			/always be included, but already has its maximum of 2 entries/
+		)
+		expect(sel.groups.worldLore.entries).toBe(2)
+	})
+
+	it("a pin still steps over the cap — a promise about one entry, not the band", () => {
+		const sel = select(
+			[
+				lore({ id: "a", tokens: 1, signals: { keyword: 1 } }),
+				lore({ id: "b", tokens: 1, signals: { keyword: 0.9 } }),
+				lore({ id: "p", tokens: 1, pinned: true, signals: {} })
+			],
+			{ availableTokens: 100_000, params: always() }
+		)
+		expect(sel.included.map((d) => [d.candidate.id, d.reason])).toEqual([
+			["p", "reserved"],
+			["a", "reserved_priority"],
+			["b", "reserved_priority"]
+		])
+	})
+
+	it("with no cap keeps every entry the window can hold", () => {
+		const params = withDefaults({
+			groups: {
+				priority: { ...DEFAULT_RANKING.groups.priority, worldLore: "always" },
+				maxEntries: { ...DEFAULT_RANKING.groups.maxEntries, worldLore: undefined }
+			}
+		})
+		const many = Array.from({ length: 30 }, (_, i) =>
+			lore({ id: i, tokens: 1, signals: { keyword: 1 - i / 100 } })
+		)
+		const sel = select(many, { availableTokens: 100_000, params })
+		expect(sel.included).toHaveLength(30)
+		expect(sel.included.every((d) => d.reason === "reserved_priority")).toBe(true)
+	})
+})
+
 describe("pinned entries", () => {
 	it("are always included, whatever they score", () => {
 		const sel = select([lore({ id: "pin", pinned: true, signals: {} })], {
@@ -284,7 +352,7 @@ describe("a pinned entry the window cannot hold", () => {
 	})
 
 	it("does not take the pins sorted below it with it", () => {
-		// Note 3 applied to pins. A floor is one promise about a source in an
+		// Note 3 applied to pins. A minimum is one promise about a source in an
 		// order; a pin is a separate promise per ticked box, so `a` and `b` are
 		// owed nothing by `big` being oversized.
 		const sel = select(
@@ -369,7 +437,7 @@ describe("a pinned entry the window cannot hold", () => {
 		expect(sel.excluded.map((d) => d.candidate.id)).toEqual(["third"])
 	})
 
-	it("does not also cancel the floor its source was owed", () => {
+	it("does not also cancel the minimum its source was owed", () => {
 		const sel = select(
 			[
 				lore({
@@ -404,12 +472,12 @@ describe("a pinned entry the window cannot hold", () => {
 				} as any)
 			}
 		)
-		// The floor subtracts the pins that are keeping it. A pin that was
-		// dropped keeps nothing, so both floor slots are still owed.
-		const floored = sel.included.filter(
+		// The minimum subtracts the pins that are keeping it. A pin that was
+		// dropped keeps nothing, so both minimum slots are still owed.
+		const minimumEntries = sel.included.filter(
 			(d) => d.reason === "reserved_minimum"
 		)
-		expect(floored.map((d) => d.candidate.id)).toEqual(["m1", "m2"])
+		expect(minimumEntries.map((d) => d.candidate.id)).toEqual(["m1", "m2"])
 	})
 
 	it("renders a line of its own, which a group's dropped count cannot", () => {
@@ -594,13 +662,13 @@ describe("group budgets", () => {
 		)
 	})
 
-	// The guarantee the floors exist to make, and the one they must not break.
-	it("never selects more than the window, however the floors are set", () => {
+	// The guarantee the minimums exist to make, and the one they must not break.
+	it("never selects more than the window, however the minimums are set", () => {
 		const sel = select(mixed(), {
 			availableTokens: 500,
 			params: withDefaults({
 				groups: {
-					// Every floor set past what 500 tokens can hold: five
+					// Every minimum set past what 500 tokens can hold: five
 					// 200-token entries per source is 2000 tokens of promises
 					// against a 500-token window.
 					minEntries: {
@@ -617,13 +685,13 @@ describe("group budgets", () => {
 		expect(sel.included.length).toBeGreaterThan(0)
 	})
 
-	it("fills a floor in score order and marks it as a floor", () => {
+	it("fills a minimum in score order and marks it as a minimum", () => {
 		const sel = select(mixed(), {
 			availableTokens: 2000,
 			params: withDefaults({
 				groups: {
 					// worldLore weighted to nothing, so anything of it that
-					// survives got there by the floor rather than by a share.
+					// survives got there by the minimum rather than by a share.
 					share: { ...DEFAULT_RANKING.groups.share, worldLore: 0 },
 					minEntries: {
 						...DEFAULT_RANKING.groups.minEntries,
@@ -632,13 +700,13 @@ describe("group budgets", () => {
 				}
 			} as any)
 		})
-		const floored = sel.included.filter(
+		const minimumEntries = sel.included.filter(
 			(d) =>
 				d.reason === "reserved_minimum" &&
 				d.candidate.source === "worldLore"
 		)
-		expect(floored).toHaveLength(2)
-		expect(floored[0]!.why).toMatch(/floor of 2 for worldLore/)
+		expect(minimumEntries).toHaveLength(2)
+		expect(minimumEntries[0]!.why).toMatch(/minimum of 2 for worldLore/)
 	})
 
 	it("a zero-weighted group is excluded, and says so", () => {
@@ -844,7 +912,7 @@ describe("a source with no budget group", () => {
 })
 
 /**
- * Design §7: *score allocates, floors guarantee, shares cap.*
+ * Design §7: *score allocates, minimums guarantee, shares cap.*
  *
  * Every test here runs the same input twice, once each way, because the claim
  * is comparative — "the new precedence is better" is only meaningful next to
@@ -853,14 +921,14 @@ describe("a source with no budget group", () => {
  */
 describe("score-led allocation", () => {
 	/**
-	 * The floors are switched off in most of these, and it is not to make the
+	 * The minimums are switched off in most of these, and it is not to make the
 	 * arithmetic tidier. `minEntries.messages` is 6 by default, so on a small
-	 * window the floor decides these fixtures before either precedence gets a
+	 * window the minimum decides these fixtures before either precedence gets a
 	 * turn — and a test that passes because of the mechanism it is not about
 	 * is a test that keeps passing when the mechanism it *is* about breaks.
-	 * The floor gets its own test below, where it is the subject.
+	 * The minimum gets its own test below, where it is the subject.
 	 */
-	const noFloors = (over: Record<string, unknown> = {}) =>
+	const noMinimums = (over: Record<string, unknown> = {}) =>
 		withDefaults({
 			groups: {
 				minEntries: {
@@ -911,7 +979,7 @@ describe("score-led allocation", () => {
 		// candidate that scored is the one that was dropped.
 		const shareFirst = select(oneRelevantSource(), {
 			availableTokens: 1000,
-			params: noFloors()
+			params: noMinimums()
 		})
 		expect(shareFirst.included.map((d) => d.candidate.id)).toEqual([
 			"m_idle1",
@@ -928,7 +996,7 @@ describe("score-led allocation", () => {
 		// something that did not.
 		const scoreLed = select(oneRelevantSource(), {
 			availableTokens: 1000,
-			params: noFloors(),
+			params: noMinimums(),
 			scoreLedAllocation: true
 		})
 		expect(scoreLed.included.map((d) => d.candidate.id).sort()).toEqual([
@@ -944,11 +1012,11 @@ describe("score-led allocation", () => {
 		// omitting the option is the same call as passing it false.
 		const omitted = select(oneRelevantSource(), {
 			availableTokens: 1000,
-			params: noFloors()
+			params: noMinimums()
 		})
 		const explicit = select(oneRelevantSource(), {
 			availableTokens: 1000,
-			params: noFloors(),
+			params: noMinimums(),
 			scoreLedAllocation: false
 		})
 		expect(omitted.included.map((d) => d.candidate.id)).toEqual(
@@ -967,7 +1035,7 @@ describe("score-led allocation", () => {
 		// Under share-first there was only one bound and one name for it.
 		const sel = select(oneRelevantSource(), {
 			availableTokens: 1000,
-			params: noFloors(),
+			params: noMinimums(),
 			scoreLedAllocation: true
 		})
 		const capped = sel.excluded.find((d) => d.candidate.id === "m_idle2")!
@@ -976,7 +1044,7 @@ describe("score-led allocation", () => {
 
 		const shareFirst = select(oneRelevantSource(), {
 			availableTokens: 1000,
-			params: noFloors()
+			params: noMinimums()
 		})
 		expect(
 			shareFirst.excluded.find((d) => d.candidate.id === "w_relevant")!
@@ -984,13 +1052,13 @@ describe("score-led allocation", () => {
 		).toBe("excluded_token_limit")
 	})
 
-	// ── Floors guarantee ────────────────────────────────────────────────
-	describe("floors still guarantee", () => {
+	// ── Minimums guarantee ────────────────────────────────────────────────
+	describe("minimums still guarantee", () => {
 		// The property the share bands were really protecting, and the one
-		// thing score-led allocation must not take with it: a floor is a
+		// thing score-led allocation must not take with it: a minimum is a
 		// promise about a *source*, so it has to survive a turn where every
 		// scored candidate from somewhere else outranks it.
-		const flooredMessages = () => [
+		const minimumMessages = () => [
 			lore({
 				id: "w_dominant",
 				source: "worldLore",
@@ -1011,8 +1079,8 @@ describe("score-led allocation", () => {
 			})
 		]
 
-		it("keeps the floor's entries even when a better candidate wanted the tokens", () => {
-			const sel = select(flooredMessages(), {
+		it("keeps the minimum's entries even when a better candidate wanted the tokens", () => {
+			const sel = select(minimumMessages(), {
 				availableTokens: 1000,
 				params: withDefaults({
 					groups: {
@@ -1024,20 +1092,20 @@ describe("score-led allocation", () => {
 				} as any),
 				scoreLedAllocation: true
 			})
-			const floored = sel.included.filter(
+			const minimumEntries = sel.included.filter(
 				(d) => d.reason === "reserved_minimum"
 			)
-			expect(floored.map((d) => d.candidate.id)).toEqual(["m1", "m2"])
-			expect(floored[0]!.why).toMatch(/floor of 2 for messages/)
-			// And the floor came off the top, so the 900-token entry is
+			expect(minimumEntries.map((d) => d.candidate.id)).toEqual(["m1", "m2"])
+			expect(minimumEntries[0]!.why).toMatch(/minimum of 2 for messages/)
+			// And the minimum came off the top, so the 900-token entry is
 			// weighed against 800 rather than 1000 and does not fit.
 			expect(sel.included.map((d) => d.candidate.id)).not.toContain(
 				"w_dominant"
 			)
 		})
 
-		it("fills the floor in score order, as it always did", () => {
-			const sel = select(flooredMessages(), {
+		it("fills the minimum in score order, as it always did", () => {
+			const sel = select(minimumMessages(), {
 				availableTokens: 1000,
 				params: withDefaults({
 					groups: {
@@ -1049,14 +1117,14 @@ describe("score-led allocation", () => {
 				} as any),
 				scoreLedAllocation: true
 			})
-			const floored = sel.included.filter(
+			const minimumEntries = sel.included.filter(
 				(d) => d.reason === "reserved_minimum"
 			)
-			expect(floored.map((d) => d.candidate.id)).toEqual(["m1"])
+			expect(minimumEntries.map((d) => d.candidate.id)).toEqual(["m1"])
 		})
 
-		it("never selects more than the window, however the floors are set", () => {
-			// The guarantee the floors exist to make, and the one they must
+		it("never selects more than the window, however the minimums are set", () => {
+			// The guarantee the minimums exist to make, and the one they must
 			// not break — restated under the new precedence because the pool
 			// the scored pass draws on is what is left after them.
 			const sel = select(
@@ -1233,7 +1301,7 @@ describe("score-led allocation", () => {
 		it("holds a source to its band while another source can still use the tokens", () => {
 			const sel = select(contended(), {
 				availableTokens: 1000,
-				params: noFloors(),
+				params: noMinimums(),
 				scoreLedAllocation: true
 			})
 			// Character lore and history each had four candidates and a band
@@ -1253,7 +1321,7 @@ describe("score-led allocation", () => {
 		it("lets a source past its band only with tokens nothing else could use", () => {
 			const sel = select(contended(), {
 				availableTokens: 1000,
-				params: noFloors(),
+				params: noMinimums(),
 				scoreLedAllocation: true
 			})
 			for (const source of ["worldLore", "messages"] as const) {
@@ -1282,7 +1350,7 @@ describe("score-led allocation", () => {
 			)
 			const sel = select(many, {
 				availableTokens: 100_000,
-				params: noFloors(),
+				params: noMinimums(),
 				scoreLedAllocation: true
 			})
 			expect(sel.groups.worldLore.entries).toBe(20)
@@ -1300,7 +1368,7 @@ describe("score-led allocation", () => {
 			)
 			const sel = select([...pins, lore({ id: "scored", tokens: 1 })], {
 				availableTokens: 10_000,
-				params: noFloors(),
+				params: noMinimums(),
 				scoreLedAllocation: true
 			})
 			expect(sel.included.map((d) => d.candidate.id)).toContain("scored")
@@ -1315,7 +1383,7 @@ describe("score-led allocation", () => {
 				],
 				{
 					availableTokens: 1000,
-					params: noFloors(),
+					params: noMinimums(),
 					scoreLedAllocation: true
 				}
 			)
@@ -1338,7 +1406,7 @@ describe("score-led allocation", () => {
 				],
 				{
 					availableTokens: 250,
-					params: noFloors(),
+					params: noMinimums(),
 					scoreLedAllocation: true
 				}
 			)
@@ -1384,7 +1452,7 @@ describe("a candidate an eligibility rule excluded", () => {
 		expect(dropped.why).toBe("the speaker does not know this")
 	})
 
-	it("is not merely outranked — a floor cannot bring it back", () => {
+	it("is not merely outranked — a minimum cannot bring it back", () => {
 		// The whole reason this is not a score of zero. A zero-scored candidate
 		// is still a candidate: `minEntries` fills in score order and would
 		// take it when nothing else was left.

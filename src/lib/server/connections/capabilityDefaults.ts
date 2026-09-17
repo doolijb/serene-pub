@@ -1,8 +1,7 @@
 /**
  * The instance's default connection and sampling config, per capability.
  *
- * These used to be columns on `system_settings` — one pair for text, and 0172
- * added a second pair for images. That does not scale: the capability space is
+ * A column pair on `system_settings` does not scale: the capability space is
  * open, so a plugin introducing a transform would mean a migration, and the
  * table would grow a column pair for every modality anyone ever adds.
  *
@@ -11,20 +10,17 @@
  * "the default connection for JSON schema" is not, because a feature qualifies
  * a request rather than being something a node goes shopping for.
  *
- * ⚠ Until 0181 this header said `default_connection_id` / `default_sampling_id`
- * on `system_settings` were "deliberately still there and still read by the
- * legacy generation path". They were, and both paths wrote both, and readers
- * checked the table first and the column only when the row was ABSENT — never
- * when it was merely STALE. Two spellings of one fact, which is how a star press
- * landed in the column, lost to a seeded row, and left the pipeline running on
- * yesterday's connection while every legacy screen showed today's. The columns
- * are gone (0181); this table is the only store.
+ * ⚠ `system_settings.default_connection_id` / `default_sampling_id` do not
+ * exist and must not come back. Two spellings of one fact is how a star press
+ * lands in one, is lost to a seeded row, and leaves the pipeline running on a
+ * stale connection while every reader checking the other spelling sees
+ * today's. This table is the only store.
  *
  * **Reading is not choosing.** Nothing here selects a connection — these are
  * lookups, and a capability with no row is a capability nothing will run. The
- * chain that decides (`capability default → pipeline config → session override`)
- * is `capabilityTarget.ts`, and it is the only caller that should be turning an
- * absent row into a sentence.
+ * chain that decides (`capability default → pipeline config`; a session names
+ * no connection) is `capabilityTarget.ts`, and it is the only caller that
+ * should be turning an absent row into a sentence.
  *
  * ## This file is the storage boundary, and the only one (0183)
  *

@@ -52,14 +52,12 @@ const seated = (
 const bound = (
 	row: Partial<{
 		characterId: number | null
-		personaId: number | null
 		name: string
 		aliases: unknown
 		absorbedAliases: unknown
 	}>
 ) => ({
 	characterId: null,
-	personaId: null,
 	name: "",
 	aliases: [],
 	absorbedAliases: [],
@@ -129,18 +127,22 @@ describe("the vocabulary reaches the whole book, not only the room", () => {
 	})
 
 	it("resolves a bound persona the session never seated", () => {
+		// A persona is a character, so the binding that names one is a
+		// character binding and it resolves under that kind. What the test is
+		// still for: a persona bound in the book but absent from the room
+		// reaches the vocabulary at all.
 		const out = castEntityRefs({
-			lorebookBindings: [bound({ personaId: 4, name: "Warren" })]
+			lorebookBindings: [bound({ characterId: 4, name: "Warren" })]
 		})
 		expect(out).toEqual([
-			{ name: "Warren", ref: { kind: "persona", id: 4 } }
+			{ name: "Warren", ref: { kind: "character", id: 4 } }
 		])
 	})
 
 	/**
-	 * A background NPC the graph minted binds neither, and there is no row for
-	 * it to resolve *to* — `EntityRef` names a character, a persona or an entry.
-	 * `loadVocabulary` drops it for the same reason, and inventing a fourth kind
+	 * A background NPC the graph minted binds nothing, and there is no row for
+	 * it to resolve *to* — `EntityRef` names a character or an entry.
+	 * `loadVocabulary` drops it for the same reason, and inventing a third kind
 	 * is a schema decision neither seam should make alone. Its name still
 	 * reaches the open tier as a string.
 	 */

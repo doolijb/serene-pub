@@ -13,7 +13,7 @@ describe("resolveStyle", () => {
 		row(1, "messages", systemStyleSlug("messages", "default")),
 		row(2, "messages", systemStyleSlug("messages", "compact")),
 		row(7, "messages", "user-my-skin"),
-		row(9, "composer", systemStyleSlug("composer", "default"))
+		row(9, "stats", systemStyleSlug("stats", "default"))
 	]
 
 	test("exact id+slug match wins", () => {
@@ -43,8 +43,8 @@ describe("resolveStyle", () => {
 	test("a pin to another user's now-invisible style falls back to default, not the wrong widget", () => {
 		// The candidate set is the caller's usable rows; a private style simply
 		// isn't in it, so it degrades to THIS widget's default.
-		const r = resolveStyle("composer", { id: 7, slug: "user-my-skin" }, candidates)
-		expect(r?.slug).toBe(systemStyleSlug("composer", "default"))
+		const r = resolveStyle("stats", { id: 7, slug: "user-my-skin" }, candidates)
+		expect(r?.slug).toBe(systemStyleSlug("stats", "default"))
 	})
 
 	test("no ref → the widget default", () => {

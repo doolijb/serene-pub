@@ -3,7 +3,7 @@
 	import PanelTabList from "$lib/client/components/panels/PanelTabList.svelte"
 	import PanelTab from "$lib/client/components/panels/PanelTab.svelte"
 	import PanelSectionTitle from "$lib/client/components/panels/PanelSectionTitle.svelte"
-	import { getContext, onMount, onDestroy } from "svelte"
+	import { getContext, onMount } from "svelte"
 	import { Tabs } from "@skeletonlabs/skeleton-svelte"
 	import type { ValueChangeDetails } from "@zag-js/tabs"
 	import OllamaInstalledTab from "../ollamaManager/OllamaInstalledTab.svelte"
@@ -11,6 +11,7 @@
 	import OllamaSettingsTab from "../ollamaManager/OllamaSettingsTab.svelte"
 	import OllamaDownloadsTab from "../ollamaManager/OllamaDownloadsTab.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import OllamaIcon from "../icons/OllamaIcon.svelte"
 	import OllamaUnsavedChangesModal from "../modals/OllamaUnsavedChangesModal.svelte"
@@ -126,9 +127,6 @@
 		baseUrlField = ollamaSettingsCtx.settings?.ollamaManagerBaseUrl ?? ""
 	})
 
-	// Named so `off` can name them too. A bare `socket.off("ollama:modelsList")`
-	// removes EVERY listener for that event — including the tabs that read the
-	// same list once they render.
 	function handleModelsList(message: Sockets.Ollama.ModelsList.Response) {
 		installedCount = message.models?.length ?? 0
 	}
@@ -162,27 +160,35 @@
 		}
 	}
 
+	/**
+	 * Four standing interests, all BARE. The panel holds them for as long as it
+	 * is open rather than one reply at a time: the tabs it renders ask for the
+	 * same model list and the same version, and this shell reads their answers
+	 * to decide which tab to open and whether to show the setup screen at all.
+	 * Holding the key is also what keeps `ollama:modelsList` arriving here
+	 * while a tab, not this component, is the one asking for it.
+	 *
+	 * Declared ABOVE `onMount`, itself an effect: the keys have to be held
+	 * before the connection check leaves, and the typed `emit` flushes the
+	 * interest sync ahead of itself (plan ruling 3).
+	 */
+	useInterest<"ollama:modelsList">("ollama:modelsList", handleModelsList)
+	useInterest<"ollama:version">("ollama:version", handleVersion)
+	useInterest<"ollama:version:error">(
+		"ollama:version:error",
+		handleVersionError
+	)
+	useInterest<"ollama:setBaseUrl">("ollama:setBaseUrl", handleSetBaseUrl)
+
 	onMount(() => {
 		// Only the tabs fetch the model list, and only once they're rendered —
 		// which is exactly backwards for deciding which tab to open. Ask here
 		// too, but only during the wizard hand-off, so the normal path keeps
 		// its current single request.
-		socket.on("ollama:modelsList", handleModelsList)
 		if (panelsCtx?.digest?.tutorial) socket.emit("ollama:modelsList", {})
-
-		socket.on("ollama:version", handleVersion)
-		socket.on("ollama:version:error", handleVersionError)
-		socket.on("ollama:setBaseUrl", handleSetBaseUrl)
 
 		// Check initial connection
 		checkConnection()
-	})
-
-	onDestroy(() => {
-		socket.off("ollama:modelsList", handleModelsList)
-		socket.off("ollama:version", handleVersion)
-		socket.off("ollama:version:error", handleVersionError)
-		socket.off("ollama:setBaseUrl", handleSetBaseUrl)
 	})
 
 	function handleUnsavedChangesModalOnOpenChange(e: OpenChangeDetails) {

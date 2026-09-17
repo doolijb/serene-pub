@@ -12,17 +12,25 @@
 	 * name and a `Wire` tab with no connection. Nothing here reconstructs a
 	 * missing field from a neighbouring one.
 	 */
-	import { onDestroy } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { Tabs } from "@skeletonlabs/skeleton-svelte"
-	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import {
+		requestWithInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
+	// The incremental UI-translation seam (R5) — see `src/routes/+page.svelte`.
+	// Wrapped here for the Portrayed-by line's words; a member's name is
+	// never passed through it.
+	import { statusText, t } from "$lib/client/i18n/state.svelte"
 	import {
 		nodeRows,
 		outputView,
 		postHistoryView,
 		promptView,
 		verdict,
+		lastStatusOf,
+		portrayalsLine,
 		wireView,
 		type InspectedRun,
 		type NodeRow
@@ -39,8 +47,6 @@
 	}
 
 	let { runId, onLoaded }: Props = $props()
-
-	const socket = useTypedSocket()
 
 	let run = $state<InspectedRun | null>(null)
 	let loading = $state(false)
@@ -64,15 +70,22 @@
 		refusal = res?.error ?? "That run could not be read."
 	}
 
-	socket.on("pipelines:run", onRun)
-	socket.on("pipelines:run:error", onRunError)
-	onDestroy(() => {
-		// Named handlers, always: `off(event)` with no handler removes every
-		// listener on that event, app-wide.
-		socket.off("pipelines:run", onRun)
-		socket.off("pipelines:run:error", onRunError)
-	})
+	// Never gated (plan ruling 2 — an error is not an output to skip), but the
+	// registry is the only listener path, so it is declared like the reply.
+	useInterest<"pipelines:run:error">("pipelines:run:error", onRunError)
 
+	/**
+	 * The run this inspector is showing, asked for and listened for together:
+	 * `requestWithInterest` declares the reply's key, flushes the interest sync
+	 * and only then sends the request (ruling 3).
+	 *
+	 * BARE — `pipelines:run` has no entry in `SCOPED_EVENTS`, and a `#<runId>`
+	 * key for an unscoped event would match no payload at all. `onRun`'s own
+	 * `res.run.runId !== runId` check is the filter, as it was.
+	 *
+	 * The release is the effect's teardown, so re-pointing the inspector at
+	 * another run drops the previous interest rather than stacking one.
+	 */
 	$effect(() => {
 		const id = runId
 		run = null
@@ -80,7 +93,7 @@
 		selectedSeq = null
 		if (!id) return
 		loading = true
-		socket.emit("pipelines:run", { runId: id })
+		return requestWithInterest("pipelines:run", { runId: id }, onRun)
 	})
 
 	const rows = $derived(run ? nodeRows(run.receipt) : [])
@@ -95,7 +108,7 @@
 		const haltKey = run?.haltNodeKey
 		return (
 			rows.find((r) => haltKey && r.nodeKey === haltKey) ??
-			[...rows].reverse().find((r) => r.isProvider) ??
+			[...rows].reverse().find((r) => r.isOracle) ??
 			rows[rows.length - 1]
 		)
 	})
@@ -192,6 +205,8 @@
 
 	const triggerSource = $derived((run?.receipt as any)?.triggerSource ?? null)
 	const runNotes = $derived(((run?.receipt as any)?.notes ?? []) as string[])
+	/** Who portrayed whom this run — pinned at run start (R-21 (4)). */
+	const portrayals = $derived(run ? portrayalsLine(run) : [])
 </script>
 
 <section data-run-inspector class="flex min-h-0 flex-col gap-3">
@@ -204,8 +219,14 @@
 	{:else if run}
 		<!-- ── the verdict, then the facts behind it ───────────────────── -->
 		<header class="flex flex-col gap-2">
+			<!-- The one status the receipt keeps (R-21): what the run was
+			     doing when it died, in the reader's language, inside the
+			     sentence — "Stopped at generate on request while Jasmine is
+			     typing." -->
 			<p class="text-base font-semibold" data-run-verdict>
-				{verdict(run)}
+				{verdict(run, {
+					status: statusText(lastStatusOf(run)?.text)
+				})}
 			</p>
 			<div
 				class="text-surface-600-400 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs"
@@ -221,13 +242,21 @@
 					<span
 						class="chip rounded-full px-2 py-0.5 font-mono {run.specHashIsCurrent
 							? 'preset-tonal-surface'
-							: 'preset-tonal-warning'}"
+							: run.specHashRenamedAt
+								? 'preset-tonal-surface'
+								: 'preset-tonal-warning'}"
 						title={run.specHashIsCurrent
 							? "This pipeline still resolves to the document this run used."
-							: "This pipeline has been edited since. The receipt describes the run, not what the pipeline does now."}
+							: run.specHashRenamedAt
+								? "The vocabulary was renamed after this run — the same document under new words. The receipt describes what the pipeline still does."
+								: "This pipeline has been edited since. The receipt describes the run, not what the pipeline does now."}
 					>
 						{run.specHash.slice(0, 8)}
-						{run.specHashIsCurrent ? "" : "· superseded"}
+						{run.specHashIsCurrent
+							? ""
+							: run.specHashRenamedAt
+								? `· renamed ${run.specHashRenamedAt.slice(0, 10)}`
+								: "· superseded"}
 					</span>
 				{/if}
 				<span class={badgeClass[runTone]}>
@@ -256,6 +285,26 @@
 			</div>
 			{#if run.haltReason}
 				<p class="text-surface-600-400 text-xs">{run.haltReason}</p>
+			{/if}
+			{#if portrayals.length}
+				<!-- Who portrayed whom, as the run pinned it before its first
+				     node: a member joining mid-run changes the next run's
+				     line, never this one's. Each pair is its own chip so
+				     "Tom · AI · Elara · you" groups by participant. -->
+				<p
+					class="text-surface-600-400 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs"
+					data-run-portrayals
+					title="Who portrayed each participant this run, decided when the run started."
+				>
+					<span>{t("Portrayed by")}</span>
+					{#each portrayals as chip (chip.ref)}
+						<span class="chip preset-tonal-surface rounded-full px-2 py-0.5">
+							{chip.name} · {chip.by === "person" && !chip.you
+								? chip.portrayedBy
+								: t(chip.portrayedBy)}
+						</span>
+					{/each}
+				</p>
 			{/if}
 			{#if runNotes.length}
 				<ul class="text-surface-600-400 list-disc pl-5 text-xs">
@@ -310,10 +359,10 @@
 									class="text-surface-600-400 flex items-center gap-2 pl-7 text-[0.68rem]"
 								>
 									<span class="min-w-0 truncate">
-										{row.typeId}
+										{row.definitionId}
 									</span>
 									<span class="flex-1"></span>
-									{#if row.isProvider}
+									{#if row.isOracle}
 										<span
 											class="inline-flex shrink-0 items-center gap-1"
 											title={row.model
@@ -345,7 +394,7 @@
 							<span
 								class="text-surface-600-400 font-mono text-xs"
 							>
-								{selected.typeId}
+								{selected.definitionId}
 							</span>
 							{#if selected.model}
 								<span

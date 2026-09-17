@@ -1,15 +1,32 @@
 /**
- * The pure half of the widget-style store (PLAN 25, ruled 2026-08-30).
+ * The widget-style store (PLAN 25, ruled 2026-08-30).
  *
- * Two things are tested here and nothing else: the LIST REDUCER (a
+ * Mostly its pure half: the LIST REDUCER (a
  * `widgetStyles:list` reply scoped to one widget must not wipe the rows of
  * every other widget) and the SANITISER/SCOPER, which is the security boundary
  * — a widget skin is user-authored CSS that can be marked `shared`, so it runs
  * in other people's browsers. The earlier style-bleed bug is why the scoping
  * half is asserted as hard as the stripping half: a skin that escapes its own
  * widget is a bug even when it fetches nothing.
+ *
+ * The last describe is the socket path, driven through the real interest
+ * registry against a fake socket. Three properties, each of which fails
+ * silently: the list interest is DECLARED before the request that wants it
+ * (the reply is gated — a request that overtook its own sync would be answered
+ * to nobody), one raw listener exists per event name however many keys are
+ * held, and the two writes that nothing reads a reply for declare no interest
+ * at all, so the gate can skip replies the store was never going to fold in.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
+
+/** The live socket the registry and the store both read. */
+let socket: ReturnType<typeof makeSocket> | null = null
+
+vi.mock("$app/environment", () => ({ dev: false, building: false }))
+vi.mock("$lib/client/sockets/socketInstance", () => ({
+	getSocket: () => socket
+}))
+
 import {
 	canManageStyle,
 	checkWidgetCss,
@@ -68,7 +85,7 @@ describe("mergeStyles", () => {
 		// must not smuggle rows into a widget the reducer was not told about.
 		const next = mergeStyles(
 			[row({ id: 2, widgetSlug: "messages" })],
-			[row({ id: 3 }), row({ id: 4, widgetSlug: "composer" })],
+			[row({ id: 3 }), row({ id: 4, widgetSlug: "stats" })],
 			"scene-portraits"
 		)
 		expect(next.map((r) => r.id).sort()).toEqual([2, 3])
@@ -542,5 +559,155 @@ describe("nextSaveState — holding the preview until the save lands", () => {
 				drop: false
 			})
 		}
+	})
+})
+
+// ── The socket path ─────────────────────────────────────────────────────────
+
+type Listener = (payload: any) => void
+
+/** The same shape `sockets/interest.test.ts` drives the registry with. */
+function makeSocket() {
+	const listeners = new Map<string, Listener[]>()
+	return {
+		connected: true,
+		emits: [] as Array<{ event: string; payload: any }>,
+		listeners,
+		on(event: string, fn: Listener) {
+			listeners.set(event, [...(listeners.get(event) ?? []), fn])
+		},
+		off(event: string, fn: Listener) {
+			const arr = listeners.get(event)
+			if (!arr) return
+			const at = arr.indexOf(fn)
+			if (at !== -1) arr.splice(at, 1)
+			if (arr.length === 0) listeners.delete(event)
+		},
+		once() {},
+		emit(event: string, payload: any) {
+			this.emits.push({ event, payload })
+		},
+		/** The server pushing an event down this socket. */
+		dispatch(event: string, payload: any) {
+			for (const fn of [...(listeners.get(event) ?? [])]) fn(payload)
+		},
+		listenerCount(event: string) {
+			return (listeners.get(event) ?? []).length
+		}
+	}
+}
+
+/** A fresh module graph, so the module-scoped store and registry start empty. */
+async function loadStore() {
+	vi.resetModules()
+	return await import("./widgetStyles.svelte")
+}
+
+/** The key list of the most recent interest sync. */
+function lastSyncKeys(): string[] | null {
+	const syncs = (socket?.emits ?? []).filter(
+		(e) => e.event === "interest:sync"
+	)
+	return syncs.length ? syncs[syncs.length - 1].payload.keys : null
+}
+
+/** Everything but the registry's own syncs. */
+function requests() {
+	return (socket?.emits ?? []).filter((e) => e.event !== "interest:sync")
+}
+
+describe("the socket path", () => {
+	beforeEach(() => {
+		socket = makeSocket()
+	})
+
+	afterEach(() => {
+		socket = null
+	})
+
+	test("declares what it reads, then asks for the list", async () => {
+		const { widgetStylesStore } = await loadStore()
+		widgetStylesStore()
+
+		// The sync went first, and it names the key the reply comes back on.
+		expect(socket!.emits[0].event).toBe("interest:sync")
+		expect(socket!.emits[0].payload.keys).toContain("widgetStyles:list")
+		expect(requests()).toEqual([{ event: "widgetStyles:list", payload: {} }])
+
+		// The create pair and the five error twins are held too — an error
+		// event is never gated, but the store still reads it through the one
+		// listener path.
+		const keys = lastSyncKeys()!
+		expect(keys).toContain("widgetStyles:create")
+		expect(keys).toContain("widgetStyles:clone")
+		expect(keys).toContain("widgetStyles:update:error")
+	})
+
+	test("one raw listener per event name, and the rows land through it", async () => {
+		const { widgetStylesStore } = await loadStore()
+		const store = widgetStylesStore()
+		// A second reader is a second caller of the same store.
+		widgetStylesStore()
+
+		expect(socket!.listenerCount("widgetStyles:list")).toBe(1)
+
+		socket!.dispatch("widgetStyles:list", {
+			styles: [row({ id: 1 }), row({ id: 2 })]
+		})
+		expect(store.rows.map((r) => r.id)).toEqual([1, 2])
+		expect(store.loaded).toBe(true)
+	})
+
+	test("a create asks on the event its reply comes back on", async () => {
+		const { widgetStylesStore } = await loadStore()
+		const store = widgetStylesStore()
+		socket!.emits.length = 0
+
+		store.create({
+			widgetSlug: "scene-portraits",
+			title: "Cozy",
+			css: "",
+			vars: {}
+		})
+
+		expect(requests().map((e) => e.event)).toEqual(["widgetStyles:create"])
+		expect(lastSyncKeys()).toContain("widgetStyles:create")
+	})
+
+	test("update and delete declare nothing — nothing reads their reply", async () => {
+		// The store folds in the refreshed `:list` the server pushes after a
+		// write, never the write's own reply. Holding no key for those two is
+		// what lets the gate skip building them at all.
+		const { widgetStylesStore } = await loadStore()
+		const store = widgetStylesStore()
+		socket!.emits.length = 0
+
+		store.update({ id: 3, title: "Cosy" })
+		store.remove(3)
+
+		expect(requests().map((e) => e.event)).toEqual([
+			"widgetStyles:update",
+			"widgetStyles:delete"
+		])
+		const keys = lastSyncKeys()
+		if (keys) {
+			expect(keys).not.toContain("widgetStyles:update")
+			expect(keys).not.toContain("widgetStyles:delete")
+		}
+	})
+
+	test("stopping releases every listener it took", async () => {
+		const { stopWidgetStyles, widgetStylesStore } = await loadStore()
+		widgetStylesStore()
+		expect(socket!.listenerCount("widgetStyles:list")).toBe(1)
+
+		stopWidgetStyles()
+
+		expect(socket!.listenerCount("widgetStyles:list")).toBe(0)
+		expect(socket!.listenerCount("widgetStyles:create")).toBe(0)
+		// The sync that tells the server is microtask-debounced, so that one
+		// screen closing twenty widgets sends one packet rather than twenty.
+		await Promise.resolve()
+		expect(lastSyncKeys()).toEqual([])
 	})
 })

@@ -45,10 +45,10 @@ describe("preset bindings validation", () => {
 			.where(
 				eq(schema.sessionPresets.seedKey, "core-chat-default")
 			)) as any[]
-		expect(preset.bindings["session-created"]?.spec).toBe(
+		expect(preset.bindings["core:event/session-created@1"]?.spec).toBe(
 			"core:spec/create-chat"
 		)
-		expect(preset.bindings["message-respond"]?.spec).toBe(
+		expect(preset.bindings["core:event/message-respond@1"]?.spec).toBe(
 			"core:spec/respond"
 		)
 	}, 60_000)
@@ -64,7 +64,7 @@ describe("preset bindings validation", () => {
 		)
 		const id = created.preset!.id
 		// The create defaulted the bindings from the locks.
-		expect(created.preset!.bindings["message-respond"]?.spec).toBe(
+		expect(created.preset!.bindings["core:event/message-respond@1"]?.spec).toBe(
 			"core:spec/respond"
 		)
 
@@ -73,14 +73,14 @@ describe("preset bindings validation", () => {
 			{
 				id,
 				bindings: {
-					"session-created": { spec: "core:spec/create-chat" },
+					"core:event/session-created@1": { spec: "core:spec/create-chat" },
 					// narrate answers session-action, not message-respond.
-					"message-respond": { spec: "core:spec/narrate" }
+					"core:event/message-respond@1": { spec: "core:spec/narrate" }
 				}
 			},
 			noop
 		)
-		expect(wrong.error).toMatch(/cannot bind to 'message-respond'/)
+		expect(wrong.error).toMatch(/cannot bind to 'core:event\/message-respond@1'/)
 
 		const missing = await sessionPresetsUpdate.handler(
 			admin(),
@@ -88,7 +88,7 @@ describe("preset bindings validation", () => {
 				id,
 				enabled: true,
 				bindings: {
-					"session-created": { spec: "core:spec/create-chat" }
+					"core:event/session-created@1": { spec: "core:spec/create-chat" }
 				}
 			},
 			noop
@@ -100,8 +100,8 @@ describe("preset bindings validation", () => {
 			{
 				id,
 				bindings: {
-					"session-created": { spec: "core:spec/create-chat" },
-					"message-respond": {
+					"core:event/session-created@1": { spec: "core:spec/create-chat" },
+					"core:event/message-respond@1": {
 						spec: "core:spec/respond",
 						config: 999999
 					}
@@ -116,8 +116,8 @@ describe("preset bindings validation", () => {
 			{
 				id,
 				bindings: {
-					"session-created": { spec: "core:spec/create-chat" },
-					"message-respond": { spec: "core:spec/respond" }
+					"core:event/session-created@1": { spec: "core:spec/create-chat" },
+					"core:event/message-respond@1": { spec: "core:spec/respond" }
 				}
 			},
 			noop
@@ -166,12 +166,12 @@ describe("the genre dashboard", () => {
 			noop
 		)
 		expect(res.genre?.createSpecSlug).toBe("core:spec/create-chat")
-		const respond = res.slots.find((s) => s.event === "message-respond")
+		const respond = res.slots.find((s) => s.event === "core:event/message-respond@1")
 		expect(respond?.required).toBe(true)
 		expect(respond?.candidates.map((c) => c.slug)).toContain(
 			"core:spec/respond"
 		)
-		const action = res.slots.find((s) => s.event === "session-action")
+		const action = res.slots.find((s) => s.event === "core:event/session-action@1")
 		expect(action?.open).toBe(true)
 		expect(action?.candidates.map((c) => c.slug)).toContain(
 			"core:spec/narrate"
@@ -218,8 +218,8 @@ describe("the configurations index", () => {
 			{
 				id: created.preset!.id,
 				bindings: {
-					"session-created": { spec: "core:spec/create-chat" },
-					"message-respond": {
+					"core:event/session-created@1": { spec: "core:spec/create-chat" },
+					"core:event/message-respond@1": {
 						spec: "core:spec/respond",
 						config: cfgId
 					}
@@ -262,7 +262,7 @@ describe("the preset decides the run", () => {
 				status: "published",
 				canonicalHash: `hash-${slug}`,
 				inputGenre: GENRE,
-				inputEvent: "message-respond",
+				inputEvent: "core:event/message-respond@1",
 				publishedAt: new Date()
 			})
 			.returning()) as any[]
@@ -271,8 +271,8 @@ describe("the preset decides the run", () => {
 		await db.insert(schema.pipelineNodes).values({
 			specVersionId: version.id,
 			nodeKey: "write",
-			kind: "consumer",
-			typeId: "core:consumer/create-message",
+			kind: "outlet",
+			definitionId: "core:outlet/create-message",
 			position: 0
 		})
 		await db
@@ -315,8 +315,8 @@ describe("the preset decides the run", () => {
 			{
 				id: presetId,
 				bindings: {
-					"session-created": { spec: "core:spec/create-chat" },
-					"message-respond": { spec: clone }
+					"core:event/session-created@1": { spec: "core:spec/create-chat" },
+					"core:event/message-respond@1": { spec: clone }
 				}
 			},
 			noop
@@ -329,7 +329,7 @@ describe("the preset decides the run", () => {
 			"$lib/server/pipelines/runtime/sessionEvents"
 		)
 		expect(
-			await resolveSessionEventSpec(db as any, GENRE, "message-respond", {
+			await resolveSessionEventSpec(db as any, GENRE, "core:event/message-respond@1", {
 				sessionId
 			})
 		).toBe(clone)
@@ -384,8 +384,8 @@ describe("the preset decides the run", () => {
 			{
 				id: presetId,
 				bindings: {
-					"session-created": { spec: "core:spec/create-chat" },
-					"message-respond": {
+					"core:event/session-created@1": { spec: "core:spec/create-chat" },
+					"core:event/message-respond@1": {
 						spec: "core:spec/respond",
 						config: copy.id
 					}
@@ -496,8 +496,8 @@ describe("the preset decides the run", () => {
 			.update(schema.sessionPresets)
 			.set({
 				bindings: {
-					"session-created": { spec: "core:spec/create-chat" },
-					"message-respond": { spec: "core:spec/narrate" }
+					"core:event/session-created@1": { spec: "core:spec/create-chat" },
+					"core:event/message-respond@1": { spec: "core:spec/narrate" }
 				}
 			})
 			.where(eq(schema.sessionPresets.id, presetId))
@@ -509,7 +509,7 @@ describe("the preset decides the run", () => {
 		const verdict = await resolveSessionEventVerdict(
 			db as any,
 			GENRE,
-			"message-respond",
+			"core:event/message-respond@1",
 			{ sessionId }
 		)
 		// The genre's own answer runs — the session keeps working.
@@ -517,7 +517,7 @@ describe("the preset decides the run", () => {
 		// And the substitution is stated, by preset and by slug.
 		expect(verdict.fallback?.preset).toBe("Went stale")
 		expect(verdict.fallback?.bound).toBe("core:spec/narrate")
-		expect(verdict.fallback?.event).toBe("message-respond")
+		expect(verdict.fallback?.event).toBe("core:event/message-respond@1")
 		expect(verdict.fallback?.reason).toMatch(/core:spec\/narrate/)
 
 		// The reply seam agrees with the dispatch seam, as it must.

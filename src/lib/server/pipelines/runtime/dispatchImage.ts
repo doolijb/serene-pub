@@ -201,7 +201,7 @@ function threadsFrom(value: unknown): number | undefined {
  * nobody asked this app to start those, and trying would be a surprise.
  */
 async function ensureManagedInstanceReady(
-	connection: SelectConnection,
+	connection: AdapterConnection,
 	opts: {
 		signal?: AbortSignal
 		onProgress?: (p: ImageGenProgress) => void

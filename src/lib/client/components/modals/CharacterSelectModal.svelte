@@ -104,9 +104,23 @@
 												class="relative flex w-0 min-w-0 flex-1 flex-col"
 											>
 												<div
-													class="w-full truncate text-left font-semibold"
+													class="flex w-full items-center gap-1 text-left font-semibold"
 												>
-													{c.nickname || c.name}
+													<span class="truncate">
+														{c.nickname || c.name}
+													</span>
+													{#if c.isPersona}
+														<span title="Persona">
+															<Icons.UserRound
+																size={14}
+																class="text-primary-600-400 shrink-0"
+																aria-hidden="true"
+															/>
+															<span class="sr-only"
+																>Persona</span
+															>
+														</span>
+													{/if}
 												</div>
 												<div
 													class="text-surface-700-300 group-hover:text-surface-800-200 line-clamp-2 w-full text-left text-xs"

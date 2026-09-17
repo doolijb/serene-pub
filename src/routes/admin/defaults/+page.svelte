@@ -44,18 +44,24 @@
 	 * asking the build first would tell an admin who HAS an embeddings connection
 	 * that this build cannot do embeddings.
 	 */
-	import { getContext, onDestroy, onMount } from "svelte"
+	import { getContext } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { capabilityLabel, capabilityTagline } from "@serene-pub/sdk"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { getAdminInterestContext } from "$lib/client/sockets/interest.svelte"
 	import Select, {
 		type SelectOption
 	} from "$lib/client/components/inputs/Select.svelte"
 	import { notePreview } from "$lib/shared/utils/connectionNotes"
 	import { outputKindOf } from "$lib/shared/capabilities/samplingShape"
+	import {
+		OUTPUT_KIND_ICONS,
+		outputKindLabel
+	} from "$lib/shared/constants/outputKinds"
 	import type { ComboRow } from "$lib/shared/capabilities/combos"
 
 	const socket = useTypedSocket()
+	const interest = getAdminInterestContext()
 	const userCtx: UserCtx = getContext("userCtx")
 
 	type ConnectionOption = Sockets.ConnectionDefaults.List.ConnectionOption
@@ -68,32 +74,6 @@
 	let loading = $state(true)
 	/** Which cards have their sampling disclosure open, by capability id. */
 	let openOverrides = $state<Record<string, boolean>>({})
-
-	/**
-	 * The heading each output kind gets.
-	 *
-	 * Plain words, because a heading reading `text` over a card reading "Chat"
-	 * is the machine's vocabulary leaking into the person's. Unknown kinds — a
-	 * plugin's own — fall through to the kind itself rather than to "Other", so
-	 * a `text->video` provider gets a heading that names it.
-	 */
-	const GROUP_LABELS: Record<string, string> = {
-		text: "Text",
-		image: "Images",
-		audio: "Speech and audio",
-		video: "Video",
-		document: "Documents",
-		embedding: "Embeddings"
-	}
-
-	const GROUP_ICONS: Record<string, keyof typeof Icons> = {
-		text: "Type",
-		image: "Image",
-		audio: "AudioLines",
-		video: "Clapperboard",
-		document: "FileText",
-		embedding: "Zap"
-	}
 
 	/**
 	 * The cards, already grouped.
@@ -111,7 +91,7 @@
 			if (!group) {
 				group = {
 					kind,
-					label: GROUP_LABELS[kind] ?? `Produces ${kind}`,
+					label: outputKindLabel(kind),
 					rows: []
 				}
 				out.push(group)
@@ -198,14 +178,14 @@
 	) {
 		const id = raw === "" ? null : Number(raw)
 		if (id !== null && Number.isNaN(id)) return
-		// The MODEL rides with the connection (0114), never on its own.
-		//
-		// ⚠ Changing the endpoint sends NO model, which the handler stores as
-		// NULL — "that endpoint, its default model". Carrying the previous
-		// endpoint's model across would register a pair whose two halves name
-		// different connections, which no picker can display and no run can
-		// resolve. The select below is keyed on the connection for the same
-		// reason: a different endpoint is a different list.
+		// The MODEL rides with the connection, never on its own — and both
+		// halves are required, because connections have no default model.
+		// Changing the endpoint pins its first switched-on model at once;
+		// carrying the previous endpoint's model across would register a pair
+		// whose two halves name different connections, which no picker can
+		// display and no run can resolve. The select below is keyed on the
+		// connection for the same reason: a different endpoint is a different
+		// list.
 		const modelId =
 			half === "connection" && modelRaw ? Number(modelRaw) : null
 		socket.emit("connectionDefaults:set", {
@@ -246,15 +226,22 @@
 		defaults = res.defaults
 	}
 
-	onMount(() => {
-		socket.on("connectionDefaults:list", handleList)
-		socket.on("connectionDefaults:set", handleSet)
-		socket.emit("connectionDefaults:list", {})
-	})
-	onDestroy(() => {
-		socket.off("connectionDefaults:list", handleList)
-		socket.off("connectionDefaults:set", handleSet)
-	})
+	/**
+	 * Both keys BARE and STANDING. `connectionDefaults:set` answers every write
+	 * this page makes — including the group header's, which writes one row per
+	 * card — and `connectionDefaults:list` is re-sent whenever a connection or
+	 * sampling config changes underneath it, so neither may end with a request.
+	 *
+	 * Declared ABOVE the request: the sync naming `connectionDefaults:list`
+	 * leaves before it, so the handler answering it already sees the key.
+	 */
+	interest.useInterest<"connectionDefaults:set">(
+		"connectionDefaults:set",
+		handleSet
+	)
+	$effect(() =>
+		interest.requestWithInterest("connectionDefaults:list", {}, handleList)
+	)
 </script>
 
 <div class="mb-4 flex flex-wrap items-start gap-3">
@@ -298,8 +285,8 @@
 	</div>
 
 	{#each groups as group (group.kind)}
-		{@const GroupIcon = (Icons[GROUP_ICONS[group.kind] ?? "Boxes"] ??
-			Icons.Boxes) as any}
+		{@const GroupIcon =
+			(Icons as any)[OUTPUT_KIND_ICONS[group.kind]] ?? Icons.Boxes}
 		{@const samplingChoices = groupSamplingOptions(group.rows)}
 		{@const groupValue = groupSampling(group.rows)}
 		<section class="mb-5">
@@ -364,7 +351,7 @@
 										<span
 											class="preset-tonal-warning rounded-full px-1.5 py-0.5 text-[0.68rem] font-semibold"
 											title={`Required by ${combo.requiredBy
-												.map((r) => r.typeId)
+												.map((r) => r.definitionId)
 												.join(", ")}`}
 										>
 											needed
@@ -397,12 +384,31 @@
 									value={current == null
 										? ""
 										: String(current)}
-									onchange={(e) =>
+									onchange={(e) => {
+										const v = e.currentTarget.value
+										if (v === "") {
+											setHalf(combo.id, "connection", v)
+											return
+										}
+										// Pin the first switched-on model: the
+										// registration needs both halves and
+										// connections have no default model.
+										const models =
+											(
+												connectionOptions[combo.id] ??
+												[]
+											).find((o) => o.id === Number(v))
+												?.models ?? []
+										const first = models.find(
+											(m) => m.enabled && !m.missingSince
+										)
 										setHalf(
 											combo.id,
 											"connection",
-											e.currentTarget.value
-										)}
+											v,
+											first ? String(first.id) : undefined
+										)
+									}}
 									aria-label={`Default connection for ${capabilityLabel(combo.id as any)}`}
 								>
 									<option value="">Not set</option>
@@ -447,42 +453,37 @@
 									{/each}
 								</select>
 								{#if currentModels.length}
-									<!-- The second half of the pair (0114).
+									<!-- The second half of the pair.
 									     Rendered only where the chosen endpoint
 									     HAS models: an endpoint with none means
 									     what it always meant, and a picker over
 									     an empty list is a control with no
 									     choice in it.
 
-									     "Its default model" is a real option and
-									     the resting one, not a blank: it is what
-									     every registration the 0114 backfill left
-									     behind says, and it keeps following the
-									     star when somebody re-stars the endpoint
-									     — which is what an admin who has never
-									     thought about models wants and what a
-									     pinned id would silently stop doing. -->
+									     Every option names a model — a legacy
+									     endpoint-only registration lands on the
+									     placeholder until somebody picks. -->
 									<select
 										class="select select-sm w-56"
 										value={currentModel == null
 											? ""
 											: String(currentModel)}
-										onchange={(e) =>
+										onchange={(e) => {
+											if (!e.currentTarget.value) return
 											setHalf(
 												combo.id,
 												"connection",
 												String(current),
 												e.currentTarget.value
-											)}
+											)
+										}}
 										aria-label={`Model for ${capabilityLabel(combo.id as any)}`}
 									>
-										<option value="">
-											Its default model{currentModels.find(
-												(m) => m.isDefault
-											)
-												? ` (${currentModels.find((m) => m.isDefault)!.name})`
-												: ""}
-										</option>
+										{#if currentModel == null}
+											<option value="" disabled>
+												— Choose a model —
+											</option>
+										{/if}
 										<!-- Disabled models are LISTED and
 										     greyed, never dropped: a
 										     registration made before somebody
@@ -491,15 +492,38 @@
 										{#each currentModels as m (m.id)}
 											<option
 												value={String(m.id)}
-												disabled={!m.enabled}
+												disabled={!m.enabled ||
+													m.missingSince != null}
 												title={m.model}
 											>
-												{m.name}{m.enabled
-													? ""
-													: " — switched off"}
+												{m.name}{m.missingSince
+													? " — no longer listed by its host"
+													: m.enabled
+														? ""
+														: " — switched off"}
 											</option>
 										{/each}
 									</select>
+								{/if}
+								{#if currentModels.find((m) => m.id === currentModel)?.missingSince}
+									<!-- The registered pair's model has gone
+									     missing on its host. Said here, on the
+									     card, because this screen is where
+									     the registration was made and the
+									     one place an admin looks to answer
+									     "why does every reply refuse". -->
+									<p
+										class="text-warning-500 flex w-full items-center gap-1 text-xs"
+									>
+										<Icons.TriangleAlert
+											size={12}
+											aria-hidden="true"
+										/>
+										This model is no longer listed by its host;
+										runs needing it refuse. Refresh the connection
+										once it serves the model again, or choose
+										another.
+									</p>
 								{/if}
 							{/if}
 						</div>

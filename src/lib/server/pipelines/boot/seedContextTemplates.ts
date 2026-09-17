@@ -81,7 +81,7 @@ export async function seedContextTemplates(
 	}
 
 	await db.insert(schema.pipelineContextTemplates).values({
-		nodeTypeId: poolKeyFor(CONTEXT_TEMPLATE_NODE_TYPE),
+		nodeDefinitionId: poolKeyFor(CONTEXT_TEMPLATE_NODE_TYPE),
 		seedKey: CONTEXT_TEMPLATE_SEED_KEY,
 		name: SHIPPED_CONTEXT_TEMPLATE_NAME,
 		source: SHIPPED_CONTEXT_TEMPLATE,
@@ -102,12 +102,12 @@ export async function seedContextTemplates(
 /**
  * The template a node's slot should point at by default.
  *
- * Core's shipped row for that node type, resolved by **seed key** rather than
+ * Core's shipped row for that node definition, resolved by **seed key** rather than
  * by lowest id — a migrated `context_configs` row can hold a lower id than the
  * seed on an upgraded install, and "first row" would then hand two installs
  * different defaults from identical settings.
  *
- * Falls back to the oldest immutable row for a node type core ships nothing
+ * Falls back to the oldest immutable row for a node definition core ships nothing
  * for, which is any plugin's.
  *
  * ## Per engine, and there is deliberately NO cross-engine fallback
@@ -125,10 +125,10 @@ export async function seedContextTemplates(
  */
 export async function defaultContextTemplateFor(
 	db: Db,
-	nodeTypeId: string,
+	nodeDefinitionId: string,
 	engine: string
 ): Promise<number | null> {
-	const pool = poolKeyFor(nodeTypeId)
+	const pool = poolKeyFor(nodeDefinitionId)
 
 	if (
 		pool === poolKeyFor(CONTEXT_TEMPLATE_NODE_TYPE) &&
@@ -152,7 +152,7 @@ export async function defaultContextTemplateFor(
 		.from(schema.pipelineContextTemplates)
 		.where(
 			and(
-				eq(schema.pipelineContextTemplates.nodeTypeId, pool),
+				eq(schema.pipelineContextTemplates.nodeDefinitionId, pool),
 				eq(schema.pipelineContextTemplates.engine, engine),
 				eq(schema.pipelineContextTemplates.isImmutable, true),
 				isNull(schema.pipelineContextTemplates.createdForSpecId)

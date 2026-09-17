@@ -40,8 +40,8 @@
 	 * says so about the third rather than pretending to record it.
 	 */
 	import * as Icons from "@lucide/svelte"
-	import { onDestroy, onMount } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import { getInterestContext } from "$lib/client/sockets/interest.svelte"
 	import type { EntryTypeId } from "$lib/shared/entries/types"
 	import {
 		signalFactsFrom,
@@ -71,6 +71,7 @@
 	}: Props = $props()
 
 	const socket = useTypedSocket()
+	const interest = getInterestContext()
 	/** Unique per instance: two lorebook panels can be open at once. */
 	const uid = $props.id()
 
@@ -135,17 +136,31 @@
 		refusal = res?.error || "The test could not be run."
 	}
 
-	onMount(() => {
-		socket.on("sessions:list", onSessions)
-		socket.on("pipelines:previewRetrieval", onAnswer)
-		socket.on("pipelines:previewRetrieval:error", onRefusal)
-		socket.emit("sessions:list", {})
-	})
-	onDestroy(() => {
-		socket.off("sessions:list", onSessions)
-		socket.off("pipelines:previewRetrieval", onAnswer)
-		socket.off("pipelines:previewRetrieval:error", onRefusal)
-	})
+	/**
+	 * The conversation picker's list, asked for and listened for in one: the
+	 * interest sync naming `sessions:list` leaves ahead of the request, so the
+	 * handler answering it already sees the key. BARE — the list is this user's
+	 * own and has no session to be scoped to.
+	 */
+	$effect(() => interest.requestWithInterest("sessions:list", {}, onSessions))
+
+	/**
+	 * The answer, held for as long as the panel is: the request is a button
+	 * press (`run` below), not a mount, so the interest stays and the emit
+	 * stays where the press is. BARE — neither event is in `SCOPED_EVENTS`,
+	 * and `onAnswer`'s own `running`/`asked` checks stay the filter.
+	 *
+	 * The refusal is never gated (plan ruling 2 — an error is not an output to
+	 * skip), but the registry is the only listener path, so it is declared too.
+	 */
+	interest.useInterest<"pipelines:previewRetrieval">(
+		"pipelines:previewRetrieval",
+		onAnswer
+	)
+	interest.useInterest<"pipelines:previewRetrieval:error">(
+		"pipelines:previewRetrieval:error",
+		onRefusal
+	)
 
 	function run() {
 		if (sessionId == null || running) return

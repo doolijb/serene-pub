@@ -66,7 +66,7 @@ function startGatedNode(reviewer: Reviewer, payload: unknown) {
 	}
 	const done = reviewer({
 		nodeKey: "render",
-		typeId: "core:provider/generate-image",
+		definitionId: "core:oracle/generate-image",
 		payload,
 		position: "on"
 	}).then((decision) => {

@@ -30,6 +30,7 @@ import type {
 	ScriptHookSite,
 	ScriptApplicationRecord
 } from "@serene-pub/sdk"
+import { splitCandidates, withBandIntents } from "@serene-pub/sdk"
 import {
 	scriptTypeInfos,
 	type ScriptTypeInfo
@@ -126,6 +127,47 @@ export function makeScriptApplier(
 	}
 
 	return async (site: ScriptHookSite, chain: unknown, value: unknown) => {
+		/**
+		 * Band intents (R-7 P5) never reach a script. A `candidates/filter`
+		 * or `candidates/rescore` link is written against candidates — an
+		 * intent has no id, no tokens and no signals, and a filter keeping
+		 * "everything that scored" would drop a band's declaration with it —
+		 * so they are lifted off the value here and put back on whatever the
+		 * chain returns. The chain cannot see, drop or invent one.
+		 */
+		const intents = Array.isArray(value)
+			? splitCandidates(value).intents
+			: []
+		if (!intents.length) return await fold(site, chain, value)
+		const applied = await fold(
+			site,
+			chain,
+			splitCandidates(value as unknown[]).items
+		)
+		if (Array.isArray(applied.value))
+			return {
+				...applied,
+				value: withBandIntents(intents, applied.value as unknown[])
+			}
+		/**
+		 * The chain handed back something that is not a list. Every link
+		 * that could do that is already refused by `validShape` and its value
+		 * kept, so this is a shape no link is allowed to return arriving
+		 * anyway — and the one thing that must not happen is the intents
+		 * going with it: a band whose declaration is lost runs on the
+		 * ranker's fallback silently. The value the chain was handed is what
+		 * goes on, intents and all, and the receipt says so (U3b review S2).
+		 */
+		return {
+			...applied,
+			value,
+			notes: [
+				`scripts: the ${site.slot} chain on ${site.port} returned a non-list where candidates were expected — value kept, band intents kept`
+			]
+		}
+	}
+
+	async function fold(site: ScriptHookSite, chain: unknown, value: unknown) {
 		const applications: ScriptApplicationRecord[] = []
 		const record = (
 			r: Omit<ScriptApplicationRecord, "phase" | "appliedBy">
@@ -164,13 +206,13 @@ export function makeScriptApplier(
 				record({
 					scriptId: id,
 					name: `#${id}`,
-					typeId: "",
+					scriptKind: "",
 					result: "skip",
 					reason: "no longer exists — remove it from this chain"
 				})
 				continue
 			}
-			const base = { scriptId: id, name: row.name, typeId: row.typeId }
+			const base = { scriptId: id, name: row.name, scriptKind: row.typeId }
 			if (!site.accepts.includes(row.typeId)) {
 				record({
 					...base,
@@ -450,7 +492,7 @@ export function makeScriptApplier(
 				const base = {
 					scriptId: row.id,
 					name: row.name,
-					typeId: row.typeId,
+					scriptKind: row.typeId,
 					via: "connection",
 					connectionName: conn.connectionName
 				}
@@ -550,7 +592,7 @@ export function makeScriptApplier(
  * ## The new-name fact (ruling 2026-09-07)
  *
  * `speakerName`, `speakerCharacterId` and `speakerIsKnown` are what
- * `core:input/side-character-turn@1` declares on its scripts hook, and this is
+ * `core:inlet/side-character-turn@1` declares on its scripts hook, and this is
  * where they get values. `speakerIsKnown: false` means a free-form name matched
  * nothing in the session's lorebook — the fact a script needs to offer adding
  * them. Core supplies the fact and the hook and stops there: it does not

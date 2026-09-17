@@ -39,4 +39,3 @@
 	</article>
 	<DocPageOutline headings={data.meta.headings} />
 </div>
-

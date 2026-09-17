@@ -1,6 +1,10 @@
 <script lang="ts">
-	import { onMount, getContext } from "svelte"
+	import { getContext } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import {
+		requestWithInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import { sectionForModality } from "$lib/shared/constants/connectionSections"
 
@@ -48,17 +52,22 @@
 		socket.emit("connections:list", {})
 	}
 
-	onMount(() => {
-		socket.on("connections:list", handleConnectionsList)
-		socket.on("connections:delete", handleConnectionsDelete)
-		socket.on("connections:setDefault", handleConnectionsSetDefault)
-		socket.emit("connections:list", {})
-		return () => {
-			socket.off("connections:list", handleConnectionsList)
-			socket.off("connections:delete", handleConnectionsDelete)
-			socket.off("connections:setDefault", handleConnectionsSetDefault)
-		}
-	})
+	// The two cascade triggers first, then the list interest and the request
+	// that fills it: effects run in creation order and a request flushes the
+	// pending interest sync, so a declaration made below the request would miss
+	// the flush its own reply rides on. All three keys are bare and standing —
+	// this page re-asks for the whole list after every write.
+	useInterest<"connections:delete">(
+		"connections:delete",
+		handleConnectionsDelete
+	)
+	useInterest<"connections:setDefault">(
+		"connections:setDefault",
+		handleConnectionsSetDefault
+	)
+	$effect(() =>
+		requestWithInterest("connections:list", {}, handleConnectionsList)
+	)
 </script>
 
 <svelte:head>
@@ -97,11 +106,14 @@
 				{@const starred = section
 					? starredId(section.starCapability)
 					: null}
+				{@const modelCount = conn.models?.length ?? 0}
 				<li class="a11y-list-item">
 					<h2>{conn.name}</h2>
 					<p>
 						Type: {conn.type}
-						{conn.model ? `· Model: ${conn.model}` : ""}
+						{modelCount === 1
+							? "· 1 model"
+							: `· ${modelCount} models`}
 					</p>
 					{#if section && conn.id === starred}
 						<p><strong>Used for {section.starVerb}.</strong></p>

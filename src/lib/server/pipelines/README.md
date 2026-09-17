@@ -9,22 +9,22 @@ went](../../../../docs-dev/DECOMPOSITION.md).
 ## The one-paragraph version
 
 A **pipeline** is a list of **nodes** (build context → assemble a prompt → call
-a model). A **spec** declares that list. Each node type is described by a
+a model). A **spec** declares that list. Each node definition is described by a
 **descriptor** in the SDK, which names the node's **slots** — the things a user
 can configure about it: which connection, which sampling preset, which prompts,
-which template. A **binding** is core's implementation of one node type. The
+which template. A **binding** is core's implementation of one node definition — its **handler**. The
 **executor** (in the SDK) walks the spec, resolves each node's configuration,
 and calls its binding.
 
-Configuration resolves through six scopes, most specific first:
+Configuration resolves through four scopes, most specific first (R-10, 2026-09-16 — `preset` is the selected config, the one place an administrator's edit lands):
 
-    chat → user → instance → preset → defaults → author
+    session → preset → defaults → author
 
 ## Where do I find…
 
 | I want to…                                                         | Start at                                                                                                         |
 | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
-| follow one chat turn end to end                                    | [`runtime/runTurn.ts`](runtime/runTurn.ts)                                                                       |
+| follow one session turn end to end                                 | [`utils/runReply.ts`](../utils/runReply.ts) → [`runtime/runTurn.ts`](runtime/runTurn.ts) → [`runtime/liveRow.ts`](runtime/liveRow.ts) |
 | see what pipelines ship                                            | [`specs/index.ts`](specs/index.ts)                                                                               |
 | change what a prompt says                                          | [`entities/prompts.ts`](entities/prompts.ts), or the seeded text in [`boot/seedPrompts.ts`](boot/seedPrompts.ts) |
 | change how the context is laid out                                 | [`entities/contextTemplateDefaults.ts`](entities/contextTemplateDefaults.ts)                                     |
@@ -33,7 +33,7 @@ Configuration resolves through six scopes, most specific first:
 | know why a setting resolved the way it did                         | [`config/world.ts`](config/world.ts) — the six-scope projection                                                  |
 | find where lore is chosen                                          | [`ranking/`](ranking/) — `select.ts` for the decision, `weights.ts` for every constant                           |
 | know what actually ran                                             | [`runtime/receipts.ts`](runtime/receipts.ts)                                                                     |
-| add a node type                                                    | a descriptor in the SDK, then a binding in [`runtime/bindings.ts`](runtime/bindings.ts)                          |
+| add a node definition                                                    | a descriptor in the SDK, then a binding in [`runtime/bindings.ts`](runtime/bindings.ts)                          |
 
 ## The groups
 
@@ -84,7 +84,7 @@ Which lore, which history, which messages survive the token budget. Two arms
 ### `runtime/` — running it
 
 `runTurn.ts` is the entry point. `host.ts` is the I/O a binding may not do
-itself. `bindings.ts` implements the node types. `dispatch.ts` sends a prompt
+itself. `bindings.ts` implements the node definitions. `dispatch.ts` sends a prompt
 built elsewhere. `reviewGate.ts` parks a run awaiting human approval —
 **graph builds always stop here and are never auto-applied.**
 

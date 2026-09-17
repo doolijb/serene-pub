@@ -1,7 +1,8 @@
 <script lang="ts">
-	import { onMount, getContext } from "svelte"
+	import { getContext } from "svelte"
 	import { goto } from "$app/navigation"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { announce } from "$lib/client/accessibility/state.svelte"
 
 	const socket = useTypedSocket()
@@ -46,14 +47,16 @@
 		announce(error)
 	}
 
-	onMount(() => {
-		socket.on("users:create", handleUsersCreate)
-		socket.on("users:create:error", handleUsersCreateError)
-		return () => {
-			socket.off("users:create", handleUsersCreate)
-			socket.off("users:create:error", handleUsersCreateError)
-		}
-	})
+	/**
+	 * The create's answer and its refusal, both BARE and both STANDING: they
+	 * land when the person submits, not in reply to anything asked at mount.
+	 * `:error` events are never gated (plan ruling 2).
+	 */
+	useInterest<"users:create">("users:create", handleUsersCreate)
+	useInterest<"users:create:error">(
+		"users:create:error",
+		handleUsersCreateError
+	)
 </script>
 
 <svelte:head>

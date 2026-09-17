@@ -1,7 +1,7 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
-	import { onMount, onDestroy } from "svelte"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 
 	interface Props {
@@ -24,9 +24,6 @@
 		socket.emit("koboldcpp:setManagedMode", { mode: "external" })
 	}
 
-	// Named so `off` can name them too. A bare `socket.off("koboldcpp:setManagedMode")`
-	// removes EVERY listener for that event — including KoboldCppSidebar's, which
-	// listens for the same event and would stop updating for the rest of the session.
 	function handleSetManagedMode(
 		msg: Sockets.KoboldCPP.SetManagedMode.Response
 	) {
@@ -39,15 +36,18 @@
 		toaster.error({ title: "Failed to save mode" })
 	}
 
-	onMount(() => {
-		socket.on("koboldcpp:setManagedMode", handleSetManagedMode)
-		socket.on("koboldcpp:setManagedMode:error", handleSetManagedModeError)
-	})
-
-	onDestroy(() => {
-		socket.off("koboldcpp:setManagedMode", handleSetManagedMode)
-		socket.off("koboldcpp:setManagedMode:error", handleSetManagedModeError)
-	})
+	// Both keys BARE — nothing in `koboldcpp:` carries an interest scope — and
+	// standing, because the mode is a choice the user can make twice before
+	// this screen gives way. The sidebar declares the same event; the registry
+	// keeps one raw listener and fans the reply out to both.
+	useInterest<"koboldcpp:setManagedMode">(
+		"koboldcpp:setManagedMode",
+		handleSetManagedMode
+	)
+	useInterest<"koboldcpp:setManagedMode:error">(
+		"koboldcpp:setManagedMode:error",
+		handleSetManagedModeError
+	)
 </script>
 
 <div class="flex flex-col items-center gap-6 py-8">

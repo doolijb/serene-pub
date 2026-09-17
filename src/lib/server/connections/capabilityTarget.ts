@@ -9,10 +9,35 @@
  * > "capability default → pipeline config provider set connection → session
  * > override"
  *
- * Three tiers, later wins, and **nothing else**. A connection that merely exists
- * and happens to be capable is not selected; neither is "the only one", nor "the
- * first one that can". Where no tier set anything, the run FAILS with a sentence
- * naming what to set and where — it does not guess.
+ * Later wins, and **nothing else**. A connection that merely exists and happens
+ * to be capable is not selected; neither is "the only one", nor "the first one
+ * that can". Where no tier set anything, the run FAILS with a sentence naming
+ * what to set and where — it does not guess.
+ *
+ * ## Amended 2026-09-15 — a session names no endpoint and no model
+ *
+ * > "the session-level connection override is retired. Overrides are always by
+ * > model, never by connection."
+ *
+ * So the chain has two shapes rather than one, and they are the two halves this
+ * resolver already walked independently:
+ *
+ *   - the **pair** — the `(endpoint, model)` a run is sent to — is walked over
+ *     `PAIR_TIERS`: the capability default, then the pipeline configuration's
+ *     provider slot. There is no third. The one connection override left in the
+ *     product is that slot, and it stores both halves.
+ *   - **sampling** is still walked over all three of `RESOLUTION_TIERS`, because
+ *     `sessions.sampling_config_id` stays. A sampling profile is not a
+ *     connection: choosing one says nothing about where the request goes, so it
+ *     is the one thing a session may still say on its own.
+ *
+ * Which is why `WHERE_SET` below has two entries where `SCOPE_FOR_TIER` has
+ * three. `WHERE_SET` answers "where was this PAIR set", and a session is not one
+ * of the answers any more — so no refusal sentence here can send somebody to a
+ * session's settings to fix a connection, where there is now nothing to fix it
+ * with. The session tier is not merely ignored, either: `CapabilityTargetRequest`
+ * has no field an endpoint could arrive in from a session, so the rule is the
+ * request's shape rather than a check somebody has to remember.
  *
  * ## Why this is a function and not a rule everyone follows
  *
@@ -41,15 +66,17 @@
  * ## What it resolves is a PAIR, not a connection (0114)
  *
  * The endpoint/model split made "which connection" half an answer. A tier names
- * `(connectionId, connectionModelId)`, and where it names only the endpoint the
- * endpoint's default model is what it meant — which is what every registration
- * the 0114 backfill left behind says, so nothing that was configured before the
- * split resolves differently after it.
+ * `(connectionId, connectionModelId)`, and BOTH halves are required: a
+ * connection has no default model, so a tier naming only an endpoint — with no
+ * lower tier having chosen a model for that same endpoint — is an incomplete
+ * selection, and resolution says so with the fix attached rather than guessing
+ * a row.
  *
  * The two halves are NOT walked independently the way connection and sampling
  * are: a `connection_models` row belongs to one endpoint, so a model surviving a
- * higher tier's endpoint change would name a model of some other connection. The
- * model therefore comes from whichever tier won the connection. See the walk.
+ * higher tier's endpoint CHANGE would name a model of some other connection. The
+ * model therefore comes from whichever tier won the connection, or from the tier
+ * below when that tier re-states the same endpoint. See the walk.
  *
  * What comes back is the endpoint row with the model MERGED into it
  * (`mergeEndpointModel`), so `connection.model` is the identifier that will go
@@ -79,23 +106,18 @@ import {
 import { capabilityDefault } from "./capabilityDefaults"
 import { withCompletionTemplate } from "./completionTemplates"
 import { withWireMode } from "./resolve"
-import {
-	connectionModelById,
-	defaultConnectionModel,
-	mergeEndpointModel
-} from "./models"
+import { connectionModelById, mergeEndpointModel } from "./models"
 import { capabilityRefusal } from "$lib/server/pipelines/runtime/capabilityGuard"
 import { connectionIdentity, type ConnectionIdentity } from "./visibility"
 
 /**
  * What every legacy column, and every slot that named nothing, means.
  *
- * `sessions.connection_id` predates there being a second capability and cannot
- * say which one it holds; a slot authored before `requires` existed is in the
- * same position. Both resolve to this one, which is what they have always in
- * fact been. Named once here so the five files that need it cannot spell it
- * differently — the dropped `system_settings` columns were two spellings of one
- * fact and that is precisely what cost a release.
+ * A slot authored before `requires` existed cannot say which capability it
+ * holds. It resolves to this one, which is what it has always in fact been.
+ * Named once here so the files that need it cannot spell it differently — a
+ * second spelling of this fact is exactly the kind of drift that costs a
+ * release.
  */
 export const TEXT_CAPABILITY = "text->text"
 
@@ -105,6 +127,12 @@ export const TEXT_CAPABILITY = "text->text"
  * Ordered rather than named-and-compared, so adding a tier is one entry here and
  * one entry in `SCOPE_FOR_TIER` — and so the monotonicity test below has
  * something to walk.
+ *
+ * ⚠ This is the SAMPLING chain, and the full one. Only `PAIR_TIERS` may name an
+ * endpoint and a model — see the header. `sessionOverride` is still a tier here
+ * because a session may still choose a sampling profile; it is the tier the
+ * `session` scope belongs to, and dropping it would leave `samplingVia` with no
+ * name for the answer it gives most often.
  *
  * ⚠ `capabilityDefault` is first and is read from the database by this module,
  * never passed in. That is the whole point of piece 1: the instance default has
@@ -120,16 +148,36 @@ export const RESOLUTION_TIERS = [
 
 export type ResolutionTier = (typeof RESOLUTION_TIERS)[number]
 
+/** A tier that may name an `(endpoint, model)` pair. A session may not (0130). */
+export type PairTier = Exclude<ResolutionTier, "sessionOverride">
+
+/**
+ * The pair chain — `RESOLUTION_TIERS` minus the session, in the same order.
+ *
+ * Derived rather than written out, so a tier added above is in this walk from
+ * the moment it exists unless it is deliberately excluded here. Two hand-kept
+ * lists of the same precedence is the shape of the drift this file's header is
+ * about, and the cost of it was a release.
+ */
+export const PAIR_TIERS = RESOLUTION_TIERS.filter(
+	(tier): tier is PairTier => tier !== "sessionOverride"
+)
+
 /**
  * Each tier's equivalent in the executor's scope chain.
  *
  * The two models must not drift: this resolver decides for the flows that run
  * OUTSIDE the executor (the summarize steps, the graph builder, the legacy
- * generation path), while `world.ts` projects the same three facts as
- * `OverrideRow`s for the flows that run inside it. If the two disagreed about
- * precedence, a person's pick would be honoured on one path and ignored on the
- * other — which is the exact failure `world.ts`'s own header calls out about
- * having two sources for one slot.
+ * generation path), while `world.ts` projects the same facts as `OverrideRow`s
+ * for the flows that run inside it. If the two disagreed about precedence, a
+ * person's pick would be honoured on one path and ignored on the other — which
+ * is the exact failure `world.ts`'s own header calls out about having two
+ * sources for one slot.
+ *
+ * `sessionOverride` maps to `session` because that is the scope
+ * `sessions.sampling_config_id` is projected at, and the scope the pipeline
+ * panel writes a person's own overrides at — even though a session cannot name
+ * a pair.
  *
  * `user` is deliberately unmapped: a user cannot write a connection slot (F20),
  * and `preset` rather than `instance` for the pipeline config because that is
@@ -142,25 +190,34 @@ export const SCOPE_FOR_TIER: Record<ResolutionTier, ScopeKind> = {
 	sessionOverride: "session"
 }
 
-/** Where a person goes to change what this tier decided, in their words. */
-const WHERE_SET: Record<ResolutionTier, string> = {
+/**
+ * Where a person goes to change the PAIR this tier decided, in their words.
+ *
+ * Keyed by `PairTier`, which is what keeps the retirement honest: there is no
+ * entry to write here for a session, so no sentence below can name one as a
+ * place to set a connection. Before 0130 there was one, and it was the last
+ * place in the product still claiming a session could choose compute.
+ */
+const WHERE_SET: Record<PairTier, string> = {
 	capabilityDefault: "Admin → Defaults",
-	pipelineConfig: "the pipeline's configuration",
-	sessionOverride: "this session's settings"
+	pipelineConfig: "the pipeline's configuration"
 }
 
 /** One tier's answer. `null`/`undefined` both mean "this tier said nothing". */
 export interface CapabilityCandidate {
 	connectionId?: number | null
 	/**
-	 * WHICH MODEL on that endpoint (0114). Absent means "its default model".
+	 * WHICH MODEL on that endpoint. Absent is an INCOMPLETE selection, not a
+	 * default: connections have no default model.
 	 *
-	 * ⚠ Read ONLY from the tier that won `connectionId`, never walked on its
-	 * own. A model id is meaningless apart from the endpoint it belongs to, so
-	 * a lower tier's model surviving a higher tier's endpoint change would
-	 * produce a pair naming a model of some OTHER connection — an incoherent
-	 * selection that no picker can display, and which the resolver would then
-	 * have to refuse at run time for a choice nobody made. See the walk below.
+	 * ⚠ Read from the tier that won `connectionId`, never walked on its own. A
+	 * model id is meaningless apart from the endpoint it belongs to, so a lower
+	 * tier's model surviving a higher tier's endpoint CHANGE would produce a
+	 * pair naming a model of some OTHER connection — an incoherent selection
+	 * that no picker can display, and which the resolver would then have to
+	 * refuse at run time for a choice nobody made. Where the endpoint does not
+	 * change, both halves still name one connection and the lower tier's model
+	 * stands. See the walk below.
 	 */
 	connectionModelId?: number | null
 	samplingConfigId?: number | null
@@ -194,16 +251,21 @@ export type CapabilityProblemKind =
  * Why the run cannot start, in a sentence a person can act on.
  *
  * The `kind` is for tests and callers that want to branch; `message` is the only
- * thing a user ever sees. Every message names a SCREEN, because the failure this
- * whole change introduces is "it used to quietly use the connection I had" and a
- * refusal that does not say where to go reads as a regression rather than a rule.
+ * thing a user ever sees. Every message names a SCREEN: a refusal that does not
+ * say where to go reads as a silent failure rather than a rule for fixing it.
  */
 export interface CapabilityProblem {
 	kind: CapabilityProblemKind
 	capability: string
 	message: string
-	/** Which tier produced the bad value. Absent for `unset`/`unknown`. */
-	via?: ResolutionTier
+	/**
+	 * Which tier produced the bad value. Absent for `unset`/`unknown`.
+	 *
+	 * A `PairTier`, because every problem here is a problem with the pair — a
+	 * sampling id that resolves to nothing degrades to "send nothing" rather
+	 * than becoming one of these.
+	 */
+	via?: PairTier
 	/** The id that failed to resolve, for `missing`. */
 	connectionId?: number
 	/**
@@ -239,7 +301,7 @@ export type CapabilityTargetResult =
 			 * (`Sockets.CapabilityDefault`), not an oversight.
 			 */
 			sampling: SelectSamplingConfig | null
-			connectionVia: ResolutionTier
+			connectionVia: PairTier
 			samplingVia: ResolutionTier | null
 	  }
 	| { ok: false; problem: CapabilityProblem }
@@ -249,9 +311,56 @@ export interface CapabilityTargetRequest {
 	capability: string
 	/** Tier 2: what the pipeline's configuration selected for this node. */
 	pipelineConfig?: CapabilityCandidate | null
-	/** Tier 3: what this session overrode it with. */
-	sessionOverride?: CapabilityCandidate | null
+	/**
+	 * Tier 3, and SAMPLING ONLY — a `sampling_configs` id, or null.
+	 *
+	 * An id rather than a `CapabilityCandidate`, and that is the retirement
+	 * (0130) written into the type: there is no field here for an endpoint or a
+	 * model to arrive in, so a session cannot name compute even by mistake. It
+	 * was a candidate until 2026-09-15, it outranked everything, and
+	 * `sessions:update` handed it whatever the client sent.
+	 */
+	sessionSampling?: number | null
+	/**
+	 * The session's genre, when this request is for one turn of a session —
+	 * wording only. `text->text`'s display name is "Chat" (the transform's
+	 * generic label, `TRANSFORMS` in the SDK), which reads as if it named the
+	 * session's own genre when the session is not `core:genre/chat` — an
+	 * adventure or a guide session with no connection set would be told
+	 * nothing is set "for Chat". Given here rather than resolved from a
+	 * `sessionId`, because this module reads connections and sampling, never
+	 * sessions or genres — the caller who already has the row hands over the
+	 * one fact its wording needs.
+	 */
+	genreId?: string | null
 }
+
+/**
+ * `core:genre/chat` (24 §3) — the one genre whose sessions this file may call
+ * "Chat" without confusing it for the transform label above. A literal
+ * rather than an import of `STANDARD_GENRE_ID`: that constant lives in
+ * `pipelines/entities`, which imports connection resolution, not the other
+ * way around.
+ */
+const STANDARD_CHAT_GENRE_ID = "core:genre/chat"
+
+/**
+ * The capability's display name for one refusal sentence — "Chat" (the
+ * transform's own label), unless this request names a session whose genre is
+ * not the standard one, in which case that would misname the session's own
+ * genre and "text generation" says the same thing without the confusion.
+ * Only `text->text` is ever "Chat"; every other capability's label already
+ * names what it does (`Image generation`, `Vision`, …) and is left alone.
+ */
+const wordingLabelFor = (
+	capability: string,
+	req: Pick<CapabilityTargetRequest, "genreId">
+): string =>
+	capability === TEXT_CAPABILITY &&
+	req.genreId != null &&
+	req.genreId !== STANDARD_CHAT_GENRE_ID
+		? "text generation"
+		: capabilityLabel(capability as CapabilityId)
 
 /**
  * The reads this resolver makes, spelled per table rather than through one
@@ -294,6 +403,10 @@ const samplingConfigById = async (db: Db, id: number) =>
  * session that overrides only the sampling should not drag the connection along
  * with it. Collapsing them was how "set the connection here, the sampling
  * silently came from somewhere else" became unanswerable.
+ *
+ * The two chains do not even run to the same depth — the pair stops at
+ * `PAIR_TIERS`, sampling goes on to the session — which is that independence
+ * becoming a fact about the chains rather than a discipline about the loop.
  */
 export async function resolveCapabilityTarget(
 	db: Db,
@@ -304,8 +417,8 @@ export async function resolveCapabilityTarget(
 	// Guarded here rather than trusted, because the value can arrive from a
 	// node's `requires` — authored text, possibly from a plugin. A capability
 	// that is not a transform keys nothing in `connection_defaults` (whose
-	// primary key IS the transform, as its two sides since 0183), so it can
-	// never be satisfied by any connection however capable, and the honest
+	// primary key IS the transform's two sides), so it can never be satisfied
+	// by any connection however capable, and the honest
 	// answer is to say so rather than to report "nothing is set" forever.
 	//
 	// It is also the guard that keeps `sidesOf` from being reached with a
@@ -331,39 +444,68 @@ export async function resolveCapabilityTarget(
 	const byTier: Record<ResolutionTier, CapabilityCandidate | null> = {
 		capabilityDefault: registered ?? null,
 		pipelineConfig: req.pipelineConfig ?? null,
-		sessionOverride: req.sessionOverride ?? null
+		// Built HERE, from an id, rather than accepted as a candidate — so the
+		// session tier has no pair half for the walk below to find (0130).
+		sessionOverride:
+			req.sessionSampling != null
+				? { samplingConfigId: req.sessionSampling }
+				: null
 	}
 
 	let connectionId: number | null = null
 	let connectionModelId: number | null = null
-	let connectionVia: ResolutionTier | null = null
+	let connectionVia: PairTier | null = null
 	let samplingConfigId: number | null = null
 	let samplingVia: ResolutionTier | null = null
 	// Increasing precedence, so the LAST tier that named something wins. Written
-	// as a walk over the constant rather than as a `??` chain, so the order lives
+	// as walks over the constants rather than as `??` chains, so the order lives
 	// in data one test can assert about instead of in an expression three files
 	// have to spell identically.
-	for (const tier of RESOLUTION_TIERS) {
+	//
+	// TWO walks over two chains, because the halves do not run to the same
+	// depth. One loop with the session's pair half left permanently null would
+	// do the same arithmetic and say something false while doing it:
+	// that the tier is asked about a connection and merely never has one.
+	for (const tier of PAIR_TIERS) {
 		const at = byTier[tier]
 		if (at?.connectionId != null) {
-			connectionId = at.connectionId
-			// ⚠ The model is taken FROM THE SAME TIER, and reset to null when
-			// that tier named none. It is the one value here that is not walked
-			// independently, because it is not independent: `connection_models`
-			// rows belong to one endpoint, so carrying a lower tier's model past
-			// a higher tier's endpoint change would build a pair whose two
-			// halves name different connections. That pair cannot be displayed
-			// (no picker would find the model under the endpoint it shows) and
-			// cannot be run (the guard below refuses it), so it would turn a
-			// perfectly ordinary "the pipeline overrides the default connection"
-			// into a hard failure about a model nobody selected.
+			// ⚠ The model is taken FROM THE SAME TIER, EXCEPT where this tier
+			// re-states the endpoint the tier below it already chose.
 			//
-			// Naming only the endpoint therefore means "its default model",
-			// everywhere, at every tier — which is also what every row the 0114
-			// backfill left behind says.
-			connectionModelId = at.connectionModelId ?? null
+			// It is the one value here that is not walked independently, because
+			// it is not independent: `connection_models` rows belong to one
+			// endpoint, so carrying a lower tier's model past a higher tier's
+			// endpoint CHANGE would build a pair whose two halves name different
+			// connections. That pair cannot be displayed (no picker would find
+			// the model under the endpoint it shows) and cannot be run (the
+			// guard below refuses it).
+			//
+			// An endpoint that did not change raises none of that: both halves
+			// still name the same connection. And re-stating it is what a great
+			// deal of stored configuration does — the executor hands a node's
+			// `connection` slot down as tier 2 even when nobody picked one (it
+			// falls through to the instance default and forwards THAT id), every
+			// slot value authored before the endpoint/model split is a bare
+			// connection id, and the legacy per-config overrides in
+			// `resolveTaskConfig` have an endpoint column and no model column at
+			// all. Resetting on those would unconfigure a capability whose
+			// default names a perfectly good pair, at the tier that agreed with
+			// it — which is a refusal for a choice nobody made, the same failure
+			// the reset exists to prevent.
+			//
+			// So: the model is cleared when the endpoint CHANGES, which is what
+			// every picker does too ("choosing a different connection clears the
+			// model, always"), and kept when it does not.
+			const sameEndpoint = connectionId === at.connectionId
+			connectionModelId =
+				at.connectionModelId ??
+				(sameEndpoint ? connectionModelId : null)
+			connectionId = at.connectionId
 			connectionVia = tier
 		}
+	}
+	for (const tier of RESOLUTION_TIERS) {
+		const at = byTier[tier]
 		if (at?.samplingConfigId != null) {
 			samplingConfigId = at.samplingConfigId
 			samplingVia = tier
@@ -398,7 +540,7 @@ export async function resolveCapabilityTarget(
 						// at was deleted" here, which would have been a confident
 						// lie on first run.
 						message:
-							`No connection is set for ${capabilityLabel(capability as CapabilityId)}. ` +
+							`No connection is set for ${wordingLabelFor(capability, req)}. ` +
 							`Choose one in Admin → Defaults — a connection is never picked ` +
 							`automatically, and deleting one releases every capability it held.`
 					}
@@ -429,33 +571,56 @@ export async function resolveCapabilityTarget(
 		}
 
 	/**
-	 * The MODEL half of the pair (0114), resolved before anything judges the
+	 * The MODEL half of the pair, resolved before anything judges the
 	 * connection — because what a pair can DO is the model's answer layered over
 	 * the endpoint's, and judging the bare endpoint would offer a vision slot a
 	 * text-only checkpoint sitting behind a vision-capable host.
 	 *
 	 * Named model: it must exist, belong to THIS endpoint, and be switched on.
-	 * All three are refusals rather than fallbacks — see the `model` problem
-	 * kind for why substituting the default here would be the worst of the
-	 * available answers.
+	 * All three are refusals rather than fallbacks.
 	 *
-	 * No model named: the endpoint's default. An endpoint with no models at all
-	 * merges to itself, which is exactly the pre-0114 row, so an install that
-	 * never filled in a model behaves the way it always did.
+	 * No model named: connections have no default model, so there is nothing
+	 * to fall back to. An endpoint-only choice is incomplete, and the resolver
+	 * says so with the fix attached rather than guessing a row.
 	 */
 	const model =
 		connectionModelId == null
-			? await defaultConnectionModel(db, connectionId)
+			? undefined
 			: await connectionModelById(db, connectionModelId)
 
-	if (connectionModelId != null) {
+	if (connectionModelId == null) {
+		return {
+			ok: false,
+			problem: {
+				kind: "model",
+				capability,
+				via: connectionVia,
+				connectionId,
+				message:
+					`No model is chosen for ${capabilityLabel(capability as CapabilityId)} in ` +
+					`${WHERE_SET[connectionVia]}. Pick a model on that ` +
+					`connection.`,
+				connection: connectionIdentity(connection)
+			}
+		}
+	}
+
+	{
+		// `missingSince` is the fourth refusal, and it is a refusal rather
+		// than a warning on purpose: the host stopped listing the model, so a
+		// request naming it would fail at the wire with the host's own
+		// sentence — or, worse, be silently served by whatever the host
+		// substitutes. Saying so here, with the fix, is the "unavailable
+		// globally" half of the availability ruling.
 		const wrong = !model
 			? "no longer exists"
 			: model.connectionId !== connectionId
 				? "belongs to a different connection"
 				: !model.enabled
 					? "is switched off"
-					: null
+					: model.missingSince
+						? "is no longer listed by its host"
+						: null
 		if (wrong)
 			return {
 				ok: false,
@@ -466,8 +631,10 @@ export async function resolveCapabilityTarget(
 					connectionId,
 					message:
 						`The model chosen for ${capabilityLabel(capability as CapabilityId)} in ` +
-						`${WHERE_SET[connectionVia]} ${wrong}. Pick another model on that ` +
-						`connection, or clear the choice to use its default model.`,
+						`${WHERE_SET[connectionVia]} ${wrong}. ` +
+						(model?.missingSince
+							? `Refresh that connection's models once the host serves it again, pick another model, or clear the choice.`
+							: `Pick another model on that connection, or clear the choice.`),
 					// WHICH endpoint, for an administrator — the same key the
 					// projection removes for everyone else. The sentence above
 					// names neither the connection nor the model on purpose: it

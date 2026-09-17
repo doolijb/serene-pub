@@ -32,7 +32,8 @@ import {
 } from "$lib/server/utils/sillyTavernParsers"
 import { resolveSillyTavernDataRoot } from "$lib/shared/utils/sillyTavernPaths"
 import { characterFieldsFromParsedData } from "./characters"
-import { personaFieldsFromParsedData } from "./personas"
+import { personaFieldsFromParsedData } from "$lib/server/utils/personaCard"
+import { markCharacterAsPersona } from "$lib/server/utils/markCharacterAsPersona"
 
 // ==================== Import Staging ====================
 //
@@ -550,12 +551,17 @@ export const importExecuteSillyTavern: Handler<
 				return existing?.id ?? null
 			}
 
+			// A persona is a character, so this is `findCharacterId` narrowed
+			// to the ones the user plays — narrowed rather than merged,
+			// because an import naming a persona must not silently attach some
+			// NPC that happens to share the name.
 			async function findPersonaId(name: string): Promise<number | null> {
-				const existing = await db.query.personas.findFirst({
+				const existing = await db.query.characters.findFirst({
 					where: and(
-						eq(schema.personas.userId, userId),
-						eq(schema.personas.name, name),
-						eq(schema.personas.isDeleted, false)
+						eq(schema.characters.userId, userId),
+						eq(schema.characters.name, name),
+						eq(schema.characters.isPersona, true),
+						eq(schema.characters.isDeleted, false)
 					)
 				})
 				return existing?.id ?? null
@@ -756,15 +762,16 @@ export const importExecuteSillyTavern: Handler<
 							? (pd.description ?? "")
 							: ""
 
+					// `personaFieldsFromParsedData` carries `isPersona: true` —
+					// an ST persona import is the user saying they play it.
 					const [newPersona] = await db
-						.insert(schema.personas)
+						.insert(schema.characters)
 						.values({
 							...personaFieldsFromParsedData({
 								name: personaItem.name,
 								description
 							}),
-							userId,
-							isDefault: false
+							userId
 						})
 						.returning()
 
@@ -781,14 +788,14 @@ export const importExecuteSillyTavern: Handler<
 						const buffer = await fsPromises.readFile(avatarSrc)
 						const created = await createMedia(db, {
 							userId,
-							personaId: newPersona.id,
+							characterId: newPersona.id,
 							bytes: buffer,
 							filename: avatarFilename
 						})
 						await db
-							.update(schema.personas)
+							.update(schema.characters)
 							.set({ avatarMediaId: created.file.id })
-							.where(eq(schema.personas.id, newPersona.id))
+							.where(eq(schema.characters.id, newPersona.id))
 					} catch {
 						/* no avatar file — that's fine */
 					}
@@ -875,20 +882,21 @@ export const importExecuteSillyTavern: Handler<
 			}
 
 			// Fallback persona: prefer the DB default, then any existing persona for this user.
-			// Imported personas are inserted with isDefault=false, so we need the secondary fallback
-			// for fresh installs where no default has been set yet.
+			// Imported personas are inserted with isDefaultPersona=false, so we need the secondary
+			// fallback for fresh installs where no default has been set yet.
 			const defaultPersona =
-				(await db.query.personas.findFirst({
+				(await db.query.characters.findFirst({
 					where: and(
-						eq(schema.personas.userId, userId),
-						eq(schema.personas.isDefault, true),
-						eq(schema.personas.isDeleted, false)
+						eq(schema.characters.userId, userId),
+						eq(schema.characters.isDefaultPersona, true),
+						eq(schema.characters.isDeleted, false)
 					)
 				})) ??
-				(await db.query.personas.findFirst({
+				(await db.query.characters.findFirst({
 					where: and(
-						eq(schema.personas.userId, userId),
-						eq(schema.personas.isDeleted, false)
+						eq(schema.characters.userId, userId),
+						eq(schema.characters.isPersona, true),
+						eq(schema.characters.isDeleted, false)
 					)
 				}))
 
@@ -948,6 +956,7 @@ export const importExecuteSillyTavern: Handler<
 							sessionId: newSession.id,
 							personaId: resolvedPersonaId
 						})
+						await markCharacterAsPersona(resolvedPersonaId)
 					}
 
 					assertWithinBulkImportLimit(
@@ -1077,6 +1086,7 @@ export const importExecuteSillyTavern: Handler<
 							sessionId: newSession.id,
 							personaId: resolvedGroupPersonaId
 						})
+						await markCharacterAsPersona(resolvedGroupPersonaId)
 					}
 
 					if (groupParsed) {

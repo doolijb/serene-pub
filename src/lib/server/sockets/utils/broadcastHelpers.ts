@@ -3,6 +3,37 @@ import * as schema from "$lib/server/db/schema"
 import { and, eq, inArray } from "drizzle-orm"
 import type { AuthenticatedSocket } from "../auth"
 import { withoutConnectionIdentity } from "$lib/server/connections/visibility"
+import { isGatedEvent, scopeOfPayload } from "$lib/shared/sockets/interest"
+import {
+	anyInterestAnywhere,
+	hasInterest,
+	interestedSockets,
+	socketsInUserRoom,
+	socketWantsAnyScope
+} from "../interest"
+
+/**
+ * A lazy broadcast payload — the cascade's query, deferred (plan ruling 4).
+ *
+ * Both helpers below take one wherever building the payload costs a query: the
+ * thunk runs ONCE, and only after the gate has said somebody is listening, so a
+ * re-read nobody wants is never paid for. Skipping the emit alone would save
+ * nothing; the query is the cost.
+ *
+ * Nullish back means there is nothing to broadcast — the thunk's own guard on a
+ * re-read that came back empty. So `null` is a skip here rather than a payload,
+ * unlike `emitToUser`'s boxed thunk in `sockets/index.ts`: no broadcast in the
+ * application sends one.
+ *
+ * ⚠ A rejection is NOT swallowed either. Every caller awaits this helper from
+ * inside its own try/catch, so a payload that fails to build belongs to that
+ * catch — the same place it would land had the caller built it itself.
+ */
+type LazyPayload = () => any | Promise<any>
+
+function isLazy(data: unknown): data is LazyPayload {
+	return typeof data === "function"
+}
 
 /**
  * Emit to a set of user rooms, hiding connections from those who are not
@@ -23,12 +54,41 @@ import { withoutConnectionIdentity } from "$lib/server/connections/visibility"
  * all. Same number of queries, one of them moved: the owner's copy of a
  * streamed chunk lands a query later than it used to, which is not cumulative
  * across chunks.
+ *
+ * The interest gate is asked twice, for two different questions. PER RECIPIENT
+ * first — a user none of whose sockets declared the key is dropped before
+ * anything else happens, which keeps the one roster read above to the people who
+ * are actually going to be sent something. Then PER SOCKET at the emit (ruling
+ * 5), because a user's other tab may be open on another session and has no
+ * business receiving this one's rows.
+ *
+ * `scope` is the **interest scope** the caller already extracted, passed in
+ * rather than re-derived so the narrowing check and the delivery ask about the
+ * same scope — `broadcastToSessionUsers` falls back to the session it was
+ * called for when a payload does not name one, and a second extraction here
+ * would read that as "no scope" and drop every scoped listener. Omitted (the
+ * one-recipient helper below), the scope comes from the payload.
  */
 async function emitRedacted(
 	io: AuthenticatedSocket["io"],
 	event: string,
-	recipients: { userId: number; data: any }[]
+	all: { userId: number; data: any }[],
+	scope?: string | null
 ): Promise<void> {
+	const recipients = isGatedEvent(event)
+		? all.filter((r) =>
+				hasInterest(
+					io,
+					r.userId,
+					event,
+					scope === undefined ? scopeOfPayload(event, r.data) : scope
+				)
+			)
+		: all
+	// Nobody to send to is nothing to look up. An ungated event reaches this
+	// only with an empty list, where the loop below already emitted nothing.
+	if (recipients.length === 0) return
+
 	const hidden = new Map<any, any>()
 	for (const { data } of recipients) {
 		if (hidden.has(data)) continue
@@ -58,11 +118,31 @@ async function emitRedacted(
 			)
 		: null
 
-	for (const { userId, data } of recipients)
-		io.to(`user_${userId}`).emit(
+	// A GATED event is delivered PER SOCKET (plan ruling 5), not to the room: a
+	// user's second tab, open on another session, must not be sent this
+	// session's chunks at all. The client registry drops a payload whose scope
+	// it holds no key for, which is correct and pays the bandwidth anyway — one
+	// row per streamed chunk, to every tab that user has open. Ungated events
+	// keep the room emit they have always had.
+	//
+	// The redaction is still decided per USER, because that is what the admin
+	// roster answers for; every socket of one user therefore receives the same
+	// payload.
+	const gated = isGatedEvent(event)
+	for (const { userId, data } of recipients) {
+		const payload = admins && !admins.has(userId) ? hidden.get(data) : data
+		if (!gated) {
+			io.to(`user_${userId}`).emit(event, payload)
+			continue
+		}
+		const targets = interestedSockets(
+			io,
+			userId,
 			event,
-			admins && !admins.has(userId) ? hidden.get(data) : data
+			scope === undefined ? scopeOfPayload(event, data) : scope
 		)
+		for (const target of targets) io.to(target.id).emit(event, payload)
+	}
 }
 
 /**
@@ -71,14 +151,39 @@ async function emitRedacted(
  * For the handful of pushes aimed at somebody else — a newly added guest's
  * session list, say — which by definition cannot go through the caller's
  * `emitToUser` and so would otherwise leave the redaction behind.
+ *
+ * `data` may be a `LazyPayload`, for the ones whose payload is a query: a fresh
+ * session list for a guest who was just added is the whole `sessions:list`
+ * read, paid for somebody who may have no tab open at all.
  */
 export async function emitToUserRedacted(
 	io: AuthenticatedSocket["io"],
 	userId: number,
 	event: string,
-	data: any
+	data: any | LazyPayload
 ): Promise<void> {
-	await emitRedacted(io, event, [{ userId, data }])
+	if (!isLazy(data)) {
+		await emitRedacted(io, event, [{ userId, data }])
+		return
+	}
+
+	// The gate, before the query. Asked as the WEAKER question — has this user
+	// a socket wanting ANY scope of the event — for the reason `emitToUser`'s
+	// thunk path gives: a thunk's scope lives in the payload it has not
+	// produced yet. `emitRedacted` below still asks the exact scope off what
+	// the thunk built, so a socket watching another session is dropped at
+	// delivery rather than served the wrong rows.
+	if (
+		isGatedEvent(event) &&
+		!socketsInUserRoom(io, userId).some((socket) =>
+			socketWantsAnyScope(socket, event)
+		)
+	)
+		return
+
+	const payload = await data()
+	if (payload == null) return
+	await emitRedacted(io, event, [{ userId, data: payload }])
 }
 
 /**
@@ -86,14 +191,55 @@ export async function emitToUserRedacted(
  * @param io The socket.io instance
  * @param sessionId The session ID to broadcast to
  * @param event The event name
- * @param data The data to emit
+ * @param data The data to emit, or a `LazyPayload` that builds it
  */
 export async function broadcastToSessionUsers(
 	io: AuthenticatedSocket["io"],
 	sessionId: number,
 	event: string,
-	data: any
+	data: any | LazyPayload
 ) {
+	// The gate comes BEFORE the two reads below, which is the whole of it for
+	// this helper: the streaming push broadcasts one row per chunk, so the
+	// owner and guest lookups are paid per chunk for a session no open view may
+	// be watching. Asked of every connected socket rather than of a room —
+	// whose rooms to read is exactly what the queries below are for — and it
+	// only ever NARROWS: `emitRedacted` still decides per recipient and then per
+	// socket.
+	//
+	// The scope falls back to the session this broadcast is for when a payload
+	// does not name one, so an event whose shape drifts fails towards sending
+	// rather than towards silence. The same value goes to `emitRedacted`, so
+	// both halves ask about one scope.
+	//
+	// A LAZY payload has no scope to read yet — the query that would name one
+	// is the query being skipped — so the narrowing asks about `sessionId`, the
+	// session this broadcast is FOR. That is the scope its payload will name;
+	// a thunk that builds ANOTHER session's payload must be passed eagerly
+	// instead, because the sockets watching that other session are the ones
+	// this check would then miss.
+	const gated = isGatedEvent(event)
+	const narrowing = gated
+		? isLazy(data)
+			? String(sessionId)
+			: (scopeOfPayload(event, data) ?? String(sessionId))
+		: undefined
+	if (narrowing !== undefined && !anyInterestAnywhere(io, event, narrowing))
+		return
+
+	// Only now is the payload worth building, and it is built exactly once.
+	const payload = isLazy(data) ? await data() : data
+	// Nullish from a thunk is the empty re-query — nothing to broadcast.
+	if (isLazy(data) && payload == null) return
+
+	// The scope DELIVERY asks about, read off the payload that now exists. On
+	// the eager path this is the same value the narrowing used, from the same
+	// payload; on the lazy one it is the first look the gate gets at what was
+	// actually built.
+	const scope = gated
+		? (scopeOfPayload(event, payload) ?? String(sessionId))
+		: undefined
+
 	// Get session owner
 	const session = await db.query.sessions.findFirst({
 		where: eq(schema.sessions.id, sessionId),
@@ -108,10 +254,15 @@ export async function broadcastToSessionUsers(
 		columns: { userId: true }
 	})
 
-	await emitRedacted(io, event, [
-		{ userId: session.userId, data },
-		...guests.map((guest) => ({ userId: guest.userId, data }))
-	])
+	await emitRedacted(
+		io,
+		event,
+		[
+			{ userId: session.userId, data: payload },
+			...guests.map((guest) => ({ userId: guest.userId, data: payload }))
+		],
+		scope
+	)
 }
 
 /*

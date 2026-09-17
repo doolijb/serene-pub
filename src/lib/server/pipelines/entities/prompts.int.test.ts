@@ -51,9 +51,9 @@ let db: TestDb
 let specId: number
 let specVersionId: number
 /** The reply pipeline's context pool — `(node type, slot)`, discovered not typed. */
-let pool: { nodeTypeId: string; slot: string }
+let pool: { nodeDefinitionId: string; slot: string }
 /** The narrator's, which is a different node type and therefore a different pool. */
-let narratorPool: { nodeTypeId: string; slot: string }
+let narratorPool: { nodeDefinitionId: string; slot: string }
 let narrateVersionId: number
 
 beforeAll(async () => {
@@ -74,7 +74,7 @@ beforeAll(async () => {
 	const decl = (await declarations(db, specVersionId)).find(
 		(d) => d.nodeKey === "context" && d.control === "prompts-ref"
 	)!
-	pool = { nodeTypeId: decl.nodeTypeId!, slot: decl.slot }
+	pool = { nodeDefinitionId: decl.nodeDefinitionId!, slot: decl.slot }
 
 	const { NARRATE_SPEC_ID } = await import("$lib/server/pipelines/specs")
 	const [narrate] = await db
@@ -85,7 +85,7 @@ beforeAll(async () => {
 	const nDecl = (await declarations(db, narrateVersionId)).find(
 		(d) => d.control === "prompts-ref"
 	)!
-	narratorPool = { nodeTypeId: nDecl.nodeTypeId!, slot: nDecl.slot }
+	narratorPool = { nodeDefinitionId: nDecl.nodeDefinitionId!, slot: nDecl.slot }
 }, 60_000)
 
 describe("what a node declares", () => {
@@ -148,7 +148,7 @@ describe("what a node declares", () => {
 	})
 
 	it("puts the pool on the declaration, both halves", async () => {
-		// The half that used to be missing. Without `nodeTypeId` on a
+		// The half that used to be missing. Without `nodeDefinitionId` on a
 		// prompts-ref the picker has nothing to narrow by, and every prompt on
 		// the instance is a candidate for every step.
 		const { declarations } = await import(
@@ -156,10 +156,10 @@ describe("what a node declares", () => {
 		)
 		for (const d of await declarations(db, specVersionId))
 			if (d.control === "prompts-ref") {
-				expect(d.nodeTypeId, `${d.nodeKey}.${d.slot} has no pool`).toBeTruthy()
+				expect(d.nodeDefinitionId, `${d.nodeKey}.${d.slot} has no pool`).toBeTruthy()
 				// Unversioned — a type bump must not strand the prompts a
 				// person wrote against the old one.
-				expect(d.nodeTypeId).not.toMatch(/@\d+$/)
+				expect(d.nodeDefinitionId).not.toMatch(/@\d+$/)
 				expect(d.slot).toBeTruthy()
 			}
 	})
@@ -273,7 +273,7 @@ describe("selecting a prompt", () => {
 	it("keeps one pool's rows out of another's list", async () => {
 		const mine = await listPrompts(
 			db,
-			pool.nodeTypeId,
+			pool.nodeDefinitionId,
 			pool.slot,
 			specId
 		)
@@ -311,7 +311,7 @@ describe("a prompt follows its node", () => {
 		// Asked as some *other* pipeline would ask: same pool, different spec.
 		const elsewhere = await listPrompts(
 			db,
-			pool.nodeTypeId,
+			pool.nodeDefinitionId,
 			pool.slot,
 			specId + 10_000
 		)
@@ -329,7 +329,7 @@ describe("a prompt follows its node", () => {
 	it("sorts the pipeline's own first, then shipped, then everything else", async () => {
 		const rows = await listPrompts(
 			db,
-			pool.nodeTypeId,
+			pool.nodeDefinitionId,
 			pool.slot,
 			specId
 		)
@@ -386,7 +386,7 @@ describe("editing", () => {
 		expect(copy.isImmutable).toBe(false)
 		// Into the same pool, or the copy would be unselectable at the very
 		// control the Duplicate button sits on.
-		expect(copy.nodeTypeId).toBe(shipped.nodeTypeId)
+		expect(copy.nodeDefinitionId).toBe(shipped.nodeDefinitionId)
 		expect(copy.slot).toBe(shipped.slot)
 
 		await updatePrompt(db, copy.id, {

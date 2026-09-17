@@ -24,7 +24,7 @@ import { createHost } from "$lib/server/pipelines/runtime/host"
 import { buildWorld } from "$lib/server/pipelines/config/world"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
 import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
-import { spec, compile, run, slot } from "@serene-pub/sdk"
+import { spec, compile, run, slot, splitCandidates } from "@serene-pub/sdk"
 import * as C from "@serene-pub/contracts"
 import * as schema from "$lib/server/db/schema"
 import { worldLoreValues } from "$lib/server/pipelines/testing/fixtures"
@@ -77,6 +77,35 @@ vi.mock("$lib/server/utils/resolveTaskConfig", () => ({
 		sampling: { id: 1 }
 	})
 }))
+// The reply dispatch consumes the run's own resolution now (R-8) and asks the
+// resolver only to load the pair — so the stand-in connection is supplied
+// where dispatch actually reads it. The real resolver answers first: a test
+// that registers a capability default of its own gets that connection (and
+// its stop guards), and only an instance with nothing registered falls back
+// to the stand-in.
+vi.mock("$lib/server/connections/capabilityTarget", async (importOriginal) => {
+	const real = await importOriginal<
+		typeof import("$lib/server/connections/capabilityTarget")
+	>()
+	return {
+		...real,
+		resolveCapabilityTarget: async (
+			db: Db,
+			req: Parameters<typeof real.resolveCapabilityTarget>[1]
+		) => {
+			const target = await real.resolveCapabilityTarget(db, req)
+			if (target.ok) return target
+			return {
+				ok: true,
+				capability: req.capability,
+				connection: { id: 1, type: "koboldcpp", promptFormat: "vicuna" },
+				sampling: { id: 1 },
+				connectionVia: "pipelineConfig",
+				samplingVia: "pipelineConfig"
+			}
+		}
+	}
+})
 vi.mock("$lib/server/utils/getUserConfigurations", () => ({
 	getUserConfigurations: async () => ({
 		sampling: { id: 1 },
@@ -102,8 +131,7 @@ let characterId: number
 const promptPipeline = () =>
 	compile(
 		spec("core:spec/respond", { version: "1.0.0" })
-			.on("core:event/message-created@1")
-			.input("input", C.userMessage.v1())
+			.inlet("input", C.userMessage.v1())
 			.query("history", ($) =>
 				C.sessionHistory.v1({ scope: $.input.sessionScope })
 			)
@@ -161,10 +189,10 @@ const promptPipeline = () =>
 					params: slot.params()
 				})
 			)
-			.provider("generate", ($) =>
+			.oracle("generate", ($) =>
 				C.generateText.v1({ context: $.prompt.context })
 			)
-			.consume("save", ($) =>
+			.outlet("save", ($) =>
 				C.createMessage.v1({ text: $.generate.text })
 			)
 			.build()
@@ -191,12 +219,12 @@ beforeAll(async () => {
 	characterId = character.id
 
 	const [persona] = await db
-		.insert(schema.personas)
+		.insert(schema.characters)
 		.values({
 			userId,
+			isPersona: true,
 			name: "Bob",
-			description: "A traveller.",
-			isDefault: false
+			description: "A traveller."
 		})
 		.returning()
 
@@ -387,7 +415,11 @@ describe("the prompt path, end to end", () => {
 		const receipt = await execute()
 		const lore = receipt.nodes.find((n) => n.nodeKey === "lore")!
 			.output as any
-		expect(lore.hits[0].payload.name).toBe("The Ashguard")
+		// `hits` opens with the scan's band-intent elements (R-7 P5); the
+		// items are what a reader splits off.
+		const { intents, items } = splitCandidates<any>(lore.hits)
+		expect(intents.map((i) => i.band)).toEqual(["worldLore", "characterLore", "history"])
+		expect(items[0].payload.name).toBe("The Ashguard")
 		// Why RAG did not run is answerable from the receipt rather than from
 		// the embedding settings screen.
 		expect(lore.diagnostics.vectorSearch).toMatch(/no embedding model/)

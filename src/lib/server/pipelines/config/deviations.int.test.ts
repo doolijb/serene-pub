@@ -132,7 +132,7 @@ const resolvedLimit = async (sessionId?: number) => {
 /**
  * Re-declare `limit`'s default, the way a re-projection would.
  *
- * `declarations()` reads `pipeline_type_registry.slots` and nothing else, so
+ * `declarations()` reads `pipeline_definition_registry.slots` and nothing else, so
  * rewriting the projected row IS what a migration that deletes the row and lets
  * boot re-project it produces — without needing a second build of the app in
  * the middle of a test.
@@ -140,14 +140,14 @@ const resolvedLimit = async (sessionId?: number) => {
 const redeclareDefault = async (value: number) => {
 	const [row] = await db
 		.select()
-		.from(schema.pipelineTypeRegistry)
+		.from(schema.pipelineDefinitionRegistry)
 		.where(
 			and(
 				eq(
-					schema.pipelineTypeRegistry.typeId,
+					schema.pipelineDefinitionRegistry.definitionId,
 					"core:query/session-history"
 				),
-				eq(schema.pipelineTypeRegistry.version, 1)
+				eq(schema.pipelineDefinitionRegistry.version, 1)
 			)
 		)
 	expect(row, "the history node's type is not projected").toBeTruthy()
@@ -158,9 +158,9 @@ const redeclareDefault = async (value: number) => {
 	).toBeDefined()
 	slots.params.schema.limit.default = value
 	await db
-		.update(schema.pipelineTypeRegistry)
+		.update(schema.pipelineDefinitionRegistry)
 		.set({ slots })
-		.where(eq(schema.pipelineTypeRegistry.id, row.id))
+		.where(eq(schema.pipelineDefinitionRegistry.id, row.id))
 }
 
 describe("seeding writes deviations, not values", () => {

@@ -14,8 +14,8 @@
 	 * generated section below is what this backend alone offers.
 	 */
 	import * as Icons from "@lucide/svelte"
-	import { onDestroy } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { mediaUrl } from "$lib/client/utils/media"
 	import SchemaForm from "$lib/client/components/pipelines/SchemaForm.svelte"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
@@ -41,7 +41,6 @@
 		extra?: Record<string, unknown>
 	}
 	let testResult = $state<TestResult | null>(null)
-	let models: string[] = $derived(testResult?.models ?? [])
 	/**
 	 * A Manager-owned connection, which changes what several fields MEAN.
 	 *
@@ -73,13 +72,7 @@
 			}
 		}
 	}
-	socket.on("images:profileSchema", onProfileSchema)
-	onDestroy(() => socket.off("images:profileSchema", onProfileSchema))
-
-	$effect(() => {
-		if (CONNECTION_TYPE.isImage(connection.type))
-			socket.emit("images:profileSchema", { type: connection.type })
-	})
+	useInterest<"images:profileSchema">("images:profileSchema", onProfileSchema)
 
 	// The apiKey and profile bindings both need a container object.
 	$effect(() => {
@@ -87,8 +80,8 @@
 	})
 
 	// ── Test connection ──────────────────────────────────────────────────
-	// A named handler + targeted off, so unmounting this form removes only its
-	// own listener and never the parent sidebar's connections:test handler.
+	// The registry keeps ONE raw listener per event and fans it out, so this
+	// form's interest coming and going never disturbs the parent sidebar's own.
 	const onTest = (msg: Sockets.Connections.Test.Response) => {
 		if (msg.connectionId != null && msg.connectionId !== connection.id)
 			return
@@ -99,8 +92,7 @@
 			extra: msg.extra
 		}
 	}
-	socket.on("connections:test", onTest)
-	onDestroy(() => socket.off("connections:test", onTest))
+	useInterest<"connections:test">("connections:test", onTest)
 
 	function handleTest() {
 		testResult = null
@@ -130,8 +122,10 @@
 		}
 		progress = msg
 	}
-	socket.on("images:progress", onProgress)
-	onDestroy(() => socket.off("images:progress", onProgress))
+	// Bare key: `images:progress` has no entry in SCOPED_EVENTS, so there is no
+	// `#runId` scope for the two sides to agree on and the handler's own runId
+	// guard is what narrows it.
+	useInterest<"images:progress">("images:progress", onProgress)
 
 	const onGenerated = (msg: ImagesGenerateResponse) => {
 		if (runId && msg.runId && msg.runId !== runId) return
@@ -146,8 +140,7 @@
 			genError = msg.error ?? "Generation failed."
 		}
 	}
-	socket.on("images:generate", onGenerated)
-	onDestroy(() => socket.off("images:generate", onGenerated))
+	useInterest<"images:generate">("images:generate", onGenerated)
 
 	function handleGenerate() {
 		if (!connection.id || !genPrompt.trim()) return
@@ -170,6 +163,14 @@
 	function handleCancel() {
 		if (runId) socket.emit("images:cancel", { runId })
 	}
+
+	// Asked for AFTER every declaration above, because effects run in creation
+	// order and an emit flushes the pending interest sync: a key declared after
+	// this request would miss the flush the reply needs.
+	$effect(() => {
+		if (CONNECTION_TYPE.isImage(connection.type))
+			socket.emit("images:profileSchema", { type: connection.type })
+	})
 
 	const previewSrc = $derived(
 		progress?.preview
@@ -234,44 +235,8 @@
 		<p class="text-error-500 mt-2 text-sm">{testResult.error}</p>
 	{/if}
 
-	{#if models.length}
-		<div class="mt-3 flex flex-col gap-1">
-			<label
-				class="flex items-center gap-1.5 font-semibold"
-				for="img-model"
-			>
-				<Icons.Image size={14} />
-				Checkpoint
-			</label>
-			<select
-				id="img-model"
-				class="select bg-background border-muted w-full rounded border"
-				bind:value={connection.model}
-			>
-				<!-- For a MANAGED connection there is no server default to fall
-				     back to: the model named here is the entire content of the
-				     load request, and a blank one is refused at render time. The
-				     old wording actively recommended the one choice that cannot
-				     work. -->
-				<option value="">
-					{isManaged ? "— none selected —" : "(server default)"}
-				</option>
-				{#each models as m}
-					<option value={m}>{m}</option>
-				{/each}
-			</select>
-			<p class="text-muted-foreground text-xs">
-				{#if isManaged}
-					Required. The KoboldCPP Manager loads this file on demand
-					when an image is requested.
-				{:else}
-					The base checkpoint. Leave on default to let the server
-					choose.
-				{/if}
-			</p>
-		</div>
-	{/if}
-
+	<!-- No model/checkpoint picker here: connections have no default model.
+	     Models live in the Models section below. -->
 	<!-- Everything below is this backend's own, rendered from what its adapter
 	     declares. Core has no idea what any of these fields mean. -->
 	{#if profileSchema && Object.keys(profileSchema).length && connection.extraJson}

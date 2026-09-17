@@ -11,16 +11,20 @@
 	 * the declarations, not the source. In-but-not-out is read-only; a verdict
 	 * type has no outs at all, because its return is consumed by the hook.
 	 */
-	import { getContext, onDestroy, onMount } from "svelte"
+	import { getContext, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { goto } from "$app/navigation"
 	import { page } from "$app/state"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import {
+		declareInterest,
+		requestWithInterest
+	} from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { downloadBlob } from "$lib/client/utils/downloadBlob"
 
 	type Script = Sockets.Pipelines.Scripts.Script
-	type ScriptType = Sockets.Pipelines.Scripts.ScriptType
+	type ScriptKind = Sockets.Pipelines.Scripts.ScriptKind
 
 	const userCtx: { user: SelectUser } = getContext("userCtx")
 	const socket = useTypedSocket()
@@ -30,7 +34,7 @@
 	let loading = $state(true)
 
 	let row = $derived((view.scripts ?? []).find((s) => s.id === id))
-	let type = $derived<ScriptType | undefined>(
+	let type = $derived<ScriptKind | undefined>(
 		(view.types ?? []).find((t) => t.typeId === row?.typeId)
 	)
 	let readonly = $derived(!!row?.isImmutable)
@@ -96,9 +100,6 @@
 		"pipelines:deleteScript"
 	] as const
 
-	// Named so `off` can name them too. A bare `socket.off("pipelines:scripts")`
-	// removes EVERY listener for that event — including any other open
-	// page's, which then stops updating for the rest of the session.
 	function handlePipelinesScripts(res: Sockets.Pipelines.Scripts.Response) {
 		view = res
 		loading = false
@@ -127,22 +128,44 @@
 			goto("/")
 			return
 		}
-		socket.on("pipelines:scripts", handlePipelinesScripts)
-		for (const ev of WRITE_EVENTS) {
-			socket.on(ev, handleWriteEvent)
-			socket.on(`${ev}:error` as any, handleWriteEventError)
-		}
-		socket.on("pipelines:exportScripts", handlePipelinesExportScripts)
-		socket.emit("pipelines:scripts", {})
 	})
 
-	onDestroy(() => {
-		socket.off("pipelines:scripts", handlePipelinesScripts)
+	/**
+	 * The row, asked for and listened for in one; the three writes, their
+	 * refusals and the export download stand — each arrives when the person
+	 * presses a button, not in reply to anything asked here. All BARE: a
+	 * script is not one session's anything.
+	 *
+	 * The loop declares one key per iteration; every release goes in the same
+	 * array, so the whole set is dropped when the page is.
+	 *
+	 * The app-wide registry, not `adminInterest`: `pipelines:` is a MIXED
+	 * family — most of its handlers answer every user — so these are ordinary
+	 * keys, and the admin check here is the same one the redirect above makes.
+	 */
+	$effect(() => {
+		if (!userCtx.user?.isAdmin) return
+		const releases = [
+			declareInterest<"pipelines:exportScripts">(
+				"pipelines:exportScripts",
+				handlePipelinesExportScripts
+			)
+		]
 		for (const ev of WRITE_EVENTS) {
-			socket.off(ev, handleWriteEvent)
-			socket.off(`${ev}:error` as any, handleWriteEventError)
+			releases.push(
+				declareInterest<"pipelines:updateScript">(ev, handleWriteEvent),
+				declareInterest<"pipelines:updateScript:error">(
+					`${ev}:error`,
+					handleWriteEventError
+				)
+			)
 		}
-		socket.off("pipelines:exportScripts", handlePipelinesExportScripts)
+		releases.push(
+			requestWithInterest("pipelines:scripts", {}, handlePipelinesScripts)
+		)
+		return () => {
+			for (const release of releases) release()
+		}
 	})
 
 	function save() {

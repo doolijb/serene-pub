@@ -12,9 +12,15 @@
 	import { getContext, onDestroy, onMount } from "svelte"
 	import { goto } from "$app/navigation"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { getAdminInterestContext } from "$lib/client/sockets/interest.svelte"
+	import { interestKey } from "$lib/shared/sockets/interest"
 
 	const userCtx: { user: SelectUser } = getContext("userCtx")
 	const socket = useTypedSocket()
+	// The admin-only half of the registry (plan ruling 6b): `plugins:` is a
+	// RESTRICTED interest family, and this context exists only inside the
+	// admin tree, which already turns non-admins away.
+	const interest = getAdminInterestContext()
 
 	let plugins: Sockets.Plugins.PluginRow[] = $state([])
 	let logs: Sockets.Plugins.LogRow[] = $state([])
@@ -41,10 +47,10 @@
 	let settingsDraft = $state<Record<string, Record<string, unknown>>>({})
 	let settingsError = $state<Record<string, string | null>>({})
 
-	// Named so `off` can name them too — and so there is anything to off at
-	// all: these had no teardown, so every visit to this page left another set
-	// of listeners on the socket. A bare `socket.off(event)` is not the fix:
-	// it removes EVERY listener for that event across the app.
+	// Named because the interest registry releases by handler reference — and
+	// because it is the ONE listener path now, the leak these handlers were
+	// named for (no teardown at all, a fresh set of listeners on every visit)
+	// is gone with it.
 	function handlePluginsList(res: Sockets.Plugins.List.Response) {
 		plugins = res.plugins
 		sandboxEnabled = res.sandboxEnabled
@@ -77,20 +83,87 @@
 		if (res.error) settingsError[res.pluginId] = res.error
 	}
 
+	/**
+	 * The three page-wide reads, each asked for and listened for in one, plus
+	 * the refusal a settings save can come back with. All BARE — an installed
+	 * set is the instance's — and all STANDING: `plugins:list` and
+	 * `plugins:active` are re-asked by the poll below and re-emitted by the
+	 * server after every write on this page, and `plugins:setSettings:error`
+	 * answers a Save nothing here asked about.
+	 *
+	 * Declared here rather than in `onMount` so each key leaves ahead of its
+	 * own request, and so the poll below only ever emits against keys that are
+	 * already held.
+	 */
+	$effect(() => {
+		if (!userCtx.user?.isAdmin) return
+		const releases = [
+			interest.declareInterest<"plugins:setSettings:error">(
+				"plugins:setSettings:error",
+				handlePluginsSetSettingsError
+			),
+			interest.requestWithInterest("plugins:list", {}, handlePluginsList),
+			interest.requestWithInterest(
+				"plugins:logs",
+				{ limit: 100 },
+				handlePluginsLogs
+			),
+			interest.requestWithInterest(
+				"plugins:active",
+				{},
+				handlePluginsActive
+			)
+		]
+		return () => {
+			for (const release of releases) release()
+		}
+	})
+
+	/**
+	 * The open permissions panel's answer, SCOPED to the plugin it is about —
+	 * `plugins:permissions#<pluginId>` — so a reply for another plugin does
+	 * not land in a panel that is not open.
+	 *
+	 * An effect rather than `useInterest` because the key MOVES: `useInterest`
+	 * reads its key once, and the selected plugin changes every time a panel
+	 * is opened. The request goes out here too, after the declare, so the key
+	 * is always the older of the two.
+	 */
+	$effect(() => {
+		if (!userCtx.user?.isAdmin) return
+		const pluginId = openPerms
+		if (!pluginId) return
+		const release = interest.declareInterest<"plugins:permissions">(
+			interestKey("plugins:permissions", pluginId),
+			handlePluginsPermissions
+		)
+		socket.emit("plugins:permissions", { pluginId })
+		return release
+	})
+
+	/**
+	 * The open settings panel's view, SCOPED the same way — and the same
+	 * effect form for the same reason. A settings save answers ONLY through
+	 * the cascaded `plugins:getSettings`, so the panel that can write holds
+	 * this key for as long as it is open.
+	 */
+	$effect(() => {
+		if (!userCtx.user?.isAdmin) return
+		const pluginId = openSettings
+		if (!pluginId) return
+		const release = interest.declareInterest<"plugins:getSettings">(
+			interestKey("plugins:getSettings", pluginId),
+			handlePluginsGetSettings
+		)
+		socket.emit("plugins:getSettings", { pluginId })
+		return release
+	})
+
 	onMount(() => {
 		if (!userCtx.user?.isAdmin) {
 			goto("/")
 			return
 		}
-		socket.on("plugins:list", handlePluginsList)
-		socket.on("plugins:logs", handlePluginsLogs)
-		socket.on("plugins:active", handlePluginsActive)
-		socket.on("plugins:permissions", handlePluginsPermissions)
-		socket.on("plugins:getSettings", handlePluginsGetSettings)
-		socket.on("plugins:setSettings:error", handlePluginsSetSettingsError)
-		socket.emit("plugins:list", {})
-		socket.emit("plugins:logs", { limit: 100 })
-		socket.emit("plugins:active", {})
 		// The list rides the same poll as the monitor: `warm` is live truth
 		// that changes as hooks fire, and a stale badge reads as a stuck unload.
 		pollTimer = setInterval(() => {
@@ -101,12 +174,6 @@
 
 	onDestroy(() => {
 		if (pollTimer) clearInterval(pollTimer)
-		socket.off("plugins:list", handlePluginsList)
-		socket.off("plugins:logs", handlePluginsLogs)
-		socket.off("plugins:active", handlePluginsActive)
-		socket.off("plugins:permissions", handlePluginsPermissions)
-		socket.off("plugins:getSettings", handlePluginsGetSettings)
-		socket.off("plugins:setSettings:error", handlePluginsSetSettingsError)
 	})
 
 	function setEnabled(p: Sockets.Plugins.PluginRow, enabled: boolean) {
@@ -148,18 +215,17 @@
 	function kill(callId: number) {
 		socket.emit("plugins:kill", { callId })
 	}
+	// Neither toggler emits: the scoped effects above send the request for
+	// whichever plugin is open, so the key naming it is always declared first.
 	function togglePerms(pluginId: string) {
 		openPerms = openPerms === pluginId ? null : pluginId
-		if (openPerms) socket.emit("plugins:permissions", { pluginId })
 	}
 	/** Open (never close) the permissions panel — what the waiting badge does. */
 	function openPermsFor(pluginId: string) {
 		openPerms = pluginId
-		socket.emit("plugins:permissions", { pluginId })
 	}
 	function toggleSettings(pluginId: string) {
 		openSettings = openSettings === pluginId ? null : pluginId
-		if (openSettings) socket.emit("plugins:getSettings", { pluginId })
 	}
 	function editSetting(pluginId: string, key: string, value: unknown) {
 		settingsDraft[pluginId] = {

@@ -20,7 +20,7 @@ import {
 	reasoningOf
 } from "$lib/shared/utils/samplerMappings"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
-import { fetchCurrentModelName } from "$lib/server/koboldcpp/kcppHttp"
+import { fetchCurrentModelStatus } from "$lib/server/koboldcpp/kcppHttp"
 import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
 import {
 	createIdleWatchdog,
@@ -263,8 +263,8 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 			// continue a conversation it had never been shown. A refusal here
 			// names the disagreement; a silent request does not.
 			//
-			// Deliberately not a fallback to `promptTextFor`: rebuilding a flat
-			// prompt would put a locally-decided wire mode back, which is the
+			// It refuses rather than falling back to `promptTextFor`: rebuilding
+			// a flat prompt would decide the wire mode locally, which is the
 			// defect rather than the recovery.
 			if (!Array.isArray(compiledPrompt.messages))
 				throw new Error(
@@ -322,7 +322,7 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 			requestBody = {
 				// `promptTextFor`, not `compiledPrompt.prompt`: a payload built
 				// for a chat endpoint carries `messages` and no prompt string,
-				// and this used to put `undefined` on the wire.
+				// so reading the field directly puts `undefined` on the wire.
 				prompt: this.promptTextFor(compiledPrompt),
 				max_length:
 					samplingParams.max_length ||
@@ -705,26 +705,35 @@ export async function testConnection(
 // List models function — a dumb connection never assumes an admin API is
 // present, so this only ever reports the currently loaded model. See
 // KoboldCppManagedAdapter's listModels for the admin-API-backed version.
+//
+// The answer is the model's REAL name, or an empty list when nothing is
+// loaded, or an ERROR when the process could not be asked. Never a `[current]`
+// sentinel with a "Currently Loaded: …" label: that is fine for a dropdown and
+// wrong for a sync, because the sentinel becomes a row no host lists. Nor may
+// "could not ask" collapse into "nothing loaded", which would mark the real row
+// missing every time the worker is busy. `determined` is the flag that keeps
+// those two apart — see `fetchCurrentModelStatus`.
 async function listModels(
 	connection: SelectConnection
 ): Promise<{ models: any[]; error?: string }> {
 	try {
 		const baseUrl =
 			normalizeBaseUrl(connection.baseUrl) || "http://localhost:5001"
-
-		const currentModel =
-			(await fetchCurrentModelName(baseUrl)) || "No model loaded"
-
-		const models = [
-			{
-				id: "[current]",
-				name: `Currently Loaded: ${currentModel}`,
-				object: "model",
-				isCurrent: true
+		const status = await fetchCurrentModelStatus(baseUrl)
+		if (!status.determined)
+			return {
+				models: [],
+				error: "KoboldCPP did not answer — it may be loading a model or mid-generation."
 			}
-		]
-
-		return { models }
+		if (status.refused)
+			return {
+				models: [],
+				error: "Nothing is listening at this address."
+			}
+		if (!status.modelName) return { models: [] }
+		return {
+			models: [{ model: status.modelName, name: status.modelName }]
+		}
 	} catch (e: any) {
 		return {
 			models: [],

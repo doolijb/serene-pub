@@ -54,21 +54,21 @@ async function scenario() {
 		.values({ name: "Guest Char", description: "x", userId: guest.id })
 		.returning()
 	const [ownerPersona] = await testDb
-		.insert(schema.personas)
+		.insert(schema.characters)
 		.values({
 			name: "Owner Persona",
 			description: "x",
 			userId: owner.id,
-			isDefault: false
+			isPersona: true
 		})
 		.returning()
 	const [guestPersona] = await testDb
-		.insert(schema.personas)
+		.insert(schema.characters)
 		.values({
 			name: "Guest Persona",
 			description: "x",
 			userId: guest.id,
-			isDefault: false
+			isPersona: true
 		})
 		.returning()
 	const [guestLore] = await testDb

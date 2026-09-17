@@ -21,7 +21,7 @@
  * a width that silently corrupts an index the day a backend changes default.
  */
 
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 
 const conn = (over: Record<string, unknown> = {}) =>
@@ -43,14 +43,17 @@ const conn = (over: Record<string, unknown> = {}) =>
  * instance at module scope, so without this every case here pays a full
  * migration and fails as a five-second timeout that reads like a flake. The only
  * thing these adapters ask it is which `local_models` rows are embeddings, and
- * "none" is the answer that makes the catalogue assertions exact.
+ * "none" is the answer that makes the catalogue assertions exact —
+ * `registry.rows` is swappable for the one case that needs a downloaded model
+ * to be there.
  */
+const registry = vi.hoisted(() => ({ rows: [] as any[] }))
 vi.mock("$lib/server/db", () => ({
 	getCryptoSecretKey: () => "test-secret",
 	db: {
 		select: () => ({
 			from: () => ({
-				where: async () => []
+				where: async () => registry.rows
 			})
 		})
 	}
@@ -172,6 +175,28 @@ describe("OpenAI-compatible embeddings", () => {
 })
 
 describe("local ONNX embeddings", () => {
+	/**
+	 * ⚠ Offline, deliberately.
+	 *
+	 * `listModels` merges the PUBLISHED recommended list
+	 * (`localModels/onnxList`) over the built-in catalogue, and this file must
+	 * not reach the Hub — see the header. With the fetch refused the merge
+	 * falls back to the built-ins, which is also what makes the assertions
+	 * below exact rather than "contains at least".
+	 */
+	beforeEach(async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => {
+				throw new Error("offline")
+			})
+		)
+		const { resetRecommendedLists } = await import(
+			"$lib/server/localModels/onnxList"
+		)
+		resetRecommendedLists()
+	})
+
 	it("offers the shipped catalogue as its model list", async () => {
 		const { EMBEDDING_MODELS } = await import(
 			"$lib/server/embedding/models"
@@ -186,6 +211,80 @@ describe("local ONNX embeddings", () => {
 		)
 		for (const m of EMBEDDING_MODELS)
 			expect(models.map((x: any) => x.model ?? x.id ?? x)).toContain(m.id)
+	})
+
+	/**
+	 * ⚠ The listing feeds `syncConnectionModels`, whose `(connection_id, model)`
+	 * unique index refuses a second row for an id it already wrote — so an id
+	 * appearing twice here does not show a model twice, it aborts that
+	 * endpoint's whole sync with a duplicate-key error. Every source overlaps
+	 * by design: the published list names the same ids the built-in catalogue
+	 * does, and a downloaded model is usually one of them.
+	 */
+	it("names each id exactly once when every source overlaps", async () => {
+		const { resetRecommendedLists } = await import(
+			"$lib/server/localModels/onnxList"
+		)
+		const { EMBEDDING_MODELS } = await import(
+			"$lib/server/embedding/models"
+		)
+		// A published list that names a built-in id, and repeats one of its own.
+		const yaml = `
+models:
+  - id: Xenova/all-MiniLM-L6-v2
+    name: all-MiniLM-L6-v2
+    dtype: q8
+    size: 24
+    dimensions: 384
+    pooling: mean
+    tier: fast
+    details:
+      description: "The smallest model that still works."
+  - id: Xenova/all-MiniLM-L6-v2
+    name: all-MiniLM-L6-v2 (a duplicated entry)
+    dtype: q8
+    size: 24
+    dimensions: 384
+    pooling: mean
+    tier: best
+    details:
+      description: "The same id a second time."
+`
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => ({ ok: true, text: async () => yaml }) as any)
+		)
+		resetRecommendedLists()
+		// …and a downloaded model that is also a catalogue model.
+		registry.rows = [
+			{
+				modelName: "Xenova/all-MiniLM-L6-v2",
+				filename: "Xenova/all-MiniLM-L6-v2",
+				description: "Downloaded"
+			},
+			{
+				modelName: "some-org/hand-placed",
+				filename: "some-org/hand-placed.onnx",
+				description: "Downloaded"
+			}
+		]
+		try {
+			const mod = (await import("./LocalOnnxEmbeddingAdapter")).default
+			const { models } = await mod.listModels(
+				conn({
+					type: CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS,
+					baseUrl: null,
+					model: null
+				})
+			)
+			const ids = models.map((m: any) => m.model)
+			expect(new Set(ids).size).toBe(ids.length)
+			for (const m of EMBEDDING_MODELS) expect(ids).toContain(m.id)
+			expect(ids).toContain("some-org/hand-placed")
+		} finally {
+			registry.rows = []
+			resetRecommendedLists()
+		}
 	})
 
 	it("refuses a model the catalogue does not name", async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest"
 import { characterFieldsFromParsedData } from "./characters"
-import { personaFieldsFromParsedData } from "./personas"
+import { personaFieldsFromParsedData } from "$lib/server/utils/personaCard"
 
 /**
  * Field-level import mapping for V2/V3 character cards.

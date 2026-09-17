@@ -120,7 +120,7 @@ export interface LayoutBlob {
 	zoneLayout?: unknown
 	/**
 	 * The chat widget grid (sessionLayout/widgetGrid.ts, PLAN 25) — the
-	 * messages/composer widget config the layout editor writes. Stored verbatim
+	 * middle-zone widget config the layout editor writes. Stored verbatim
 	 * for the same reason as zoneLayout; the manager is only its courier.
 	 */
 	widgetGrid?: unknown

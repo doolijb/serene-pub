@@ -15,41 +15,42 @@ export interface PipelineMapContext {
 
 /** Kind → the card's leading-edge stripe. An edge reads as a key. */
 export const KIND_STRIPE: Record<string, string> = {
-	input: "bg-surface-400-600",
+	inlet: "bg-surface-400-600",
 	query: "bg-success-500",
 	task: "bg-primary-500",
-	provider: "bg-warning-500",
-	consumer: "bg-error-500"
+	oracle: "bg-warning-500",
+	outlet: "bg-error-500"
 }
 
 export const KIND_MEANING: Record<string, string> = {
-	input: "the trigger",
+	inlet: "where the run enters",
 	query: "reads data",
 	task: "transforms",
-	provider: "calls a model",
-	consumer: "writes data"
+	oracle: "calls out — a model, a tool, a person",
+	outlet: "writes, attaches or emits"
 }
 
-export const BLOCK_LABEL: Record<string, string> = {
-	async: "Fan-out",
-	map: "For each",
+/** The four clause rules (NOMENCLATURE §4), labelled. */
+export const CLAUSE_LABEL: Record<string, string> = {
+	gather: "Gather",
+	each: "For each",
 	loop: "Loop",
-	route: "Route"
+	junction: "Junction"
 }
 
-export const BLOCK_MEANING: Record<string, string> = {
-	async: "chains run side by side, results gathered",
-	map: "runs its body once per item in a list",
+export const CLAUSE_MEANING: Record<string, string> = {
+	gather: "chains run side by side, results gathered",
+	each: "runs its body once per item in a list",
 	loop: "runs its body again until done (bounded)",
-	route: "branches on a value — any subset may fire"
+	junction: "branches on a value — any subset may fire"
 }
 
-/** The frame's accent, one per construct. */
-export const BLOCK_ACCENT: Record<string, string> = {
-	async: "border-success-500/60",
-	map: "border-tertiary-500/60",
+/** The frame's accent, one per clause rule. */
+export const CLAUSE_ACCENT: Record<string, string> = {
+	gather: "border-success-500/60",
+	each: "border-tertiary-500/60",
 	loop: "border-warning-500/60",
-	route: "border-secondary-500/60"
+	junction: "border-secondary-500/60"
 }
 
 export const countsFor = (step: Sockets.Pipelines.Step | undefined) => {

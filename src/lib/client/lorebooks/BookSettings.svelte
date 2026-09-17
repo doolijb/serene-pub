@@ -1,7 +1,9 @@
 <script lang="ts">
-	import { getContext, onDestroy, onMount } from "svelte"
+	import { getContext, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { declareInterest } from "$lib/client/sockets/interest.svelte"
+	import { interestKey } from "$lib/shared/sockets/interest"
 	import EditLorebookForm from "$lib/client/components/lorebookForms/EditLorebookForm.svelte"
 	import {
 		CHARACTER_LORE_TYPE_ID,
@@ -125,8 +127,6 @@
 		})
 	)
 
-	// Named so `off` can name them too: a bare off() removes every listener for
-	// the event, including the workspace's own.
 	function handleEntriesList(msg: Sockets.Entries.List.Response) {
 		if (msg.lorebookId !== lorebookId) return
 		rowsByType = { ...rowsByType, [msg.typeId]: msg.entryList as any[] }
@@ -136,25 +136,44 @@
 		scenes = msg.sceneList
 	}
 
-	// The list carries no lorebook id, and one book is open at a time.
+	// One book is open at a time, and the interest key already names it, so
+	// there is nothing left here to filter on.
 	function handleGraph(msg: Sockets.NarrativeGraph.List.Response) {
 		relationships = msg.relationships.length
 	}
 
+	/**
+	 * Three reads, all about the one book this page is counting.
+	 *
+	 * Effects rather than `useInterest` because the key moves: `lorebookId` is
+	 * a prop, and `useInterest` keeps the key it was first given. Declared
+	 * above `onMount` so the interest exists before the requests below go out
+	 * (effects run in creation order, and `onMount` is one of them).
+	 */
+	$effect(() =>
+		declareInterest<"entries:list">(
+			interestKey("entries:list", lorebookId),
+			handleEntriesList
+		)
+	)
+	$effect(() =>
+		declareInterest<"scenes:listByLorebook">(
+			interestKey("scenes:listByLorebook", lorebookId),
+			handleScenes
+		)
+	)
+	$effect(() =>
+		declareInterest<"narrativeGraph:list">(
+			interestKey("narrativeGraph:list", lorebookId),
+			handleGraph
+		)
+	)
+
 	onMount(() => {
-		socket.on("entries:list", handleEntriesList)
-		socket.on("scenes:listByLorebook", handleScenes)
-		socket.on("narrativeGraph:list", handleGraph)
 		for (const typeId of TYPES)
 			socket.emit("entries:list", { lorebookId, typeId })
 		socket.emit("scenes:listByLorebook", { lorebookId })
 		socket.emit("narrativeGraph:list", { lorebookId })
-	})
-
-	onDestroy(() => {
-		socket.off("entries:list", handleEntriesList)
-		socket.off("scenes:listByLorebook", handleScenes)
-		socket.off("narrativeGraph:list", handleGraph)
 	})
 </script>
 

@@ -159,7 +159,6 @@ export interface ClientMedia {
 	 *  download or a card export, never for routine rendering. */
 	originalUrl: string
 	characterId: number | null
-	personaId: number | null
 	sessionId: number | null
 	messageId: number | null
 }
@@ -201,7 +200,6 @@ export function toClientMedia(row: FileRow): ClientMedia {
 		thumbUrl: mediaUrl(row.uuid, row.rev, MediaVariant.THUMB),
 		originalUrl: mediaUrl(row.uuid, row.rev, MediaVariant.ORIGINAL),
 		characterId: row.characterId,
-		personaId: row.personaId,
 		sessionId: row.sessionId,
 		messageId: row.messageId
 	}
@@ -346,7 +344,6 @@ export async function createMedia(
 		.values({
 			userId: input.userId,
 			characterId: input.characterId ?? null,
-			personaId: input.personaId ?? null,
 			sessionId: input.sessionId ?? null,
 			messageId: input.messageId ?? null,
 			visibility: input.visibility ?? MediaVisibility.SCOPED,
@@ -456,7 +453,6 @@ async function restoreOriginal(
 
 export type MediaParent =
 	| { characterId: number }
-	| { personaId: number }
 	| { sessionId: number }
 	| { messageId: number }
 	| { userId: number; bucket?: never }
@@ -464,8 +460,6 @@ export type MediaParent =
 function parentWhere(parent: MediaParent): SQL {
 	if ("characterId" in parent)
 		return eq(schema.files.characterId, parent.characterId)
-	if ("personaId" in parent)
-		return eq(schema.files.personaId, parent.personaId)
 	if ("messageId" in parent)
 		return eq(schema.files.messageId, parent.messageId)
 	if ("sessionId" in parent)
@@ -473,7 +467,6 @@ function parentWhere(parent: MediaParent): SQL {
 	return and(
 		eq(schema.files.userId, parent.userId),
 		isNull(schema.files.characterId),
-		isNull(schema.files.personaId),
 		isNull(schema.files.sessionId)
 	)!
 }

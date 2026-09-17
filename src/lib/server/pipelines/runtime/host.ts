@@ -36,14 +36,45 @@ import {
 	extractMentions
 } from "$lib/server/pipelines/ranking/mentions"
 import { buildScanWindow } from "$lib/server/pipelines/ranking/signals"
-import type { HostServices, MediaRef, NodeRef } from "@serene-pub/sdk"
+import type {
+	FormAddressedPayload,
+	FormBlock,
+	HostServices,
+	MediaRef,
+	MessageBlock,
+	NodeRef,
+	Portrayals,
+	RunLineage
+} from "@serene-pub/sdk"
 import type { ToolDeclaration } from "$lib/server/adapters/actions"
-import { slotRef } from "@serene-pub/sdk"
+import {
+	slotRef,
+	isBuiltInSpec,
+	isParticipantRef,
+	FORM_ADDRESSED_INLET_ID,
+	assignBlockIds,
+	checkMessageBlocks,
+	formBlocksOf,
+	formFireOf,
+	formAnswerSchema,
+	stampBlockActions,
+	undeclaredBlockFunctions,
+	worldBlockFunctions
+} from "@serene-pub/sdk"
+import { randomUUID } from "node:crypto"
+import { CORE_BLOCKS_PART } from "$lib/server/messages/blocks"
 import { slotModelId } from "$lib/shared/connections/slotRef"
 import type { RunProgress } from "$lib/shared/sockets/progress"
 import type { RunArtifact } from "$lib/server/pipelines/runtime/receipts"
 import { resolvePersonaName } from "$lib/shared/utils/resolveCharacterName"
 import { streamingModeFrom } from "$lib/server/connections/streaming"
+import type { LiveRow, SessionIo } from "$lib/server/pipelines/runtime/liveRow"
+import type { StatusRelay } from "$lib/server/pipelines/runtime/runStatus"
+import { broadcastToSessionUsers } from "$lib/server/sockets/utils/broadcastHelpers"
+import {
+	recordSessionChange,
+	speakerRefOf
+} from "$lib/server/messages/sessionChanges"
 import {
 	DEFAULT_CHANNEL,
 	DEFAULT_LANE,
@@ -109,12 +140,84 @@ export interface HostScope {
 	 */
 	currentCharacterId?: number | null
 	/**
-	 * Where streamed tokens go while a Provider is still generating.
+	 * Who portrays each participant this run concerns — resolved once at
+	 * run start by `resolvePortrayals` and pinned on the receipt (R-21 (4)).
+	 * Here, read-only, for the host's own seams that need the answer
+	 * without a port (the form-addressed pipeline, U5d). ⚠ Never exposed on
+	 * a node's `ctx`: nodes stay blind to who is present, and a definition
+	 * that needs the answer declares an in-port the spec wires. Absent for
+	 * a host wired by hand, and on a pre-call preview (`runSpec`).
+	 */
+	readonly portrayals?: Portrayals
+	/**
+	 * The message verb re-driving this run's row, when one is — a
+	 * `regenerate`, a `swipe`'s fresh alternative or a `continue` (R-15,
+	 * 2026-09-16). Read by `update-message` at the finishing write so the
+	 * `message-updated` it emits says which verb rewrote the row, and the
+	 * next reply's inlet sees the rewrite in its `sessionChanges`. Absent on a
+	 * fresh turn, whose finishing write changes no history a pipeline has
+	 * seen.
+	 */
+	verb?: "regenerate" | "swipe" | "continue"
+	/**
+	 * What the verb's row held before its handler cleared it — a
+	 * regenerate's (U5b review W3). Recorded as `previous` on the
+	 * `message-updated` the finishing write emits, so the next reply's inlet
+	 * sees what the regenerate replaced the way it sees what an edit
+	 * replaced. Absent on every other verb: a swipe's fresh alternative keeps
+	 * the old text in the row's history and `message-swiped` already carried
+	 * it; a continue replaces nothing.
+	 */
+	previous?: { content: string }
+	/**
+	 * The document this run is executing, by slug — `runSpec` always names
+	 * it. Read by the built-in writes' commits, which refuse to perform under
+	 * any document but the built-in's own (U5b review W8): the item rule was
+	 * judged by the handler that started THAT spec, and a payload reaching
+	 * `delete-message@1` from any other document was judged by nobody.
+	 * Absent on a host wired by hand, which no built-in reaches.
+	 */
+	specId?: string
+	/**
+	 * What the running document contributes — its `contributes.actions[]`
+	 * (U5d). Read by the message writes to stamp a block's `action` with the
+	 * identity of the declaration it fires (`stampBlockActions`) and to
+	 * refuse a block naming a function this document declares no action for,
+	 * or one whose action is `world` (the effects line). Absent on a host
+	 * wired by hand, where no block is stamped.
+	 */
+	contributes?: unknown
+	/**
+	 * The running document's inlet, pinned (`core:inlet/user-message@1`).
+	 * Read by `answer-form`, which performs only under
+	 * `core:inlet/form-addressed@1` — the form it answers is the one the
+	 * event carried, and a document entered any other way has none (U5d).
+	 */
+	inletDefinitionId?: string
+	/**
+	 * Where this run stands in a tree of runs (01 §8; U5d) — absent for a
+	 * root. Read by `answer-form`, whose fire is this run's child.
+	 */
+	lineage?: RunLineage
+	/**
+	 * The forms this run addressed to a participant the AI portrays (R-15
+	 * *Forms*; U5d), pushed by the message writes when a block's
+	 * `addressee` resolves — through the pinned `portrayals` — to `ai`, and
+	 * dispatched as `form-addressed` by `runSpec` once the receipt is saved.
+	 * Mutated in place like `artifacts`, for the same reason. Absent on a
+	 * host wired by hand, where an addressed form is written and waits.
+	 */
+	addressed?: Array<{ payload: FormAddressedPayload; form: FormBlock }>
+	/**
+	 * Where streamed tokens go while a Provider is still generating, for a
+	 * caller that is not filling a message row — the comparison tool, a test.
 	 *
-	 * On the scope rather than in the call payload, because a payload is a
-	 * *value*: it lands in the receipt and in every downstream node's input, and
-	 * a socket handle is not a thing to write down. The pipeline still gets the
-	 * finished text on the port — this is only so the user sees it arrive.
+	 * A reply's stream goes to the run's **live row** (`live`), routed by core
+	 * from the executor's `run.liveRow` (R-21 (2)); this sink is the older
+	 * seam and still honoured beside it. On the scope rather than in the call
+	 * payload, because a payload is a *value*: it lands in the receipt and in
+	 * every downstream node's input, and a socket handle is not a thing to
+	 * write down.
 	 */
 	sink?: {
 		onChunk?: (chunk: string) => void
@@ -153,26 +256,112 @@ export interface HostScope {
 	 */
 	artifacts?: RunArtifact[]
 	/**
-	 * The message row this run was started to fill in, when one already exists.
+	 * Where the rows this run writes are announced to the session's users.
 	 *
-	 * The reply path's row is created by the TRIGGER, before the run: it is what
-	 * the composer's placeholder is, what Stop cancels, and what a swipe or a
-	 * regenerate later rewrites. A spec that runs to completion writes its reply
-	 * through `create-message`, so without this the turn would end with two rows
-	 * — an empty one the client is still showing as generating, and a second one
-	 * carrying the text.
-	 *
-	 * ⚠ **The id comes from OUTSIDE the run, which is the only case this is
-	 * for.** A spec may not create a message and then fill it: that is a create →
-	 * update pair in one document, and `create-message`'s contract refuses it
-	 * because under async review the created row may never exist. Nothing here
-	 * lets a spec do that — the caller names a row that already exists, and the
-	 * first `create-message` in the run lands in it.
-	 *
-	 * Spent once. A second write in the same run inserts, exactly as it always
-	 * did, and a row that has since been deleted falls back to an insert too.
+	 * The pipeline owns its reply row (09-B B4, R-17): the placeholder the
+	 * composer shows is the row `create-message` commits, so the commit is
+	 * what broadcasts it — the trigger inserts nothing. Absent,
+	 * nothing is broadcast: a host wired by hand, an event-triggered run with
+	 * no socket behind it. A socket server is not a value and never reaches a
+	 * payload; it lives on the scope for the same reason `sink` did.
 	 */
-	fillMessageId?: number
+	io?: SessionIo
+	/**
+	 * The run's live row — streaming, the queue item, the stage, and what
+	 * happens to the row if the run ends with it still open. Created by
+	 * `runSpec` beside the scope and read here at the oracle's call with the
+	 * executor's `run.liveRow`. See `liveRow.ts`.
+	 */
+	live?: LiveRow
+	/**
+	 * The run's status relay (R-19) — where `ctx.status` lands after the
+	 * executor: `{speaker}` filled, the live row written, the session list
+	 * told. Read here for the one status the host itself sets: the LLM
+	 * queue's `queued` / `loading` on the oracle's call, said in the same
+	 * voice as a node's. Absent on a host wired by hand and on a pre-call
+	 * preview, where nobody is watching.
+	 */
+	status?: StatusRelay
+}
+
+/** One legacy message row — the model the reply path still writes. */
+async function legacyMessage(db: Db, id: number) {
+	const [row] = await db
+		.select()
+		.from(schema.sessionMessages)
+		.where(eq(schema.sessionMessages.id, id))
+		.limit(1)
+	return row
+}
+
+/**
+ * What follows a reply landing: the row is embedded for retrieval, and the
+ * session's backlog is queued. Off the write, because that is where every
+ * road converges now — a reply, a narration, a tool loop's answer.
+ *
+ * Both halves swallow: `autoEnqueueSession` is the fallback that catches a
+ * message up through the background queue whether or not the inline embed
+ * managed, and a reply that was written and then could not be embedded has
+ * still been written.
+ */
+async function settledMessage(
+	messageId: number,
+	sessionId: number
+): Promise<void> {
+	const { autoEnqueueSession, ensureSessionMessageEmbedded } = await import(
+		"$lib/server/embedding/vectorizationQueue"
+	)
+	try {
+		await ensureSessionMessageEmbedded(messageId)
+	} catch (err) {
+		console.error(
+			"[vectorization] Inline embed of new message failed:",
+			err
+		)
+	}
+	autoEnqueueSession(sessionId).catch(console.error)
+}
+
+/**
+ * The narrator's display name for a session, snapshotted onto a narration row
+ * at the write so a later rename does not relabel messages already made.
+ *
+ * The session's own override (Edit Session) wins, else the instance default —
+ * the same chain `resolveNarratorPromptConfig` walks with the retired user
+ * layer removed. Read through the run's `db` rather than the global one, for
+ * the reason every host read is: a run against another database must not
+ * quietly read this from the application's.
+ */
+export async function narratorNameFor(
+	db: Db,
+	sessionId: number,
+	_userId: number | undefined
+): Promise<string | null> {
+	const [session] = await db
+		.select({
+			narratorPromptConfigId: schema.sessions.narratorPromptConfigId
+		})
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, sessionId))
+		.limit(1)
+	let configId = session?.narratorPromptConfigId ?? null
+	if (configId == null) {
+		const [system] = await db
+			.select({
+				defaultNarratorPromptConfigId:
+					schema.systemSettings.defaultNarratorPromptConfigId
+			})
+			.from(schema.systemSettings)
+			.limit(1)
+		configId = system?.defaultNarratorPromptConfigId ?? null
+	}
+	if (configId == null) return null
+	const [config] = await db
+		.select({ narratorName: schema.narratorPromptConfigs.narratorName })
+		.from(schema.narratorPromptConfigs)
+		.where(eq(schema.narratorPromptConfigs.id, configId))
+		.limit(1)
+	return config?.narratorName ?? null
 }
 
 /**
@@ -183,15 +372,15 @@ export interface HostScope {
  * twelfth.
  */
 const STEP_TYPE_LIST = [
-	"core:provider/summarize-batch",
-	"core:provider/summarize-synth",
-	"core:provider/name-entry",
-	"core:provider/extract-cast",
-	"core:provider/graph-pre-filter",
-	"core:provider/graph-node-resolution",
-	"core:provider/graph-perspective",
-	"core:provider/graph-node-description",
-	"core:provider/graph-state-detection"
+	"core:oracle/summarize-batch",
+	"core:oracle/summarize-synth",
+	"core:oracle/name-entry",
+	"core:oracle/extract-cast",
+	"core:oracle/graph-pre-filter",
+	"core:oracle/graph-node-resolution",
+	"core:oracle/graph-perspective",
+	"core:oracle/graph-node-description",
+	"core:oracle/graph-state-detection"
 ]
 
 const STEP_TYPES = new Set(STEP_TYPE_LIST)
@@ -205,7 +394,7 @@ export const STEP_TYPES_FOR_TEST = STEP_TYPE_LIST
  * Shorter than a plugin *node*'s thirty seconds, and deliberately: a node runs
  * once on the spine, while a tool runs once per iteration of a loop bounded at
  * eight or more — so the same number would be a turn a person waits four
- * minutes for. The node's own `timeoutMs` (`core:provider/run-tool@1`) bounds
+ * minutes for. The node's own `timeoutMs` (`core:oracle/run-tool@1`) bounds
  * the whole invocation on top of this; this is the inner deadline the sandbox
  * enforces.
  */
@@ -249,6 +438,35 @@ const refId = (v: unknown): number | null => {
 	}
 	return null
 }
+
+/**
+ * The MODEL half of a RESOLVED connection slot (0114).
+ *
+ * `refId` above reduces a resolved slot to the endpoint's row id; this is the
+ * other half of the same pick, and the two are read separately because they
+ * arrive by different routes. The executor resolves the slot's stored pair
+ * against `world.connections` and hands back `{id, kind, metadata, modelId}` —
+ * so the model half is on the DESCRIPTOR, under the same key name the stored
+ * value uses.
+ *
+ * ⚠ It was read here with `slotModelId(p.connection)`, the reader for a STORED
+ * value, against a descriptor that carried no `modelId` at all. That is not a
+ * mismatch that fails: it returns null, every time, and null means "no model
+ * named" — so a model chosen in the panel reached no request, and the run went
+ * out against the endpoint alone looking entirely normal.
+ *
+ * Delegates to `slotModelId` rather than re-reading the key, because the two
+ * shapes spell it identically **on purpose**: the descriptor carries the pick's
+ * model half under the name the pick itself used, so one reader covers a
+ * descriptor from an SDK that carries it and one from an SDK that does not
+ * (null, the same answer as "no model named"). A second branch here would be a
+ * copy of that reader that only ever returned what it already returns. What
+ * this function adds is the NAME — a call site that says it is reading a
+ * resolved slot, so the next person does not have to know that the coincidence
+ * is deliberate.
+ */
+const connectionDescriptorModelId = (v: unknown): number | null =>
+	slotModelId(v)
 
 /**
  * The user half of a step's prompt.
@@ -299,7 +517,7 @@ function assertScoped(
 	if (wanted === undefined) return
 	if (allowed === undefined || wanted !== allowed)
 		throw new HostScopeError(
-			`${node.key} (${node.typeId}) asked for session ${wanted}, but this run is scoped to ` +
+			`${node.key} (${node.definitionId}) asked for session ${wanted}, but this run is scoped to ` +
 				`${allowed ?? "no session"}. A pipeline may only read the session it was triggered in.`
 		)
 }
@@ -387,7 +605,7 @@ async function mediaParts(
 			(scope.userId != null && row.userId === scope.userId)
 		if (!ownedHere)
 			throw new HostScopeError(
-				`${node.key} (${node.typeId}) tried to post media ${uuid}, which belongs ` +
+				`${node.key} (${node.definitionId}) tried to post media ${uuid}, which belongs ` +
 					`to neither this session nor the user this run is acting as.`
 			)
 
@@ -439,11 +657,40 @@ const embeddingApi = () => (embeddingModule ??= import("$lib/server/embedding"))
 
 export function createHost(db: Db, scope: HostScope = {}): HostServices {
 	/**
-	 * The row the caller named, until it has been used — see
-	 * `HostScope.fillMessageId`. Local to the host, so two runs sharing a scope
-	 * object could not spend each other's.
+	 * A row this run wrote, announced to everyone in the session. The trigger
+	 * announces nothing of its own. A no-op with no socket server on the scope
+	 * (see `HostScope.io`).
 	 */
-	let fillMessageId = scope.fillMessageId
+	const announce = async (row: {
+		sessionId: number
+		[k: string]: unknown
+	}) => {
+		if (!scope.io) return
+		await broadcastToSessionUsers(
+			scope.io,
+			row.sessionId,
+			"sessionMessage",
+			{
+				sessionMessage: row
+			}
+		)
+	}
+
+	/**
+	 * The same announcement with the row's parts attached — for a row that
+	 * just gained a block tree (U5d), so the client renders the buttons off
+	 * the frame rather than after a reload. The plain `announce` stays for
+	 * every other write: its frame is the legacy row, which is what the live
+	 * stream and the parity gate compare.
+	 */
+	const announceWithParts = async (messageId: number) => {
+		if (!scope.io) return
+		const row = await legacyMessage(db, messageId)
+		if (!row) return
+		const { attachParts } = await import("$lib/server/messages/store")
+		const [withParts] = await attachParts(db, [row])
+		await announce(withParts ?? row)
+	}
 
 	/**
 	 * Write down a row this run just made.
@@ -462,6 +709,144 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 	) => {
 		if (!scope.artifacts || typeof entityId !== "number") return
 		scope.artifacts.push({ kind, entityId, action, nodeKey: node.key })
+	}
+
+	/**
+	 * A built-in write performs only under the built-in's own document
+	 * (U5b review W8) — `validate()` refuses the placement at publish, and
+	 * this is the same refusal at the write, for a document that reached the
+	 * host without passing through it. A host with no document named (wired
+	 * by hand) is not judged here: there is no document to judge.
+	 */
+	const assertBuiltInSpec = (node: NodeRef) => {
+		if (scope.specId === undefined || isBuiltInSpec(scope.specId)) return
+		throw new HostScopeError(
+			`${node.key} (${node.definitionId}) is a built-in write and '${scope.specId}' is not a ` +
+				`built-in's spec. Only core:spec/builtin-* may perform one — the write's permission ` +
+				`was judged by the handler that started that spec, and by nothing this document ` +
+				`can supply. A manifest permission for a plugin spec to place one is not granted in ` +
+				`this release.`
+		)
+	}
+
+	/**
+	 * The item rule, at the write (U5b review C1): may the run's actor act on
+	 * THIS row? The handler asked the same question before the run began, on
+	 * the id it was given; this asks it on the id the write is about to use,
+	 * because the two can differ — a review gate folds an edit into the
+	 * payload between them — and ownership is not a property the payload
+	 * carries. No actor is no permission: the only default that can be
+	 * wrong in one direction is the one that grants.
+	 */
+	const assertMayAct = async (node: NodeRef, messageId: number) => {
+		const { canActOnMessage, MESSAGE_ACTION_REFUSAL } = await import(
+			"$lib/server/messages/permissions"
+		)
+		if (
+			scope.userId != null &&
+			(await canActOnMessage(db, messageId, scope.userId))
+		)
+			return
+		throw new HostScopeError(
+			`${node.key}: ${MESSAGE_ACTION_REFUSAL}`
+		)
+	}
+
+	/**
+	 * Message blocks, written (20 §6; R-15 *Forms*; U5d) — the `blocks`
+	 * in-port of `create-message` and `update-message`, one path for both.
+	 *
+	 * The tree is validated with the SDK's gate; a block naming a function
+	 * this document declares no action for is refused with the function
+	 * named (nothing would ever hold a press to an audience for it); a block
+	 * naming a `world` action is refused — the effects line: an
+	 * out-of-fiction effect never rides a message where a character could be
+	 * asked to answer it. What passes is stamped with the writing spec's
+	 * action identity and a block id, and stored as ONE `core:blocks` part.
+	 *
+	 * Then the forms: for every block with an `addressee`, the run's
+	 * **pinned** portrayals answer who portrays them this turn (R-21 (4)) —
+	 * `ai` means the form goes on the run's `addressed` list for `runSpec`
+	 * to dispatch as `form-addressed` once the receipt is saved; a person,
+	 * nobody, or a reference the run never pinned means the block waits for
+	 * a click, as a form put to a person does. An addressed form whose
+	 * function no action of this document declares was refused above; one
+	 * left unstamped — several actions on one function — is refused here,
+	 * since a form nobody can be held to is a form nobody can answer.
+	 *
+	 * Returns what it stored, so a caller's receipt can say so.
+	 */
+	const writeBlocks = async (
+		node: NodeRef,
+		row: { id: number; sessionId: number },
+		raw: unknown
+	): Promise<MessageBlock[] | null> => {
+		if (raw === undefined || raw === null) return null
+		if (!Array.isArray(raw)) {
+			throw new HostScopeError(
+				`${node.key}: 'blocks' is not a list — wire a block list (a MessageBlock[]), or leave it unwired`
+			)
+		}
+		if (!raw.length) return null
+		const findings = checkMessageBlocks(raw)
+		if (findings.length)
+			throw new HostScopeError(
+				`${node.key}: the blocks do not validate — ` +
+					findings.map((f) => `${f.path}: ${f.message} (${f.fix})`).join("; ")
+			)
+		const spec = { id: scope.specId ?? "", contributes: scope.contributes }
+		let blocks = raw as MessageBlock[]
+		if (scope.specId !== undefined) {
+			const undeclared = undeclaredBlockFunctions(blocks, spec)
+			if (undeclared.length)
+				throw new HostScopeError(
+					`${node.key}: the blocks name ${undeclared.map((f) => `'${f}'`).join(", ")}, which ` +
+						`'${scope.specId}' declares no action for — a block's press is held to an ` +
+						`action's audience, so declare one under contributes.actions[] first`
+				)
+			const world = worldBlockFunctions(blocks, spec)
+			if (world.length)
+				throw new HostScopeError(
+					`${node.key}: the blocks name ${world.map((f) => `'${f}'`).join(", ")}, whose ` +
+						`action changes something outside the story (effects: 'world'). Such an action ` +
+						`is the owner's, from the composer or the review gate — never a question a ` +
+						`message carries (the effects line, R-15)`
+				)
+			blocks = stampBlockActions(blocks, spec)
+		}
+		blocks = assignBlockIds(blocks, () => randomUUID())
+		for (const form of formBlocksOf(blocks)) {
+			if (!form.addressee) continue
+			const action = form.kind === "choices" ? form.actions[0]?.action : form.action
+			if (!action)
+				throw new HostScopeError(
+					`${node.key}: the form '${form.id}' is addressed to ${form.addressee} but its ` +
+						`function is declared by several actions of '${scope.specId ?? "this document"}', so ` +
+						`no one identity could be stamped — a form nobody can be held to is a form nobody ` +
+						`can answer; name the action on the block, or declare the function once`
+				)
+		}
+		const { appendParts } = await import("$lib/server/messages/store")
+		await appendParts(db, row.id, [
+			{ type: CORE_BLOCKS_PART, data: { blocks } }
+		])
+		for (const form of formBlocksOf(blocks)) {
+			if (!form.addressee || !form.id) continue
+			const who = scope.portrayals?.[form.addressee]
+			if (who?.by !== "ai") continue
+			const action = form.kind === "choices" ? form.actions[0]!.action! : form.action!
+			scope.addressed?.push({
+				payload: {
+					sessionId: row.sessionId,
+					messageId: row.id,
+					blockId: form.id,
+					action,
+					addressee: form.addressee
+				},
+				form
+			})
+		}
+		return blocks
 	}
 
 	/**
@@ -718,8 +1103,10 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					const personas = personaIds.length
 						? await db
 								.select()
-								.from(schema.personas)
-								.where(inArray(schema.personas.id, personaIds))
+								.from(schema.characters)
+								.where(
+									inArray(schema.characters.id, personaIds)
+								)
 						: []
 					const characterName = new Map(
 						characters.map((c) => [c.id, c.name])
@@ -1043,16 +1430,16 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 								),
 							db
 								.select({
-									persona: schema.personas,
+									persona: schema.characters,
 									position: schema.sessionPersonas.position,
 									removedAt: schema.sessionPersonas.removedAt
 								})
 								.from(schema.sessionPersonas)
 								.innerJoin(
-									schema.personas,
+									schema.characters,
 									eq(
 										schema.sessionPersonas.personaId,
-										schema.personas.id
+										schema.characters.id
 									)
 								)
 								.where(
@@ -1066,7 +1453,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					/**
 					 * The other half of the alias union, per cast member.
 					 *
-					 * `characters.aliases` and `personas.aliases` ride on the
+					 * `characters.aliases` rides on the
 					 * rows above already; `lorebook_bindings.absorbedAliases` —
 					 * where `narrativeGraph:mergeNode` puts the identity a merge
 					 * absorbed — does not, and that column's schema note makes
@@ -1082,8 +1469,12 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					 * `resolveContextInput` picks fields by name, as it does
 					 * with `position` and `removedAt`.
 					 */
+					// ONE map: a voiced character's binding is a character
+					// binding, so the cast and the voices read the same key
+					// space. `absorbedByPersona` is an alias of it so both call
+					// sites below still say which side they are on.
 					const absorbedByCharacter = new Map<number, string[]>()
-					const absorbedByPersona = new Map<number, string[]>()
+					const absorbedByPersona = absorbedByCharacter
 					/**
 					 * The book's whole roster, not just the seated part of it.
 					 *
@@ -1104,7 +1495,6 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					 */
 					let lorebookBindings: Array<{
 						characterId: number | null
-						personaId: number | null
 						name: string | null
 						aliases: string[]
 						absorbedAliases: string[]
@@ -1114,7 +1504,6 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 							.select({
 								characterId:
 									schema.lorebookBindings.characterId,
-								personaId: schema.lorebookBindings.personaId,
 								name: schema.lorebookBindings.name,
 								aliases: schema.lorebookBindings.aliases,
 								absorbedAliases:
@@ -1137,26 +1526,32 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 								? b.absorbedAliases
 								: []
 							if (!names.length) continue
-							const into =
-								b.characterId != null
-									? absorbedByCharacter
-									: b.personaId != null
-										? absorbedByPersona
-										: null
-							if (!into) continue
-							const id = b.characterId ?? b.personaId
-							// The narrowing the `into` check above already
-							// implies but the compiler cannot carry across two
-							// expressions: `id` is nullish exactly when both
-							// columns are, which is exactly when `into` was
-							// null and we already continued. Both columns are
-							// nullable — an unbound background graph node sets
-							// neither — so the check is real, just not one TS
-							// can derive here.
+							// Nullable — an unbound background graph node sets
+							// no character — so an unbound row contributes no
+							// absorbed identity to anybody.
+							const id = b.characterId
 							if (id == null) continue
-							into.set(id, [...(into.get(id) ?? []), ...names])
+							absorbedByCharacter.set(id, [
+								...(absorbedByCharacter.get(id) ?? []),
+								...names
+							])
 						}
 					}
+
+					/**
+					 * The seated envoys (plans/29 R-18; U5g): cast rows with
+					 * `envoy_slug`, each joined to its declaration — name,
+					 * description, image, `speaks` — because an envoy has no
+					 * character row for the `innerJoin` above to find. Live
+					 * and departed, like the character rows, with `position`
+					 * and `removedAt` riding along for the turn strategies;
+					 * `speaks` is what tells a strategy whether it may pick
+					 * one (`in-turn`) or never may (`on-action`).
+					 */
+					const { seatedEnvoys } = await import(
+						"$lib/server/pipelines/entities/envoys"
+					)
+					const envoys = await seatedEnvoys(db, sessionId)
 
 					return {
 						sessionCharacters: sessionCharacters.map((cc) => ({
@@ -1169,6 +1564,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 							absorbedAliases:
 								absorbedByPersona.get(cp.persona?.id) ?? []
 						})),
+						envoys,
 						lorebookBindings,
 						sessionScenario: session.scenario ?? null,
 						isGroup: Boolean(session.isGroup)
@@ -1345,7 +1741,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					 * would advertise a list that is already wrong.
 					 *
 					 * Declarations only — a name, a sentence and a JSON Schema.
-					 * Nothing here can run anything; `core:provider/run-tool@1`
+					 * Nothing here can run anything; `core:oracle/run-tool@1`
 					 * does that, and resolves the same list again through the
 					 * same module so the advertisement and the dispatch cannot
 					 * disagree.
@@ -1984,18 +2380,18 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 
 				default:
 					throw new HostScopeError(
-						`${node.key} (${node.typeId}) tried to read '${table}', which no Query type is ` +
+						`${node.key} (${node.definitionId}) tried to read '${table}', which no Query type is ` +
 							`bound to. Reads are enumerated here on purpose — a table nobody listed is a ` +
 							`table nobody reviewed for scope.`
 					)
 			}
 		},
 
-		async call(payload, node) {
+		async call(payload, node, run) {
 			const p = (payload ?? {}) as Record<string, any>
 
-			switch (node.typeId) {
-				case "core:provider/embed-text": {
+			switch (node.definitionId) {
+				case "core:oracle/embed-text": {
 					// The embedding call is a Provider because it reaches a model
 					// (16 §1) — a Query may not. Splitting it out also means the
 					// run's budget and receipt see the embedding call, which they
@@ -2038,9 +2434,9 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 				 * Three cases would be three copies of a fifty-line forward,
 				 * which is how they would come to differ about a stop sequence.
 				 */
-				case "core:provider/generate-json":
-				case "core:provider/generate-with-tools":
-				case "core:provider/generate-text": {
+				case "core:oracle/generate-json":
+				case "core:oracle/generate-with-tools":
+				case "core:oracle/generate-text": {
 					/**
 					 * The generation itself, through the existing adapters.
 					 *
@@ -2058,82 +2454,157 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 							`${node.key} has no session to generate in — the run was started without a session scope`
 						)
 
-					const result = await dispatchGeneration({
-						compiledPrompt: p.compiledPrompt,
-						db,
-						sessionId: scope.sessionId,
-						userId: scope.userId,
-						// The payload's value when a caller supplied one,
-						// otherwise the run's. Neither is authoritative alone:
-						// a dispatch-only caller knows the speaker, and a spec
-						// has no port to put it on.
-						currentCharacterId:
-							p.currentCharacterId ??
-							scope.currentCharacterId ??
-							null,
-						generatingMessageMetadata:
-							p.generatingMessageMetadata ?? {},
-						// The `attachments` in-port: media REFERENCES, in the
-						// order they are to be sent. `dispatch` turns them into
-						// bytes — checking each one against this run's session
-						// and user on the way, the same rule `mediaParts` above
-						// applies to media posted into a message.
-						attachments: Array.isArray(p.attachments)
-							? (p.attachments as unknown[] as MediaRef[])
-							: undefined,
-						// Tier 2 — this node's own slots, exactly as the
-						// `generate-image` sibling below already forwards them.
-						// Omitting them was why the panel's Connection and
-						// Sampling pickers on the reply step did nothing.
-						connectionId: refId(p.connection),
-						// The MODEL half of the same slot (0114). A slot
-						// authored before the split carries none, which means
-						// the endpoint's default — so nothing stored needs
-						// migrating and nothing already configured changes.
-						connectionModelId: slotModelId(p.connection),
-						samplingId: refId(p.sampling),
-						// The author's own stop sequences, off the node's
-						// `params` slot (ruling 2026-09-10). Forwarded, never
-						// interpreted: the dispatch composes them together with
-						// the connection's completion template and the scene's
-						// speaker labels, and applies the wire rule once.
-						stopSequences: Array.isArray(p.stopSequences)
-							? (p.stopSequences as string[])
-							: undefined,
-						// The author's send shape, off the same `params` slot.
-						// Forwarded, never interpreted: which wire `auto`
-						// resolves to needs the connection, and the connection
-						// is resolved one layer down.
-						streaming: streamingModeFrom(p.streaming),
-						// The `tools` in-port — `advertise-tools`' `native`
-						// door, forwarded verbatim. Empty on `generate-text`,
-						// which declares no such port, so that node's requests
-						// are byte-identical to what they always were.
-						tools: Array.isArray(p.tools)
-							? (p.tools as ToolDeclaration[])
-							: undefined,
-						/**
-						 * The structured-output ask — `generate-json`'s and
-						 * nobody else's.
-						 *
-						 * Forwarded as a REQUEST, never as an answer: which
-						 * door it actually goes out through needs the
-						 * connection, and the connection is resolved one layer
-						 * down. Absent on the other two pins, so their requests
-						 * are byte-identical to what they always were.
-						 */
-						structured:
-							node.typeId === "core:provider/generate-json"
-								? { schema: p.schema ?? undefined }
+					/**
+					 * Streaming is run-level (R-21 (2)). The executor says
+					 * which row this run is filling; core decides whether THIS
+					 * oracle's stream is the reply's prose (`narratingProvider`)
+					 * and routes it there. The binding asked for text and gets
+					 * text — it never learns there was a row.
+					 *
+					 * The live row is also what the queue's stage lands on and
+					 * what the client's Stop cancels by, so the queue item is
+					 * put on it before the call is enqueued — a very fast Stop
+					 * must never find a generating row with nothing to cancel.
+					 */
+					const liveRow =
+						typeof run.liveRow === "number"
+							? run.liveRow
+							: undefined
+					const stream = scope.live?.attach(run.liveRow, node.key)
+					const queueItemId =
+						liveRow !== undefined && scope.live
+							? await scope.live.claim(liveRow)
+							: undefined
+
+					let result: Awaited<ReturnType<typeof dispatchGeneration>>
+					try {
+						result = await dispatchGeneration({
+							compiledPrompt: p.compiledPrompt,
+							db,
+							sessionId: scope.sessionId,
+							userId: scope.userId,
+							// The payload's value when a caller supplied one,
+							// otherwise the run's. Neither is authoritative alone:
+							// a dispatch-only caller knows the speaker, and a spec
+							// has no port to put it on.
+							currentCharacterId:
+								p.currentCharacterId ??
+								scope.currentCharacterId ??
+								null,
+							generatingMessageMetadata:
+								p.generatingMessageMetadata ?? {},
+							// The `attachments` in-port: media REFERENCES, in the
+							// order they are to be sent. `dispatch` turns them into
+							// bytes — checking each one against this run's session
+							// and user on the way, the same rule `mediaParts` above
+							// applies to media posted into a message.
+							attachments: Array.isArray(p.attachments)
+								? (p.attachments as unknown[] as MediaRef[])
 								: undefined,
-						onChunk: scope.sink?.onChunk,
-						onThinking: scope.sink?.onThinking,
-						signal: scope.signal
-					})
+							// Tier 2 — this node's own slots, exactly as the
+							// `generate-image` sibling below already forwards them.
+							// Omitting them was why the panel's Connection and
+							// Sampling pickers on the reply step did nothing.
+							connectionId: refId(p.connection),
+							// The MODEL half of the same slot (0114), off the
+							// resolved descriptor. A slot authored before the split
+							// names none, and that resolves as unconfigured through
+							// the tiers below — so nothing stored needs migrating
+							// and nothing already configured changes.
+							connectionModelId: connectionDescriptorModelId(
+								p.connection
+							),
+							samplingId: refId(p.sampling),
+							// The author's own stop sequences, off the node's
+							// `params` slot (ruling 2026-09-10). Forwarded, never
+							// interpreted: the dispatch composes them together with
+							// the connection's completion template and the scene's
+							// speaker labels, and applies the wire rule once.
+							stopSequences: Array.isArray(p.stopSequences)
+								? (p.stopSequences as string[])
+								: undefined,
+							// The author's send shape, off the same `params` slot.
+							// Forwarded, never interpreted: which wire `auto`
+							// resolves to needs the connection, and the connection
+							// is resolved one layer down.
+							streaming: streamingModeFrom(p.streaming),
+							// The `tools` in-port — `advertise-tools`' `native`
+							// door, forwarded verbatim. Empty on `generate-text`,
+							// which declares no such port, so that node's requests
+							// are byte-identical to what they always were.
+							tools: Array.isArray(p.tools)
+								? (p.tools as ToolDeclaration[])
+								: undefined,
+							/**
+							 * The structured-output ask — `generate-json`'s and
+							 * nobody else's.
+							 *
+							 * Forwarded as a REQUEST, never as an answer: which
+							 * door it actually goes out through needs the
+							 * connection, and the connection is resolved one layer
+							 * down. Absent on the other two pins, so their requests
+							 * are byte-identical to what they always were.
+							 */
+							structured:
+								node.definitionId === "core:oracle/generate-json"
+									? { schema: p.schema ?? undefined }
+									: undefined,
+							onChunk: (chunk) => {
+								stream?.onChunk(chunk)
+								scope.sink?.onChunk?.(chunk)
+							},
+							onThinking: (chunk) => {
+								stream?.onThinking(chunk)
+								scope.sink?.onThinking?.(chunk)
+							},
+							signal: scope.signal,
+							/**
+							 * Through the LLM queue — one model call at a time
+							 * across the application, the same lane every other
+							 * generating step takes (`dispatchStep`,
+							 * `runQueuedLLMCall`). The queue's status reaches
+							 * the run's status relay (R-19), which says
+							 * *waiting for the model* / *loading the model* on
+							 * the live row while the call waits its turn or a
+							 * managed backend loads, and restores the node's
+							 * own status (*typing*) once it generates.
+							 */
+							queue: {
+								// What the row this run fills IS — narration
+								// or a character's turn — read off the live
+								// row, which learned it from the placeholder's
+								// commit. The payload's metadata is the
+								// fallback for a dispatch-only caller with no
+								// row: the narrate specs never set it, so
+								// reading it first filed every narrator call
+								// as `session`.
+								taskType: (scope.live?.narration ??
+								p.generatingMessageMetadata?.isNarratorResponse)
+									? "narratorPrompt"
+									: "session",
+								sessionId: scope.sessionId,
+								messageId: liveRow,
+								userId: scope.userId,
+								queueItemId,
+								onStatusChange: scope.status
+									? (status) => scope.status!.queue(status)
+									: undefined
+							}
+						})
+					} catch (err) {
+						// The object, for the row's error write at the end of
+						// the run — the executor keeps only the message, and
+						// the redaction rule needs the class. See `LiveRow`.
+						scope.live?.failedWith(err)
+						throw err
+					}
+					// The stream has drained: whatever the throttle held back
+					// lands now, before the port value moves on to the write.
+					if (stream) await scope.live?.flush()
 					return result
 				}
 
-				case "core:provider/generate-image": {
+				case "core:oracle/generate-image": {
 					/**
 					 * The render, through the image adapters.
 					 *
@@ -2153,7 +2624,9 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 								: String(p.negative),
 						prompts: p.prompts ?? null,
 						connectionId: refId(p.connection),
-						connectionModelId: slotModelId(p.connection),
+						connectionModelId: connectionDescriptorModelId(
+							p.connection
+						),
 						samplingId: refId(p.sampling),
 						sessionId: scope.sessionId ?? null,
 						userId: scope.userId ?? null,
@@ -2197,7 +2670,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					})
 				}
 
-				case "core:provider/run-tool": {
+				case "core:oracle/run-tool": {
 					/**
 					 * The one node that runs a tool (20 §9).
 					 *
@@ -2364,7 +2837,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					 * connection and sampling from the node's slots. Listing them
 					 * case by case would be eleven copies of one call.
 					 */
-					if (STEP_TYPES.has(node.typeId)) {
+					if (STEP_TYPES.has(node.definitionId)) {
 						const { dispatchStep } = await import(
 							"$lib/server/pipelines/runtime/dispatchStep"
 						)
@@ -2372,7 +2845,9 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 							systemPrompt: String(p.systemPrompt ?? ""),
 							userPrompt: stepUserPrompt(p),
 							connectionId: refId(p.connection),
-							connectionModelId: slotModelId(p.connection),
+							connectionModelId: connectionDescriptorModelId(
+								p.connection
+							),
 							samplingId: refId(p.sampling),
 							label: p.label,
 							signal: scope.signal
@@ -2390,7 +2865,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					}
 
 					throw new Error(
-						`${node.key} (${node.typeId}) has no dispatch path in core. A Provider core ` +
+						`${node.key} (${node.definitionId}) has no dispatch path in core. A Provider core ` +
 							`cannot call is one a user could add to a pipeline and watch fail at run time.`
 					)
 				}
@@ -2400,9 +2875,16 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 		async commit(payload, node) {
 			const p = (payload ?? {}) as Record<string, any>
 
-			switch (node.typeId) {
-				case "core:consumer/create-message": {
-					const sessionId = p.sessionId ?? scope.sessionId
+			switch (node.definitionId) {
+				case "core:outlet/create-message": {
+					// The run's own session and user, and only those: payload-
+					// borne `sessionId`/`userId` overrides were read here and
+					// nothing declared or supplied them (U2 residual,
+					// 2026-09-16). A port that let a spec write into another
+					// session, or as another user, would be a scope escape
+					// wearing a port's clothes — so the reads went rather than
+					// the declarations arriving.
+					const sessionId = scope.sessionId
 					if (sessionId === undefined)
 						throw new HostScopeError(
 							`${node.key} has no session to write to — the run was started without a session scope`
@@ -2431,58 +2913,180 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					if (refusal)
 						throw new HostScopeError(`${node.key}: ${refusal}`)
 
-					const { insertLegacy, updateLegacy } = await import(
+					const { insertLegacy, updateLegacyWhere } = await import(
 						"$lib/server/messages/store"
 					)
-					/**
-					 * The caller's row, spent — see `HostScope.fillMessageId`.
-					 *
-					 * Only what this node PRODUCED is written: the text, the
-					 * flags that end the generation, and a channel the spec
-					 * actually named. The identity columns stay as the trigger
-					 * set them, because the trigger is what decided whose turn
-					 * this was, and `create-message`'s payload carries no
-					 * opinion about it on the reply path.
-					 */
-					const filled =
-						fillMessageId != null
-							? await updateLegacy(db, fillMessageId, {
-									content: String(p.text ?? ""),
-									isGenerating: false,
-									generationStage: null,
-									queueItemId: null,
-									error: null,
-									...(p.channel !== undefined
-										? {
-												channel: canonicalChannel(
-													p.channel
-												)
-											}
-										: {}),
-									...(p.metadata
-										? { metadata: p.metadata }
-										: {})
-								})
-							: undefined
-					fillMessageId = undefined
 
-					const row =
-						filled ??
-						(await insertLegacy(db, {
+					/**
+					 * The pipeline owns its row (09-B B4, R-17). What this
+					 * node commits is the row the composer shows, the run's
+					 * live row and the row Stop finalises — so the two facts
+					 * a placeholder needs are on the payload, declared:
+					 * `generating`, and who it is for.
+					 */
+					const generating = p.generating === true
+					/**
+					 * Narration: not a character's turn. `characterId` stays
+					 * **null** even when a real speaker was picked — that is the
+					 * whole of "not inserted into the round-robin" surviving
+					 * contact with the database. `getNextCharacterTurn` drops
+					 * `isNarratorResponse` rows before it matches ids, but the
+					 * column is also what `computeDueCharacter` reads on every
+					 * other path, and a side-character turn is not the
+					 * character's turn in any of them. The identity rides on
+					 * `metadata.sideCharacter` (the side-character fact), where
+					 * the run and the receipt read it.
+					 *
+					 * The name is resolved at the write, which is where the row
+					 * is: the speaker's where one was named, else the session's
+					 * narrator config's, else the default — the same three-way
+					 * fallback, resolved at the write rather than by the trigger.
+					 */
+					const narration = p.narration === true
+					// The side-character fact, off the `sideCharacter` in-port
+					// (was `speaker` until 2026-09-16). Stored under
+					// `metadata.sideCharacter` since U5g (migration 0138 moved
+					// the rows): `metadata.speaker` is the participant
+					// reference now, on the row as on the inlet (R1).
+					const sideCharacter =
+						p.sideCharacter && typeof p.sideCharacter === "object"
+							? (p.sideCharacter as {
+									name?: string
+									characterId?: number | null
+									known?: boolean
+								})
+							: null
+					/**
+					 * Who is speaking, as a participant reference (R-18 (3);
+					 * U5g) — the `speaker` in-port, `character:<id>` or
+					 * `envoy:<slug>`. Stored as `metadata.speaker`. For an
+					 * envoy it is the row's ONLY identity: there is no
+					 * character row for `characterId` to name, and the client
+					 * renders the envoy's name and image from the session view
+					 * by this reference. A well-formed reference only; anything
+					 * else is not stored rather than stored as noise.
+					 */
+					const speakerRef =
+						typeof p.speaker === "string" && isParticipantRef(p.speaker)
+							? p.speaker
+							: null
+					const narratorName = narration
+						? sideCharacter?.name ||
+							(await narratorNameFor(
+								db,
+								sessionId,
+								scope.userId
+							)) ||
+							"Narrator"
+						: undefined
+					const instructions =
+						typeof p.instructions === "string" &&
+						p.instructions.trim()
+							? p.instructions
+							: undefined
+					const metadata: Record<string, unknown> = {
+						...(p.metadata ?? {}),
+						...(narratorName ? { narratorName } : {}),
+						...(instructions
+							? { narratorInstructions: instructions }
+							: {}),
+						...(sideCharacter ? { sideCharacter } : {}),
+						...(speakerRef ? { speaker: speakerRef } : {})
+					}
+
+					/**
+					 * An existing row, claimed rather than inserted (the
+					 * inlet's `messageId` on a regenerate, swipe or continue).
+					 * Reset to generating; its text and swipe history stay as
+					 * the verb left them — a continue's partial is the prefill
+					 * the seed line carries, and the live row joins onto it.
+					 * Refused outside this session, like every other reach.
+					 */
+					const claimId =
+						typeof p.row === "number"
+							? p.row
+							: typeof p.row === "string" && /^\d+$/.test(p.row)
+								? Number(p.row)
+								: null
+					let row: Awaited<ReturnType<typeof insertLegacy>>
+					if (claimId !== null) {
+						const existing = await legacyMessage(db, claimId)
+						if (!existing)
+							throw new HostScopeError(
+								`${node.key}: no message ${claimId} to take as the placeholder`
+							)
+						assertScoped(node, existing.sessionId, scope.sessionId)
+						/**
+						 * Only a row that is ALREADY generating can be claimed.
+						 * The verb's handler set it so before the run started;
+						 * that state is what says "this row is waiting for a
+						 * run". Without the check `row` was a port through
+						 * which an authored spec could take over any settled
+						 * message in the session — somebody's finished reply,
+						 * the user's own line — reset it to generating and
+						 * overwrite it at `save`. Fenced in the write as well,
+						 * so a row released between the read and the claim
+						 * (a Stop landing exactly then) is refused too rather
+						 * than resurrected.
+						 */
+						if (!existing.isGenerating)
+							throw new HostScopeError(
+								`${node.key}: message ${claimId} is not generating, so it is not a ` +
+									`placeholder this run may claim — only a row a regenerate, swipe ` +
+									`or continue has already set generating can be taken over.`
+							)
+						const [claimed] = await updateLegacyWhere(
+							db,
+							and(
+								eq(schema.sessionMessages.id, claimId),
+								eq(schema.sessionMessages.isGenerating, true)
+							),
+							{
+								// A stale status from the run this row last
+								// waited on says nothing about this one.
+								generationStatus: null,
+								queueItemId: null,
+								error: null,
+								// A re-driven row's outcome is the run's to
+								// decide: a stop before this claim is cleared.
+								generationOutcome: null
+							}
+						)
+						if (!claimed)
+							throw new HostScopeError(
+								`${node.key}: message ${claimId} was released before this run could claim it`
+							)
+						row = claimed
+					} else {
+						row = await insertLegacy(db, {
 							sessionId,
-							userId: p.userId ?? scope.userId ?? null,
-							characterId: p.characterId ?? null,
+							userId: scope.userId ?? null,
+							characterId: narration
+								? null
+								: (refId(p.characterId) ?? null),
 							personaId: p.personaId ?? null,
 							role: p.role ?? "assistant",
 							// Canonical, so `text-messages:1` and `text-messages`
 							// cannot land in the column as two lanes.
 							channel: canonicalChannel(p.channel),
 							content: String(p.text ?? ""),
-							metadata: p.metadata ?? {},
-							isGenerating: false
-						}))
+							metadata,
+							isNarratorResponse: narration,
+							isGenerating: generating
+						})
+					}
 
-					record(node, "message", row.id, "created")
+					record(
+						node,
+						"message",
+						row.id,
+						claimId !== null ? "updated" : "created"
+					)
+					// The composer's placeholder IS this row (R-17): announced
+					// from the write, so the client sees it the moment it
+					// exists — before a token has been spent on it.
+					scope.live?.opened(row)
+					await announce(row)
 
 					// Media posted WITH the message (the `media` in-port).
 					//
@@ -2518,19 +3122,28 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						}
 					}
 
+					// Blocks posted WITH the message (the `blocks` in-port,
+					// U5d) — for the reason media is: the write that creates
+					// the row is the write that gives it its parts. A form
+					// among them addressed to the AI goes on the run's list
+					// for `runSpec` to dispatch once the receipt is saved.
+					const blocks = await writeBlocks(node, row, p.blocks)
+					if (blocks) await announceWithParts(row.id)
+
 					return { id: row.id, sessionId: row.sessionId }
 				}
 
-				case "core:consumer/seed-greetings": {
+				case "core:outlet/seed-greetings": {
 					// The create pipeline's write (24 §12, T8) — the same
 					// implementation the imperative path used, behind the
 					// declared node. Empty greetings are an ordinary state.
-					const sessionId = p.sessionId ?? scope.sessionId
+					// The run's own session and user — see `create-message`.
+					const sessionId = scope.sessionId
 					if (sessionId === undefined)
 						throw new HostScopeError(
 							`${node.key} has no session to write to — the run was started without a session scope`
 						)
-					const userId = p.userId ?? scope.userId
+					const userId = scope.userId
 					if (userId === undefined || userId === null)
 						throw new HostScopeError(
 							`${node.key} has no user to write as — the run was started without a user scope`
@@ -2575,32 +3188,639 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					return { ids, count: ids.length, sessionId }
 				}
 
-				case "core:consumer/update-message": {
+				case "core:outlet/update-message": {
+					/**
+					 * The target is a row id from the inlet, or the write
+					 * result of an earlier outlet in this run — the reply's
+					 * `$.placeholder.messageId`, whose `ids.id` IS a row id by
+					 * the time this node runs (09-B B4).
+					 */
 					const target = p.target
-					const id =
-						typeof target === "number"
-							? target
-							: (target?.id ?? target?.ids?.[0])
-					if (id === undefined)
+					const id = refId(
+						target && typeof target === "object" && "ids" in target
+							? (target as { ids?: { id?: unknown } }).ids?.id
+							: target
+					)
+					if (id === null)
 						throw new HostScopeError(
-							`${node.key} was given no message id to update. update-message takes a row id ` +
-								`from outside the run — a message created in the same run cannot be updated ` +
-								`by a second node (13 §10b).`
+							`${node.key} was given no message id to update — wire 'target' from the ` +
+								`inlet's row id, or from the placeholder outlet that created the row.`
 						)
-					const { updateLegacy } = await import(
+					const { updateLegacyWhere, updateLegacy } = await import(
 						"$lib/server/messages/store"
 					)
+					const current = await legacyMessage(db, id)
+					if (!current)
+						throw new HostScopeError(
+							`${node.key}: no message ${id} to update`
+						)
+					assertScoped(node, current.sessionId, scope.sessionId)
+					const text = String(p.text ?? "")
+
+					/**
+					 * The row decides which of the two updates this is.
+					 *
+					 * **Still generating** — the placeholder this run created:
+					 * finish it. The text lands joined onto whatever a continue
+					 * started from, the reasoning trace and the swipe slot are
+					 * written through the one builder that keeps their
+					 * invariants, and the flags that end the generation are
+					 * cleared. Fenced on the row still generating: a Stop that
+					 * released it first wins — and when the released row is
+					 * THIS run's own live row, winning means the reply that
+					 * arrived after the stop is dropped, not written. Before
+					 * that rule was code, a Stop landing between the fence
+					 * check and the write fell through to the edit below and
+					 * put the whole reply over the partial the person had just
+					 * kept, marked as their edit.
+					 *
+					 * **Settled** — a person's edit, a rewrite from outside the
+					 * run: the text replaces, and the row says it was edited.
+					 * Never the run's own PLACEHOLDER: the only way that row is
+					 * settled while its run is still going is a Stop, so the
+					 * reply that arrived after it is dropped here too. A row
+					 * this run created complete and now edits is not that —
+					 * it was never open — and takes the edit as written.
+					 */
+					const ownRow =
+						scope.live?.id === id && scope.live.placeholder === true
+					if (ownRow && !current.isGenerating)
+						return { id: current.id, sessionId: current.sessionId }
+					if (current.isGenerating) {
+						const { buildThinkingMetadata } = await import(
+							"$lib/server/messages/thinkingMetadata"
+						)
+						const { joinContinuation } = await import(
+							"$lib/server/messages/continuation"
+						)
+						// Onto the PREFILL — what the row held when the
+						// placeholder claimed it — never onto its current
+						// text: the live row has been rewriting that with the
+						// stream, already joined, and joining again would
+						// write the reply twice. Without a live row nothing
+						// streamed, and the row still holds the prefill.
+						const content = joinContinuation(
+							scope.live?.id === id
+								? scope.live.prefill
+								: (current.content ?? ""),
+							text
+						)
+						const thinking =
+							typeof p.thinking === "string" && p.thinking.length
+								? p.thinking
+								: undefined
+						const metadata = buildThinkingMetadata(
+							current.metadata,
+							content,
+							thinking,
+							true
+						)
+						const [finished] = await updateLegacyWhere(
+							db,
+							and(
+								eq(schema.sessionMessages.id, id),
+								eq(schema.sessionMessages.isGenerating, true)
+							),
+							{
+								content,
+								isGenerating: false,
+								generationStatus: null,
+								generationOutcome: null,
+								queueItemId: null,
+								error: null,
+								...(metadata !== null ? { metadata } : {})
+							}
+						)
+						if (finished) {
+							record(node, "message", finished.id, "updated")
+							// Blocks a reply ends with — a question put to
+							// the cast — appended once the text has landed,
+							// and announced with the parts so the buttons
+							// show without a reload.
+							const blocks = await writeBlocks(node, finished, p.blocks)
+							if (blocks) await announceWithParts(finished.id)
+							else await announce(finished)
+							// A verb's rewrite is a change to history a
+							// pipeline has already seen (R-15): recorded for
+							// the next reply's inlet with the verb on it —
+							// and, for a regenerate, with what it replaced
+							// (`scope.previous`, W3). A fresh turn's finish is
+							// the history growing, not moving, and records
+							// nothing.
+							if (scope.verb)
+								await recordSessionChange(db, {
+									event: "core:event/message-updated@1",
+									sessionId: finished.sessionId,
+									messageId: finished.id,
+									verb: scope.verb,
+									...(scope.previous
+										? { previous: scope.previous }
+										: {}),
+									runId: scope.runId
+								})
+							await settledMessage(
+								finished.id,
+								finished.sessionId
+							)
+							return {
+								id: finished.id,
+								sessionId: finished.sessionId
+							}
+						}
+						// The fence missed on the run's own row: somebody
+						// released it between the read above and the write —
+						// a Stop, which wins. The row is left exactly as the
+						// release left it, holding the partial; nothing is
+						// recorded, because nothing was written.
+						if (ownRow) {
+							const released = (await legacyMessage(db, id))!
+							return {
+								id: released.id,
+								sessionId: released.sessionId,
+								notes: [
+									"dropped: row released before the write"
+								]
+							}
+						}
+					}
+
 					const row = await updateLegacy(db, id, {
-						content: String(p.text ?? ""),
+						content: text,
 						isEdited: true
 					})
 					if (!row)
 						throw new HostScopeError(
 							`${node.key}: no message ${id} to update`
 						)
-					assertScoped(node, row.sessionId, scope.sessionId)
 					record(node, "message", row.id, "updated")
+					const blocks = await writeBlocks(node, row, p.blocks)
+					if (blocks) await announceWithParts(row.id)
+					else await announce(row)
 					return { id: row.id, sessionId: row.sessionId }
+				}
+
+				// ── The built-in writes (R-15, 2026-09-16) ──────────────────
+				//
+				// Each is the write half of one message verb, reached through
+				// its own one-node spec (`core:spec/builtin-*`, `runBuiltIn`).
+				// The venue's handler made the permission checks on the id it
+				// was asked about; here they are made AGAIN, on the id the
+				// write is about to use (U5b review C1) — the two can differ,
+				// because a review gate may fold an edit into the payload
+				// between them, and the ownership a handler judged is not a
+				// property the payload carries. So: the document is the
+				// built-in's own (`assertBuiltInSpec`), the target is checked
+				// against the run's session like every other reach, the actor
+				// may act on THIS row (`assertMayAct`), the row is changed, the
+				// artifact is recorded, the row is announced as today, and the
+				// change is written for the next reply's inlet with what was
+				// lost or replaced. The event itself rides the outlet's
+				// `causesEvent` onto the receipt.
+
+				case "core:outlet/delete-message": {
+					assertBuiltInSpec(node)
+					const id = refId(p.target)
+					if (id === null)
+						throw new HostScopeError(
+							`${node.key} was given no message id to delete — wire 'target' from the inlet.`
+						)
+					const current = await legacyMessage(db, id)
+					if (!current)
+						throw new HostScopeError(
+							`${node.key}: no message ${id} to delete`
+						)
+					assertScoped(node, current.sessionId, scope.sessionId)
+					await assertMayAct(node, id)
+					const { deleteLegacy } = await import(
+						"$lib/server/messages/store"
+					)
+					// Both worlds — the store owns the mirror — and the
+					// `messages.id` cascade retracts the state this line
+					// anchored.
+					await deleteLegacy(db, id)
+					record(node, "message", id, "deleted")
+					const lost = {
+						content: current.content,
+						role: current.role,
+						speaker: speakerRefOf(current),
+						channel: current.channel,
+						metadata: current.metadata
+					}
+					await recordSessionChange(db, {
+						event: "core:event/message-deleted@1",
+						sessionId: current.sessionId,
+						messageId: id,
+						lost,
+						runId: scope.runId
+					})
+					return { id, sessionId: current.sessionId, lost }
+				}
+
+				case "core:outlet/hide-message": {
+					assertBuiltInSpec(node)
+					const id = refId(p.target)
+					if (id === null)
+						throw new HostScopeError(
+							`${node.key} was given no message id to hide — wire 'target' from the inlet.`
+						)
+					const current = await legacyMessage(db, id)
+					if (!current)
+						throw new HostScopeError(
+							`${node.key}: no message ${id} to hide`
+						)
+					assertScoped(node, current.sessionId, scope.sessionId)
+					await assertMayAct(node, id)
+					const hidden = p.hidden === true
+					const { updateLegacy } = await import(
+						"$lib/server/messages/store"
+					)
+					const row = await updateLegacy(db, id, { isHidden: hidden })
+					if (!row)
+						throw new HostScopeError(
+							`${node.key}: no message ${id} to hide`
+						)
+					record(node, "message", row.id, "hidden")
+					await announce(row)
+					await recordSessionChange(db, {
+						event: "core:event/message-hidden@1",
+						sessionId: row.sessionId,
+						messageId: row.id,
+						hidden,
+						runId: scope.runId
+					})
+					return { id: row.id, sessionId: row.sessionId, hidden }
+				}
+
+				case "core:outlet/edit-message": {
+					assertBuiltInSpec(node)
+					const id = refId(p.target)
+					if (id === null)
+						throw new HostScopeError(
+							`${node.key} was given no message id to edit — wire 'target' from the inlet.`
+						)
+					const current = await legacyMessage(db, id)
+					if (!current)
+						throw new HostScopeError(
+							`${node.key}: no message ${id} to edit`
+						)
+					assertScoped(node, current.sessionId, scope.sessionId)
+					await assertMayAct(node, id)
+					/**
+					 * A floor's write is a person's rewrite of a SETTLED row.
+					 * A row still generating belongs to the run filling it,
+					 * whose `update-message` finishes it; rewriting under a
+					 * live stream would race the frames the live row is
+					 * persisting.
+					 */
+					if (current.isGenerating)
+						throw new HostScopeError(
+							`${node.key}: message ${id} is still being written — stop it first, or wait.`
+						)
+					const text = String(p.text ?? "")
+					const previous = { content: current.content }
+					// The selected alternative follows the edit, so a swipe
+					// back and forth does not resurrect the old text.
+					const metadata = current.metadata as Record<string, any>
+					const swipes = metadata?.swipes
+					const patch: Partial<
+						typeof schema.sessionMessages.$inferInsert
+					> = {
+						content: text,
+						isEdited: true,
+						// Content changed — cleared so the vectorization
+						// queue re-embeds it.
+						embedding: null,
+						embeddingModel: null
+					}
+					if (swipes && Array.isArray(swipes.history)) {
+						const currentIdx = swipes.currentIdx ?? 0
+						const history = [...swipes.history]
+						if (currentIdx >= 0 && currentIdx < history.length)
+							history[currentIdx] = text
+						patch.metadata = {
+							...metadata,
+							swipes: { ...swipes, history }
+						}
+					}
+					const { updateLegacy } = await import(
+						"$lib/server/messages/store"
+					)
+					const row = await updateLegacy(db, id, patch)
+					if (!row)
+						throw new HostScopeError(
+							`${node.key}: no message ${id} to edit`
+						)
+					record(node, "message", row.id, "edited")
+					await announce(row)
+					await recordSessionChange(db, {
+						event: "core:event/message-edited@1",
+						sessionId: row.sessionId,
+						messageId: row.id,
+						previous,
+						runId: scope.runId
+					})
+					return { id: row.id, sessionId: row.sessionId, previous }
+				}
+
+				case "core:outlet/swipe-message": {
+					assertBuiltInSpec(node)
+					const id = refId(p.target)
+					if (id === null)
+						throw new HostScopeError(
+							`${node.key} was given no message id to swipe — wire 'target' from the inlet.`
+						)
+					const current = await legacyMessage(db, id)
+					if (!current)
+						throw new HostScopeError(
+							`${node.key}: no message ${id} to swipe`
+						)
+					assertScoped(node, current.sessionId, scope.sessionId)
+					await assertMayAct(node, id)
+					if (current.isGenerating)
+						throw new HostScopeError(
+							`${node.key}: message ${id} is still being written — stop it first, or wait.`
+						)
+					const metadata = (current.metadata ?? {}) as Record<
+						string,
+						any
+					>
+					/**
+					 * The alternatives as the row keeps them: `history` is
+					 * every text, `thinkingHistory` the reasoning beside each,
+					 * `currentIdx` which is showing (null until a second
+					 * alternative exists — the shape the swipe handlers have
+					 * always written).
+					 */
+					const swipes = {
+						currentIdx: null as number | null,
+						history: [] as string[],
+						thinkingHistory: [] as (string | null)[],
+						...(metadata.swipes ?? {})
+					}
+					const previous = {
+						content: current.content,
+						swipeIndex: swipes.currentIdx
+					}
+					let swipeIndex: number
+					if (typeof p.text === "string") {
+						// Record a new alternative and select it. The first
+						// swipe on a row seeds the history with what the row
+						// already holds, so nothing showing is lost.
+						if (swipes.currentIdx === null) {
+							swipes.currentIdx = 0
+							swipes.history = [current.content]
+						}
+						while (
+							swipes.thinkingHistory.length < swipes.history.length
+						)
+							swipes.thinkingHistory.push(null)
+						swipes.history.push(p.text)
+						swipes.thinkingHistory.push(null)
+						swipeIndex = swipes.history.length - 1
+					} else {
+						const index = Number(p.index)
+						if (
+							!Number.isInteger(index) ||
+							index < 0 ||
+							index >= swipes.history.length
+						)
+							throw new HostScopeError(
+								`${node.key}: message ${id} has no alternative ${String(p.index)} to select — ` +
+									`it holds ${swipes.history.length}.`
+							)
+						swipeIndex = index
+					}
+					swipes.currentIdx = swipeIndex
+					const { updateLegacy } = await import(
+						"$lib/server/messages/store"
+					)
+					const row = await updateLegacy(db, id, {
+						content: swipes.history[swipeIndex] ?? "",
+						metadata: {
+							...metadata,
+							swipes,
+							// The reasoning shown follows the alternative.
+							thinking: swipes.thinkingHistory[swipeIndex] ?? null
+						},
+						// A stop belongs to the alternative that was streaming
+						// (U5b review W2): selecting another one — an existing
+						// alternative, or a fresh one being recorded — leaves
+						// the mark behind. Staying put keeps it.
+						...(swipeIndex !== previous.swipeIndex
+							? { generationOutcome: null }
+							: {})
+					})
+					if (!row)
+						throw new HostScopeError(
+							`${node.key}: no message ${id} to swipe`
+						)
+					record(node, "message", row.id, "swiped")
+					await announce(row)
+					await recordSessionChange(db, {
+						event: "core:event/message-swiped@1",
+						sessionId: row.sessionId,
+						messageId: row.id,
+						previous,
+						swipeIndex,
+						runId: scope.runId
+					})
+					return {
+						id: row.id,
+						sessionId: row.sessionId,
+						swipeIndex,
+						previous
+					}
+				}
+
+				case "core:outlet/branch-session": {
+					assertBuiltInSpec(node)
+					const sessionId = scope.sessionId
+					if (sessionId === undefined)
+						throw new HostScopeError(
+							`${node.key} has no session to branch — the run was started without a session scope`
+						)
+					const fromMessageId = refId(p.fromMessage)
+					if (fromMessageId === null)
+						throw new HostScopeError(
+							`${node.key} was given no message to branch at — wire 'fromMessage' from the inlet.`
+						)
+					// Owner-only, re-checked at the write (C1): a branch
+					// copies the whole history into a new session, unbounded
+					// by any rate limit, and a guest must not grow the owner's
+					// storage with sessions the owner never asked for.
+					{
+						const { sessionAccessFor } = await import(
+							"$lib/server/messages/permissions"
+						)
+						const access =
+							scope.userId != null
+								? await sessionAccessFor(
+										db,
+										sessionId,
+										scope.userId
+									)
+								: null
+						if (!access?.isOwner)
+							throw new HostScopeError(
+								`${node.key}: only the session's owner may branch it.`
+							)
+					}
+					const { branchSession } = await import(
+						"$lib/server/sessions/branch"
+					)
+					const created = await branchSession(db, {
+						sessionId,
+						fromMessageId,
+						title:
+							typeof p.title === "string" && p.title.trim()
+								? p.title
+								: null
+					})
+					record(node, "session", created.id, "created")
+					// On the NEW session: its first reply learns it was
+					// forked, and from where. The source's history is
+					// untouched, so it has nothing to be told.
+					await recordSessionChange(db, {
+						event: "core:event/session-branched@1",
+						sessionId: created.id,
+						fromSessionId: sessionId,
+						fromMessageId,
+						runId: scope.runId
+					})
+					return { id: created.id, sessionId: created.id }
+				}
+
+				// ── The form's answer (R-15 *Forms*; U5d, 2026-09-17) ──────
+				//
+				// Commits an oracle's answer to a form **exactly as a click
+				// would**: the block's action fires through `fireAction` —
+				// the road `sessions:triggerFunction` takes — as the
+				// addressee, with the run owner as the acting user, the
+				// addressee as the audience, and this run as the parent. The
+				// fire's run is nested inside this commit (the outlet's
+				// timeout is sized for it): the click's handler awaits its
+				// run and reports the outcome, and so does this.
+				case "core:outlet/answer-form": {
+					const sessionId = scope.sessionId
+					if (sessionId === undefined)
+						throw new HostScopeError(
+							`${node.key} has no session to answer in — the run was started without a session scope`
+						)
+					if (scope.userId === undefined || scope.userId === null)
+						throw new HostScopeError(
+							`${node.key} has no run owner to act under — the run was started without a user scope`
+						)
+					// Under the form-addressed inlet alone: the form this
+					// answers is the one the event carried, and a document
+					// entered any other way has none (validate() refuses the
+					// placement; this is the same refusal at the write).
+					if (
+						scope.inletDefinitionId !== undefined &&
+						scope.inletDefinitionId !== FORM_ADDRESSED_INLET_ID
+					)
+						throw new HostScopeError(
+							`${node.key} (${node.definitionId}) answers a form as its addressee, and ` +
+								`'${scope.specId ?? "this document"}' was entered through ` +
+								`${scope.inletDefinitionId}, not ${FORM_ADDRESSED_INLET_ID} — only the ` +
+								`pipeline the form-addressed event ran has a form to answer`
+						)
+					const messageId = refId(p.messageId)
+					const blockId = typeof p.blockId === "string" ? p.blockId : null
+					const addressee =
+						typeof p.addressee === "string" && isParticipantRef(p.addressee)
+							? p.addressee
+							: null
+					if (messageId === null || !blockId || !addressee)
+						throw new HostScopeError(
+							`${node.key} was given no form to answer — wire 'messageId', 'blockId' and ` +
+								`'addressee' from the form-addressed inlet`
+						)
+					// The block, off the ROW — never off the port, whose copy
+					// a reviewer or a script could have shaped.
+					const { loadFormBlock } = await import("$lib/server/messages/blocks")
+					const block = await loadFormBlock(db, messageId, blockId)
+					if (!block)
+						throw new HostScopeError(
+							`${node.key}: no form '${blockId}' on message ${messageId} — it was removed ` +
+								`before the answer arrived`
+						)
+					const [subject] = await db
+						.select({ sessionId: schema.sessionMessages.sessionId })
+						.from(schema.sessionMessages)
+						.where(eq(schema.sessionMessages.id, messageId))
+						.limit(1)
+					assertScoped(node, subject?.sessionId, scope.sessionId)
+					if (block.addressee !== addressee)
+						throw new HostScopeError(
+							`${node.key}: the form '${blockId}' is addressed to ${block.addressee ?? "nobody"}, ` +
+								`not ${addressee}`
+						)
+					// The answer against the form's schema (R-15): the oracle's
+					// document, checked here before anything fires. A `form`
+					// block's values are checked field by field; a `choices`
+					// block's answer must name one of its options.
+					const fire = formFireOf(block, p.answer)
+					if (!fire) {
+						const schemaText = JSON.stringify(formAnswerSchema(block))
+						throw new HostScopeError(
+							`${node.key}: the answer ${JSON.stringify(p.answer)} does not fit the form — ` +
+								`its schema is ${schemaText}`
+						)
+					}
+					if (block.kind === "form") {
+						const { checkValues } = await import("@serene-pub/sdk")
+						const faults = checkValues(block.fields, fire.payload)
+						if (faults.length)
+							throw new HostScopeError(
+								`${node.key}: the answer does not fit the form — ` +
+									faults.map((f) => `${f.message} (${f.fix})`).join("; ")
+							)
+					}
+					// The effects line, belt to the validator's braces: the
+					// writing spec's declaration, when this host knows it.
+					// `fireAction` refuses a `world` action again by the
+					// installed declaration.
+					const { fireAction } = await import(
+						"$lib/server/pipelines/runtime/fireAction"
+					)
+					const { childLineage } = await import(
+						"$lib/server/pipelines/runtime/lineage"
+					)
+					const outcome = await fireAction(db, {
+						sessionId,
+						function: fire.fn,
+						action: fire.action,
+						messageId,
+						blockId,
+						payload: fire.payload,
+						actor: { userId: scope.userId, as: addressee },
+						io: scope.io,
+						parentSignal: scope.signal,
+						lineage: scope.runId
+							? childLineage({ runId: scope.runId, lineage: scope.lineage })
+							: undefined
+					})
+					if (outcome.kind === "refused")
+						throw new HostScopeError(`${node.key}: ${outcome.error}`)
+					if (outcome.kind === "stopped")
+						throw new HostScopeError(
+							`${node.key}: the answer's action was stopped by ${outcome.by}`
+						)
+					if (outcome.receipt.outcome !== "ok") {
+						const { haltExplanation } = await import(
+							"$lib/server/pipelines/runtime/runTurn"
+						)
+						throw new HostScopeError(
+							`${node.key}: the answer's action did not land — ` +
+								(haltExplanation(outcome.receipt) ?? "the run produced nothing")
+						)
+					}
+					return {
+						id: messageId,
+						sessionId,
+						answer: fire.payload,
+						fired: { runId: outcome.runId, specId: outcome.specId }
+					}
 				}
 
 				// Attachments (20 §1): bytes into the session's asset store,
@@ -2608,8 +3828,8 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 				// a foreign URL. Both consumers are gate-eligible (`effects:
 				// 'write'`; attach-image even defaults review ON, F14's proof
 				// case), so what the reviewer approves is what lands.
-				case "core:consumer/attach-image":
-				case "core:consumer/attach-audio": {
+				case "core:outlet/attach-image":
+				case "core:outlet/attach-audio": {
 					const media = (p.image ?? p.audio ?? p) as Record<
 						string,
 						any
@@ -2645,7 +3865,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 							`${node.key}: no message ${messageId} to attach to`
 						)
 					assertScoped(node, target.sessionId, scope.sessionId)
-					const isImage = node.typeId.includes("attach-image")
+					const isImage = node.definitionId.includes("attach-image")
 
 					let asset: { id: number; mime: string }
 					if (uuid) {
@@ -2725,7 +3945,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					}
 				}
 
-				case "core:consumer/create-lore-entry": {
+				case "core:outlet/create-lore-entry": {
 					/**
 					 * The finished summary, written as a lore entry.
 					 *
@@ -2793,7 +4013,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					return { id: row.id, lorebookId }
 				}
 
-				case "core:consumer/graph-proposal": {
+				case "core:outlet/graph-proposal": {
 					/**
 					 * A proposal, and deliberately nothing more.
 					 *
@@ -2822,7 +4042,7 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 				 *
 				 * A second copy sat here until it was deleted, and it was
 				 * unreachable: this switch is on `node.typeId`, whose labels are
-				 * namespaced type ids, and no node type is named
+				 * namespaced type ids, and no node definition is named
 				 * `embedding_status`. Being unreachable, it was also free to be
 				 * wrong, and was — it read a `localModel` column
 				 * `vectorization_configs` has never had, which would have called
@@ -2830,11 +4050,11 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 				 * block answers "is a backend loaded and validated *right now*",
 				 * and deriving that from configuration instead would report
 				 * available on a configured-but-cold install while
-				 * `core:provider/embed-text` still throws.
+				 * `core:oracle/embed-text` still throws.
 				 */
 				default:
 					throw new HostScopeError(
-						`${node.key} (${node.typeId}) has no commit path in core. A Consumer that core ` +
+						`${node.key} (${node.definitionId}) has no commit path in core. A Consumer that core ` +
 							`cannot perform is one a user could add to a pipeline and watch fail at run time.`
 					)
 			}
@@ -2936,34 +4156,25 @@ async function hydrateBindings(db: Db, bindings: any[]): Promise<any[]> {
 	const characterIds = [
 		...new Set(bindings.map((b) => b.characterId).filter(Boolean))
 	]
-	const personaIds = [
-		...new Set(bindings.map((b) => b.personaId).filter(Boolean))
-	]
 
-	const [characters, personas] = await Promise.all([
-		characterIds.length
-			? db
-					.select()
-					.from(schema.characters)
-					.where(inArray(schema.characters.id, characterIds))
-			: Promise.resolve([]),
-		personaIds.length
-			? db
-					.select()
-					.from(schema.personas)
-					.where(inArray(schema.personas.id, personaIds))
-			: Promise.resolve([])
-	])
+	const characters = characterIds.length
+		? await db
+				.select()
+				.from(schema.characters)
+				.where(inArray(schema.characters.id, characterIds))
+		: []
 
 	const byCharacter = new Map(characters.map((c) => [c.id, c]))
-	const byPersona = new Map(personas.map((p) => [p.id, p]))
 
+	// `persona` is attached, and always null: a binding on a character the user
+	// voices is a character binding, so `character` above answers for both and
+	// this field exists only to keep a reader that asks for it from throwing.
 	return bindings.map((b) => ({
 		...b,
 		character: b.characterId
 			? (byCharacter.get(b.characterId) ?? null)
 			: null,
-		persona: b.personaId ? (byPersona.get(b.personaId) ?? null) : null
+		persona: null
 	}))
 }
 

@@ -20,7 +20,7 @@
  * is asserted below.
  */
 
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 
 const conn = (over: Record<string, unknown> = {}) =>
@@ -42,14 +42,16 @@ const conn = (over: Record<string, unknown> = {}) =>
  * instance at module scope, so without this every case here pays a full
  * migration and fails as a timeout that reads like a flake. The only thing this
  * adapter asks it is which `local_models` rows are NER models, and "none" is the
- * answer that makes the catalogue assertions exact.
+ * answer that makes the catalogue assertions exact — `registry.rows` is
+ * swappable for the one case that needs a downloaded model to be there.
  */
+const registry = vi.hoisted(() => ({ rows: [] as any[] }))
 vi.mock("$lib/server/db", () => ({
 	getCryptoSecretKey: () => "test-secret",
 	db: {
 		select: () => ({
 			from: () => ({
-				where: async () => []
+				where: async () => registry.rows
 			})
 		})
 	}
@@ -82,12 +84,103 @@ afterEach(async () => {
 })
 
 describe("local ONNX named entities", () => {
+	/**
+	 * ⚠ Offline, deliberately.
+	 *
+	 * `listModels` merges the PUBLISHED recommended list
+	 * (`localModels/onnxList`) over the built-in catalogue, and this file must
+	 * not reach the Hub — see the header. With the fetch refused the merge
+	 * falls back to the built-ins, which is also what makes the assertions
+	 * below exact rather than "contains at least".
+	 */
+	beforeEach(async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => {
+				throw new Error("offline")
+			})
+		)
+		const { resetRecommendedLists } = await import(
+			"$lib/server/localModels/onnxList"
+		)
+		resetRecommendedLists()
+	})
+
 	it("offers the shipped catalogue as its model list", async () => {
 		const { NER_MODELS } = await import("$lib/server/ner/models")
 		const mod = (await import("./LocalOnnxNerAdapter")).default
 		const { models } = await mod.listModels(conn())
 		for (const m of NER_MODELS)
 			expect(models.map((x: any) => x.model)).toContain(m.id)
+	})
+
+	/**
+	 * ⚠ The listing feeds `syncConnectionModels`, whose `(connection_id, model)`
+	 * unique index refuses a second row for an id it already wrote — so an id
+	 * appearing twice here aborts that endpoint's whole sync with a
+	 * duplicate-key error rather than showing a model twice. The real
+	 * `ner.yaml` names BOTH built-in ids, so the overlap is the ordinary case.
+	 */
+	it("names each id exactly once when every source overlaps", async () => {
+		const { resetRecommendedLists } = await import(
+			"$lib/server/localModels/onnxList"
+		)
+		const { NER_MODELS } = await import("$lib/server/ner/models")
+		const yaml = `
+models:
+  - id: Xenova/bert-base-NER
+    name: bert-base-NER
+    dtype: q8
+    size: 110
+    labels: [PER, LOC, ORG, MISC]
+    tier: balanced
+    details:
+      description: "The standard English CoNLL-2003 model."
+  - id: Xenova/distilbert-base-multilingual-cased-ner-hrl
+    name: distilbert-multilingual-NER
+    dtype: q8
+    size: 139
+    labels: [PER, LOC, ORG, DATE]
+    tier: fast
+    details:
+      description: "Ten high-resource languages."
+  - id: Xenova/bert-base-NER
+    name: bert-base-NER (a duplicated entry)
+    dtype: q8
+    size: 110
+    labels: [PER]
+    tier: best
+    details:
+      description: "The same id a second time."
+`
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => ({ ok: true, text: async () => yaml }) as any)
+		)
+		resetRecommendedLists()
+		registry.rows = [
+			{
+				modelName: "Xenova/bert-base-NER",
+				filename: "Xenova/bert-base-NER",
+				description: "Downloaded"
+			},
+			{
+				modelName: "some-org/hand-placed",
+				filename: "some-org/hand-placed.onnx",
+				description: "Downloaded"
+			}
+		]
+		try {
+			const mod = (await import("./LocalOnnxNerAdapter")).default
+			const { models } = await mod.listModels(conn())
+			const ids = models.map((m: any) => m.model)
+			expect(new Set(ids).size).toBe(ids.length)
+			for (const m of NER_MODELS) expect(ids).toContain(m.id)
+			expect(ids).toContain("some-org/hand-placed")
+		} finally {
+			registry.rows = []
+			resetRecommendedLists()
+		}
 	})
 
 	it("refuses a model the catalogue does not name", async () => {

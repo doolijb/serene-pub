@@ -66,9 +66,25 @@ function fakeSocket(userId: number, isAdmin = false) {
 /** Collects what a handler emitted, so a refusal's sentence can be read back. */
 function capture() {
 	const events: { event: string; data: any }[] = []
+	/**
+	 * Mirrors `sockets/index.ts`'s `emitToUser`, lazy form included: a function
+	 * payload is a THUNK the real helper evaluates once, and the promise it
+	 * returns is what a handler awaits when its cascade has to land before the
+	 * reply behind it (`relist`). Recording the evaluated value keeps every
+	 * assertion below reading the payload rather than the closure.
+	 */
+	const emit = (event: string, data: any): void | Promise<void> => {
+		if (typeof data !== "function") {
+			events.push({ event, data })
+			return
+		}
+		return Promise.resolve(data()).then((value: any) => {
+			events.push({ event, data: value })
+		})
+	}
 	return {
 		events,
-		emit: (event: string, data: any) => events.push({ event, data }),
+		emit,
 		errorFor: (event: string) =>
 			events.find((e) => e.event === `${event}:error`)?.data?.error as
 				| string
@@ -159,7 +175,9 @@ describe("widgetStyles:list — the usable set", () => {
 			() => {}
 		)
 		expect(all.styles.map((s) => s.id)).not.toContain(bobPrivate.id)
-		expect(all.styles.some((s) => s.widgetSlug === "composer")).toBe(true)
+		expect(all.styles.some((s) => s.widgetSlug === "scene-portraits")).toBe(
+			true
+		)
 	})
 })
 

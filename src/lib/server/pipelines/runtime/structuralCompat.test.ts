@@ -52,7 +52,7 @@ describe("structuralCompat", () => {
 		expect(v.missingPorts).toEqual(["topK"])
 		expect(v.missingParams).toEqual([])
 		expect(v.handler).toBe("semanticSearch")
-		expect(v.typeId).toBe("core:query/vector-search@1")
+		expect(v.definitionId).toBe("core:query/vector-search@1")
 		expect(v.message).toContain("semanticSearch")
 		expect(v.message).toContain("'topK'")
 		expect(v.message).toContain("core:query/vector-search@1")
@@ -127,15 +127,24 @@ describe("normaliseSupplies", () => {
 	it("reads a pinned contract", () => {
 		const s = normaliseSupplies(C.sessionHistory)
 		expect(s.id).toBe("core:query/session-history@1")
-		expect(s.params.sort()).toEqual(["channel", "limit", "priority"])
+		// `share`, `maxEntries`, `minEntries` joined `priority` on 2026-09-16
+		// (R-7 P5): the conversation's band intent, declared on the source.
+		expect(s.params.sort()).toEqual([
+			"channel",
+			"limit",
+			"maxEntries",
+			"minEntries",
+			"priority",
+			"share"
+		])
 	})
 
-	it("reads a pipeline_type_registry row — the only source a plugin type has", () => {
+	it("reads a pipeline_definition_registry row — the only source a plugin type has", () => {
 		// F6: core reads a plugin's contract from the row it stored at install
 		// and never loads the plugin to ask. A `transport: 'process'` type has
 		// no in-process descriptor to read even if that rule allowed it.
 		const s = normaliseSupplies({
-			typeId: "acme:query/thing",
+			definitionId: "acme:query/thing",
 			version: 2,
 			ports: { in: { text: "core:shape/text@1" }, out: {} },
 			slots: {
@@ -152,7 +161,7 @@ describe("normaliseSupplies", () => {
 		const fromContract = normaliseSupplies(C.vectorSearch)
 		const d: any = (C.vectorSearch as any).descriptor
 		const fromRow = normaliseSupplies({
-			typeId: "core:query/vector-search",
+			definitionId: "core:query/vector-search",
 			version: 1,
 			ports: d.ports,
 			slots: d.slots
@@ -177,7 +186,9 @@ describe("requiresOf — the runtime twin of SharedInput", () => {
 		// intersection is the whole of it — and that is the fact `loreFor`
 		// being bound to all three rests on.
 		const r = requiresOf(C.worldLore, C.characterLore, C.historyEntries)
-		expect([...r.ports].sort()).toEqual(["params", "scope", "text"])
+		// `scope` and the params slot: the lanes declare no `text` in-port
+		// (culled 2026-09-16, R-12 — nothing filled it and nothing read it).
+		expect([...r.ports].sort()).toEqual(["params", "scope"])
 		expect(r.params).toContain("scanDepth")
 	})
 
@@ -186,8 +197,10 @@ describe("requiresOf — the runtime twin of SharedInput", () => {
 		// `scope` and the `params` slot are common; `text` is world-lore's
 		// alone and `budget` is session-history's.
 		expect([...r.ports].sort()).toEqual(["params", "scope"])
-		// Their schemas share nothing at all.
-		expect(r.params).toEqual([])
+		// Their schemas share only the band intent both declare (R-7 P5):
+		// the scan knobs are world-lore's, `limit`/`channel`/`minEntries`
+		// are session-history's.
+		expect([...r.params].sort()).toEqual(["maxEntries", "priority", "share"])
 	})
 
 	it("a handler typed against a group is compatible with every member", () => {

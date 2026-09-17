@@ -5,8 +5,9 @@
 	import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
 	import Select from "$lib/client/components/inputs/Select.svelte"
-	import { onMount, onDestroy } from "svelte"
+	import { onMount } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { z } from "zod"
 
 	interface ExtraFieldData {
@@ -21,7 +22,6 @@
 
 	// Zod validation schema
 	const openAIConnectionSchema = z.object({
-		model: z.string().min(1, "Model is required"),
 		baseUrl: z
 			.string()
 			.url("Invalid URL format")
@@ -65,25 +65,13 @@
 		apiKey: ""
 	}
 
-	let availableOpenAIModels: any[] = $state([])
-	// OpenAI-compatible endpoints report a bare id and nothing prettier, so the
-	// id is both the stored value and the label.
-	let modelOptions = $derived(
-		availableOpenAIModels.map((m) => ({ value: m.id, label: m.id }))
-	)
 	let openAIFields: ExtraFieldData | undefined = $state()
 	let validationErrors: ValidationErrors = $state({})
 
-	const onConnectionsRefreshModels = (
-		msg: Sockets.Connections.RefreshModels.Response
-	) => {
-		if (msg.models) availableOpenAIModels = msg.models
-	}
-	socket.on("connections:refreshModels", onConnectionsRefreshModels)
-
-	// Named so `off` can name it too. A bare `socket.off("connections:test")`
-	// removes EVERY listener for that event — including the parent sidebar's,
-	// which then stops updating for the rest of the session.
+	// Standing interest in the test result, held by the registry for as long as
+	// this form is mounted and released with it. The registry keeps ONE raw
+	// listener for the event and fans it out, so the parent sidebar's own
+	// interest is untouched by this form coming and going.
 	const onConnectionsTest = (msg: Sockets.Connections.Test.Response) => {
 		testResult = {
 			ok: msg.ok,
@@ -91,13 +79,7 @@
 			models: msg.models
 		}
 	}
-	socket.on("connections:test", onConnectionsTest)
-
-	function handleRefreshModels() {
-		socket.emit("connections:refreshModels", {
-			connection
-		})
-	}
+	useInterest<"connections:test">("connections:test", onConnectionsTest)
 
 	let testResult: { ok: boolean; error?: string; models?: any[] } | null =
 		$state(null)
@@ -112,7 +94,6 @@
 
 	function validateConnection(): boolean {
 		const data = {
-			model: connection.model || "",
 			baseUrl: connection.baseUrl || "",
 			apiKey: openAIFields?.apiKey || ""
 		}
@@ -190,52 +171,12 @@
 		} else {
 			openAIFields = extraJsonToExtraFields(defaultExtraJson)
 		}
-		handleRefreshModels()
-	})
-
-	onDestroy(() => {
-		socket.off("connections:refreshModels", onConnectionsRefreshModels)
-		socket.off("connections:test", onConnectionsTest)
 	})
 </script>
 
 {#if connection}
-	<div class="mt-2 flex flex-col gap-1">
-		<Select
-			label="Model"
-			options={modelOptions}
-			bind:value={connection.model}
-			placeholder="-- Select Model --"
-			emptyMessage="No models — try Refresh Models."
-			clearable
-			required
-			invalid={!!validationErrors.model}
-			describedBy={validationErrors.model ? "model-error" : undefined}
-			onValueChange={() => {
-				if (validationErrors.model) {
-					const { model, ...rest } = validationErrors
-					validationErrors = rest
-				}
-			}}
-		/>
-		{#if validationErrors.model}
-			<p
-				id="model-error"
-				class="text-error-500 mt-1 text-sm"
-				role="alert"
-			>
-				{validationErrors.model}
-			</p>
-		{/if}
-	</div>
+	<!-- Model picker removed: models live in the Models section below. -->
 	<div class="mt-4 flex gap-2">
-		<button
-			type="button"
-			class="btn btn-sm preset-tonal-primary w-full"
-			onclick={handleRefreshModels}
-		>
-			Refresh Models
-		</button>
 		<button
 			type="button"
 			class="btn preset-tonal-success btn-sm w-full"

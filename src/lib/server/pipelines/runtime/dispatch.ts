@@ -58,7 +58,17 @@
  * port and gives bytes to a backend. Neither lets bytes travel the graph.
  */
 
-import { resolveTaskConfig } from "$lib/server/utils/resolveTaskConfig"
+import type { TaskType } from "$lib/server/utils/resolveTaskConfig"
+import {
+	resolveCapabilityTarget,
+	TEXT_CAPABILITY
+} from "$lib/server/connections/capabilityTarget"
+import {
+	isQueueCancellation,
+	llmQueue,
+	type LLMQueueStatus
+} from "$lib/server/utils/llmQueue"
+import { contextWindowFrom } from "$lib/server/pipelines/runtime/contextWindow"
 import { getConnectionAdapter } from "$lib/server/utils/getConnectionAdapter"
 import { getUserConfigurations } from "$lib/server/utils/getUserConfigurations"
 import { resolveSampling } from "$lib/server/utils/resolveSampling"
@@ -126,15 +136,18 @@ export interface DispatchRequest {
 	/** Forwarded verbatim; carries `isNarratorResponse` among other things. */
 	generatingMessageMetadata?: Record<string, unknown>
 	/**
-	 * Tier 2 — what the pipeline's configuration selected for THIS node.
+	 * The run's resolution — what the executor's `resolveSlot` settled the
+	 * calling node's `connection` and `sampling` slots to (R-8).
 	 *
-	 * Forwarded from the `connection` and `sampling` slots on the calling
-	 * provider node, exactly as `generate-image` already forwards them. Without
-	 * these the chat path resolved from the capability default alone, so the
-	 * panel's own Connection and Sampling pickers on the reply node changed
-	 * nothing an admin could observe — the middle tier of
-	 * `capability default → pipeline config → session override` simply was not
-	 * there for the primary path.
+	 * ⚠ **Consumed, never re-walked.** This used to be tier 2 of a second walk
+	 * (`resolveTaskConfig`: session sampling → prompt-config override → these →
+	 * the capability default), so the request could go out against a
+	 * connection and a window the budget and the render had resolved
+	 * differently. The world the executor resolves against carries every tier
+	 * now (`config/world.ts`), so what arrives here is the one answer, and the
+	 * resolver below only loads the pair, checks the model and attaches the
+	 * template — it selects nothing. Null means the run resolved nothing, and
+	 * the resolver's own sentence says what to set and where.
 	 */
 	connectionId?: number | null
 	/**
@@ -185,7 +198,7 @@ export interface DispatchRequest {
 	 */
 	tools?: readonly ToolDeclaration[]
 	/**
-	 * A request for STRUCTURE rather than prose — `core:provider/generate-json@1`
+	 * A request for STRUCTURE rather than prose — `core:oracle/generate-json@1`
 	 * and nothing else sets it.
 	 *
 	 * Present means "constrain the answer as far as this connection can", and
@@ -205,6 +218,27 @@ export interface DispatchRequest {
 	onChunk?: (chunk: string) => void
 	onThinking?: (chunk: string) => void
 	signal?: AbortSignal
+	/**
+	 * Send through the LLM queue — one model call at a time across the
+	 * application — rather than directly.
+	 *
+	 * The host passes this for every generating node of a run, which is the
+	 * same lane `dispatchStep` and `runQueuedLLMCall` already take. The
+	 * status is what a live row shows as its `generationStatus` while the call
+	 * waits or a managed backend loads; `queueItemId` is the id the row
+	 * already carries, so the client's Stop can cancel by it. Absent, the call
+	 * is made directly — a test poking the dispatch, or a caller that queues
+	 * for itself.
+	 */
+	queue?: {
+		taskType: TaskType
+		sessionId?: number
+		messageId?: number
+		userId?: number
+		label?: string
+		queueItemId?: string
+		onStatusChange?: (status: LLMQueueStatus) => void
+	}
 }
 
 export interface DispatchResult {
@@ -724,69 +758,74 @@ export async function dispatchGeneration(
 				"generate from nothing and return something that reads like a model problem."
 		)
 
-	const isNarrator = Boolean(
-		request.generatingMessageMetadata?.isNarratorResponse
-	)
-
 	const session = await loadAdapterSession(request.db, request.sessionId)
-	// Context and prompt only. This used to also take `sampling` and pass it
-	// below as `resolved.sampling ?? defaultSampling` — an undeclared FOURTH
-	// tier, and a no-op only for as long as both sides read
-	// `system_settings.default_sampling_id`. `resolveTaskConfig` walks the whole
-	// chain now, so a second opinion here could only ever disagree with it.
+	// Context and prompt only — the two legacy rows an adapter's constructor
+	// still wants. Neither is a resolution tier: the prompt config's own
+	// sampling column reaches the run through the world (`config/world.ts`)
+	// and arrives here already resolved, and its connection column is read by
+	// nothing (see the ⏳ note there).
 	const { contextConfig, promptConfig } = await getUserConfigurations(
 		request.userId as number
 	)
 
-	// The same resolver the legacy path uses, so a session-level connection
-	// override or a per-config one applies identically on both paths. Resolving
-	// it again here rather than threading it through the pipeline is deliberate:
-	// see the header.
-	const resolved = await resolveTaskConfig({
-		taskType: isNarrator ? "narratorPrompt" : "session",
-		promptConfigId: promptConfig?.id,
-		sessionId: request.sessionId,
-		// Tier 2, forwarded from the calling node's own slots. `resolveTaskConfig`
-		// hands these to `resolveCapabilityTarget` so all three tiers are walked
-		// by the one resolver rather than two of them here and one elsewhere.
-		pipelineConnectionId: request.connectionId ?? null,
-		pipelineConnectionModelId: request.connectionModelId ?? null,
-		pipelineSamplingId: request.samplingId ?? null
+	/**
+	 * One resolution per run (R-8). The ids are the executor's answer; what
+	 * the resolver adds is what only a database can — the rows, the model
+	 * merged onto its endpoint, the capability check, the completion template
+	 * and the wire mode — and the sentence naming the fix when the run
+	 * resolved nothing. No session tier, no prompt-config tier: what is live
+	 * of both is in the world now, and a second walk of them here is what let
+	 * the request go to a connection the budget never saw.
+	 */
+	const target = await resolveCapabilityTarget(request.db, {
+		capability: TEXT_CAPABILITY,
+		pipelineConfig:
+			request.connectionId != null || request.samplingId != null
+				? {
+						connectionId: request.connectionId ?? null,
+						connectionModelId: request.connectionModelId ?? null,
+						samplingConfigId: request.samplingId ?? null
+					}
+				: null,
+		// Wording only (08 wording pass): "Chat" is `text->text`'s generic
+		// label, which misnames this session's own genre when it is not the
+		// standard one — see `CapabilityTargetRequest.genreId`.
+		genreId: session.genreId
 	})
-
-	const connection = resolved.connection
 	// The sentence comes from the resolver, which knows which tier failed and
-	// what to do about it. The one that used to be here — "Set one up under
-	// Connections" — was the same words for four different situations: nothing
-	// registered, a default cleared by a deleted connection, a dangling id, and
-	// a connection that cannot do chat. `resolveTaskConfig` carries the right
-	// one forward; the fallback is only for a caller that never set `problem`.
-	//
-	// The `capabilityRefusal` that used to sit under this is inside the resolver
-	// too, so a session override pointing at an image connection is refused by
-	// name rather than by `getConnectionAdapter` saying the type has no adapter.
-	if (!connection)
+	// what to do about it: nothing registered, a default cleared by a deleted
+	// connection, a dangling id, a model that is switched off, a connection
+	// that cannot do chat. It names no connection — the identity rides in
+	// `problem.connection`, which the projection removes for everyone who may
+	// not see it.
+	if (!target.ok)
 		throw new DispatchError(
-			resolved.problem?.message ??
-				"no AI connection is configured, so there is nothing to send this prompt to.",
-			resolved.problem?.connection
+			target.problem.message,
+			target.problem.connection
 		)
+	const { connection } = target
 
+	// The row is `{shape, values, enabled}`; an adapter takes the parameters
+	// actually switched on, defaults applied — `resolveSampling` is the one
+	// path between the two.
+	const values = resolveSampling(target.sampling)
 	const { Adapter } = await getConnectionAdapter(connection.type)
 	const adapter = new Adapter({
 		session: session as any,
 		connection,
-		// Both of these are rows. An adapter takes the parameters, not the row —
-		// only the keys switched on, with the shape's defaults filled in — and
-		// `resolveSampling` is the one path between the two.
-		sampling: resolveSampling(resolved.sampling),
+		sampling: values,
 		contextConfig,
 		promptConfig,
 		currentCharacterId: request.currentCharacterId ?? null,
 		tokenCounter: new TokenCounters(
 			(connection as any).tokenCounter || TokenCounterOptions.ESTIMATE
 		),
-		tokenLimit: 4096,
+		// THE window (R-8): the same computation `core:task/context-budget@1`
+		// sized the prompt with, off the same pair — the model's own window
+		// where it states one, else the sampling config's. It was a literal
+		// 4096 here, so LM Studio loaded every model at 4k whatever the config
+		// said.
+		tokenLimit: contextWindowFrom(values, connection),
 		contextThresholdPercent: 0.8,
 		generatingMessageMetadata: request.generatingMessageMetadata ?? {}
 	})
@@ -953,8 +992,67 @@ export async function dispatchGeneration(
 	const onAbort = () => adapter.abort()
 	request.signal?.addEventListener("abort", onAbort, { once: true })
 
+	/**
+	 * The call itself, on the queue when the caller asked for it.
+	 *
+	 * The queue's own signal is deliberately unused: the run's abort reaches
+	 * the adapter through `onAbort` above, and a stop that arrives while the
+	 * item is still waiting reaches the queue as a cancel — one source, two
+	 * shapes, the same rule `runQueuedLLMCall` follows.
+	 */
+	const generate = async () => {
+		const queue = request.queue
+		if (!queue) return await adapter.generateText()
+		if (request.signal?.aborted)
+			return { completionResult: "", isAborted: true } as Awaited<
+				ReturnType<typeof adapter.generateText>
+			>
+		const { id, done } = llmQueue.enqueue(
+			{
+				taskType: queue.taskType,
+				connectionName: connection.name ?? "connection",
+				samplingName: target.sampling?.name ?? "default",
+				sessionId: queue.sessionId,
+				messageId: queue.messageId,
+				userId: queue.userId,
+				label: queue.label,
+				// Both lifecycle hooks the base class always has, read
+				// structurally like `recordedWire` reads its getters: a test
+				// fake standing in for a model implements `generateText` and
+				// nothing else, and a queue item that demanded the rest would
+				// fail every one of them for a reason unrelated to the send.
+				preflight:
+					typeof adapter.preflight === "function"
+						? (signal) => adapter.preflight(signal)
+						: undefined,
+				execute: () => adapter.generateText(),
+				onCancel: () => {
+					if (typeof adapter.abort === "function") adapter.abort()
+				},
+				onStatusChange: queue.onStatusChange
+			},
+			queue.queueItemId
+		)
+		const cancelQueued = () => llmQueue.cancel(id)
+		request.signal?.addEventListener("abort", cancelQueued, { once: true })
+		try {
+			return await done
+		} catch (err) {
+			// The queue's own way of saying "stopped" — an item cancelled
+			// while it waited, or force-detached after it ignored its abort.
+			// A stop is an aborted call, never a service error.
+			if (isQueueCancellation(err))
+				return { completionResult: "", isAborted: true } as Awaited<
+					ReturnType<typeof adapter.generateText>
+				>
+			throw err
+		} finally {
+			request.signal?.removeEventListener("abort", cancelQueued)
+		}
+	}
+
 	try {
-		const result = await adapter.generateText()
+		const result = await generate()
 		let text = ""
 		let thinking = ""
 
@@ -1024,7 +1122,16 @@ export async function dispatchGeneration(
 		return {
 			text: bounded.text,
 			thinking: resolved.thinking,
-			isAborted: Boolean(result.isAborted),
+			// A streaming adapter reports `isAborted` as of the moment
+			// `generateText()` returned — BEFORE the stream ran — so a stop
+			// that landed mid-stream ends the stream early and reads as a
+			// complete reply. The signal and the adapter's own flag know
+			// better, and an aborted stream is an aborted call: the binding
+			// halts on it, and the executor files the run as cancelled.
+			isAborted:
+				Boolean(result.isAborted) ||
+				Boolean(request.signal?.aborted) ||
+				Boolean((adapter as { isAborting?: boolean }).isAborting),
 			via: connection.type,
 			// Read AFTER the stream has been drained, which is why the hit is a
 			// property on the adapter rather than a field on `TextGenResult`:

@@ -5,16 +5,16 @@
 	 * panel renders — one source of truth). The full (small) list arrives
 	 * once; search filters it as you type, client-side.
 	 */
-	import { getContext, onDestroy, onMount } from "svelte"
+	import { getContext } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { goto } from "$app/navigation"
-	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { getInterestContext } from "$lib/client/sockets/interest.svelte"
 	import AdminList, {
 		type AdminColumn
 	} from "$lib/client/components/admin/AdminList.svelte"
 	import InvitePanel from "$lib/client/components/userForms/InvitePanel.svelte"
 
-	const socket = useTypedSocket()
+	const interest = getInterestContext()
 	let userCtx: UserCtx = getContext("userCtx")
 
 	type Row = SelectUser
@@ -34,13 +34,17 @@
 		loading = false
 	}
 
-	onMount(() => {
-		socket.on("users:list", handleList)
-		socket.emit("users:list", {})
-	})
-	onDestroy(() => {
-		socket.off("users:list", handleList)
-	})
+	/**
+	 * The roster, asked for and listened for in one. BARE — the accounts are
+	 * the instance's, with nothing to scope them to — and STANDING, because
+	 * the server re-emits this list as a cascade after every account write, so
+	 * a change made on a change page is already here on the way back.
+	 *
+	 * The app-wide interest context, not `adminInterest`: `users:` is a MIXED
+	 * family (every account reads its own `users:current`), so this is an
+	 * ordinary key and the handler's admin check is the boundary.
+	 */
+	$effect(() => interest.requestWithInterest("users:list", {}, handleList))
 
 	const columns: AdminColumn<Row>[] = [
 		{ key: "username", label: "Username", value: (r) => r.username },

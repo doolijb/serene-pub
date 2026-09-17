@@ -31,7 +31,7 @@ import path from "path"
 import { eq } from "drizzle-orm"
 import type { TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
-import { run } from "@serene-pub/sdk"
+import { run, splitCandidates } from "@serene-pub/sdk"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
 import { createHost } from "$lib/server/pipelines/runtime/host"
 import { buildWorld } from "$lib/server/pipelines/config/world"
@@ -182,8 +182,8 @@ const nodeOut = (key: string) => {
 	return node.output
 }
 
-/** Its candidates, in the order it published them. */
-const ranked = (): any[] => nodeOut(GRAPH)?.main ?? []
+/** Its candidates, in the order it published them — past the band intent it leads with (R-7 P5). */
+const ranked = (): any[] => splitCandidates<any>(nodeOut(GRAPH)?.main ?? []).items
 
 const nameOf = (c: any) => c?.payload?.name
 

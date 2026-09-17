@@ -166,7 +166,7 @@ export async function migrateContextTemplates(
 		}
 
 		const created = await createContextTemplate(db, {
-			nodeTypeId: CONTEXT_TEMPLATE_NODE_TYPE,
+			nodeDefinitionId: CONTEXT_TEMPLATE_NODE_TYPE,
 			name: await freeName(db, legacy.name || "Context template"),
 			source: legacy.template ?? "",
 			// The engine travels on the value (12 §2a). A legacy row that never
@@ -288,7 +288,7 @@ export async function migrateContextTemplates(
 
 			for (const d of templateDecls)
 				if (
-					d.nodeTypeId === poolKeyFor(CONTEXT_TEMPLATE_NODE_TYPE) &&
+					d.nodeDefinitionId === poolKeyFor(CONTEXT_TEMPLATE_NODE_TYPE) &&
 					(await write(d, instanceTemplateId))
 				)
 					report.selected++
@@ -312,7 +312,7 @@ export async function migrateContextTemplates(
 /**
  * A name no other template for this node type is using.
  *
- * `(node_type_id, name)` is a unique index, so two legacy configs both called
+ * `(node_definition_id, name)` is a unique index, so two legacy configs both called
  * "Default" — one core's, one a clone somebody never renamed — would make the
  * second insert throw at boot. Suffixing is the least surprising resolution: a
  * picker with two identical labels is unusable anyway, so the constraint is
@@ -324,7 +324,7 @@ async function freeName(db: Db, wanted: string): Promise<string> {
 		.from(schema.pipelineContextTemplates)
 		.where(
 			eq(
-				schema.pipelineContextTemplates.nodeTypeId,
+				schema.pipelineContextTemplates.nodeDefinitionId,
 				poolKeyFor(CONTEXT_TEMPLATE_NODE_TYPE)
 			)
 		)

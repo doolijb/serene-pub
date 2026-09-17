@@ -15,7 +15,7 @@
  *     `rag` entry keyword-**ineligible** the moment an embedding model loaded,
  *     deferring it to a vector mechanism that no shipped spec wired. Loading a model
  *     emptied lore out of every prompt.
- *   · **Removing a model ended the turn.** `core:provider/embed-text@1` throws
+ *   · **Removing a model ended the turn.** `core:oracle/embed-text@1` throws
  *     when the host has no model loaded, which is the right answer to give a
  *     caller and the wrong thing to let end somebody's reply. Wiring the mechanism
  *     into `respond` 1.19.0 put that throw on the shipped path.
@@ -419,7 +419,7 @@ describe("a model that goes away mid-session", () => {
 		 * `enabled: 'on'` is the setting that says *"I configured this, tell me
 		 * when it breaks"*, and it does — the failure is recorded rather than
 		 * swallowed. What it must not do is cost a reply, and that guarantee is
-		 * structural: `core:provider/embed-text@1` is `optional`, so the executor
+		 * structural: `core:oracle/embed-text@1` is `optional`, so the executor
 		 * turns the error into an empty `ok` and marks it `recoveredAsEmpty`.
 		 *
 		 * This is the case a `try` in the binding would not have covered, which

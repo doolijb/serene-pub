@@ -1,6 +1,6 @@
 # Tags
 
-Tags are short, colored labels you create once and then attach to [characters](./characters.md), [personas](./personas.md), [lorebooks](./lorebooks.md), and [sessions](./sessions.md) so related content is easier to find later.
+Tags are short, colored labels you create once and then attach to [characters](./characters.md) (your [personas](./personas.md) included), [lorebooks](./lorebooks.md), and [sessions](./sessions.md) so related content is easier to find later.
 
 ## Overview
 
@@ -8,7 +8,7 @@ A tag is just a name (e.g. "villain", "sci-fi", "in-progress") with an optional 
 
 ## Opening the Tags Panel
 
-The Tags panel is opened from the **Tags** icon (a tag/label icon) in the app's side navigation, alongside the icons for Personas, Characters, Lorebooks, and Sessions. On mobile layouts the same panel is reachable from the mobile navigation bar under "Tags". The panel opens showing every tag you've created as a row of colored chips, with a search box above them for filtering the list by tag name or description.
+The Tags view is opened from the **Tags** icon (a tag/label icon) on the rail, beside the icons for Characters, Lorebooks, and Sessions (see [Getting Around](./getting-around.md)). On mobile layouts the same panel is reachable from the mobile navigation bar under "Tags". The panel opens showing every tag you've created as a row of colored chips, with a search box above them for filtering the list by tag name or description.
 
 ## Creating a Tag
 
@@ -30,7 +30,6 @@ Click any tag chip in the Tags panel to open its detail view. This shows:
 
 - The tag's name and, if set, its description in a bordered panel.
 - A **Characters** section listing every character carrying that tag.
-- A **Personas** section listing every persona carrying that tag.
 - A **Lorebooks** section listing every lorebook carrying that tag.
 
 Each listed item can be clicked to jump to it, and has its own edit button to open that item directly for editing. From the tag detail view you can also click the pencil ("Edit Tag") button to edit the tag's name, description, and color, or the trash ("Delete Tag") button to remove it.
@@ -39,12 +38,11 @@ Each listed item can be clicked to jump to it, and has its own edit button to op
 
 Clicking **Delete Tag** opens a confirmation dialog: "Are you sure you want to delete the tag '\<name>'? This action cannot be undone and will remove the tag from all associated items." Confirming permanently deletes the tag and removes it from every character, persona, and lorebook it was attached to — it does not delete those items themselves, only the tag association.
 
-## Assigning Tags to Characters, Personas, Lorebooks, and Sessions
+## Assigning Tags to Characters, Lorebooks, and Sessions
 
 Tags aren't assigned from the Tags panel itself — you attach them from the **Tags** field inside the form for the item you're editing:
 
 - The character form's Tags field (also available in the character creation/edit view).
-- The persona form's Tags field.
 - The lorebook form's Tags field.
 - The session edit form's Tags field.
 
@@ -52,4 +50,4 @@ In each case, typing in the Tags field shows a dropdown of your existing tags th
 
 ## Finding Tagged Items
 
-There's no separate tag-filter control — instead, the search boxes on the [Characters](./characters.md), [Personas](./personas.md), and [Sessions](./sessions.md) sidebars match against tag names in addition to names and descriptions. Typing a tag name (e.g. "villain") into a sidebar's search field will surface any character, persona, or session carrying a tag whose name contains that text. To see everything tagged with a specific tag at a glance, open that tag from the Tags panel instead and review its Characters, Personas, and Lorebooks sections directly.
+There's no separate tag-filter control — instead, the search boxes on the [Characters](./characters.md) and [Sessions](./sessions.md) sidebars match against tag names in addition to names and descriptions. Typing a tag name (e.g. "villain") into a sidebar's search field will surface any character, persona, or session carrying a tag whose name contains that text. To see everything tagged with a specific tag at a glance, open that tag from the Tags panel instead and review its Characters, Personas, and Lorebooks sections directly.

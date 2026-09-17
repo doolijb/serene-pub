@@ -18,12 +18,29 @@
  * one copy. Switching sessions re-seeds it, because the answer is about a
  * session and not about the tab.
  *
- * ⚠ Every `off` names its handler. `socket.off(event)` with no handler removes
- * every listener in the app for that event, including other modules'.
+ * ## Every listener is an interest, and `state:changed` names its session
+ *
+ * Nothing here touches the socket directly any more: the interest registry owns
+ * the listeners, and the server skips a `state:*` query no open surface asked
+ * for. The one key worth explaining is `state:changed`, declared with the open
+ * session as its **interest scope** (`state:changed#42`). The server extracts
+ * the same scope from the payload it broadcasts — one table, `SCOPED_EVENTS` in
+ * the shared contract, read by both sides — so a write in a session this tab
+ * does not have open is never sent here, and the two roster queries behind the
+ * broadcast are not run for it either. The key is re-declared when the open
+ * session changes, and released with the last one when there is none.
+ *
+ * `mine()` stays on every handler regardless: replies to this store's own
+ * requests are not scoped, and a check that costs a comparison is worth keeping
+ * in front of a cache that answers for one session.
  */
 import { SvelteMap } from "svelte/reactivity"
-import { getSocket } from "$lib/client/sockets/socketInstance"
-import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+import {
+	declareInterest,
+	requestWithInterest
+} from "$lib/client/sockets/interest.svelte"
+import { interestKey } from "$lib/shared/sockets/interest"
+import { typedSocketOrNull } from "$lib/client/sockets/typedSocket"
 import {
 	groupLinesByOwner,
 	ledgerLines,
@@ -57,7 +74,7 @@ let started = false
 function socketOrNull() {
 	// SSR and the moment before the client socket connects both land here; the
 	// next caller starts it, so nothing is lost by declining now.
-	return getSocket() ? useTypedSocket() : null
+	return typedSocketOrNull()
 }
 
 const mine = (sessionId: unknown): boolean =>
@@ -147,35 +164,64 @@ const ERROR_EVENTS = [
 	"state:decide:error"
 ] as const
 
+/** What `stopSessionState` releases — one per declared interest key. */
+let releases: Array<() => void> = []
+
+/**
+ * The scoped `state:changed` interest, held on its own because it is the one
+ * key here that moves: it names a session, and this store is pointed at a
+ * different one over the life of the tab.
+ */
+let changedRelease: (() => void) | null = null
+
 function start(): void {
 	if (started) return
 	const socket = socketOrNull()
 	if (!socket) return
 	started = true
-	socket.on("state:get", onGet)
-	socket.on("state:ledger", onLedger)
-	socket.on("state:proposals", onProposals)
-	socket.on("state:changed", onChanged)
-	for (const e of SETTLED_EVENTS) socket.on(e, onSettled)
-	for (const e of ERROR_EVENTS) socket.on(e, onError)
+	releases = [
+		declareInterest<"state:get">("state:get", onGet),
+		declareInterest<"state:ledger">("state:ledger", onLedger),
+		declareInterest<"state:proposals">("state:proposals", onProposals),
+		...SETTLED_EVENTS.map((e) =>
+			declareInterest<"state:set">(e, onSettled)
+		),
+		...ERROR_EVENTS.map((e) =>
+			declareInterest<"state:get:error">(e, onError)
+		)
+	]
+	declareChanged()
 }
 
 /**
- * Drop the subscription. Nothing calls this today — the cache lives as long as
- * the tab, which is the point — but every handler is named so a teardown is
- * possible at all.
+ * Declare `state:changed` for the session that is open, releasing the key held
+ * for the last one.
+ *
+ * Called from `start` and from every `openSessionState`, so the declared scope
+ * and `openSessionId` are never out of step — and nothing is declared before a
+ * session is open, because there is no session for a change to be about yet.
+ */
+function declareChanged(): void {
+	changedRelease?.()
+	changedRelease = null
+	if (!started || openSessionId == null) return
+	changedRelease = declareInterest<"state:changed">(
+		interestKey("state:changed", openSessionId),
+		onChanged
+	)
+}
+
+/**
+ * Drop the interest. Nothing calls this today — the cache lives as long as the
+ * tab, which is the point — but each release is kept so a teardown is possible
+ * at all, and so it removes THIS store's listeners and nobody else's.
  */
 export function stopSessionState(): void {
 	if (!started) return
-	const socket = socketOrNull()
-	if (socket) {
-		socket.off("state:get", onGet)
-		socket.off("state:ledger", onLedger)
-		socket.off("state:proposals", onProposals)
-		socket.off("state:changed", onChanged)
-		for (const e of SETTLED_EVENTS) socket.off(e, onSettled)
-		for (const e of ERROR_EVENTS) socket.off(e, onError)
-	}
+	for (const release of releases) release()
+	releases = []
+	changedRelease?.()
+	changedRelease = null
 	started = false
 }
 
@@ -205,9 +251,17 @@ function refresh(): void {
 		return
 	}
 	askedFor = openSessionId
-	socket.emit("state:get", { sessionId: openSessionId })
-	socket.emit("state:proposals", { sessionId: openSessionId })
-	socket.emit("state:ledger", { sessionId: openSessionId })
+	// Each reply is its request's own event, so these add no second subscriber
+	// (the handlers are the same references `start` declared) — what they add
+	// is the interest sync ahead of the request, which is what makes a gated
+	// reply reachable at all.
+	requestWithInterest("state:get", { sessionId: openSessionId }, onGet)
+	requestWithInterest(
+		"state:proposals",
+		{ sessionId: openSessionId },
+		onProposals
+	)
+	requestWithInterest("state:ledger", { sessionId: openSessionId }, onLedger)
 }
 
 /**
@@ -221,6 +275,10 @@ export function openSessionState(sessionId: number | null): void {
 	start()
 	if (sessionId === openSessionId) return
 	openSessionId = sessionId
+	// Ahead of the reads below: `refresh` flushes an interest sync before it
+	// sends its requests, and that sync should already name the new scope
+	// (plan ruling 3).
+	declareChanged()
 	askedFor = null
 	state = EMPTY
 	loaded = false
@@ -359,32 +417,29 @@ export function sessionState() {
 		) {
 			if (openSessionId == null) return
 			lastError = null
-			socketOrNull()?.emit("state:set", {
-				sessionId: openSessionId,
-				owner,
-				slotId,
-				value
-			})
+			requestWithInterest(
+				"state:set",
+				{ sessionId: openSessionId, owner, slotId, value },
+				onSettled
+			)
 		},
 		give(owner: Sockets.State.Owner, entryId: number, quantity = 1) {
 			if (openSessionId == null) return
 			lastError = null
-			socketOrNull()?.emit("state:give", {
-				sessionId: openSessionId,
-				owner,
-				entryId,
-				quantity
-			})
+			requestWithInterest(
+				"state:give",
+				{ sessionId: openSessionId, owner, entryId, quantity },
+				onSettled
+			)
 		},
 		take(owner: Sockets.State.Owner, entryId: number, quantity = 1) {
 			if (openSessionId == null) return
 			lastError = null
-			socketOrNull()?.emit("state:take", {
-				sessionId: openSessionId,
-				owner,
-				entryId,
-				quantity
-			})
+			requestWithInterest(
+				"state:take",
+				{ sessionId: openSessionId, owner, entryId, quantity },
+				onSettled
+			)
 		},
 		transfer(
 			from: Sockets.State.Owner,
@@ -394,18 +449,20 @@ export function sessionState() {
 		) {
 			if (openSessionId == null) return
 			lastError = null
-			socketOrNull()?.emit("state:transfer", {
-				sessionId: openSessionId,
-				from,
-				to,
-				entryId,
-				quantity
-			})
+			requestWithInterest(
+				"state:transfer",
+				{ sessionId: openSessionId, from, to, entryId, quantity },
+				onSettled
+			)
 		},
 		/** Accept or reject one held change. Nothing applies until this. */
 		decide(proposalId: number, accept: boolean) {
 			lastError = null
-			socketOrNull()?.emit("state:decide", { proposalId, accept })
+			requestWithInterest(
+				"state:decide",
+				{ proposalId, accept },
+				onSettled
+			)
 		}
 	}
 }

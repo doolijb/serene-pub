@@ -124,7 +124,7 @@ export async function variableOptionGate(
  * that the caller is operating a control this pipeline actually offers them —
  * the option handle resolves to one of this spec's declarations, that
  * declaration is a template reference, and the viewer may write it. The
- * returned `nodeTypeId` is then what the caller matches the target row against,
+ * returned `nodeDefinitionId` is then what the caller matches the target row against,
  * which is the real rule: you may edit a template through the setting that
  * renders it.
  */
@@ -135,13 +135,13 @@ export async function contextTemplateOptionGate(
 	viewer: Viewer,
 	id: string
 ): Promise<{
-	nodeTypeId: string
+	nodeDefinitionId: string
 	engine: string
 	engines: string[]
 	specId: number
 }> {
 	const { at, decl } = await locate(db, secret, slug, id)
-	if (decl.control !== "context-template-ref" || !decl.nodeTypeId)
+	if (decl.control !== "context-template-ref" || !decl.nodeDefinitionId)
 		throw new OptionNotFoundError(
 			"That setting does not choose a context template, so there is " +
 				"nothing here to edit."
@@ -154,7 +154,7 @@ export async function contextTemplateOptionGate(
 	)
 	const engines = acceptedEngines(decl)
 	return {
-		nodeTypeId: decl.nodeTypeId,
+		nodeDefinitionId: decl.nodeDefinitionId,
 		// The language a NEW template here is written in — the slot's first
 		// accepted engine. Returned rather than left to the caller because the
 		// caller would have to guess, and the only guess available is core's,
@@ -199,7 +199,7 @@ export async function promptOptionGate(
 	viewer: Viewer,
 	id: string
 ): Promise<{
-	nodeTypeId: string
+	nodeDefinitionId: string
 	slot: string
 	/** The declaration's own node, so a caller can re-check with `assertSelectable`. */
 	nodeKey: string
@@ -207,7 +207,7 @@ export async function promptOptionGate(
 	specVersionId: number
 }> {
 	const { at, decl } = await locate(db, secret, slug, id)
-	if (decl.control !== "prompts-ref" || !decl.nodeTypeId)
+	if (decl.control !== "prompts-ref" || !decl.nodeDefinitionId)
 		throw new OptionNotFoundError(
 			"That setting does not choose a prompt, so there is nothing here to " +
 				"edit."
@@ -227,7 +227,7 @@ export async function promptOptionGate(
 		decl.matrixSlot
 	)
 	return {
-		nodeTypeId: decl.nodeTypeId,
+		nodeDefinitionId: decl.nodeDefinitionId,
 		slot: decl.slot,
 		nodeKey: decl.nodeKey,
 		specId: at.specId,

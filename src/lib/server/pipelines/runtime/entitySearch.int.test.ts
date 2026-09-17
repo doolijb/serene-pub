@@ -280,14 +280,14 @@ describe("the mechanism ships inert", () => {
 		// never re-projected would still ship the old number.
 		const [row] = await db
 			.select()
-			.from(schema.pipelineTypeRegistry)
+			.from(schema.pipelineDefinitionRegistry)
 			.where(
 				and(
 					eq(
-						schema.pipelineTypeRegistry.typeId,
+						schema.pipelineDefinitionRegistry.definitionId,
 						"core:query/entity-search"
 					),
-					eq(schema.pipelineTypeRegistry.version, 1)
+					eq(schema.pipelineDefinitionRegistry.version, 1)
 				)
 			)
 			.limit(1)

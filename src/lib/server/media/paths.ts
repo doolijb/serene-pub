@@ -17,7 +17,6 @@ import type { MediaVariantName } from "$lib/shared/constants/MediaVisibility"
 export interface MediaProvenance {
 	userId: number
 	characterId?: number | null
-	personaId?: number | null
 	sessionId?: number | null
 	messageId?: number | null
 }
@@ -29,7 +28,7 @@ export function mediaRoot(): string {
 
 /**
  * Rule 1 — **deepest known parent wins**, in one fixed precedence applied
- * everywhere: message → session, character, persona, else a user-level bucket.
+ * everywhere: message → session, character, else a user-level bucket.
  *
  * Rule 6 — **import sources do not get their own tree.** A character card, an
  * ST folder import and a manual upload all land under the entity they produced.
@@ -43,8 +42,13 @@ function relDir(p: MediaProvenance, bucket?: string): string {
 		// stamp, not a separate place on disk.
 		return path.join(user, "sessions", String(p.sessionId ?? 0))
 	}
-	if (p.characterId) return path.join(user, "characters", String(p.characterId))
-	if (p.personaId) return path.join(user, "personas", String(p.personaId))
+	if (p.characterId)
+		return path.join(user, "characters", String(p.characterId))
+	// A persona is a character, so its files land beside every other
+	// character's. ⚠ A file whose stored path is under `personas/<id>/` STAYS
+	// THERE: `variants.path` is authoritative and re-parenting never moves a
+	// file (rule 2), so this function decides where NEW bytes go and nothing
+	// else.
 	return path.join(user, bucket ?? "uploads")
 }
 

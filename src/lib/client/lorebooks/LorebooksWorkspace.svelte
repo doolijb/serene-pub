@@ -3,9 +3,15 @@
 	import * as Icons from "@lucide/svelte"
 	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import {
+		declareInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
+	import { interestKey } from "$lib/shared/sockets/interest"
 	import { toaster } from "$lib/client/utils/toaster"
 	import EmptyState from "$lib/client/components/EmptyState.svelte"
 	import LorebookListItem from "$lib/client/components/listItems/LorebookListItem.svelte"
+	import PanelFilterInput from "$lib/client/components/panels/PanelFilterInput.svelte"
 	import LorebookUnsavedChangesModal from "$lib/client/components/modals/LorebookUnsavedChangesModal.svelte"
 	import {
 		CHARACTER_LORE_TYPE_ID,
@@ -29,6 +35,7 @@
 	import { drawingForLens } from "./graphs"
 	import { layoutModeFor } from "./layoutMode"
 	import { loreRoute } from "./loreRoute.svelte"
+	import { JUMP_CONTEXT, type JumpCtx } from "$lib/client/shell/jump.svelte"
 	import {
 		DEFAULT_LENS,
 		describeRoute,
@@ -39,7 +46,12 @@
 		type LoreLens,
 		type LoreScope
 	} from "./loreRoute"
-	import { emptyFilters, type PoolFilters } from "./poolFilter"
+	import {
+		emptyFilters,
+		filterPool,
+		SCENE_KIND,
+		type PoolFilters
+	} from "./poolFilter"
 	import {
 		bookIsEmpty,
 		CAST_KIND,
@@ -53,6 +65,7 @@
 	import {
 		bookPoolItems,
 		descriptorFor,
+		descriptorForKind,
 		SECTION_DESCRIPTORS
 	} from "./sections"
 	import type { EntryDecisions } from "./markers"
@@ -389,6 +402,65 @@
 		} satisfies Sockets.Entries.Counts.Params)
 	}
 
+	/**
+	 * Jump, scoped to this view.
+	 *
+	 * ⚠ This view has TWO search boxes, never both at once: the list of books
+	 * (`bookSearch`) before one is open, and the one inside a book (`search`,
+	 * the `[data-lore-search]` input) after. The registration branches on the
+	 * same `book` the layout does, so the overlay is always bound to the box
+	 * that is actually on screen and scoped to the list behind it — which is
+	 * what replaced this workspace's own ⌘K (see `onDestroy`).
+	 *
+	 * `label` and `placeholder` are getters, not strings, because the answer
+	 * changes as you open a book.
+	 */
+	const jumpCtx = getContext<JumpCtx | undefined>(JUMP_CONTEXT)
+	$effect(() =>
+		jumpCtx?.registerScope("lorebooks", {
+			get label() {
+				return book ? book.name : "Lorebooks"
+			},
+			get placeholder() {
+				return book ? "Search this book" : "Filter lorebooks"
+			},
+			getQuery: () => (book ? search : bookSearch),
+			setQuery: (next) => {
+				if (book) search = next
+				else bookSearch = next
+			},
+			getHits: () => {
+				if (!book)
+					return filteredLorebooks.map((l) => ({
+						kind: "lorebook" as const,
+						id: l.id,
+						title: l.name,
+						subtitle: l.description || undefined
+					}))
+				// The same arithmetic the sections below run, over the same
+				// pool and the same filters — a second rule here would be a
+				// second answer to "what is this book showing".
+				return filterPool(bookPool, filters, readInKeys ?? new Set())
+					.filter((item) => item.kind !== SCENE_KIND)
+					.map((item) => ({
+						kind: "entry" as const,
+						id: item.id,
+						title: item.name,
+						subtitle: descriptorForKind(item.kind)?.label,
+						parentId: book!.id
+					}))
+			},
+			onPick: (hit) => {
+				if (hit.kind === "entry")
+					void loreRoute.navigate({
+						type: "openEntry",
+						entryId: Number(hit.id)
+					})
+				else openBook(Number(hit.id))
+			}
+		})
+	)
+
 	function refreshBook() {
 		const id = route.lorebookId
 		if (id === null) return
@@ -399,20 +471,6 @@
 		refreshCounts()
 	}
 
-	/** ⌘K puts the cursor in whichever search box this layout mounted. */
-	function focusSearch(event: KeyboardEvent) {
-		if (event.key !== "k" || !(event.metaKey || event.ctrlKey)) return
-		const input =
-			document.querySelector<HTMLInputElement>("[data-lore-search]")
-		if (!input) return
-		event.preventDefault()
-		input.focus()
-		input.select()
-	}
-
-	// Named so `off` can name them too. A bare `socket.off("lorebooks:list")`
-	// removes EVERY listener for that event — including any other open
-	// lorebooks UI, not just this workspace's.
 	function handleLorebooksList(msg: Sockets.Lorebooks.List.Response) {
 		if (msg.lorebookList) {
 			lorebookList = msg.lorebookList
@@ -470,7 +528,8 @@
 		refreshBook()
 	}
 
-	// The list carries no lorebook id, and one book is open at a time.
+	// One book is open at a time, and the interest key already names it, so
+	// there is nothing left here to filter on.
 	function handleGraphList(msg: Sockets.NarrativeGraph.List.Response) {
 		graphNodes = msg.nodes
 		graphRelationships = msg.relationships
@@ -623,6 +682,70 @@
 		guardedChanges = managerMounted && tabHasUnsavedChanges
 	})
 
+	/**
+	 * Everything this workspace reads about the OPEN BOOK, scoped to it.
+	 *
+	 * One effect rather than nine, because all nine keys share one scope and
+	 * one lifetime: they are taken together when a book opens and dropped
+	 * together when the reader leaves it or opens another. With no book open
+	 * — the list of books — none of them is held at all, which is also what
+	 * every one of these handlers already did by returning early.
+	 *
+	 * An effect rather than `useInterest` for the same reason the
+	 * `sessionMessage` one above is: the key moves, and `useInterest` keeps
+	 * the key it was first given.
+	 *
+	 * The three entry writes are scoped on the book the written row belongs to
+	 * (`payload.entry.lorebookId`), which is the id their handlers already
+	 * refuse anything else on; `entries:delete` answers with neither the row
+	 * nor its type, so the server names the book beside it.
+	 */
+	$effect(() => {
+		const id = route.lorebookId
+		if (id === null) return
+		const releases = [
+			declareInterest<"entries:list">(
+				interestKey("entries:list", id),
+				handleEntriesList
+			),
+			declareInterest<"entries:create">(
+				interestKey("entries:create", id),
+				handleEntryCreated
+			),
+			declareInterest<"entries:update">(
+				interestKey("entries:update", id),
+				handleEntryUpdated
+			),
+			declareInterest<"entries:delete">(
+				interestKey("entries:delete", id),
+				handleEntryDeleted
+			),
+			declareInterest<"entries:counts">(
+				interestKey("entries:counts", id),
+				handleEntryCounts
+			),
+			declareInterest<"entries:recentDecisions">(
+				interestKey("entries:recentDecisions", id),
+				handleRecentDecisions
+			),
+			declareInterest<"lorebooks:bindingList">(
+				interestKey("lorebooks:bindingList", id),
+				handleBindingList
+			),
+			declareInterest<"scenes:listByLorebook">(
+				interestKey("scenes:listByLorebook", id),
+				handleScenesList
+			),
+			declareInterest<"narrativeGraph:list">(
+				interestKey("narrativeGraph:list", id),
+				handleGraphList
+			)
+		]
+		return () => {
+			for (const release of releases) release()
+		}
+	})
+
 	// The whole book, re-read whenever the book changes: the rail reports on
 	// every row rather than on the scope that happens to be open.
 	$effect(() => {
@@ -637,9 +760,11 @@
 	})
 
 	/**
-	 * ⚠ Emitted from an effect and answered on a listener registered in
-	 * `onMount`: the answer is a network round trip away, so the listener is
-	 * attached long before it can arrive, whichever of the two runs first.
+	 * ⚠ Emitted from an effect, and answered on a key the book-scoped effect
+	 * ABOVE takes. That order is the contract, not a coincidence: effects run
+	 * in creation order, so the key naming this book is already held — and
+	 * already synced, since the typed `emit` flushes the sync ahead of every
+	 * request — before this asks anything.
 	 */
 	$effect(() => {
 		const sessionId = markedSessionId
@@ -655,24 +780,57 @@
 			} satisfies Sockets.Entries.RecentDecisions.Params)
 	})
 
+	/**
+	 * A finished reply in the session that is READING this book — nothing else.
+	 *
+	 * The scope is `markedSessionId`, which is already the only session this
+	 * panel's handler acts on: the marks it re-reads say what happened in the
+	 * conversation the reader has open, so a book nothing is reading declares
+	 * nothing at all and a run in some other session leaves this workspace
+	 * alone. (`sessionMessage` is gated, so a declaration here is also what
+	 * makes the server broadcast to this tab in the first place.)
+	 *
+	 * An effect rather than `useInterest` because the key moves — a different
+	 * book, or the reader opening another session, changes the scope, and
+	 * `useInterest` would keep the key it was first given.
+	 */
+	$effect(() => {
+		const sessionId = markedSessionId
+		if (sessionId == null) return
+		return declareInterest<"sessionMessage">(
+			interestKey("sessionMessage", sessionId),
+			handleSessionMessage
+		)
+	})
+
+	/**
+	 * The lorebook attach/detach ack. BARE, not scoped: `sessions:setLorebook`
+	 * has no entry in `SCOPED_EVENTS`, so the handler's own
+	 * `msg.session.id !== openSessionCtx.sessionId` check stays the filter.
+	 */
+	useInterest<"sessions:setLorebook">(
+		"sessions:setLorebook",
+		handleSessionsSetLorebook
+	)
+
+	/**
+	 * The four BARE keys. The list of books is not about one book; the two
+	 * scene writes answer with the scene alone and name none; and an `:error`
+	 * is never gated (plan ruling 2) but still goes through the registry,
+	 * which is the only listener path. `scenes:delete` has no emitter
+	 * anywhere; the listener stays so that gaining one is not also gaining a
+	 * bug.
+	 */
+	useInterest<"lorebooks:list">("lorebooks:list", handleLorebooksList)
+	useInterest<"lorebooks:list:error">(
+		"lorebooks:list:error",
+		handleLorebooksListError
+	)
+	useInterest<"scenes:create">("scenes:create", handleSceneWritten)
+	useInterest<"scenes:delete">("scenes:delete", handleSceneWritten)
+
 	onMount(() => {
-		socket.on("lorebooks:list", handleLorebooksList)
-		socket.on("lorebooks:list:error", handleLorebooksListError)
-		socket.on("sessions:setLorebook", handleSessionsSetLorebook)
-		socket.on("entries:list", handleEntriesList)
-		socket.on("entries:create", handleEntryCreated)
-		socket.on("entries:update", handleEntryUpdated)
-		socket.on("entries:delete", handleEntryDeleted)
-		socket.on("entries:counts", handleEntryCounts)
-		socket.on("lorebooks:bindingList", handleBindingList)
-		socket.on("entries:recentDecisions", handleRecentDecisions)
-		socket.on("scenes:listByLorebook", handleScenesList)
-		socket.on("narrativeGraph:list", handleGraphList)
-		socket.on("scenes:create", handleSceneWritten)
-		socket.on("scenes:delete", handleSceneWritten)
-		socket.on("sessionMessage", handleSessionMessage)
 		socket.emit("lorebooks:list", {})
-		window.addEventListener("keydown", focusSearch)
 		const detachHash = loreRoute.attachHash()
 		const unregister = loreRoute.registerUnsavedChanges(
 			() => guardedChanges
@@ -688,22 +846,11 @@
 	})
 
 	onDestroy(() => {
-		socket.off("lorebooks:list", handleLorebooksList)
-		socket.off("lorebooks:list:error", handleLorebooksListError)
-		socket.off("sessions:setLorebook", handleSessionsSetLorebook)
-		socket.off("entries:list", handleEntriesList)
-		socket.off("entries:create", handleEntryCreated)
-		socket.off("entries:update", handleEntryUpdated)
-		socket.off("entries:delete", handleEntryDeleted)
-		socket.off("entries:counts", handleEntryCounts)
-		socket.off("lorebooks:bindingList", handleBindingList)
-		socket.off("entries:recentDecisions", handleRecentDecisions)
-		socket.off("scenes:listByLorebook", handleScenesList)
-		socket.off("narrativeGraph:list", handleGraphList)
-		socket.off("scenes:create", handleSceneWritten)
-		socket.off("scenes:delete", handleSceneWritten)
-		socket.off("sessionMessage", handleSessionMessage)
-		window.removeEventListener("keydown", focusSearch)
+		// Nothing to tear down: every listener this workspace holds is an
+		// interest key, and the registry releases them as its effects are
+		// destroyed. The shell's Jump overlay owns the ⌘K chord and, scoped to
+		// this view, drives the same `[data-lore-search]` cursor state (see
+		// the registration below), so the box fills as you type.
 	})
 </script>
 
@@ -925,13 +1072,12 @@
 				Import
 			</button>
 		</div>
-		<div class="mb-4 flex items-center gap-2">
-			<input
-				type="text"
-				placeholder="Search lorebooks..."
-				aria-label="Search lorebooks"
-				class="input"
+		<div class="mb-4">
+			<PanelFilterInput
 				bind:value={bookSearch}
+				placeholder="lorebooks"
+				count={lorebookList.length}
+				aria-label="Search lorebooks"
 			/>
 		</div>
 		<div class="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
@@ -1035,14 +1181,10 @@
 			{@render bookChip()}
 		</div>
 		<div class="mb-2 flex flex-col gap-2">
-			<input
-				class="input input-sm"
-				type="search"
+			<PanelFilterInput
+				bind:value={search}
 				data-lore-search
 				placeholder="Search this book"
-				aria-label="Search this book"
-				value={search}
-				oninput={(e) => (search = e.currentTarget.value)}
 			/>
 			{@render scopeChips()}
 		</div>

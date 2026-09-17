@@ -62,13 +62,8 @@ export interface ZoneDef {
 export interface ZoneLayout {
 	version: 1
 	zones: Record<string, ZoneDef>
-	/**
-	 * Message-column caps by container width — the conversation should not
-	 * become a 40-inch-wide bubble on a 4k screen. Same ascending-merge rule.
-	 */
-	messageRules?: Array<{ min: number; maxColRem?: number }>
 	/** Style packs (data-attributes on the root; plumbing for later packs). */
-	styles?: { chat?: string; composer?: string }
+	styles?: { chat?: string }
 }
 
 /** What a zone IS at the current width, after rules + pinning. */
@@ -99,12 +94,6 @@ export const DEFAULT_SIDE_RULES: Record<"left" | "right", ZoneRule[]> = {
 }
 
 export const DEFAULT_STRIP_RULES: ZoneRule[] = [{ min: 0, mode: "row" }]
-
-export const DEFAULT_MESSAGE_RULES: NonNullable<ZoneLayout["messageRules"]> = [
-	{ min: 0 },
-	{ min: 1900, maxColRem: 54 },
-	{ min: 2400, maxColRem: 58 }
-]
 
 /**
  * A fresh layout: exactly the three zones (PLAN 25) — Left, Middle, Right.
@@ -160,20 +149,6 @@ export function resolveZone(
 	return { id, def, mode, width: r.width, columns: r.columns }
 }
 
-export function resolveMessageCap(
-	layout: ZoneLayout,
-	containerWidth: number
-): number | undefined {
-	let cap: number | undefined
-	for (const rule of [...(layout.messageRules ?? DEFAULT_MESSAGE_RULES)].sort(
-		(a, b) => a.min - b.min
-	)) {
-		if (containerWidth < rule.min) break
-		cap = rule.maxColRem ?? cap
-	}
-	return cap
-}
-
 /* ── normalization ──────────────────────────────────────────────────── */
 
 /**
@@ -222,14 +197,14 @@ export function withoutWidget(layout: ZoneLayout, id: string): ZoneLayout {
 	return { ...layout, zones }
 }
 
-/* ── style packs (message + composer layouts) ───────────────────────── */
+/* ── style packs (message layouts) ──────────────────────────────────── */
 
 /**
  * A selectable "style pack". These skin the ONE feature-complete
- * SessionMessage / SessionComposer — same components, same data, same
- * behaviors; only presentation changes (mockup 2026-08-28: pure-CSS swaps via
- * a data-attribute, no re-render). New packs are additive: a plugin surface
- * later (the scriptable-CSS discussion) can register more the same way.
+ * SessionMessage — same component, same data, same behaviors; only presentation
+ * changes (mockup 2026-08-28: pure-CSS swaps via a data-attribute, no
+ * re-render). New packs are additive: a plugin surface later (the
+ * scriptable-CSS discussion) can register more the same way.
  */
 export interface StylePack {
 	id: string
@@ -241,7 +216,7 @@ export interface StylePack {
 export const MESSAGE_LAYOUTS: StylePack[] = [
 	{
 		id: "clean",
-		label: "Clean",
+		label: "Stage",
 		description: "The classic Serene Pub card — full-width, uncluttered."
 	},
 	{
@@ -267,48 +242,26 @@ export const MESSAGE_LAYOUTS: StylePack[] = [
 	}
 ]
 
-/** Composer layouts. */
-export const COMPOSER_LAYOUTS: StylePack[] = [
-	{
-		id: "classic",
-		label: "Classic",
-		description: "The standard composer with tabs and token meter."
-	},
-	{
-		id: "minimal",
-		label: "Minimal",
-		description: "A single-line pill; chrome tucked away."
-	},
-	{
-		id: "writer",
-		label: "Writer",
-		description: "A tall editor with room to draft long prose."
-	}
-]
-
 export const DEFAULT_CHAT_STYLE = "clean"
-export const DEFAULT_COMPOSER_STYLE = "classic"
 
-/** The effective style ids, falling back to defaults for anything unknown. */
-export function resolveStyles(layout: ZoneLayout): {
-	chat: string
-	composer: string
-} {
+/**
+ * The effective style id, falling back to the default for anything unknown.
+ *
+ * A blob written by an older build carries a second key naming a composer look.
+ * The composer's shape is a SETTING on the messages widget (`CORE_WIDGETS`), so
+ * there is no pack to resolve it to and the key is read past.
+ */
+export function resolveStyles(layout: ZoneLayout): { chat: string } {
 	const chat = MESSAGE_LAYOUTS.some((l) => l.id === layout.styles?.chat)
 		? layout.styles!.chat!
 		: DEFAULT_CHAT_STYLE
-	const composer = COMPOSER_LAYOUTS.some(
-		(l) => l.id === layout.styles?.composer
-	)
-		? layout.styles!.composer!
-		: DEFAULT_COMPOSER_STYLE
-	return { chat, composer }
+	return { chat }
 }
 
-/** Return a copy with one or both style slots patched. */
+/** Return a copy with the style slot patched. */
 export function withStyles(
 	layout: ZoneLayout,
-	patch: { chat?: string; composer?: string }
+	patch: { chat?: string }
 ): ZoneLayout {
 	return { ...layout, styles: { ...layout.styles, ...patch } }
 }

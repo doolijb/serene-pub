@@ -232,10 +232,10 @@ describe("a lore node's scan depth reaches the scan", () => {
 		expect(narrator["lore"]).toBe(DEFAULT_RETRIEVAL.scanDepth)
 	}, 60_000)
 
-	it("a configured value reaches the lane that was configured, and only it", async () => {
+	it("a value configured on the owner lane reaches all three lanes (R-7 P2)", async () => {
 		// The assertion the unwired slot could not fail: an unwired `params`
-		// resolves to nothing regardless of what is stored, so both numbers
-		// below came back as the engine default and the two lanes agreed.
+		// resolves to nothing regardless of what is stored, so every number
+		// below came back as the engine default however the row read.
 		const configId = await selectedConfigId(
 			RESPOND_SPEC_ID,
 			respondSpecRow.id
@@ -251,14 +251,13 @@ describe("a lore node's scan depth reaches the scan", () => {
 		try {
 			const depths = await scanned(respondSpec(), RESPOND_SPEC_ID)
 			expect(depths["gather.worldLore.read"]).toBe(4)
-			// Each lane owns its own row (F20). One node's number reaching the
-			// others would be the same defect wearing the opposite sign.
-			expect(depths["gather.characterLore.read"]).toBe(
-				DEFAULT_RETRIEVAL.scanDepth
-			)
-			expect(depths["gather.historyEntries.read"]).toBe(
-				DEFAULT_RETRIEVAL.scanDepth
-			)
+			// One owner per setting per spec (R-7 P2, ruled 2026-09-15): the
+			// world-lore lane owns the seven knobs and the other two read them
+			// through `slot.params({ node })`. Until 2026-09-16 each lane held
+			// its own row and this asserted the opposite — three "Scan depth"
+			// controls a person had to tune three times.
+			expect(depths["gather.characterLore.read"]).toBe(4)
+			expect(depths["gather.historyEntries.read"]).toBe(4)
 		} finally {
 			// And the restore is a delete: writing the declared number back
 			// would leave a row the next reconcile sweeps, so the restore and
@@ -306,7 +305,7 @@ describe("a lore node's guaranteed window reaches the scan", () => {
 		expect(narrator["lore"]).toBe(DEFAULT_RETRIEVAL.guaranteedMessages)
 	}, 60_000)
 
-	it("a configured value reaches the lane that was configured, and only it", async () => {
+	it("a value configured on the owner lane reaches all three lanes (R-7 P2)", async () => {
 		const configId = await selectedConfigId(
 			RESPOND_SPEC_ID,
 			respondSpecRow.id
@@ -327,13 +326,9 @@ describe("a lore node's guaranteed window reaches the scan", () => {
 				"guaranteedMessages"
 			)
 			expect(windows["gather.worldLore.read"]).toBe(3)
-			// Each lane owns its own row (F20), exactly as `scanDepth` does.
-			expect(windows["gather.characterLore.read"]).toBe(
-				DEFAULT_RETRIEVAL.guaranteedMessages
-			)
-			expect(windows["gather.historyEntries.read"]).toBe(
-				DEFAULT_RETRIEVAL.guaranteedMessages
-			)
+			// One owner (R-7 P2), exactly as `scanDepth` does.
+			expect(windows["gather.characterLore.read"]).toBe(3)
+			expect(windows["gather.historyEntries.read"]).toBe(3)
 			// ⚠ And it did not move the *other* window. The whole reason these
 			// are two controls is that one install wants a deep scan and a
 			// short guarantee; a change that moved both would be the shared
@@ -374,11 +369,11 @@ describe("the declared scan depth and the engine's fallback are one number", () 
 		for (const typeId of LORE_TYPES) {
 			const [row] = await db
 				.select()
-				.from(schema.pipelineTypeRegistry)
+				.from(schema.pipelineDefinitionRegistry)
 				.where(
 					and(
-						eq(schema.pipelineTypeRegistry.typeId, typeId),
-						eq(schema.pipelineTypeRegistry.version, 1)
+						eq(schema.pipelineDefinitionRegistry.definitionId, typeId),
+						eq(schema.pipelineDefinitionRegistry.version, 1)
 					)
 				)
 				.limit(1)

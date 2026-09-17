@@ -8,11 +8,17 @@
  * session presets → a user picks a preset and starts a session, with optional
  * overrides.
  */
+import { sessionEvents } from "@serene-pub/sdk"
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { asc, desc, eq, inArray, sql } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
-import { listSessionGenres } from "$lib/server/pipelines/entities/sessionGenres"
+import {
+	listGenreActions,
+	listSessionGenres,
+	normalizeIncludedActions,
+	promoteIncludedActions
+} from "$lib/server/pipelines/entities/sessionGenres"
 
 const adminOnly = (socket: any) => {
 	if (!socket.user?.isAdmin) throw new Error("Unauthorized")
@@ -64,7 +70,8 @@ const presetRow = (
 	primarySlug: p.primarySlug ?? null,
 	configSelections: (p.configSelections ?? {}) as Record<string, number>,
 	includedActions: (p.includedActions ?? null) as string[] | null,
-	defaults: (p.defaults ?? null) as Sockets.SessionAdmin.PresetDefaults | null,
+	defaults: (p.defaults ??
+		null) as Sockets.SessionAdmin.PresetDefaults | null,
 	enabled: p.enabled,
 	isDefault: p.isDefault,
 	isImmutable: p.isImmutable,
@@ -76,6 +83,72 @@ const presetRow = (
 
 /* ── types ──────────────────────────────────────────────────────────── */
 
+/**
+ * Every genre with its settings, preset count and create pipeline.
+ *
+ * Split out of the handler below so the one cascade that re-sends it
+ * (`sessionGenres:update`) can hand it to `emitToUser` as a thunk
+ * (socket-interest plan, ruling 4): ONE source of truth for the payload, and
+ * the four reads behind it — the registry, the settings, the preset counts and
+ * every spec version's input lock — are paid only when some socket declared the
+ * key. Skipping the emit alone would save nothing; those reads are the cost.
+ */
+async function buildSessionGenres(): Promise<Sockets.SessionAdmin.Genres.Response> {
+	const modes = await listSessionGenres(db)
+	const settings = await db.select().from(schema.sessionGenreSettings)
+	const presets = await db
+		.select({
+			genreId: schema.sessionPresets.genreId,
+			n: sql<number>`count(*)`.mapWith(Number)
+		})
+		.from(schema.sessionPresets)
+		.groupBy(schema.sessionPresets.genreId)
+	const countBy = new Map(presets.map((p) => [p.genreId, p.n]))
+	const settingBy = new Map((settings as any[]).map((s) => [s.genreId, s]))
+	// A genre's create pipeline (24 §3), for the workspace link — via the
+	// input lock: the spec whose active version answers session-created
+	// for that genre. Transitional input-type genres have none.
+	const specRows = await db
+		.select({
+			slug: schema.pipelineSpecs.slug,
+			activeVersionId: schema.pipelineSpecs.activeVersionId,
+			versionId: schema.pipelineSpecVersions.id,
+			inputGenre: schema.pipelineSpecVersions.inputGenre,
+			inputEvent: schema.pipelineSpecVersions.inputEvent
+		})
+		.from(schema.pipelineSpecs)
+		.innerJoin(
+			schema.pipelineSpecVersions,
+			eq(schema.pipelineSpecVersions.specId, schema.pipelineSpecs.id)
+		)
+	const createSpecByGenre = new Map<string, string>(
+		(specRows as any[])
+			.filter(
+				(r) =>
+					r.activeVersionId === r.versionId &&
+					r.inputEvent === sessionEvents.sessionCreated &&
+					r.inputGenre
+			)
+			.map((r) => [r.inputGenre, r.slug])
+	)
+	const res: Sockets.SessionAdmin.Genres.Response = {
+		genres: modes.map((m) => {
+			const st = settingBy.get(m.genreId)
+			return {
+				slug: m.genreId,
+				name: m.name,
+				description: m.description ?? "",
+				family: (m as any).family ?? "",
+				enabled: st ? !!st.enabled : true,
+				defaultPresetId: st?.defaultPresetId ?? null,
+				presetCount: countBy.get(m.genreId) ?? 0,
+				createSpecSlug: createSpecByGenre.get(m.genreId) ?? null
+			}
+		})
+	}
+	return res
+}
+
 export const sessionGenresList: Handler<
 	Sockets.SessionAdmin.Genres.Params,
 	Sockets.SessionAdmin.Genres.Response
@@ -83,63 +156,7 @@ export const sessionGenresList: Handler<
 	event: "sessionGenres:list",
 	handler: async (socket, _params, emitToUser) => {
 		adminOnly(socket)
-		const modes = await listSessionGenres(db)
-		const settings = await db.select().from(schema.sessionGenreSettings)
-		const presets = await db
-			.select({
-				genreId: schema.sessionPresets.genreId,
-				n: sql<number>`count(*)`.mapWith(Number)
-			})
-			.from(schema.sessionPresets)
-			.groupBy(schema.sessionPresets.genreId)
-		const countBy = new Map(presets.map((p) => [p.genreId, p.n]))
-		const settingBy = new Map(
-			(settings as any[]).map((s) => [s.genreId, s])
-		)
-		// A genre's create pipeline (24 §3), for the workspace link — via the
-		// input lock: the spec whose active version answers session-created
-		// for that genre. Transitional input-type genres have none.
-		const specRows = await db
-			.select({
-				slug: schema.pipelineSpecs.slug,
-				activeVersionId: schema.pipelineSpecs.activeVersionId,
-				versionId: schema.pipelineSpecVersions.id,
-				inputGenre: schema.pipelineSpecVersions.inputGenre,
-				inputEvent: schema.pipelineSpecVersions.inputEvent
-			})
-			.from(schema.pipelineSpecs)
-			.innerJoin(
-				schema.pipelineSpecVersions,
-				eq(
-					schema.pipelineSpecVersions.specId,
-					schema.pipelineSpecs.id
-				)
-			)
-		const createSpecByGenre = new Map<string, string>(
-			(specRows as any[])
-				.filter(
-					(r) =>
-						r.activeVersionId === r.versionId &&
-						r.inputEvent === "session-created" &&
-						r.inputGenre
-				)
-				.map((r) => [r.inputGenre, r.slug])
-		)
-		const res: Sockets.SessionAdmin.Genres.Response = {
-			genres: modes.map((m) => {
-				const st = settingBy.get(m.genreId)
-				return {
-					slug: m.genreId,
-					name: m.name,
-					description: m.description ?? "",
-					family: (m as any).family ?? "",
-					enabled: st ? !!st.enabled : true,
-					defaultPresetId: st?.defaultPresetId ?? null,
-					presetCount: countBy.get(m.genreId) ?? 0,
-					createSpecSlug: createSpecByGenre.get(m.genreId) ?? null
-				}
-			})
-		}
+		const res = await buildSessionGenres()
 		emitToUser("sessionGenres:list", res)
 		return res
 	}
@@ -165,7 +182,10 @@ export const sessionGenresUpdate: Handler<
 			})
 		const res = { slug: params.slug, ok: true }
 		emitToUser("sessionGenres:update", res)
-		await sessionGenresList.handler(socket, {}, emitToUser)
+		// LAZY (socket-interest plan, ruling 4): a re-list nobody asked for,
+		// so the four reads behind it are paid only where a genre list is
+		// open. Skipping the emit alone would save nothing.
+		await emitToUser("sessionGenres:list", () => buildSessionGenres())
 		return res
 	}
 }
@@ -246,7 +266,8 @@ export const sessionGenresDetail: Handler<
 			.where(eq(schema.sessions.genreId, params.genreId))
 
 		const createSpecSlug =
-			active.find((r) => r.inputEvent === "session-created")?.slug ?? null
+			active.find((r) => r.inputEvent === sessionEvents.sessionCreated)?.slug ??
+			null
 
 		const staleByPreset = await staleBindingsByPreset(
 			(presetRows as any[]).map((p) => p.id)
@@ -274,51 +295,61 @@ export const sessionGenresDetail: Handler<
 
 /* ── presets ────────────────────────────────────────────────────────── */
 
+/**
+ * The presets, as one caller may be shown them.
+ *
+ * Split out for the same reason as `buildSessionGenres`: the three write
+ * cascades below re-send this list, and the stale-binding scan behind it runs
+ * per preset. `isAdmin` rides along because it decides which presets the
+ * recipient may be offered — an administrator sees the whole table, everyone
+ * else the picker's cut.
+ */
+async function buildSessionPresets(
+	isAdmin: boolean
+): Promise<Sockets.SessionAdmin.Presets.Response> {
+	const rows = await db
+		.select()
+		.from(schema.sessionPresets)
+		.orderBy(asc(schema.sessionPresets.id))
+	const staleByPreset = await staleBindingsByPreset(
+		(rows as any[]).map((r) => r.id)
+	)
+	let out = (rows as any[]).map((r) => presetRow(r, staleByPreset.get(r.id)))
+	// The picker's cut: a non-admin sees only what they may start.
+	if (!isAdmin) {
+		const settings = await db.select().from(schema.sessionGenreSettings)
+		const disabledTypes = new Set(
+			(settings as any[]).filter((s) => !s.enabled).map((s) => s.genreId)
+		)
+		// Withdrawn beside enabled (0119): a plugin's preset that lost its
+		// plugin drops out of the picker the same way a disabled one does,
+		// while staying in the admin list and on the sessions that named it.
+		const withdrawn = new Set(
+			(rows as any[])
+				.filter((r) => r.withdrawnAt != null)
+				.map((r) => r.id)
+		)
+		out = out.filter(
+			(p) =>
+				p.enabled &&
+				!disabledTypes.has(p.genreId) &&
+				!withdrawn.has(p.id)
+		)
+	}
+	return { presets: out }
+}
+
 export const sessionPresetsList: Handler<
 	Sockets.SessionAdmin.Presets.Params,
 	Sockets.SessionAdmin.Presets.Response
 > = {
 	event: "sessionPresets:list",
 	handler: async (socket, _params, emitToUser) => {
-		const rows = await db
-			.select()
-			.from(schema.sessionPresets)
-			.orderBy(asc(schema.sessionPresets.id))
-		const staleByPreset = await staleBindingsByPreset(
-			(rows as any[]).map((r) => r.id)
-		)
-		let out = (rows as any[]).map((r) =>
-			presetRow(r, staleByPreset.get(r.id))
-		)
-		// The picker's cut: a non-admin sees only what they may start.
-		if (!socket.user?.isAdmin) {
-			const settings = await db.select().from(schema.sessionGenreSettings)
-			const disabledTypes = new Set(
-				(settings as any[])
-					.filter((s) => !s.enabled)
-					.map((s) => s.genreId)
-			)
-			// Withdrawn beside enabled (0119): a plugin's preset that lost its
-			// plugin drops out of the picker the same way a disabled one does,
-			// while staying in the admin list and on the sessions that named it.
-			const withdrawn = new Set(
-				(rows as any[])
-					.filter((r) => r.withdrawnAt != null)
-					.map((r) => r.id)
-			)
-			out = out.filter(
-				(p) =>
-					p.enabled &&
-					!disabledTypes.has(p.genreId) &&
-					!withdrawn.has(p.id)
-			)
-		}
-		const res = { presets: out }
+		const res = await buildSessionPresets(!!socket.user?.isAdmin)
 		emitToUser("sessionPresets:list", res)
 		return res
 	}
 }
-
 
 /**
  * Validate a preset's event bindings against the input locks (24 §4) and the
@@ -349,11 +380,10 @@ async function validateBindings(
 	const active = (specRows as any[]).filter(
 		(r) => r.activeVersionId === r.versionId && r.status === "published"
 	)
-	const events =
-		(active.find(
-			(r) =>
-				r.inputGenre === genreId && r.inputEvent === "session-created"
-		)?.genre?.events ?? {}) as Record<
+	const events = (active.find(
+		(r) =>
+			r.inputGenre === genreId && r.inputEvent === sessionEvents.sessionCreated
+	)?.genre?.events ?? {}) as Record<
 		string,
 		{ required?: boolean; open?: boolean }
 	>
@@ -411,14 +441,27 @@ export const sessionPresetsCreate: Handler<
 				.from(schema.sessionPresets)
 				.where(eq(schema.sessionPresets.id, params.fromPresetId))
 				.limit(1)
-			if (from)
+			if (from) {
+				// The copied included set is promoted, never refused (third
+				// pass, S1): a source row may still carry a bare key from
+				// before identities, and the copy is the one chance to land
+				// it as the identity — refusing would lose a curation somebody
+				// made; writing it verbatim would copy the debt. What cannot
+				// be promoted stays bare, served by the ⏳ fallback.
+				const copied = (from as any).includedActions
 				base = {
 					bindings: (from as any).bindings,
 					primarySlug: (from as any).primarySlug,
 					configSelections: (from as any).configSelections,
-					includedActions: (from as any).includedActions,
+					includedActions: Array.isArray(copied)
+						? promoteIncludedActions(
+								await listGenreActions(db, params.genreId),
+								copied.map(String)
+							).included
+						: copied,
 					defaults: (from as any).defaults
 				}
+			}
 		}
 		// A bare preset starts with the locks' answers, so the form opens
 		// with every slot the instance can fill already filled.
@@ -427,7 +470,10 @@ export const sessionPresetsCreate: Handler<
 				"$lib/server/pipelines/runtime/sessionEvents"
 			)
 			const bindings: Record<string, { spec: string }> = {}
-			for (const event of ["session-created", "message-respond"]) {
+			for (const event of [
+				sessionEvents.sessionCreated,
+				sessionEvents.messageRespond
+			]) {
 				const spec = await resolveSessionEventSpec(
 					db,
 					params.genreId,
@@ -452,7 +498,10 @@ export const sessionPresetsCreate: Handler<
 			.returning()
 		const res = { preset: presetRow(row as any) }
 		emitToUser("sessionPresets:create", res)
-		await sessionPresetsList.handler(socket, {}, emitToUser)
+		// LAZY, like the genre re-list above.
+		await emitToUser("sessionPresets:list", () =>
+			buildSessionPresets(!!socket.user?.isAdmin)
+		)
 		return res
 	}
 }
@@ -476,11 +525,12 @@ export const sessionPresetsUpdate: Handler<
 		}
 		// The bindings contract (24 §4): validated like the modder's preset().
 		const nextBindings =
-			(params.bindings ??
-				((existing as any).bindings as Record<
-					string,
-					{ spec: string; config?: number }
-				>)) ?? {}
+			params.bindings ??
+			((existing as any).bindings as Record<
+				string,
+				{ spec: string; config?: number }
+			>) ??
+			{}
 		const nextEnabled = params.enabled ?? !!(existing as any).enabled
 		{
 			const refusal = await validateBindings(
@@ -509,8 +559,25 @@ export const sessionPresetsUpdate: Handler<
 				patch.primarySlug = params.primarySlug
 			if (params.configSelections !== undefined)
 				patch.configSelections = params.configSelections
-			if (params.includedActions !== undefined)
-				patch.includedActions = params.includedActions
+			// The included set is stored by identity (W-A): validated against
+			// what the genre is offered, a bare function key landing as the
+			// companion's identity (⏳) and anything else refused by name —
+			// the same normaliser `setPresetActions` runs on the legacy squat.
+			if (params.includedActions !== undefined) {
+				if (params.includedActions === null) patch.includedActions = null
+				else {
+					const normalized = normalizeIncludedActions(
+						await listGenreActions(db, (existing as any).genreId),
+						params.includedActions
+					)
+					if (!normalized.ok) {
+						const res = { error: normalized.error }
+						emitToUser("sessionPresets:update:error", res)
+						return res
+					}
+					patch.includedActions = normalized.included
+				}
+			}
 			// The creation pre-fill (23 §9). `null` clears it; absent leaves it
 			// alone — the same reset-is-explicit rule the rest of this patch
 			// follows, so "the admin cleared every field" and "the admin sent
@@ -547,7 +614,10 @@ export const sessionPresetsUpdate: Handler<
 		}
 		const res = { preset: presetRow(row as any) }
 		emitToUser("sessionPresets:update", res)
-		await sessionPresetsList.handler(socket, {}, emitToUser)
+		// LAZY, like the genre re-list above.
+		await emitToUser("sessionPresets:list", () =>
+			buildSessionPresets(!!socket.user?.isAdmin)
+		)
 		return res
 	}
 }
@@ -581,7 +651,10 @@ export const sessionPresetsDelete: Handler<
 			.where(eq(schema.sessionPresets.id, params.id))
 		const res = { id: params.id, ok: true }
 		emitToUser("sessionPresets:delete", res)
-		await sessionPresetsList.handler(socket, {}, emitToUser)
+		// LAZY, like the genre re-list above.
+		await emitToUser("sessionPresets:list", () =>
+			buildSessionPresets(!!socket.user?.isAdmin)
+		)
 		return res
 	}
 }

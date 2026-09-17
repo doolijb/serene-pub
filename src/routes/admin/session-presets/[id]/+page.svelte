@@ -11,15 +11,24 @@
 	 * built-ins accept availability flags only — duplicate to change what
 	 * they bind.
 	 */
-	import { getContext, onDestroy, onMount } from "svelte"
+	import { getContext, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { goto } from "$app/navigation"
 	import { page } from "$app/state"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import {
+		getAdminInterestContext,
+		requestWithInterest
+	} from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
+	import { eventDisplayName } from "$lib/client/utils/eventName"
 
 	const userCtx: { user: SelectUser } = getContext("userCtx")
 	const socket = useTypedSocket()
+	// The admin-only half of the registry (plan ruling 6b) for the restricted
+	// `sessionGenres:` family; `pipelines:configsIndex` below is a MIXED
+	// family and goes through the app-wide module functions.
+	const interest = getAdminInterestContext()
 	let id = $derived(Number(page.params.id))
 
 	type Row = Sockets.SessionAdmin.PresetRow
@@ -173,24 +182,55 @@
 	}
 
 	onMount(() => {
-		if (!userCtx.user?.isAdmin) {
-			goto("/")
-			return
-		}
-		socket.on("sessionPresets:list", onPresets)
-		socket.on("sessionGenres:detail", onDetail)
-		socket.on("pipelines:configsIndex", onConfigs)
-		socket.on("sessionPresets:update:error", onError)
-		socket.on("sessionPresets:delete:error", onError)
-		socket.emit("sessionPresets:list", {})
-		socket.emit("pipelines:configsIndex", {})
+		if (!userCtx.user?.isAdmin) goto("/")
 	})
-	onDestroy(() => {
-		socket.off("sessionPresets:list", onPresets)
-		socket.off("sessionGenres:detail", onDetail)
-		socket.off("pipelines:configsIndex", onConfigs)
-		socket.off("sessionPresets:update:error", onError)
-		socket.off("sessionPresets:delete:error", onError)
+
+	/**
+	 * The preset list this form picks its row out of, asked for and listened
+	 * for in one, plus the genre's event surface and the two refusals a save
+	 * or a delete can come back with. All BARE — neither event has a
+	 * `SCOPED_EVENTS` entry, so a key naming the id or the genre would match
+	 * no payload at all.
+	 *
+	 * `sessionPresets:list` is STANDING: the server re-emits it after every
+	 * write, which is how this form shows what it just saved.
+	 * `sessionGenres:detail` is requested by the `row` effect above — it can
+	 * only ask once the row names a genre, which is a round trip after this
+	 * key exists.
+	 */
+	$effect(() => {
+		if (!userCtx.user?.isAdmin) return
+		const releases = [
+			interest.declareInterest<"sessionGenres:detail">(
+				"sessionGenres:detail",
+				onDetail
+			),
+			interest.declareInterest<"sessionPresets:update:error">(
+				"sessionPresets:update:error",
+				onError
+			),
+			interest.declareInterest<"sessionPresets:delete:error">(
+				"sessionPresets:delete:error",
+				onError
+			),
+			interest.requestWithInterest("sessionPresets:list", {}, onPresets)
+		]
+		return () => {
+			for (const release of releases) release()
+		}
+	})
+
+	/**
+	 * The configurations a binding may name, asked for and listened for in one.
+	 * BARE — the index spans every pipeline.
+	 *
+	 * The app-wide registry, not `adminInterest`: `pipelines:` is a MIXED
+	 * family — most of its handlers answer every user — so this is an ordinary
+	 * key, and the admin check here is the same one the redirect above makes.
+	 */
+	$effect(() => {
+		if (!userCtx.user?.isAdmin) return
+		return requestWithInterest("pipelines:configsIndex", {}, onConfigs)
 	})
 
 	function save() {
@@ -282,7 +322,9 @@
 					<ul class="flex flex-col gap-0.5 text-xs">
 						{#each row.staleBindings as b (b.event)}
 							<li>
-								<code class="font-mono">{b.event}</code>
+								<span class="font-medium" title={b.event}>
+									{eventDisplayName(b.event)}
+								</span>
 								is bound to
 								<code class="font-mono">{b.bound}</code>
 								— {b.reason}
@@ -384,8 +426,8 @@
 					class="border-surface-300-700 flex flex-col gap-2 rounded-md border p-3"
 				>
 					<div class="flex items-center gap-2">
-						<span class="font-mono text-xs font-semibold">
-							{slot.event}
+						<span class="text-sm font-semibold" title={slot.event}>
+							{eventDisplayName(slot.event)}
 						</span>
 						{#if slot.required}
 							<span
@@ -553,8 +595,8 @@
 				<Icons.TriangleAlert size={16} class="mt-0.5 shrink-0" />
 				<p class="text-sm">
 					An enabled preset must bind its required slots — missing:
-					<span class="font-mono text-xs">
-						{missingRequired.join(", ")}</span
+					<span class="font-medium" title={missingRequired.join(", ")}>
+						{missingRequired.map(eventDisplayName).join(", ")}</span
 					>. The server will refuse this save.
 				</p>
 			</div>

@@ -19,11 +19,11 @@
 	 * contents on every boot, so an edit would be reverted at the next restart
 	 * with nothing to catch it. Clone is the way to a variant.
 	 */
-	import { onDestroy, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { goto } from "$app/navigation"
 	import { page } from "$app/state"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { getInterestContext } from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { PromptBlockFormatter } from "$lib/shared/utils/PromptBlockFormatter"
 	import {
@@ -36,6 +36,7 @@
 	import { refreshCompletionTemplateOptions } from "$lib/client/stores/completionTemplateOptions.svelte"
 
 	const socket = useTypedSocket()
+	const interest = getInterestContext()
 	let id = $derived(Number(page.params.id))
 
 	let row = $state<SelectCompletionTemplate | null>(null)
@@ -197,25 +198,62 @@
 		toaster.error({ title: res.error ?? "The server refused the edit." })
 	}
 
-	onMount(() => {
-		socket.on("completionTemplates:get", handleGet)
-		socket.on("completionTemplates:get:error", handleGetError)
-		socket.on("completionTemplates:update", handleUpdate)
-		socket.on("completionTemplates:update:error", handleError)
-		socket.on("completionTemplates:clone", handleClone)
-		socket.on("completionTemplates:clone:error", handleError)
-		socket.on("completionTemplates:delete", handleDelete)
-		socket.on("completionTemplates:delete:error", handleError)
-	})
-	onDestroy(() => {
-		socket.off("completionTemplates:get", handleGet)
-		socket.off("completionTemplates:get:error", handleGetError)
-		socket.off("completionTemplates:update", handleUpdate)
-		socket.off("completionTemplates:update:error", handleError)
-		socket.off("completionTemplates:clone", handleClone)
-		socket.off("completionTemplates:clone:error", handleError)
-		socket.off("completionTemplates:delete", handleDelete)
-		socket.off("completionTemplates:delete:error", handleError)
+	/**
+	 * This form's eight keys, all BARE and all STANDING — exactly what the
+	 * `onMount`/`onDestroy` pair they replace held.
+	 *
+	 * BARE because `completionTemplates:get` has no entry in `SCOPED_EVENTS`,
+	 * so a key naming the id would match no payload at all; the id in the URL
+	 * is the only thing that decides which row was asked for. STANDING because
+	 * `get` is re-requested by the effect below on every `[id]` change, and the
+	 * three writes answer whenever the person presses Save, Clone or Delete.
+	 * The four refusals are declared too, and never gated.
+	 *
+	 * Declared BEFORE the fetch effect below so the keys exist when its first
+	 * emit goes out: Svelte runs user effects in creation order.
+	 *
+	 * The app-wide interest context, not `adminInterest`: `completionTemplates:`
+	 * is not a restricted interest family, and the admin gate is the one
+	 * `/admin/+layout.svelte` already makes.
+	 */
+	$effect(() => {
+		const releases = [
+			interest.declareInterest<"completionTemplates:get">(
+				"completionTemplates:get",
+				handleGet
+			),
+			interest.declareInterest<"completionTemplates:get:error">(
+				"completionTemplates:get:error",
+				handleGetError
+			),
+			interest.declareInterest<"completionTemplates:update">(
+				"completionTemplates:update",
+				handleUpdate
+			),
+			interest.declareInterest<"completionTemplates:update:error">(
+				"completionTemplates:update:error",
+				handleError
+			),
+			interest.declareInterest<"completionTemplates:clone">(
+				"completionTemplates:clone",
+				handleClone
+			),
+			interest.declareInterest<"completionTemplates:clone:error">(
+				"completionTemplates:clone:error",
+				handleError
+			),
+			interest.declareInterest<"completionTemplates:delete">(
+				"completionTemplates:delete",
+				handleDelete
+			),
+			interest.declareInterest<"completionTemplates:delete:error">(
+				"completionTemplates:delete:error",
+				handleError
+			)
+		]
+		return () => {
+			for (const release of releases) release()
+		}
 	})
 
 	/**
@@ -228,8 +266,8 @@
 	 * pointed at something other than what it says it is editing, which then
 	 * SAVES to the id in the URL.
 	 *
-	 * Declared AFTER `onMount` so the listeners are registered before the first
-	 * emit: Svelte runs user effects in creation order, and `onMount` is one.
+	 * Declared AFTER the interest effect above so every key is held before the
+	 * first emit: Svelte runs user effects in creation order.
 	 *
 	 * `loadedId` is a plain `let`, deliberately — it is this effect's own
 	 * bookkeeping, and making it reactive would have the effect re-run itself.

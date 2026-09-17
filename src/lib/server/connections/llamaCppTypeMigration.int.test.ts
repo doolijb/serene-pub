@@ -60,18 +60,29 @@ beforeAll(async () => {
  * existed or not.
  */
 async function migrated(overrides: Record<string, unknown> = {}) {
+	// `connections` carries no model since the per-connection default went
+	// away: a `model` override names a `connection_models` row instead, so it
+	// is separated before the endpoint insert.
+	const { model: modelIdentifier, ...endpointOverrides } = overrides
 	const [row] = await db
 		.insert(schema.connections)
 		.values({
 			name: `fixture ${JSON.stringify(overrides)}`,
 			type: CONNECTION_TYPE.LLAMACPP,
 			baseUrl: "http://localhost:8080",
-			model: "m",
 			extraJson: {},
 			capabilities: {},
-			...overrides
+			...endpointOverrides
 		})
 		.returning()
+	if (typeof modelIdentifier === "string" && modelIdentifier) {
+		await db.insert(schema.connectionModels).values({
+			connectionId: row.id,
+			model: modelIdentifier,
+			name: modelIdentifier,
+			enabled: true
+		})
+	}
 	await db.execute(
 		sql`UPDATE connections SET type = ${OLD_TYPE} WHERE id = ${row.id}`
 	)
@@ -112,7 +123,13 @@ describe("0105 carries a llama.cpp connection onto the service type id", () => {
 		// rather than replacing them.
 		expect(row.name).toBe("my llama server")
 		expect(row.baseUrl).toBe("http://192.168.1.9:8080")
-		expect(row.model).toBe("qwen3-30b.gguf")
+		// The model identifier lives on its own `connection_models` row now,
+		// so the rename leaving it alone means the row still names it.
+		const models = await db
+			.select()
+			.from(schema.connectionModels)
+			.where(eq(schema.connectionModels.connectionId, row.id))
+		expect(models.map((m) => m.model)).toEqual(["qwen3-30b.gguf"])
 		expect(row.promptFormat).toBe("chatml")
 		expect(row.extraJson).toEqual({ stream: true })
 		expect((row.capabilities as any).overrides).toEqual({
@@ -153,7 +170,6 @@ describe("0105 carries a llama.cpp connection onto the service type id", () => {
 				name: "untouched ollama",
 				type: CONNECTION_TYPE.OLLAMA,
 				baseUrl: "http://localhost:11434",
-				model: "llama3",
 				extraJson: {},
 				capabilities: {}
 			})

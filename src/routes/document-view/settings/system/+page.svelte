@@ -2,6 +2,10 @@
 	import { onMount, getContext } from "svelte"
 	import { embeddingsStarred } from "$lib/shared/constants/embeddings"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import {
+		requestWithInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
 	import { announce } from "$lib/client/accessibility/state.svelte"
 
 	const socket = useTypedSocket()
@@ -172,81 +176,98 @@
 		socket.emit("cardSources:charaVault:status", {})
 	}
 
-	onMount(() => {
-		socket.on(
-			"systemSettings:updateOllamaManagerEnabled",
-			handleUpdateOllamaManagerEnabled
-		)
-		socket.on(
-			"systemSettings:updateKoboldCppManagerEnabled",
-			handleUpdateKoboldCppManagerEnabled
-		)
-		socket.on("koboldcpp:setBaseUrl", handleKoboldcppSetBaseUrl)
-		socket.on(
-			"systemSettings:updateContextDebuggingEnabled",
-			handleUpdateContextDebuggingEnabled
-		)
-		socket.on(
-			"systemSettings:updateAccountsEnabled",
-			handleUpdateAccountsEnabled
-		)
-		socket.on(
-			"systemSettings:updateAccountsEnabled:error",
-			handleUpdateAccountsEnabledError
-		)
-		socket.on("users:current:hasPassphrase", handleHasPassphrase)
-		socket.on("users:current:setPassphrase", handleSetPassphrase)
-		socket.emit("users:current:hasPassphrase", {})
-		socket.on("cardSources:charaVault:status", handleCharaVaultStatus)
-		socket.on("cardSources:charaVault:connect", handleCharaVaultConnect)
-		socket.on(
-			"cardSources:charaVault:connect:error",
-			handleCharaVaultConnectError
-		)
-		socket.on(
-			"cardSources:charaVault:disconnect",
-			handleCharaVaultDisconnect
-		)
-		socket.emit("cardSources:charaVault:status", {})
+	/**
+	 * The CharaVault card source, all BARE: none of these events is in
+	 * `SCOPED_EVENTS`, and there is one CharaVault account per instance to
+	 * scope to anyway. `cardSources:charaVault:status` is a STANDING key
+	 * rather than a one-shot — the connect and disconnect handlers ask for it
+	 * again — and its `:connect:error` half is never gated (plan ruling 2).
+	 *
+	 * Declared ahead of `onMount` so the keys are held before it sends the
+	 * first status request (effects run in declaration order, and the typed
+	 * `emit` flushes the interest sync ahead of itself — plan ruling 3).
+	 */
+	useInterest<"cardSources:charaVault:status">(
+		"cardSources:charaVault:status",
+		handleCharaVaultStatus
+	)
+	useInterest<"cardSources:charaVault:connect">(
+		"cardSources:charaVault:connect",
+		handleCharaVaultConnect
+	)
+	useInterest<"cardSources:charaVault:connect:error">(
+		"cardSources:charaVault:connect:error",
+		handleCharaVaultConnectError
+	)
+	useInterest<"cardSources:charaVault:disconnect">(
+		"cardSources:charaVault:disconnect",
+		handleCharaVaultDisconnect
+	)
 
-		return () => {
-			socket.off(
-				"systemSettings:updateOllamaManagerEnabled",
-				handleUpdateOllamaManagerEnabled
-			)
-			socket.off(
-				"systemSettings:updateKoboldCppManagerEnabled",
-				handleUpdateKoboldCppManagerEnabled
-			)
-			socket.off("koboldcpp:setBaseUrl", handleKoboldcppSetBaseUrl)
-			socket.off(
-				"systemSettings:updateContextDebuggingEnabled",
-				handleUpdateContextDebuggingEnabled
-			)
-			socket.off(
-				"systemSettings:updateAccountsEnabled",
-				handleUpdateAccountsEnabled
-			)
-			socket.off(
-				"systemSettings:updateAccountsEnabled:error",
-				handleUpdateAccountsEnabledError
-			)
-			socket.off("users:current:hasPassphrase", handleHasPassphrase)
-			socket.off("users:current:setPassphrase", handleSetPassphrase)
-			socket.off("cardSources:charaVault:status", handleCharaVaultStatus)
-			socket.off(
-				"cardSources:charaVault:connect",
-				handleCharaVaultConnect
-			)
-			socket.off(
-				"cardSources:charaVault:connect:error",
-				handleCharaVaultConnectError
-			)
-			socket.off(
-				"cardSources:charaVault:disconnect",
-				handleCharaVaultDisconnect
-			)
-		}
+	/**
+	 * The four instance switches' answers and the account's passphrase
+	 * replies, all BARE — an instance setting has nothing to scope it to, and
+	 * `users:current:*` is already one user's. All STANDING: every one of them
+	 * lands when somebody flips a switch or submits a form on this page, not
+	 * in reply to anything asked at mount. The `:error` half is never gated
+	 * (plan ruling 2).
+	 */
+	useInterest<"systemSettings:updateOllamaManagerEnabled">(
+		"systemSettings:updateOllamaManagerEnabled",
+		handleUpdateOllamaManagerEnabled
+	)
+	useInterest<"systemSettings:updateKoboldCppManagerEnabled">(
+		"systemSettings:updateKoboldCppManagerEnabled",
+		handleUpdateKoboldCppManagerEnabled
+	)
+	useInterest<"systemSettings:updateContextDebuggingEnabled">(
+		"systemSettings:updateContextDebuggingEnabled",
+		handleUpdateContextDebuggingEnabled
+	)
+	useInterest<"systemSettings:updateAccountsEnabled">(
+		"systemSettings:updateAccountsEnabled",
+		handleUpdateAccountsEnabled
+	)
+	useInterest<"systemSettings:updateAccountsEnabled:error">(
+		"systemSettings:updateAccountsEnabled:error",
+		handleUpdateAccountsEnabledError
+	)
+	useInterest<"users:current:setPassphrase">(
+		"users:current:setPassphrase",
+		handleSetPassphrase
+	)
+
+	/**
+	 * The KoboldCPP URL save's own reply. BARE — nothing in `koboldcpp:` has an
+	 * interest scope — and STANDING, because the field can be saved again
+	 * without this page reloading. `koboldcpp:` is RESTRICTED interest, so the
+	 * registry refuses the key for a known non-admin and holds it while the
+	 * user is still unknown; this page is admin-only either way.
+	 */
+	useInterest<"koboldcpp:setBaseUrl">(
+		"koboldcpp:setBaseUrl",
+		handleKoboldcppSetBaseUrl
+	)
+
+	/**
+	 * Whether this admin has a passphrase yet — the thing that decides whether
+	 * accounts may be turned on at all. Asked for and listened for in one, and
+	 * STANDING because setting one re-emits it.
+	 */
+	$effect(() =>
+		requestWithInterest(
+			"users:current:hasPassphrase",
+			{},
+			handleHasPassphrase
+		)
+	)
+
+	onMount(() => {
+		// The four `cardSources:charaVault:*` listeners are interests,
+		// declared above; this is the request their keys are waiting for.
+		// Every listener on this page is released by the registry as its
+		// effects are destroyed, so there is nothing to tear down here.
+		socket.emit("cardSources:charaVault:status", {})
 	})
 </script>
 

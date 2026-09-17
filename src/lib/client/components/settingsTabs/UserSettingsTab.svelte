@@ -2,10 +2,11 @@
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
 	import TotpSettings from "./TotpSettings.svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
-	import { getContext, onMount, onDestroy } from "svelte"
+	import { getContext, onDestroy } from "svelte"
 	import { goto } from "$app/navigation"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import type { SocketEventMap } from "$lib/client/sockets/typedSocket"
 	import {
 		accessibilityModeStore,
@@ -31,8 +32,10 @@
 	const socket = useTypedSocket()
 	const panelsCtx: PanelsCtx = getContext("panelsCtx")
 
-	// Named so `off` can name it too. A bare `socket.off(event)` removes
-	// EVERY listener for that event across the app, not just this tab's.
+	// Declared through the interest registry below, which counts subscribers
+	// per key and releases only this tab's. The hazard that replaces is a bare
+	// `socket.off(event)`, which removes EVERY listener for that event across
+	// the app, not just this tab's.
 	function handleUserSettingsUpdateShowAllCharacterFields(
 		message: SocketEventMap["userSettings:updateShowAllCharacterFields"]["response"]
 	) {
@@ -61,20 +64,6 @@
 		}
 	}
 
-	function handleUserSettingsUpdateEasyPersonaCreation(
-		message: SocketEventMap["userSettings:updateEasyPersonaCreation"]["response"]
-	) {
-		if (message.success) {
-			toaster.success({
-				title: `Easy persona creation ${message.enabled ? "enabled" : "disabled"}`
-			})
-		} else {
-			toaster.error({
-				title: "Failed to update easy persona creation setting"
-			})
-		}
-	}
-
 	function handleUserSettingsUpdateLanguage(
 		message: SocketEventMap["userSettings:updateLanguage"]["response"]
 	) {
@@ -83,20 +72,6 @@
 			// inherit option is the server's, not "default".
 			toaster.success({
 				title: `Language set to ${languageDefinition(message.effectiveLanguage).name}`
-			})
-		}
-	}
-
-	function handleUserSettingsUpdateShowHomePageBanner(
-		message: SocketEventMap["userSettings:updateShowHomePageBanner"]["response"]
-	) {
-		if (message.success) {
-			toaster.success({
-				title: `Home page banner ${message.enabled ? "shown" : "hidden"}`
-			})
-		} else {
-			toaster.error({
-				title: "Failed to update home page banner setting"
 			})
 		}
 	}
@@ -177,87 +152,57 @@
 		})
 	}
 
-	onMount(() => {
-		socket.on(
-			"userSettings:updateShowAllCharacterFields",
-			handleUserSettingsUpdateShowAllCharacterFields
-		)
-		socket.on(
-			"userSettings:updateEasyCharacterCreation",
-			handleUserSettingsUpdateEasyCharacterCreation
-		)
-		socket.on(
-			"userSettings:updateEasyPersonaCreation",
-			handleUserSettingsUpdateEasyPersonaCreation
-		)
-		socket.on(
-			"userSettings:updateLanguage",
-			handleUserSettingsUpdateLanguage
-		)
-		socket.on(
-			"userSettings:updateShowHomePageBanner",
-			handleUserSettingsUpdateShowHomePageBanner
-		)
-		socket.on(
-			"users:current:updateDisplayName",
-			handleUsersCurrentUpdateDisplayName
-		)
-		socket.on(
-			"users:current:changePassphrase",
-			handleUsersCurrentChangePassphrase
-		)
-		socket.on("users:current:logout", handleUsersCurrentLogout)
-		socket.on(
-			"users:current:updateDisplayName:error",
-			handleUsersCurrentUpdateDisplayNameError
-		)
-		socket.on(
-			"users:current:changePassphrase:error",
-			handleUsersCurrentChangePassphraseError
-		)
-		socket.on("users:current:logout:error", handleUsersCurrentLogoutError)
-	})
+	/**
+	 * Every write reply this tab renders, all BARE and all STANDING.
+	 *
+	 * Bare because none of these events is in `SCOPED_EVENTS`: each is about
+	 * the signed-in account, with no id to narrow to. Standing because each
+	 * toggle, rename and passphrase change can happen again while the tab
+	 * stays open, and because the two `userSettings:` cascades that follow a
+	 * write are what keep the switches honest.
+	 */
+	useInterest<"userSettings:updateShowAllCharacterFields">(
+		"userSettings:updateShowAllCharacterFields",
+		handleUserSettingsUpdateShowAllCharacterFields
+	)
+	useInterest<"userSettings:updateEasyCharacterCreation">(
+		"userSettings:updateEasyCharacterCreation",
+		handleUserSettingsUpdateEasyCharacterCreation
+	)
+	useInterest<"userSettings:updateLanguage">(
+		"userSettings:updateLanguage",
+		handleUserSettingsUpdateLanguage
+	)
+	useInterest<"users:current:updateDisplayName">(
+		"users:current:updateDisplayName",
+		handleUsersCurrentUpdateDisplayName
+	)
+	useInterest<"users:current:changePassphrase">(
+		"users:current:changePassphrase",
+		handleUsersCurrentChangePassphrase
+	)
+	useInterest<"users:current:logout">(
+		"users:current:logout",
+		handleUsersCurrentLogout
+	)
+	useInterest<"users:current:updateDisplayName:error">(
+		"users:current:updateDisplayName:error",
+		handleUsersCurrentUpdateDisplayNameError
+	)
+	useInterest<"users:current:changePassphrase:error">(
+		"users:current:changePassphrase:error",
+		handleUsersCurrentChangePassphraseError
+	)
+	useInterest<"users:current:logout:error">(
+		"users:current:logout:error",
+		handleUsersCurrentLogoutError
+	)
 
 	onDestroy(() => {
+		// The listeners are not here: the interest registry releases this
+		// tab's subscribers as its effects are destroyed. What is left is the
+		// one piece of state the parent shares with it.
 		hasUnsavedChanges = false
-		socket?.off(
-			"userSettings:updateShowAllCharacterFields",
-			handleUserSettingsUpdateShowAllCharacterFields
-		)
-		socket?.off(
-			"userSettings:updateEasyCharacterCreation",
-			handleUserSettingsUpdateEasyCharacterCreation
-		)
-		socket?.off(
-			"userSettings:updateEasyPersonaCreation",
-			handleUserSettingsUpdateEasyPersonaCreation
-		)
-		socket?.off(
-			"userSettings:updateLanguage",
-			handleUserSettingsUpdateLanguage
-		)
-		socket?.off(
-			"userSettings:updateShowHomePageBanner",
-			handleUserSettingsUpdateShowHomePageBanner
-		)
-		socket?.off(
-			"users:current:updateDisplayName",
-			handleUsersCurrentUpdateDisplayName
-		)
-		socket?.off(
-			"users:current:changePassphrase",
-			handleUsersCurrentChangePassphrase
-		)
-		socket?.off("users:current:logout", handleUsersCurrentLogout)
-		socket?.off(
-			"users:current:updateDisplayName:error",
-			handleUsersCurrentUpdateDisplayNameError
-		)
-		socket?.off(
-			"users:current:changePassphrase:error",
-			handleUsersCurrentChangePassphraseError
-		)
-		socket?.off("users:current:logout:error", handleUsersCurrentLogoutError)
 	})
 
 	// Passphrase validation schema
@@ -346,18 +291,6 @@
 		})
 	}
 
-	async function onEasyPersonaCreationClick(event: { checked: boolean }) {
-		socket?.emit("userSettings:updateEasyPersonaCreation", {
-			enabled: event.checked
-		})
-	}
-
-	async function onShowHomePageBannerClick(event: { checked: boolean }) {
-		socket?.emit("userSettings:updateShowHomePageBanner", {
-			enabled: event.checked
-		})
-	}
-
 	// Profile functions
 	async function updateDisplayName() {
 		if (!displayName.trim()) {
@@ -438,7 +371,7 @@
 	function switchToDocumentView() {
 		enableAccessibility()
 		goto("/document-view")
-		panelsCtx.fullscreenPanel = null
+		panelsCtx.fullPageView = null
 	}
 
 	// The standard site had no way to undo the preference: the only
@@ -512,7 +445,9 @@
 		</p>
 	</div>
 
-	<div class="card preset-filled-surface-100-900 divide-surface-300-700 divide-y p-4">
+	<div
+		class="card preset-filled-surface-100-900 divide-surface-300-700 divide-y p-4"
+	>
 		<div class="flex flex-col gap-2 pb-4">
 			<p class="text-muted-foreground text-sm">
 				Shows every field on the character form (advanced/less-common
@@ -536,11 +471,11 @@
 			</Switch>
 		</div>
 
-		<div class="flex flex-col gap-2 py-4">
+		<div class="flex flex-col gap-2 pt-4">
 			<p class="text-muted-foreground text-sm">
-				Clicking "New" in the Characters panel opens a quick, simplified
-				creator instead of the full character form. Turn off to always
-				go straight to the full form.
+				Writing a character — or a persona — from the Characters panel's
+				"New" menu opens a quick, simplified creator instead of the full
+				character form. Turn off to always go straight to the full form.
 			</p>
 			<Switch
 				name="easy-character-creation"
@@ -556,51 +491,6 @@
 				<Switch.HiddenInput />
 				<Switch.Label class="font-semibold">
 					Easy Character Creation
-				</Switch.Label>
-			</Switch>
-		</div>
-
-		<div class="flex flex-col gap-2 py-4">
-			<p class="text-muted-foreground text-sm">
-				Same as Easy Character Creation above, but for the Personas
-				panel's "New" button.
-			</p>
-			<Switch
-				name="easy-persona-creation"
-				checked={userSettingsCtx.settings?.enableEasyPersonaCreation ??
-					true}
-				onCheckedChange={onEasyPersonaCreationClick}
-			>
-				<Switch.Control
-					class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
-				>
-					<Switch.Thumb />
-				</Switch.Control>
-				<Switch.HiddenInput />
-				<Switch.Label class="font-semibold">
-					Easy Persona Creation
-				</Switch.Label>
-			</Switch>
-		</div>
-
-		<div class="flex flex-col gap-2 pt-4">
-			<p class="text-muted-foreground text-sm">
-				Shows the "Serene Pub is in beta!" banner at the top of the home
-				page.
-			</p>
-			<Switch
-				name="show-home-page-banner"
-				checked={userSettingsCtx.settings?.showHomePageBanner ?? true}
-				onCheckedChange={onShowHomePageBannerClick}
-			>
-				<Switch.Control
-					class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
-				>
-					<Switch.Thumb />
-				</Switch.Control>
-				<Switch.HiddenInput />
-				<Switch.Label class="font-semibold">
-					Show Home Page Banner
 				</Switch.Label>
 			</Switch>
 		</div>

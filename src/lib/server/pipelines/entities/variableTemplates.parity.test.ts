@@ -406,10 +406,10 @@ describe("the shipped set", () => {
 		// without a shipped layout now fails loudly instead of falling through
 		// to a floor nobody wrote.
 		await import("@serene-pub/contracts")
-		const { allTypes } = await import("@serene-pub/sdk")
+		const { allDefinitions } = await import("@serene-pub/sdk")
 
 		const renders: Record<string, string> = {}
-		for (const d of allTypes())
+		for (const d of allDefinitions())
 			for (const slot of Object.values((d.slots ?? {}) as any))
 				for (const [key, variableId] of Object.entries(
 					((slot as any).renders ?? {}) as Record<string, string>

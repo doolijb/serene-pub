@@ -123,9 +123,15 @@ import { tokenize } from "$lib/server/pipelines/ranking/signals"
  */
 export const EXTRACTOR_VERSION = "core:extract/entities-heuristic@2"
 
-/** What a gazetteer hit resolved to. Absent on an open-tier entity. */
+/**
+ * What a gazetteer hit resolved to. Absent on an open-tier entity.
+ *
+ * ⚠ There is no `persona` kind, and adding one would be a second key for a row
+ * `character` already names: a persona IS a character, and one row with two
+ * keys is one entity the matcher counts twice.
+ */
 export interface EntityRef {
-	kind: "character" | "persona" | "entry"
+	kind: "character" | "entry"
 	/**
 	 * The row id. Entry ids are unique because `lorebook_entries` is one table
 	 * now — the three legacy tables had independent sequences, which is why

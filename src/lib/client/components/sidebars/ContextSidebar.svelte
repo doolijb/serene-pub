@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { getContext, onDestroy, onMount } from "svelte"
 	import { SvelteSet } from "svelte/reactivity"
 	import * as Icons from "@lucide/svelte"
@@ -20,6 +21,7 @@
 	} from "$lib/shared/utils/contextConfigCards"
 	import { makeCardListActions } from "$lib/shared/utils/contextCardListActions"
 	import CardListDnd from "./CardListDnd.svelte"
+	import { ViewModeTracker } from "$lib/client/shell/viewMode.svelte"
 	import ContextCardNode from "./ContextCardNode.svelte"
 
 	interface Props {
@@ -76,21 +78,23 @@
 	}
 	let sectionLabel = $derived(SECTION_LABELS[activeView] ?? "")
 
-	// The Cards tab's tree editor isn't usable at mobile widths yet — hidden
-	// there for now (same lg breakpoint Layout.svelte/MessageComposer use for
-	// mobile detection elsewhere). Bounce off "cards" to "raw" so a load (or
-	// a resize down from desktop) never strands the user on a tab whose
-	// trigger just disappeared.
-	let isMobile = $state(false)
-	onMount(() => {
-		const mq = window.matchMedia("(min-width: 1024px)")
-		const update = () => (isMobile = !mq.matches)
-		update()
-		mq.addEventListener("change", update)
-		return () => mq.removeEventListener("change", update)
-	})
+	// The Cards tab's tree editor isn't usable at narrow widths yet — hidden
+	// there for now. Measured off THIS VIEW and not the window: the editor was
+	// declared unusable below ~1024px of editor, and in the single-sidebar
+	// shell a 1920px desktop hands this panel 400px, so a `matchMedia` gate
+	// showed it at exactly the width it was hidden for. Bounce off "cards" to
+	// "raw" so a load (or a resize down to the dock) never strands the user on
+	// a tab whose trigger just disappeared.
+	const viewMode = new ViewModeTracker()
+	const isMobile = $derived(viewMode.mode === "compact")
 	$effect(() => {
-		if (isMobile && activeView === "cards") activeView = "raw"
+		// ⚠ `width > 0` is load-bearing, not a tidy-up. An unmeasured tracker
+		// answers "compact", and this panel is REMOUNTED every time the Legacy
+		// tabs come back to it — without the guard the bounce fires on the
+		// frame before the first measurement and lands every mount on Raw,
+		// including the wide ones the Cards editor exists for.
+		if (viewMode.width > 0 && isMobile && activeView === "cards")
+			activeView = "raw"
 	})
 
 	let parsedTemplate = $derived(
@@ -287,9 +291,10 @@
 		socket.emit("contextConfigs:setUserActive", { id: selectedConfigId })
 	}
 
-	// Named so `off` can name them too. A bare `socket.off("contextConfigs:list")`
-	// removes EVERY listener for that event — including any other open
-	// context config UI, not just this sidebar's.
+	// Declared through the interest registry below, which counts subscribers
+	// per key and releases only this sidebar's. The hazard that replaces is a
+	// bare `socket.off("contextConfigs:list")`, which removes EVERY listener
+	// for that event — including any other open context config UI.
 	function handleContextConfigsList(
 		msg: Sockets.ContextConfigs.List.Response
 	) {
@@ -334,18 +339,39 @@
 		previewError = msg.error
 	}
 
+	/**
+	 * All six BARE — no `contextConfigs:` event is in `SCOPED_EVENTS`, so
+	 * `contextConfigs:get` is matched on its event name and the handler takes
+	 * whatever row came back, exactly as it did before. All STANDING: the list
+	 * is a cascade target (a create or a rename re-sends it), and a sidebar
+	 * that can write has to hold the key its writes answer on.
+	 */
+	useInterest<"contextConfigs:list">(
+		"contextConfigs:list",
+		handleContextConfigsList
+	)
+	useInterest<"contextConfigs:get">(
+		"contextConfigs:get",
+		handleContextConfigsGet
+	)
+	useInterest<"contextConfigs:create">(
+		"contextConfigs:create",
+		handleContextConfigsCreate
+	)
+	useInterest<"contextConfigs:update">(
+		"contextConfigs:update",
+		handleContextConfigsUpdate
+	)
+	useInterest<"contextConfigs:setUserActive">(
+		"contextConfigs:setUserActive",
+		handleContextConfigsSetUserActive
+	)
+	useInterest<"contextConfigs:preview">(
+		"contextConfigs:preview",
+		handleContextConfigsPreview
+	)
+
 	onMount(() => {
-		socket.on("contextConfigs:list", handleContextConfigsList)
-
-		socket.on("contextConfigs:get", handleContextConfigsGet)
-
-		socket.on("contextConfigs:create", handleContextConfigsCreate)
-		socket.on("contextConfigs:update", handleContextConfigsUpdate)
-		socket.on(
-			"contextConfigs:setUserActive",
-			handleContextConfigsSetUserActive
-		)
-		socket.on("contextConfigs:preview", handleContextConfigsPreview)
 		socket.emit("contextConfigs:list", {})
 		if (selectedConfigId) {
 			socket.emit("contextConfigs:get", {
@@ -356,15 +382,8 @@
 	})
 
 	onDestroy(() => {
-		socket.off("contextConfigs:list", handleContextConfigsList)
-		socket.off("contextConfigs:get", handleContextConfigsGet)
-		socket.off("contextConfigs:create", handleContextConfigsCreate)
-		socket.off("contextConfigs:update", handleContextConfigsUpdate)
-		socket.off(
-			"contextConfigs:setUserActive",
-			handleContextConfigsSetUserActive
-		)
-		socket.off("contextConfigs:preview", handleContextConfigsPreview)
+		// The `contextConfigs:` listeners are not here: the interest registry
+		// releases this sidebar's subscribers as its effects are destroyed.
 		onclose = undefined
 	})
 
@@ -385,8 +404,8 @@
 	}
 </script>
 
-<div class="text-foreground h-full p-4">
-	<div class="mt-2 mb-2 flex flex-wrap gap-2 sm:mt-0">
+<div class="text-foreground h-full p-4" use:viewMode.observe>
+	<div class="mt-2 mb-2 flex flex-wrap gap-2 @sm/view:mt-0">
 		<button
 			type="button"
 			class="btn btn-sm preset-filled-primary-500"
@@ -513,14 +532,16 @@
 					(activeView = e.value as typeof activeView)}
 			>
 				<PanelTabList>
-					<!-- Still hidden below lg: the Cards tree editor isn't usable
-					     at mobile widths yet (see the isMobile guard above). -->
-					<PanelTab
-						value="cards"
-						label="Cards"
-						icon={Icons.LayoutList}
-						class="max-lg:hidden"
-					/>
+					<!-- Not rendered rather than hidden: a `hidden` trigger is
+					     still in zag's arrow-key ring, so the tab a person
+					     cannot see was still one they could land on. -->
+					{#if !isMobile}
+						<PanelTab
+							value="cards"
+							label="Cards"
+							icon={Icons.LayoutList}
+						/>
+					{/if}
 					<PanelTab value="raw" label="Raw" icon={Icons.Code} />
 					<PanelTab
 						value="preview"

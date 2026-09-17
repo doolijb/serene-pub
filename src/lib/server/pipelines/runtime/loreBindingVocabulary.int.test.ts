@@ -58,7 +58,7 @@ import {
 } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import { worldLoreValues } from "$lib/server/pipelines/testing/fixtures"
-import { run } from "@serene-pub/sdk"
+import { run, splitCandidates } from "@serene-pub/sdk"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
 import { createHost } from "$lib/server/pipelines/runtime/host"
 import { buildWorld } from "$lib/server/pipelines/config/world"
@@ -239,7 +239,8 @@ const worldLoreLane = async () => {
 		(n) => n.nodeKey === WORLD_LORE_LANE
 	)
 	return {
-		names: ((node?.output?.hits ?? []) as any[]).map(
+		// The items, past the lane's band intent at the head (R-7 P5).
+		names: splitCandidates<any>(node?.output?.hits ?? []).items.map(
 			(c) => c.payload?.name as string
 		),
 		diagnostics: (node?.output?.diagnostics ?? {}) as Record<string, any>

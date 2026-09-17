@@ -1,7 +1,8 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
-	import { onMount, onDestroy } from "svelte"
+	import { declareInterest } from "$lib/client/sockets/interest.svelte"
+	import { interestKey } from "$lib/shared/sockets/interest"
 	import {
 		HISTORY_TYPE_ID,
 		type LorebookEntry
@@ -68,6 +69,50 @@
 		} satisfies Sockets.Entries.IterateNext.Params)
 	}
 
+	/**
+	 * The four entry events this tab reads, every one SCOPED to its book —
+	 * `entries:list` on the reply's own `lorebookId`, the other three on
+	 * `entry.lorebookId` (see `SCOPED_EVENTS`). Never on the type: one
+	 * namespace serves every entry type, so each handler's
+	 * `typeId !== HISTORY_TYPE_ID` check stays what separates History from the
+	 * lore tabs.
+	 *
+	 * Effects rather than `useInterest` because the key moves: `lorebookId` is
+	 * a prop, and `useInterest` keeps the key it was first given. Declared
+	 * above the request below so the keys are held before it goes out —
+	 * effects run in creation order, and both re-run together when the book
+	 * changes.
+	 *
+	 * ⚠ `handleIterateNext` has no id check of its own; the scope IS its
+	 * filter, which is why that key is on `entry.lorebookId`.
+	 */
+	$effect(() => {
+		// Guarded like the request below: `interestKey` with no scope yields
+		// the BARE key, which would quietly hold every book's entries.
+		if (!lorebookId) return
+		const releases = [
+			declareInterest<"entries:list">(
+				interestKey("entries:list", lorebookId),
+				handleHistoryEntriesList
+			),
+			declareInterest<"entries:iterateNext">(
+				interestKey("entries:iterateNext", lorebookId),
+				handleIterateNext
+			),
+			declareInterest<"entries:create">(
+				interestKey("entries:create", lorebookId),
+				handleHistoryEntryCreate
+			),
+			declareInterest<"entries:update">(
+				interestKey("entries:update", lorebookId),
+				handleHistoryEntryUpdate
+			)
+		]
+		return () => {
+			for (const release of releases) release()
+		}
+	})
+
 	$effect(() => {
 		if (lorebookId) {
 			socket.emit("entries:list", {
@@ -112,20 +157,6 @@
 			e.id === entry.id ? entry : e
 		)
 	}
-
-	onMount(() => {
-		socket.on("entries:list", handleHistoryEntriesList)
-		socket.on("entries:iterateNext", handleIterateNext)
-		socket.on("entries:create", handleHistoryEntryCreate)
-		socket.on("entries:update", handleHistoryEntryUpdate)
-	})
-
-	onDestroy(() => {
-		socket.off("entries:list", handleHistoryEntriesList)
-		socket.off("entries:iterateNext", handleIterateNext)
-		socket.off("entries:create", handleHistoryEntryCreate)
-		socket.off("entries:update", handleHistoryEntryUpdate)
-	})
 </script>
 
 <div class="mb-[0.5em] flex flex-col gap-3 py-1">

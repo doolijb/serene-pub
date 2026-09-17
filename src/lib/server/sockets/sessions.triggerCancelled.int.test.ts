@@ -233,7 +233,12 @@ describe("a stopped run is not a failed one", () => {
 			const { start } = await import(
 				"$lib/server/pipelines/runtime/runRegistry"
 			)
-			start({ runId, userId: user.id, sessionId: session.id })
+			start({
+				runId,
+				userId: user.id,
+				sessionId: session.id,
+				kind: "action"
+			})
 			return cancelledReceipt("system:superseded")
 		}
 

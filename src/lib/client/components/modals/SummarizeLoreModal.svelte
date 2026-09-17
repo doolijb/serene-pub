@@ -6,13 +6,19 @@
 
 	type History = LorebookEntry<typeof HISTORY_TYPE_ID>
 	import * as Icons from "@lucide/svelte"
-	import { getSocket } from "$lib/client/sockets/socketInstance"
-	import { onDestroy, onMount } from "svelte"
+	import { onDestroy } from "svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import {
+		declareInterest,
+		requestWithInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
 	import { resolveOrCreateBindingByName } from "$lib/client/utils/createLorebookBinding"
 	import { attachLorebookToSession as attachToSession } from "$lib/client/utils/attachLorebookToSession"
 	import AiTaskModal, { type AiTaskStep } from "./AiTaskModal.svelte"
+	import { statusText } from "$lib/client/i18n/state.svelte"
+	import type { StatusText } from "@serene-pub/sdk"
 
 	/** A name not yet backed by a real lorebookBindings id — either
 	 * suggested by character extraction or typed manually in review. Only
@@ -52,10 +58,15 @@
 		}
 	}
 
+	/**
+	 * Something character lore can be bound to. There is only ONE kind of
+	 * binding now — a character binding — so a persona is just a character
+	 * carrying `isPersona`, kept here only as a hint in the list.
+	 */
 	interface BindableEntity {
-		type: "character" | "persona"
 		id: number
 		name: string
+		isPersona?: boolean
 	}
 
 	interface Props {
@@ -106,9 +117,15 @@
 	 */
 	let activeActivityId = $state<string | null>(null)
 
-	const socket = getSocket()!
-	// Only used for resolveOrCreateBindingByName, which needs the type-safe
-	// on/off/emit wrapper the rest of this file's older code predates.
+	/**
+	 * One socket handle, and it emits only.
+	 *
+	 * Every listener in this file goes through the interest registry —
+	 * `useInterest` for the ones that live as long as the modal, and
+	 * `declareInterest` + release for the per-dispatch ones a generation
+	 * registers and tears down — so the typed handle is the only socket this
+	 * file needs.
+	 */
 	const typedSocket = useTypedSocket()
 
 	// ── Internal step (mapped to AiTaskStep for the shell) ───────────
@@ -157,31 +174,26 @@
 
 	let lorebookBindings = $state<SelectLorebookBinding[]>([])
 	let bindableEntities = $derived.by<BindableEntity[]>(() => {
-		const seen = new Set<string>()
+		// Keyed on the character id alone: a character the caller also voices
+		// as a persona is ONE row, not two entries that would bind to the
+		// same id.
+		const seen = new Set<number>()
 		const result: BindableEntity[] = []
 		const add = (e: BindableEntity) => {
-			const key = `${e.type}:${e.id}`
-			if (!seen.has(key)) {
-				seen.add(key)
+			if (!seen.has(e.id)) {
+				seen.add(e.id)
 				result.push(e)
 			}
 		}
 		for (const cc of sessionCharacters) add(cc)
-		for (const cp of sessionPersonas) add(cp)
+		for (const cp of sessionPersonas) add({ ...cp, isPersona: true })
 		for (const b of lorebookBindings) {
 			if (b.characterId && (b as any).character)
 				add({
-					type: "character",
 					id: b.characterId,
 					name:
 						(b as any).character.nickname ||
 						(b as any).character.name
-				})
-			if (b.personaId && (b as any).persona)
-				add({
-					type: "persona",
-					id: b.personaId,
-					name: (b as any).persona.name
 				})
 		}
 		return result
@@ -195,6 +207,12 @@
 	>("drafting")
 	let currentBatch = $state(0)
 	let totalBatches = $state(1)
+	/**
+	 * The run's own word for what it is doing (R-19) — *summarising part 2
+	 * of 5*, *merging the drafts* — shown in place of the phase's label once
+	 * the run has said one. Null until then and again on reset.
+	 */
+	let runStatus = $state<StatusText | null>(null)
 	let partialSummary = $state<{ content?: string; raw?: string }>({})
 	let trace = $state<Sockets.Sessions.Summarize.TraceEntry[]>([])
 	let showTrace = $state(false)
@@ -242,15 +260,16 @@
 	)
 
 	let progressLabel = $derived(
-		summarizePhase === "extracting"
-			? "Extracting characters…"
-			: summarizePhase === "naming"
-				? "Naming entry…"
-				: summarizePhase === "synthesizing"
-					? "Synthesizing final entry…"
-					: currentBatch > 0
-						? `Drafting part ${currentBatch} of ${totalBatches}…`
-						: "Starting…"
+		statusText(runStatus) ||
+			(summarizePhase === "extracting"
+				? "Extracting characters…"
+				: summarizePhase === "naming"
+					? "Naming entry…"
+					: summarizePhase === "synthesizing"
+						? "Synthesizing final entry…"
+						: currentBatch > 0
+							? `Drafting part ${currentBatch} of ${totalBatches}…`
+							: "Starting…")
 	)
 
 	let canGenerate = $derived(
@@ -322,6 +341,7 @@
 			summarizePhase = "drafting"
 			currentBatch = 0
 			totalBatches = 1
+			runStatus = null
 			partialSummary = {}
 			rawOutput = ""
 			showRaw = false
@@ -344,11 +364,19 @@
 
 	$effect(() => {
 		if (open && lorebookId) {
-			socket.emit("entries:list", {
-				lorebookId,
-				typeId: HISTORY_TYPE_ID
-			})
-			socket.emit("lorebooks:bindingList", { lorebookId })
+			// Same handlers the mount-time interests below hold, so these add
+			// no second subscriber — what they add is the sync ahead of the
+			// request, which is what a gated reply needs.
+			requestWithInterest(
+				"entries:list",
+				{ lorebookId, typeId: HISTORY_TYPE_ID },
+				handleHistoryEntriesList
+			)
+			requestWithInterest(
+				"lorebooks:bindingList",
+				{ lorebookId },
+				handleLorebookBindingList
+			)
 		}
 	})
 
@@ -358,6 +386,9 @@
 		currentBatch = data.batch
 		totalBatches = data.totalBatches
 		partialSummary = data.partial
+		// A frame carrying a status sets it; a phase frame without one
+		// leaves the last status standing, as the run itself would.
+		if (data.status) runStatus = data.status
 	}
 
 	function handleTrace(entry: Sockets.Sessions.Summarize.TraceEntry) {
@@ -428,11 +459,11 @@
 		}
 	}
 
-	function handleLorebookCreateError(data: { error: string }) {
+	function handleLorebookCreateError(data: { error?: string }) {
 		isCreatingLorebook = false
 		toaster.error({
 			title: "Failed to create lorebook",
-			description: data.error
+			description: data?.error
 		})
 	}
 
@@ -481,11 +512,11 @@
 	// Entry" button would spin indefinitely with no way to retry, since
 	// entries:create never fires and this was the only place that
 	// cleared the loading state.
-	function handleHistoryEntryCreateError(data: { error: string }) {
+	function handleHistoryEntryCreateError(data: { error?: string }) {
 		isCreatingHistoryEntry = false
 		toaster.error({
 			title: "Failed to create history entry",
-			description: data.error
+			description: data?.error
 		})
 	}
 
@@ -505,36 +536,44 @@
 	let activeGenerationToken = 0
 	let activeCleanup: (() => void) | null = null
 
-	onMount(() => {
-		// sessions:summarize:progress/complete/error/trace are NOT registered
-		// here — this component stays mounted for the whole session page
-		// session (unlike ProcessSceneModal, which remounts fresh per use),
-		// so a single persistent listener can't distinguish a stale,
-		// already-superseded generation's events from the current one. See
-		// generate()'s per-dispatch registration below instead.
-		socket.on("lorebooks:list", handleLorebooksList)
-		socket.on("sessions:setLorebook", handleSetLorebook)
-		socket.on("lorebooks:create", handleLorebookCreate)
-		socket.on("lorebooks:create:error", handleLorebookCreateError)
-		socket.on("entries:list", handleHistoryEntriesList)
-		socket.on("entries:create", handleHistoryEntryCreate)
-		socket.on("entries:create:error", handleHistoryEntryCreateError)
-		socket.on("lorebooks:bindingList", handleLorebookBindingList)
-		socket.emit("lorebooks:list", {})
+	// sessions:summarize:progress/complete/error/trace are NOT declared here —
+	// this component stays mounted for the whole session page (unlike
+	// ProcessSceneModal, which remounts fresh per use), so a single persistent
+	// listener can't distinguish a stale, already-superseded generation's
+	// events from the current one. See generate()'s per-dispatch interest
+	// below instead.
+	//
+	// These eight are the modal's own, declared at initialisation and released
+	// on destroy by the registry.
+	useInterest<"lorebooks:list">("lorebooks:list", handleLorebooksList)
+	useInterest<"sessions:setLorebook">(
+		"sessions:setLorebook",
+		handleSetLorebook
+	)
+	useInterest<"lorebooks:create">("lorebooks:create", handleLorebookCreate)
+	useInterest<"lorebooks:create:error">(
+		"lorebooks:create:error",
+		handleLorebookCreateError
+	)
+	useInterest<"entries:list">("entries:list", handleHistoryEntriesList)
+	useInterest<"entries:create">("entries:create", handleHistoryEntryCreate)
+	useInterest<"entries:create:error">(
+		"entries:create:error",
+		handleHistoryEntryCreateError
+	)
+	useInterest<"lorebooks:bindingList">(
+		"lorebooks:bindingList",
+		handleLorebookBindingList
+	)
+
+	$effect(() => {
+		requestWithInterest("lorebooks:list", {}, handleLorebooksList)
 	})
 
 	onDestroy(() => {
-		// getSocket()! returns Server | Socket union — .off() signatures are incompatible
-		const s = socket as any
+		// Only the per-dispatch interests are torn down by hand; the eight
+		// above are the registry's to release.
 		activeCleanup?.()
-		s.off("lorebooks:list", handleLorebooksList)
-		s.off("sessions:setLorebook", handleSetLorebook)
-		s.off("lorebooks:create", handleLorebookCreate)
-		s.off("lorebooks:create:error", handleLorebookCreateError)
-		s.off("entries:list", handleHistoryEntriesList)
-		s.off("entries:create", handleHistoryEntryCreate)
-		s.off("entries:create:error", handleHistoryEntryCreateError)
-		s.off("lorebooks:bindingList", handleLorebookBindingList)
 	})
 
 	// ── Actions ──────────────────────────────────────────────────────
@@ -553,7 +592,11 @@
 		// Claim the pending create so handleLorebookCreate knows this broadcast
 		// is ours to act on — see the comment there.
 		pendingCreateName = newLorebookName.trim()
-		socket.emit("lorebooks:create", { name: pendingCreateName })
+		requestWithInterest(
+			"lorebooks:create",
+			{ name: pendingCreateName },
+			handleLorebookCreate
+		)
 		newLorebookName = ""
 		isCreatingLorebook = false
 	}
@@ -564,21 +607,25 @@
 			historyEntryList.length > 0
 				? computeDefaultDate(historyEntryList)
 				: { year: 1, month: 1, day: 1 }
-		socket.emit("entries:create", {
-			entry: {
-				typeId: HISTORY_TYPE_ID,
-				lorebookId,
-				year: defaultDate.year,
-				month: defaultDate.month,
-				day: defaultDate.day,
-				content: "",
-				keys: "",
-				enabled: true,
-				constant: false,
-				useRegex: false,
-				caseSensitive: false
-			}
-		})
+		requestWithInterest(
+			"entries:create",
+			{
+				entry: {
+					typeId: HISTORY_TYPE_ID,
+					lorebookId,
+					year: defaultDate.year,
+					month: defaultDate.month,
+					day: defaultDate.day,
+					content: "",
+					keys: "",
+					enabled: true,
+					constant: false,
+					useRegex: false,
+					caseSensitive: false
+				}
+			},
+			handleHistoryEntryCreate
+		)
 		isCreatingHistoryEntry = true
 	}
 
@@ -597,10 +644,13 @@
 	function generateScene() {
 		if (!lorebookId || !selectedHistoryEntryId) return
 
+		let releaseCreated: (() => void) | null = null
+		let releaseCreateError: (() => void) | null = null
 		const cleanupCreate = () => {
-			const s = socket as any
-			s.off("scenes:create", onCreated)
-			s.off("scenes:create:error", onCreateError)
+			releaseCreated?.()
+			releaseCreateError?.()
+			releaseCreated = null
+			releaseCreateError = null
 			if (activeCleanup === cleanupCreate) activeCleanup = null
 		}
 
@@ -621,7 +671,7 @@
 			// Only now is it safe to drop the selection — see onSceneProcessStarted.
 			onSceneProcessStarted?.(data.scene.id)
 
-			socket.emit("scenes:process", {
+			typedSocket.emit("scenes:process", {
 				sceneId: data.scene.id,
 				ephemeralOnCancel: true
 			} satisfies Sockets.Scenes.Process.Params)
@@ -637,22 +687,30 @@
 
 		// Parked on activeCleanup so onDestroy can drop these too — closing the
 		// modal while the create is still in flight used to leave both
-		// listeners on the socket forever.
+		// interests declared forever.
 		activeCleanup = cleanupCreate
-		socket.on("scenes:create", onCreated)
-		socket.on("scenes:create:error", onCreateError)
+		releaseCreateError = declareInterest<"scenes:create:error">(
+			"scenes:create:error",
+			onCreateError
+		)
 
 		step = "generating"
 		errorMessage = ""
-		socket.emit("scenes:create", {
-			scene: {
-				lorebookId,
-				sessionId,
-				historyEntryId: Number(selectedHistoryEntryId),
-				selectedMessageIds,
-				name: null
-			}
-		} as any)
+		// Declares the reply interest, syncs it, then emits — in that order, so
+		// the reply is reachable whenever this family is gated.
+		releaseCreated = requestWithInterest(
+			"scenes:create",
+			{
+				scene: {
+					lorebookId,
+					sessionId,
+					historyEntryId: Number(selectedHistoryEntryId),
+					selectedMessageIds,
+					name: null
+				}
+			} as any,
+			onCreated
+		)
 	}
 
 	function generate() {
@@ -689,24 +747,37 @@
 			cleanup()
 			handleError(data)
 		}
+		let releases: Array<() => void> = []
 		function cleanup() {
-			const s = socket as any
-			s.off("sessions:summarize:progress", onProgress)
-			s.off("sessions:summarize:complete", onComplete)
-			s.off("sessions:summarize:error", onError)
-			s.off("sessions:summarize:trace", onTrace)
+			for (const release of releases) release()
+			releases = []
 			if (activeCleanup === cleanup) activeCleanup = null
 		}
 		activeCleanup = cleanup
-		socket.on("sessions:summarize:progress", onProgress)
-		socket.on("sessions:summarize:complete", onComplete)
-		socket.on("sessions:summarize:error", onError)
-		socket.on("sessions:summarize:trace", onTrace)
+		releases = [
+			declareInterest<"sessions:summarize:progress">(
+				"sessions:summarize:progress",
+				onProgress
+			),
+			declareInterest<"sessions:summarize:complete">(
+				"sessions:summarize:complete",
+				onComplete
+			),
+			declareInterest<"sessions:summarize:error">(
+				"sessions:summarize:error",
+				onError
+			),
+			declareInterest<"sessions:summarize:trace">(
+				"sessions:summarize:trace",
+				onTrace
+			)
+		]
 
 		step = "generating"
 		summarizePhase = "drafting"
 		currentBatch = 0
 		totalBatches = 1
+		runStatus = null
 		partialSummary = {}
 		resolvedBindingId = null
 		pendingNewParticipants = []
@@ -716,8 +787,11 @@
 		expandedTraceIdx = null
 		errorMessage = ""
 
-		const [bindingType, bindingIdStr] = selectedBinding.split(":")
-		socket.emit("sessions:summarize", {
+		// `sessions:summarize` answers on FOUR other events, so there is no
+		// reply interest for `requestWithInterest` to declare — the four above
+		// are it. The typed `emit` flushes their pending sync before the request
+		// leaves, so it cannot overtake the keys its answers need (ruling 3).
+		typedSocket.emit("sessions:summarize", {
 			sessionId,
 			messageIds: selectedMessageIds,
 			loreType,
@@ -725,10 +799,11 @@
 			// here — the old `loreType === "scene" ? undefined : …` guard is
 			// now dead and TypeScript rejects it.
 			topic: topic.trim() || undefined,
-			lorebookBindingCharacterId:
-				bindingType === "character" ? Number(bindingIdStr) : undefined,
-			lorebookBindingPersonaId:
-				bindingType === "persona" ? Number(bindingIdStr) : undefined
+			// One kind of binding: a persona IS a character, so the picker
+			// only ever yields a character id.
+			lorebookBindingCharacterId: selectedBinding
+				? Number(selectedBinding)
+				: undefined
 		} satisfies Sockets.Sessions.Summarize.Params)
 	}
 
@@ -757,7 +832,11 @@
 					mentionedIds.push(id)
 				}
 
-				socket.emit("scenes:create", {
+				// `as any` on the payload, as the other `scenes:create` emit in
+				// this file already is: `historyEntryId` is nullable here and
+				// the declared Params are not. Left exactly as it was — the
+				// wire shape is unchanged by this conversion.
+				typedSocket.emit("scenes:create", {
 					scene: {
 						lorebookId,
 						sessionId,
@@ -770,7 +849,7 @@
 						participantCharacters: [...new Set(participantIds)],
 						mentionedCharacters: [...new Set(mentionedIds)]
 					}
-				})
+				} as any)
 			} catch (err) {
 				toaster.error({
 					title: "Failed to save new character",
@@ -780,7 +859,13 @@
 				return
 			}
 		} else if (loreType === "world") {
-			socket.emit("worldLoreEntries:create", {
+			// ⚠ `worldLoreEntries:create` and `characterLoreEntries:create`
+			// below are not in `SocketEventMap` and NOTHING registers them on
+			// the server — the 0.5 tables survive in the schema, the handlers
+			// do not. They are emitted through a cast so this conversion
+			// changes no behaviour; the save silently doing nothing is a
+			// pre-existing defect for the entries overhaul to answer.
+			typedSocket.emit("worldLoreEntries:create" as any, {
 				worldLoreEntry: {
 					lorebookId,
 					name: reviewName.trim(),
@@ -794,7 +879,7 @@
 				}
 			})
 		} else if (loreType === "character") {
-			socket.emit("characterLoreEntries:create", {
+			typedSocket.emit("characterLoreEntries:create" as any, {
 				characterLoreEntry: {
 					lorebookId,
 					name: reviewName.trim(),
@@ -822,7 +907,7 @@
 		// point would make a failed save terminal — the summary lives nowhere
 		// else until the row exists.
 		if (activeActivityId) {
-			socket.emit("activity:dismiss", { id: activeActivityId })
+			typedSocket.emit("activity:dismiss", { id: activeActivityId })
 			activeActivityId = null
 		}
 		onSaved()
@@ -1145,7 +1230,7 @@
 					class="label text-sm font-semibold"
 					for="summarize-binding"
 				>
-					Bind to character / persona
+					Bind to character
 					<span class="text-surface-400 font-normal">(optional)</span>
 				</label>
 				<select
@@ -1154,22 +1239,11 @@
 					bind:value={selectedBinding}
 				>
 					<option value="">— None (unbound) —</option>
-					{#if bindableEntities.filter((e) => e.type === "character").length > 0}
-						<optgroup label="Characters">
-							{#each bindableEntities.filter((e) => e.type === "character") as e}
-								<option value="character:{e.id}">
-									{e.name}
-								</option>
-							{/each}
-						</optgroup>
-					{/if}
-					{#if bindableEntities.filter((e) => e.type === "persona").length > 0}
-						<optgroup label="Personas">
-							{#each bindableEntities.filter((e) => e.type === "persona") as e}
-								<option value="persona:{e.id}">{e.name}</option>
-							{/each}
-						</optgroup>
-					{/if}
+					{#each bindableEntities as e}
+						<option value={String(e.id)}>
+							{e.isPersona ? `${e.name} · persona` : e.name}
+						</option>
+					{/each}
 				</select>
 			</div>
 		{/if}
@@ -1604,7 +1678,7 @@
 		// Cancel means stop, not hide: without this the server would keep
 		// generating and the activity would linger as a phantom "running" card.
 		if (activeActivityId) {
-			socket.emit("activity:cancel", { id: activeActivityId })
+			typedSocket.emit("activity:cancel", { id: activeActivityId })
 			activeActivityId = null
 		}
 		onOpenChange({ open: false })

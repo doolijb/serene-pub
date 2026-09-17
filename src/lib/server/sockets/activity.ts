@@ -1,5 +1,7 @@
 import { activityStore } from "$lib/server/utils/activityStore"
 import { redactConnections } from "$lib/server/connections/visibility"
+import { isGatedEvent } from "$lib/shared/sockets/interest"
+import { socketWants } from "./interest"
 
 export function registerActivityHandlers(socket: any) {
 	const userId: number = socket.user!.id
@@ -24,9 +26,21 @@ export function registerActivityHandlers(socket: any) {
 	 * `err.message` directly puts the base URL and the model file straight back
 	 * on a non-admin's own card, so every terminalising write in `scenes.ts`,
 	 * `summarize.ts` and `narrativeGraph.ts` goes through that helper instead.
+	 *
+	 * It is also where the interest gate is applied, at the one exit that does
+	 * not go through `emitToUser`: the store pushes through this stored
+	 * per-socket closure, so `sockets/index.ts` never sees these emits and
+	 * cannot gate them. The closure holds its socket, which is what per-socket
+	 * delivery (plan ruling 5) needs — a tab with no activity surface open is
+	 * skipped while the other tab of the same person still receives its cards.
+	 * The gate narrows who RECEIVES and nothing else: the redaction below runs
+	 * exactly as it did, and an ungated event keeps today's behaviour, so
+	 * nothing changes until `activity:update` is in `GATED_EVENTS`.
 	 */
-	const send = (event: string, data: unknown) =>
+	const send = (event: string, data: unknown) => {
+		if (isGatedEvent(event) && !socketWants(socket, event)) return
 		socket.emit(event, redactConnections(data, socket.user))
+	}
 
 	activityStore.registerEmitter(send, userId, isAdmin)
 

@@ -51,6 +51,8 @@ export interface LegacyMessageRow {
 	} | null
 	isGenerating?: boolean | null
 	generationStage?: string | null
+	/** Present means a node has reported what it is doing (R-19) — see below. */
+	generationStatus?: unknown | null
 	/**
 	 * `connection` is connection identity, kept out of `message` on purpose —
 	 * this projection is a READ path, re-run on every reload, and only a key can
@@ -132,11 +134,19 @@ export function projectLegacy(row: LegacyMessageRow): {
 	const extras: Record<string, unknown> = {}
 	if (meta.isGreeting) extras.core = { isGreeting: true }
 
-	const status = row.isGenerating
-		? (row.generationStage ?? "generating")
-		: row.error
-			? "error"
-			: "settled"
+	// `generationStatus` (R-19) is the live signal — a node has said what it
+	// is doing, so the row IS generating, whatever the retired `generationStage`
+	// enum still holds. `generationStage` is written by nothing any more (a
+	// one-release fallback the client also reads); a row generating with
+	// neither yet set — the moment before a node's first status — reads as
+	// the honest default, "generating".
+	const status = row.generationStatus
+		? "generating"
+		: row.isGenerating
+			? (row.generationStage ?? "generating")
+			: row.error
+				? "error"
+				: "settled"
 
 	const updatedAt =
 		row.updatedAt instanceof Date

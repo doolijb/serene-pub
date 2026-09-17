@@ -21,7 +21,9 @@
  * segment is a *content contract* (`transform`, `filter`), shared across every
  * hook of that shape, never a function name. So the type id cannot say which of
  * a plugin's exported hooks implements a given link. That binding lives in the
- * compiled manifest as `hookTypes: { [scriptTypeId]: exportedHookName }`, which
+ * compiled manifest as `hookKinds: { [scriptKindId]: exportedHookName }` (was
+ * `hookTypes` until the 2026-09-16 rename; the old key is still read for one
+ * release so an installed plugin keeps dispatching), which
  * the packager's registry projection writes when it lands a plugin's types. The
  * port reads it from the stored manifest — the one source of truth — rather
  * than guessing a convention that a settling manifest shape could contradict.
@@ -40,16 +42,18 @@ import type { ScriptRunResult } from "$lib/server/pipelines/scripts/host"
 interface OwnerResolution {
 	/** The sandbox address — `namespace/name`. */
 	pluginId: string
-	/** `scriptTypeId → exported hook name`, from the compiled manifest. */
-	hookTypes: Record<string, string>
+	/** `scriptKindId → exported hook name`, from the compiled manifest. */
+	hookKinds: Record<string, string>
 }
 
-/** Read `hookTypes` off a stored manifest, tolerant of its json being anything. */
-export function hookTypesOf(manifest: unknown): Record<string, string> {
-	const raw =
-		manifest && typeof manifest === "object"
-			? (manifest as any).hookTypes
-			: undefined
+/**
+ * Read `hookKinds` off a stored manifest, tolerant of its json being anything.
+ * ⏳ `hookTypes` — the pre-rename key — is read when `hookKinds` is absent, for
+ * plugins packaged against the previous SDK; drop after one release.
+ */
+export function hookKindsOf(manifest: unknown): Record<string, string> {
+	const m = manifest && typeof manifest === "object" ? (manifest as any) : undefined
+	const raw = m?.hookKinds ?? m?.hookTypes
 	if (!raw || typeof raw !== "object") return {}
 	const out: Record<string, string> = {}
 	for (const [typeId, hook] of Object.entries(raw as Record<string, unknown>))
@@ -85,7 +89,7 @@ export function makePluginHookDispatch(
 		const resolution: OwnerResolution | null = row?.pluginId
 			? {
 					pluginId: row.pluginId as string,
-					hookTypes: hookTypesOf(row.manifest)
+					hookKinds: hookKindsOf(row.manifest)
 				}
 			: null
 		cache.set(ownerPluginId, resolution)
@@ -97,7 +101,7 @@ export function makePluginHookDispatch(
 			const owner = await resolveOwner(req.ownerPluginId)
 			if (!owner) return fail("this extension is no longer installed")
 
-			const hookName = owner.hookTypes[req.typeId]
+			const hookName = owner.hookKinds[req.typeId]
 			if (!hookName)
 				return fail(
 					`the extension declares no hook for ${req.typeId}`

@@ -4,7 +4,7 @@
 	 * (widgetGrid.ts) turns each widget's constraints into grid CSS; this
 	 * component is just the thin renderer. Content is supplied by the parent
 	 * via a `widget` snippet keyed by id, so the zone never knows what a widget
-	 * *is* (messages, composer, a portrait) — only where it sits.
+	 * *is* (the conversation, a portrait) — only where it sits.
 	 *
 	 * `showCells` is the visual-editor mode: columns become the fixed square-cell
 	 * module and a matching cell-guide grid is drawn behind the widgets, so you
@@ -34,8 +34,8 @@
 		 */
 		widget: Snippet<[{ id: string; placement: PlacementInput }]>
 		/**
-		 * Gap between widgets in the zone. The chat middle passes "0" so the
-		 * composer sits flush against the message list (parity with the pre-grid
+		 * Gap between widgets in the zone. The chat middle passes "0" so a strip
+		 * above the conversation sits flush against it (parity with the pre-grid
 		 * layout); other zones keep the default breathing room.
 		 */
 		gap?: string
@@ -135,7 +135,7 @@
 	}
 	/* A widget is a transparent positioned box (§8); its content brings its own
 	   look. The flex just lets the content fill the widget's grid cell.
-	   Overflow stays visible: the messages widget scrolls internally, and the
+	   Overflow stays visible: the message log scrolls internally, and the
 	   composer's popovers/tabs must not be clipped (they portal, but its inline
 	   tab content grows the widget instead). */
 	.widget {

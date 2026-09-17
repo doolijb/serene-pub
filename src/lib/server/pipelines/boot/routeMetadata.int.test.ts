@@ -14,7 +14,7 @@ import {
 	canonicalHash,
 	compile,
 	pin,
-	describeTaskType,
+	describeTaskDefinition,
 	S
 } from "@serene-pub/sdk"
 import * as C from "@serene-pub/contracts"
@@ -27,7 +27,7 @@ beforeAll(async () => {
 }, 60_000)
 
 const decide = pin(
-	describeTaskType({
+	describeTaskDefinition({
 		id: "demo:task/decide@1",
 		timeoutMs: 500,
 		ports: {
@@ -37,7 +37,7 @@ const decide = pin(
 	})
 )
 const act = pin(
-	describeTaskType({
+	describeTaskDefinition({
 		id: "demo:task/act@1",
 		timeoutMs: 500,
 		ports: { in: { what: S.json }, out: { main: S.json } }
@@ -50,11 +50,11 @@ const routedAndLooped = () =>
 			version: "1.0.0",
 			// Rides along so the taxonomy column (23 §2) is proven through
 			// the same save → rows → load identity as the route metadata.
-			taxonomy: { zone: "session", role: "action", mode: "demo:input/x@1" }
+			taxonomy: { role: "action", mode: "demo:inlet/x@1" }
 		})
-			.input("input", C.userMessage.v1())
+			.inlet("input", C.userMessage.v1())
 			.task("decide", ($: any) => decide.v1({ text: $.input.text }))
-			.route("fan", { on: ($: any) => $.decide.call }, (r) =>
+			.junction("fan", { on: ($: any) => $.decide.call }, (r) =>
 				r
 					.when("dice", { path: "tool", equals: "roll_dice" }, (c) =>
 						c.task("go", () => act.v1({ what: "rolled" } as any))
@@ -81,29 +81,29 @@ describe("route/loop metadata through the store", () => {
 
 		const blocks = (await db
 			.select()
-			.from(schema.pipelineBlocks)
+			.from(schema.pipelineClauses)
 			.where(
-				eq(schema.pipelineBlocks.specVersionId, saved.specVersionId)
+				eq(schema.pipelineClauses.specVersionId, saved.specVersionId)
 			)) as any[]
 
-		const route = blocks.find((b) => b.kind === "route")
-		expect(route, "no route block row").toBeTruthy()
+		const route = blocks.find((b) => b.kind === "junction")
+		expect(route, "no junction clause row").toBeTruthy()
 		// The projection reads `.port` — the renderable half of the reference.
 		expect(route.onRef?.port).toBe("call")
-		expect(Object.keys(route.routes ?? {}).sort()).toEqual([
+		expect(Object.keys(route.branches ?? {}).sort()).toEqual([
 			"dice",
 			"lore",
 			"narrate"
 		])
-		expect(route.routes.dice).toMatchObject({
+		expect(route.branches.dice).toMatchObject({
 			path: "tool",
 			equals: "roll_dice"
 		})
-		expect(route.routes.lore).toMatchObject({
+		expect(route.branches.lore).toMatchObject({
 			path: "writeLore",
 			truthy: true
 		})
-		expect(route.routes.narrate).toMatchObject({ default: true })
+		expect(route.branches.narrate).toMatchObject({ default: true })
 
 		const loop = blocks.find((b) => b.kind === "loop")
 		expect(loop, "no loop block row").toBeTruthy()
@@ -119,17 +119,16 @@ describe("route/loop metadata through the store", () => {
 			)) as any[]
 		// The deprecated `mode` spelling normalizes to `genre` (24 §2).
 		expect(versionRow.taxonomy).toEqual({
-			zone: "session",
 			role: "action",
-			genre: "demo:input/x@1"
+			genre: "demo:inlet/x@1"
 		})
 
 		// C1 over the new columns: import(export(rows)) is the identity.
 		const back = await loadDocument(db, saved.specVersionId)
 		expect(canonicalHash(back)).toBe(canonicalHash(doc))
-		const backRoute = back.blocks.find((b: any) => b.kind === "route") as any
-		expect(backRoute?.routes?.narrate?.default).toBe(true)
-		const backLoop = back.blocks.find((b: any) => b.kind === "loop") as any
+		const backRoute = back.clauses.find((b: any) => b.kind === "junction") as any
+		expect(backRoute?.branches?.narrate?.default).toBe(true)
+		const backLoop = back.clauses.find((b: any) => b.kind === "loop") as any
 		expect(backLoop?.repeatWhile?.port).toBe("more")
 	})
 })

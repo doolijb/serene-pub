@@ -19,11 +19,14 @@
 	 *    between two shapes forever. So archived text is read-only, below, with
 	 *    Copy as the only thing you can do to it.
 	 */
-	import { onDestroy, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { goto } from "$app/navigation"
 	import { page } from "$app/state"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import {
+		requestWithInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 
 	type Prompt = Sockets.Pipelines.Library.LibraryPrompt
@@ -75,21 +78,23 @@
 		"pipelines:libraryDeletePrompt"
 	] as const
 
-	onMount(() => {
-		socket.on("pipelines:library", handleLibrary)
-		for (const ev of WRITE_EVENTS) {
-			socket.on(ev as any, handleWrite)
-			socket.on(`${ev}:error` as any, handleError)
-		}
-		socket.emit("pipelines:library", {})
-	})
-	onDestroy(() => {
-		socket.off("pipelines:library", handleLibrary)
-		for (const ev of WRITE_EVENTS) {
-			socket.off(ev as any, handleWrite)
-			socket.off(`${ev}:error` as any, handleError)
-		}
-	})
+	/**
+	 * Every write on this page answers with the refreshed view, and a refusal
+	 * answers on the `:error` name — both arrive when the person presses the
+	 * button, not in reply to anything asked here, so their interest stands.
+	 * One `useInterest` call per key: each is its own `$effect`, released with
+	 * the page. BARE — the library is the instance's, not one session's.
+	 */
+	for (const ev of WRITE_EVENTS) {
+		useInterest<"pipelines:libraryUpdatePrompt">(ev, handleWrite)
+		useInterest<"pipelines:libraryUpdatePrompt:error">(
+			`${ev}:error`,
+			handleError
+		)
+	}
+
+	/** The library view, asked for and listened for in one. BARE, same reason. */
+	$effect(() => requestWithInterest("pipelines:library", {}, handleLibrary))
 
 	function save() {
 		if (!row) return

@@ -36,9 +36,9 @@ import { createPrompt } from "$lib/server/pipelines/entities/prompts"
 import { promptPoolKeyFor } from "$lib/server/pipelines/entities/promptPool"
 
 let db: TestDb
-let pool: { nodeTypeId: string; slot: string }
+let pool: { nodeDefinitionId: string; slot: string }
 /** The narrator's — a different node type, and it declares `narratorName`. */
-let narratorPool: { nodeTypeId: string; slot: string }
+let narratorPool: { nodeDefinitionId: string; slot: string }
 
 beforeAll(async () => {
 	db = await createTestDb()
@@ -52,7 +52,7 @@ beforeAll(async () => {
 	const decl = (await declarations(db, respond.activeVersionId!)).find(
 		(d) => d.control === "prompts-ref"
 	)!
-	pool = { nodeTypeId: decl.nodeTypeId!, slot: decl.slot }
+	pool = { nodeDefinitionId: decl.nodeDefinitionId!, slot: decl.slot }
 
 	const { NARRATE_SPEC_ID } = await import("$lib/server/pipelines/specs")
 	const [narrate] = await db
@@ -62,7 +62,7 @@ beforeAll(async () => {
 	const nDecl = (
 		await declarations(db, narrate.activeVersionId!)
 	).find((d) => d.control === "prompts-ref")!
-	narratorPool = { nodeTypeId: nDecl.nodeTypeId!, slot: nDecl.slot }
+	narratorPool = { nodeDefinitionId: nDecl.nodeDefinitionId!, slot: nDecl.slot }
 }, 60_000)
 
 const rowOf = async (id: number) => {
@@ -80,7 +80,7 @@ describe("what the registry declares", () => {
 		// so a map would silently classify all of its fields as undeclared and
 		// archive every one of them.
 		const declared = await declaredFieldsByPool(db)
-		const set = declared.get(promptPoolKeyFor(pool.nodeTypeId, pool.slot))
+		const set = declared.get(promptPoolKeyFor(pool.nodeDefinitionId, pool.slot))
 		expect(set).toBeTruthy()
 		expect([...set!]).toContain("systemPrompt")
 		expect([...set!]).toContain("postHistoryInstructions")
@@ -89,10 +89,10 @@ describe("what the registry declares", () => {
 	it("keeps the two pipelines' field sets apart", async () => {
 		const declared = await declaredFieldsByPool(db)
 		const reply = declared.get(
-			promptPoolKeyFor(pool.nodeTypeId, pool.slot)
+			promptPoolKeyFor(pool.nodeDefinitionId, pool.slot)
 		)!
 		const narrator = declared.get(
-			promptPoolKeyFor(narratorPool.nodeTypeId, narratorPool.slot)
+			promptPoolKeyFor(narratorPool.nodeDefinitionId, narratorPool.slot)
 		)!
 		expect([...reply]).not.toContain("narratorName")
 		expect([...narrator]).toContain("narratorName")
@@ -152,7 +152,7 @@ describe("archiving", () => {
 		// prompt written for it, and switching it back on would restore them —
 		// with the panel having shown nothing at all in between.
 		const p = await createPrompt(db, {
-			nodeTypeId: "plugin:task/not-installed",
+			nodeDefinitionId: "plugin:task/not-installed",
 			slot: "prompts",
 			name: "From a disabled plugin",
 			fields: { anything: "mine" }
@@ -170,8 +170,8 @@ describe("archiving", () => {
 		// blank instructions, and nothing on any screen to say why.
 		const [live] = await db
 			.select()
-			.from(schema.pipelineTypeRegistry)
-			.where(eq(schema.pipelineTypeRegistry.typeId, pool.nodeTypeId))
+			.from(schema.pipelineDefinitionRegistry)
+			.where(eq(schema.pipelineDefinitionRegistry.definitionId, pool.nodeDefinitionId))
 		expect(
 			live,
 			"the reply context type is not in the registry"
@@ -180,7 +180,7 @@ describe("archiving", () => {
 		// A newer version of the same type that drops one field.
 		const slots = JSON.parse(JSON.stringify(live.slots))
 		delete slots[pool.slot].fields.postHistoryInstructions
-		await db.insert(schema.pipelineTypeRegistry).values({
+		await db.insert(schema.pipelineDefinitionRegistry).values({
 			...live,
 			id: undefined,
 			version: (live.version ?? 1) + 1,
@@ -205,12 +205,12 @@ describe("archiving", () => {
 		// version 2 is not rare — leaving later tests reconciling against a
 		// registry with holes in it.
 		await db
-			.delete(schema.pipelineTypeRegistry)
+			.delete(schema.pipelineDefinitionRegistry)
 			.where(
 				and(
-					eq(schema.pipelineTypeRegistry.typeId, pool.nodeTypeId),
+					eq(schema.pipelineDefinitionRegistry.definitionId, pool.nodeDefinitionId),
 					eq(
-						schema.pipelineTypeRegistry.version,
+						schema.pipelineDefinitionRegistry.version,
 						(live.version ?? 1) + 1
 					)
 				)
@@ -221,7 +221,7 @@ describe("archiving", () => {
 		// The converse of the test above, and the one that proves the sweep can
 		// archive anything at all.
 		//
-		// `syncTypeRegistry` inserts and updates but never deletes, so a
+		// `syncDefinitionRegistry` inserts and updates but never deletes, so a
 		// superseded version's row lives on forever. While the sweep unioned
 		// declared fields across EVERY registry row, a field dropped in a new
 		// version was still "declared" by the old row sitting beside it — so
@@ -229,22 +229,22 @@ describe("archiving", () => {
 		// declaration count is that some published spec still PINS that version.
 		const [live] = await db
 			.select()
-			.from(schema.pipelineTypeRegistry)
-			.where(eq(schema.pipelineTypeRegistry.typeId, pool.nodeTypeId))
+			.from(schema.pipelineDefinitionRegistry)
+			.where(eq(schema.pipelineDefinitionRegistry.definitionId, pool.nodeDefinitionId))
 
 		// Drop the field from the row the pipeline actually PINS...
 		const slots = JSON.parse(JSON.stringify(live.slots))
 		delete slots[pool.slot].fields.postHistoryInstructions
 		await db
-			.update(schema.pipelineTypeRegistry)
+			.update(schema.pipelineDefinitionRegistry)
 			.set({ slots })
-			.where(eq(schema.pipelineTypeRegistry.id, live.id))
+			.where(eq(schema.pipelineDefinitionRegistry.id, live.id))
 
 		// ...while leaving an UNPINNED newer row that still declares it. This is
 		// the pair that discriminates: unioning over every registry row would
 		// find the field here and keep it, which is precisely the bug. Nothing
 		// points at this version, so its declaration is history.
-		await db.insert(schema.pipelineTypeRegistry).values({
+		await db.insert(schema.pipelineDefinitionRegistry).values({
 			...live,
 			id: undefined,
 			version: (live.version ?? 1) + 1,
@@ -265,16 +265,16 @@ describe("archiving", () => {
 
 		// Put the registry back for the tests after this one.
 		await db
-			.update(schema.pipelineTypeRegistry)
+			.update(schema.pipelineDefinitionRegistry)
 			.set({ slots: live.slots })
-			.where(eq(schema.pipelineTypeRegistry.id, live.id))
+			.where(eq(schema.pipelineDefinitionRegistry.id, live.id))
 		await db
-			.delete(schema.pipelineTypeRegistry)
+			.delete(schema.pipelineDefinitionRegistry)
 			.where(
 				and(
-					eq(schema.pipelineTypeRegistry.typeId, pool.nodeTypeId),
+					eq(schema.pipelineDefinitionRegistry.definitionId, pool.nodeDefinitionId),
 					eq(
-						schema.pipelineTypeRegistry.version,
+						schema.pipelineDefinitionRegistry.version,
 						(live.version ?? 1) + 1
 					)
 				)

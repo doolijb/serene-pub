@@ -16,11 +16,8 @@ import {
 	ComposedError,
 	connectionIdentity,
 	connectionsVisibleTo,
-	isConnectionChoice,
 	namesAConnection,
 	redactConnections,
-	refusesConnectionWrite,
-	withoutConnectionColumns,
 	withoutConnectionIdentity
 } from "./visibility"
 
@@ -97,6 +94,28 @@ describe("what a non-admin receives", () => {
 		expect(output.text).toBe("Hello there")
 		expect(output.stops).toEqual({ sent: [], dropped: [] })
 		expect(output.structured).toEqual({ mode: "schema" })
+	})
+
+	it("leaves a receipt's pinned portrayals exactly as pinned (U5a)", () => {
+		// Who portrays whom names members and characters — the audience of
+		// the session's own member list — and never a connection. Nothing in
+		// the map spells an identity key, so the projection passes it
+		// untouched for the non-admin whose run it is.
+		const portrayals = {
+			owner: { by: "person", userId: "3" },
+			"run-owner": { by: "person", userId: "3" },
+			"character:12": { by: "ai" },
+			"character:7": { by: "person", userId: "5" },
+			"user:9": { by: "none" },
+			"envoy:mascot": { by: "ai" }
+		}
+		const seen = redactConnections({ ...receipt(), portrayals }, user)
+		expect(seen.portrayals).toEqual(portrayals)
+		expect(withoutConnectionIdentity({ portrayals }).portrayals).toEqual(
+			portrayals
+		)
+		// The same receipt still loses its connection three deep.
+		expect(seen.preview).not.toHaveProperty("connection")
 	})
 
 	it("has no id to guess with — not from a session, a default, or a list", () => {
@@ -198,45 +217,9 @@ describe("the refusal tells nobody anything", () => {
 	})
 })
 
-describe("a write that names a connection", () => {
-	it("is refused for a non-admin and allowed for an admin", () => {
-		const patch = { name: "A walk", connectionId: 12 }
-		expect(refusesConnectionWrite(patch, user)).toBe(true)
-		expect(refusesConnectionWrite(patch, admin)).toBe(false)
-	})
-
-	it("is not refused when the field is merely echoed back empty", () => {
-		// A non-admin's own copy of the row now arrives without the field, so
-		// an ordinary rename round-trips a null. Refusing that would make
-		// every session uneditable; writing it would clear an admin's choice.
-		// It is dropped instead.
-		const echoed = { name: "A walk", connectionId: null }
-		expect(refusesConnectionWrite(echoed, user)).toBe(false)
-		expect(withoutConnectionColumns(echoed, user)).toEqual({
-			name: "A walk"
-		})
-		expect(isConnectionChoice(null)).toBe(false)
-		expect(isConnectionChoice(undefined)).toBe(false)
-		expect(isConnectionChoice(0)).toBe(true)
-	})
-
-	it("leaves an admin's row exactly as it arrived", () => {
-		const patch = { name: "A walk", connectionId: 12 }
-		expect(withoutConnectionColumns(patch, admin)).toBe(patch)
-	})
-
-	it("keeps a person's own JSON, which columns are not", () => {
-		// Shallow on purpose: a session's `metadata` is the user's, and a key
-		// of theirs spelled `connection` is not the instance's compute.
-		const patch = {
-			connectionId: 12,
-			metadata: { connection: "we met on a train" }
-		}
-		expect(withoutConnectionColumns(patch, user)).toEqual({
-			metadata: { connection: "we met on a train" }
-		})
-	})
-})
+// A session names no connection, so there is no fixed-shape write left to
+// guard; what a non-admin may still not do is submit one through a FORM,
+// which is the block below.
 
 describe("a form submission that names a connection", () => {
 	it("is an attempt whatever the value, because the field was never shown", () => {

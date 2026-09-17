@@ -35,8 +35,8 @@
 
 import type { FeatureExtractionPipeline } from "@huggingface/transformers"
 import { findModel, isRegisteredLocalEmbeddingModel } from "./models"
-import { getAppDataDir, isAndroidWrapper } from "$lib/server/utils"
-import path from "path"
+import { isAndroidWrapper } from "$lib/server/utils"
+import { cacheDirFor, isCached } from "$lib/server/localModels/onnxCache"
 import type { BaseEmbeddingAdapter } from "$lib/server/embeddingAdapters/BaseEmbeddingAdapter"
 import {
 	buildApiModelId,
@@ -160,8 +160,35 @@ let apiBackend: ApiEmbeddingBackend | null = null
 let ttlMinutes = 5
 let ttlTimer: ReturnType<typeof setTimeout> | null = null
 
+/**
+ * When the lane last EMBEDDED something, not when it last loaded.
+ *
+ * The number the residency panel shows beside the idle window, so "unloads in
+ * two minutes" can be read off the two together. Set by `embed`/`batchEmbed`
+ * rather than by `resetTtlTimer`, because the timer is also reset by a load —
+ * and "loaded four minutes ago, never used" is a different sentence from "last
+ * used four minutes ago".
+ */
+let lastUsedAt: Date | null = null
+
 export function setEmbeddingTtlMinutes(minutes: number) {
 	ttlMinutes = minutes
+	resetTtlTimer()
+}
+
+/** The idle window in force right now, in minutes. */
+export function getEmbeddingTtlMinutes(): number {
+	return ttlMinutes
+}
+
+/** ISO time of the last embed call, or null since the last unload. */
+export function getEmbeddingLastUsedAt(): string | null {
+	return lastUsedAt?.toISOString() ?? null
+}
+
+/** Marks the lane used. One place, so the two embed paths cannot disagree. */
+function markUsed() {
+	lastUsedAt = new Date()
 	resetTtlTimer()
 }
 
@@ -223,9 +250,10 @@ export async function loadEmbeddingModel(
 
 		// Store models inside the app data directory so they stay with
 		// the rest of Serene Pub's data. TRANSFORMERS_CACHE can override.
-		env.cacheDir =
-			process.env.TRANSFORMERS_CACHE ??
-			path.join(getAppDataDir(), "models", "embeddings")
+		// The rule itself lives in `localModels/onnxCache.ts` — the download
+		// path and the "is it on disk" check have to agree with this line, and
+		// three copies of one path is how they stop agreeing.
+		env.cacheDir = cacheDirFor("embeddings")
 
 		onProgress?.({ modelId, status: "loading" })
 
@@ -275,7 +303,7 @@ export async function loadEmbeddingModel(
  * no plaintext secret has to be threaded through this call at all.
  */
 export async function activateApiEmbedding(
-	connection: SelectConnection,
+	connection: AdapterConnection,
 	onProgress?: DownloadProgressCallback
 ): Promise<{ dimensions: number }> {
 	if (isLoading) throw new Error("Model is already loading")
@@ -453,12 +481,29 @@ export function unloadEmbeddingModel(reason?: string): void {
 	apiBackend = null
 	activeBackend = null
 	loadError = null
+	// Nothing is resident, so there is no "last used" to report about it. The
+	// panel reads null as "not loaded", which is the same fact twice rather
+	// than a time that outlives the thing it describes.
+	lastUsedAt = null
 	console.log(`[embedding] Model unloaded${reason ? ` ${reason}` : ""}`)
 }
 
 /** Returns the currently active model/API identifier, or null if none is active */
 export function getLoadedModelId(): string | null {
 	return loadedModelId
+}
+
+/**
+ * The LOCAL model resident in this lane, or null.
+ *
+ * ⚠ Not a second spelling of `getLoadedModelId`. That one answers with whatever
+ * identity is active, including an `api::baseUrl::model` composite for a hosted
+ * backend — which is the right answer for stamping a row and the wrong one for
+ * "are this repo's files loaded right now". `LocalModelState.loaded` is the
+ * second question, and the mirror of `getLoadedNerModelId()` next door.
+ */
+export function getLoadedEmbeddingModelId(): string | null {
+	return activeBackend === "local" ? loadedModelId : null
 }
 
 /**
@@ -487,27 +532,18 @@ export function getLoadError(): string | null {
 }
 
 /**
- * Check whether a model's files are present in the local cache without
- * loading it into memory. Returns true if the model directory exists and
- * contains at least one file, false if the cache appears empty or missing.
+ * Check whether a model's files are present in the local cache without loading
+ * it into memory.
+ *
+ * ⚠ The layout is `{cacheDir}/{org}/{name}/…`. `models--{org}--{name}` is the
+ * *Python* `huggingface_hub` layout and transformers.js never writes it, so a
+ * check against that name answers `false` for every model on every machine
+ * with the weights sitting right there — and `listModels.modelCached` reports
+ * a model as absent while it loads fine. The rule is stated once, in
+ * `localModels/onnxCache.ts`, which this delegates to.
  */
 export async function isModelCached(modelId: string): Promise<boolean> {
-	try {
-		const { env } = await import("@huggingface/transformers")
-		const cacheDir =
-			process.env.TRANSFORMERS_CACHE ??
-			path.join(getAppDataDir(), "models", "embeddings")
-
-		// @huggingface/transformers caches under {cacheDir}/models--{org}--{name}/
-		const safeName = modelId.replace(/\//g, "--")
-		const modelCacheDir = path.join(cacheDir, `models--${safeName}`)
-
-		const { readdir } = await import("fs/promises")
-		const entries = await readdir(modelCacheDir)
-		return entries.length > 0
-	} catch {
-		return false
-	}
+	return isCached(modelId, "embeddings")
 }
 
 /**
@@ -519,12 +555,12 @@ export async function embed(text: string): Promise<number[]> {
 		const { vectors } = await apiBackend.adapter.embedText({
 			input: [text]
 		})
-		resetTtlTimer()
+		markUsed()
 		return vectors[0]
 	}
 	if (!pipeline) throw new Error("No embedding model loaded")
 	const result = await pipeline(text, { pooling: "mean", normalize: true })
-	resetTtlTimer()
+	markUsed()
 	return Array.from(result.data as Float32Array)
 }
 
@@ -539,13 +575,13 @@ export async function batchEmbed(texts: string[]): Promise<number[][]> {
 
 	if (activeBackend === "api" && apiBackend) {
 		const { vectors } = await apiBackend.adapter.embedText({ input: texts })
-		resetTtlTimer()
+		markUsed()
 		return vectors
 	}
 
 	if (!pipeline) throw new Error("No embedding model loaded")
 	const results = await pipeline(texts, { pooling: "mean", normalize: true })
-	resetTtlTimer()
+	markUsed()
 	// When given an array, result.data is a flat Float32Array of all embeddings
 	const flat = Array.from(results.data as Float32Array)
 	const dims = flat.length / texts.length

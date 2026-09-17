@@ -23,6 +23,7 @@ import {
 	type EmbeddingModelOption
 } from "./BaseEmbeddingAdapter"
 import { EMBEDDING_MODELS } from "$lib/server/embedding/models"
+import { recommendedEmbeddingModels } from "$lib/server/localModels/onnxList"
 
 export class LocalOnnxEmbeddingAdapter extends BaseEmbeddingAdapter {
 	async embedText(req: EmbedRequest): Promise<EmbedResult> {
@@ -70,15 +71,19 @@ export class LocalOnnxEmbeddingAdapter extends BaseEmbeddingAdapter {
 }
 
 /**
- * What this machine can embed with: the shipped catalogue, plus any ONNX file
+ * What this machine can embed with: the recommended list, plus any ONNX file
  * the local model registry holds whose modality is `embeddings`.
  *
- * Both halves matter and neither replaces the other. The catalogue is three
- * curated models with known widths and sizes, which is what a first-time setup
- * needs; `local_models` is whatever the user actually downloaded, and its
- * `modality` column is the one place that says an `.onnx` file is an embedding
- * model rather than a generator (`kind` cannot: the header sniff files a BERT as
- * `text`).
+ * Both halves matter and neither replaces the other. The list is curated models
+ * with known widths and sizes, which is what a first-time setup needs;
+ * `local_models` is whatever the user actually downloaded, and its `modality`
+ * column is the one place that says an `.onnx` file is an embedding model rather
+ * than a generator (`kind` cannot: the header sniff files a BERT as `text`).
+ *
+ * ⚠ The list is the PUBLISHED one merged over the compiled catalogue
+ * (`localModels/onnxList`), never the compiled catalogue alone — the ids are the
+ * same ids, and a model list that showed three of them while the download screen
+ * offered nine would be two catalogues wearing one name.
  *
  * The registry half is behind a dynamic import and a try/catch because a model
  * list must still answer when the database is unavailable — the catalogue is the
@@ -87,12 +92,27 @@ export class LocalOnnxEmbeddingAdapter extends BaseEmbeddingAdapter {
 async function listModels(
 	_connection: SelectConnection
 ): Promise<{ models: EmbeddingModelOption[]; error?: string }> {
-	const catalogue: EmbeddingModelOption[] = EMBEDDING_MODELS.map((m) => ({
-		model: m.id,
-		name: m.name,
-		dimensions: m.dimensions,
-		description: `${m.tier} · ${m.sizeLabel} · ${m.description}`
-	}))
+	// ⚠ One id, one entry, first occurrence winning — across BOTH halves. The
+	// consumer is `syncConnectionModels`, whose `(connection_id, model)` unique
+	// index refuses a second row for an id it already wrote: a listing that
+	// named one model twice would abort that endpoint's whole sync rather than
+	// show a duplicate. The halves genuinely overlap (a downloaded model is
+	// usually a catalogue model), so this is the ordinary path.
+	const catalogue: EmbeddingModelOption[] = []
+	const have = new Set<string>()
+	const add = (option: EmbeddingModelOption) => {
+		if (!option.model || have.has(option.model)) return
+		have.add(option.model)
+		catalogue.push(option)
+	}
+
+	for (const m of await recommendedEmbeddingModels())
+		add({
+			model: m.id,
+			name: m.name,
+			dimensions: m.dimensions,
+			description: `${m.tier} · ${m.sizeLabel} · ${m.description}`
+		})
 
 	try {
 		const { db } = await import("$lib/server/db")
@@ -111,17 +131,12 @@ async function listModels(
 					eq(schema.localModels.status, "complete")
 				)
 			)
-		const have = new Set(catalogue.map((m) => m.model))
-		for (const r of rows) {
-			const id = r.modelName || r.filename
-			if (!id || have.has(id)) continue
-			have.add(id)
-			catalogue.push({
-				model: id,
+		for (const r of rows)
+			add({
+				model: r.modelName || r.filename,
 				name: r.modelName || r.filename,
 				description: r.description ?? "Downloaded model"
 			})
-		}
 	} catch (e: any) {
 		return { models: catalogue, error: e?.message ?? String(e) }
 	}
@@ -146,14 +161,10 @@ async function testConnection(
 	)
 	const reason = await getLocalEmbeddingUnsupportedReason()
 	if (reason) return { ok: false, error: reason }
-	if (!connection.model)
-		return { ok: false, error: "No model is chosen for this connection." }
+	// The endpoint only: connections have no default model, so a test names
+	// none. Reachability is the platform probe above; the catalogue rides
+	// along for the models section to offer.
 	const { models } = await listModels(connection)
-	if (!models.some((m) => m.model === connection.model))
-		return {
-			ok: false,
-			error: `"${connection.model}" is not in the shipped catalogue or the local model registry.`
-		}
 	return { ok: true, extra: { models } }
 }
 

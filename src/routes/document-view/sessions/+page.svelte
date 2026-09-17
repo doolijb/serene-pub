@@ -1,8 +1,9 @@
 <script lang="ts">
-	import { onMount } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { getInterestContext } from "$lib/client/sockets/interest.svelte"
 
 	const socket = useTypedSocket()
+	const interest = getInterestContext()
 	let sessions: Sockets.Sessions.List.Response["sessionList"] = $state([])
 	let loaded = $state(false)
 
@@ -26,18 +27,22 @@
 		loaded = true
 	}
 	function handleSessionsDelete() {
+		// A plain emit: the interest in `sessions:list` is already held below,
+		// so the reply to this refresh has a key waiting for it.
 		socket.emit("sessions:list", {})
 	}
 
-	onMount(() => {
-		socket.on("sessions:list", handleSessionsList)
-		socket.on("sessions:delete", handleSessionsDelete)
-		socket.emit("sessions:list", {})
-		return () => {
-			socket.off("sessions:list", handleSessionsList)
-			socket.off("sessions:delete", handleSessionsDelete)
-		}
-	})
+	/**
+	 * Both BARE: a list is this user's own sessions, and the delete ack says
+	 * which id went — neither is about one session's stream.
+	 */
+	$effect(() =>
+		interest.requestWithInterest("sessions:list", {}, handleSessionsList)
+	)
+	interest.useInterest<"sessions:delete">(
+		"sessions:delete",
+		handleSessionsDelete
+	)
 </script>
 
 <svelte:head>

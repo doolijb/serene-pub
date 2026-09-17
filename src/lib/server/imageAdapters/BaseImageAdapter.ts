@@ -92,7 +92,7 @@ export interface BaseImageAdapter
 	extends Partial<Omit<AdapterActions, "generateImage">> {}
 
 export interface ImageAdapterExports {
-	Adapter: new (connection: SelectConnection) => BaseImageAdapter
+	Adapter: new (connection: AdapterConnection) => BaseImageAdapter
 	listModels: (
 		connection: SelectConnection
 	) => Promise<{ models: string[]; error?: string }>
@@ -131,11 +131,11 @@ export interface ImageAdapterExports {
 }
 
 export abstract class BaseImageAdapter implements AdapterActions {
-	connection: SelectConnection
+	connection: AdapterConnection
 	/** Aborts the in-flight request; `generateImage` wires this to fetch. */
 	protected controller: AbortController | null = null
 
-	constructor(connection: SelectConnection) {
+	constructor(connection: AdapterConnection) {
 		this.connection = connection
 	}
 

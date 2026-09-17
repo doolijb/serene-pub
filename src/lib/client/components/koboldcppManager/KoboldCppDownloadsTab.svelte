@@ -1,8 +1,9 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
 	import { Progress } from "@skeletonlabs/skeleton-svelte"
-	import { onMount, onDestroy } from "svelte"
+	import { onMount } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 
 	const socket = useTypedSocket()
@@ -37,8 +38,6 @@
 		return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
 	}
 
-	// Named so `off` can name them too. A bare `socket.off("koboldcpp:downloadProgress")`
-	// removes EVERY listener for that event.
 	function handleDownloadProgress(
 		msg: Sockets.KoboldCPP.DownloadProgress.Response
 	) {
@@ -59,20 +58,32 @@
 		if (msg.success) downloads = {}
 	}
 
+	// All BARE keys — nothing in `koboldcpp:` carries an interest scope — and
+	// all standing: `downloadProgress` is pushed for as long as a download
+	// runs, and cancel/clear can be pressed repeatedly while the tab is open.
+	//
+	// Declared ABOVE the mount that emits, because effects run in creation
+	// order and a declaration made after one would miss the sync that first
+	// request flushes.
+	useInterest<"koboldcpp:downloadProgress">(
+		"koboldcpp:downloadProgress",
+		handleDownloadProgress
+	)
+	useInterest<"koboldcpp:getDownloadProgress">(
+		"koboldcpp:getDownloadProgress",
+		handleGetDownloadProgress
+	)
+	useInterest<"koboldcpp:cancelDownload">(
+		"koboldcpp:cancelDownload",
+		handleCancelDownload
+	)
+	useInterest<"koboldcpp:clearDownloadHistory">(
+		"koboldcpp:clearDownloadHistory",
+		handleClearDownloadHistory
+	)
+
 	onMount(() => {
-		socket.on("koboldcpp:downloadProgress", handleDownloadProgress)
-		socket.on("koboldcpp:getDownloadProgress", handleGetDownloadProgress)
-		socket.on("koboldcpp:cancelDownload", handleCancelDownload)
-		socket.on("koboldcpp:clearDownloadHistory", handleClearDownloadHistory)
-
 		socket.emit("koboldcpp:getDownloadProgress", {})
-	})
-
-	onDestroy(() => {
-		socket.off("koboldcpp:downloadProgress", handleDownloadProgress)
-		socket.off("koboldcpp:getDownloadProgress", handleGetDownloadProgress)
-		socket.off("koboldcpp:cancelDownload", handleCancelDownload)
-		socket.off("koboldcpp:clearDownloadHistory", handleClearDownloadHistory)
 	})
 </script>
 

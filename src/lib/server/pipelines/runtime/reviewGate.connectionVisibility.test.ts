@@ -70,7 +70,7 @@ function startGatedNode(reviewer: Reviewer, payload: unknown) {
 	}
 	reviewer({
 		nodeKey: "render",
-		typeId: "core:provider/generate-image",
+		definitionId: "core:oracle/generate-image",
 		payload,
 		position: "on"
 	})

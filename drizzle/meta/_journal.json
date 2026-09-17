@@ -897,6 +897,97 @@
       "when": 1789278445215,
       "tag": "0127_embeddings_are_connections",
       "breakpoints": true
+    },
+    {
+      "idx": 128,
+      "version": "7",
+      "when": 1789379226525,
+      "tag": "0128_organic_wild_child",
+      "breakpoints": true
+    },
+    {
+      "idx": 129,
+      "version": "7",
+      "when": 1789416539809,
+      "tag": "0129_model_availability",
+      "breakpoints": true
+    },
+    {
+      "idx": 130,
+      "version": "7",
+      "when": 1789492007598,
+      "tag": "0130_retire_session_connection_override",
+      "breakpoints": true
+    },
+    {
+      "idx": 131,
+      "version": "7",
+      "when": 1789498479275,
+      "tag": "0131_lamplight_default_theme",
+      "breakpoints": true
+    },
+    {
+      "idx": 132,
+      "version": "7",
+      "when": 1789535984801,
+      "tag": "0132_character_folders_and_persona_flags",
+      "breakpoints": true
+    },
+    {
+      "idx": 133,
+      "version": "7",
+      "when": 1789536100416,
+      "tag": "0133_merge_personas_into_characters",
+      "breakpoints": true
+    },
+    {
+      "idx": 134,
+      "version": "7",
+      "when": 1789558752203,
+      "tag": "0134_rename_definitions_clauses_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 135,
+      "version": "7",
+      "when": 1789571815870,
+      "tag": "0135_weights_to_the_source",
+      "breakpoints": true
+    },
+    {
+      "idx": 136,
+      "version": "7",
+      "when": 1789586246739,
+      "tag": "0136_built_in_writes_and_session_changes",
+      "breakpoints": true
+    },
+    {
+      "idx": 137,
+      "version": "7",
+      "when": 1789592395140,
+      "tag": "0137_seen_actions",
+      "breakpoints": true
+    },
+    {
+      "idx": 138,
+      "version": "7",
+      "when": 1789603267320,
+      "tag": "0138_envoys_seat_and_speaker_ref",
+      "breakpoints": true
+    },
+    {
+      "idx": 139,
+      "version": "7",
+      "when": 1789611900724,
+      "tag": "0139_generation_status",
+      "breakpoints": true
+    },
+    {
+      "idx": 140,
+      "version": "7",
+      "when": 1789618945018,
+      "tag": "0140_run_lineage",
+      "breakpoints": true
     }
   ]
 }

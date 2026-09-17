@@ -111,7 +111,9 @@ async function makePersona(
 	userId: number,
 	overrides: Partial<{ name: string }> = {}
 ) {
-	const { createPersonaFromParsedData } = await import("./personas")
+	const { createPersonaFromParsedData } = await import(
+		"$lib/server/utils/personaCard"
+	)
 	return createPersonaFromParsedData(
 		{ name: "Bound Persona", description: "A bound persona", ...overrides },
 		undefined,
@@ -447,7 +449,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 			.returning()
 		await testDb.insert(schema.lorebookBindings).values({
 			lorebookId: lorebook.id,
-			personaId: persona.id,
+			characterId: persona.id,
 			binding: "{{persona:1}}"
 		})
 		await testDb.insert(schema.lorebookEntries).values(
@@ -481,8 +483,8 @@ describe("lorebooks import/export (PGlite integration)", () => {
 			.delete(schema.characters)
 			.where(eq(schema.characters.id, character.id))
 		await testDb
-			.delete(schema.personas)
-			.where(eq(schema.personas.id, persona.id))
+			.delete(schema.characters)
+			.where(eq(schema.characters.id, persona.id))
 
 		const imported = await lorebookImportHandler.handler(
 			fakeSocket(user.id),
@@ -492,24 +494,32 @@ describe("lorebooks import/export (PGlite integration)", () => {
 		expect(imported.status).toBe("created")
 		const newLorebookId = imported.lorebook!.id
 
+		// A persona is a `characters` row too (0133) — filter on `isPersona`
+		// to tell the two restored rows apart.
 		const newCharacters = await testDb.query.characters.findMany({
-			where: (c, { eq }) => eq(c.userId, user.id)
+			where: (c, { and, eq }) =>
+				and(eq(c.userId, user.id), eq(c.isPersona, false))
 		})
 		expect(newCharacters).toHaveLength(1)
 		expect(newCharacters[0].name).toBe("Restorable Char")
 
-		const newPersonas = await testDb.query.personas.findMany({
-			where: (p, { eq }) => eq(p.userId, user.id)
+		const newPersonas = await testDb.query.characters.findMany({
+			where: (c, { and, eq }) =>
+				and(eq(c.userId, user.id), eq(c.isPersona, true))
 		})
 		expect(newPersonas).toHaveLength(1)
 		expect(newPersonas[0].name).toBe("Restorable Persona")
 
 		const newBindings = await testDb.query.lorebookBindings.findMany({
-			where: (b, { eq }) => eq(b.lorebookId, newLorebookId)
+			where: (b, { eq }) => eq(b.lorebookId, newLorebookId),
+			with: { character: true }
 		})
 		expect(newBindings).toHaveLength(2)
+		// Both restored bindings carry `characterId` now (0133 dropped
+		// `personaId` from lorebook_bindings) — tell them apart via the
+		// joined character's `isPersona` instead.
 		const restoredCharBinding = newBindings.find(
-			(b) => b.characterId !== null
+			(b) => b.character?.isPersona === false
 		)
 		expect(restoredCharBinding?.characterId).toBe(newCharacters[0].id)
 		// Import must sync name/aliases from the entity immediately (same as
@@ -518,7 +528,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 		// falls through to the raw {{char:N}} token forever.
 		expect(restoredCharBinding?.name).toBe("Restorable Char")
 		const restoredPersonaBinding = newBindings.find(
-			(b) => b.personaId !== null
+			(b) => b.character?.isPersona === true
 		)
 		expect(restoredPersonaBinding?.name).toBe("Restorable Persona")
 
@@ -589,7 +599,6 @@ describe("lorebooks import/export (PGlite integration)", () => {
 		})
 		expect(newBindings).toHaveLength(1)
 		expect(newBindings[0].characterId).toBeNull()
-		expect(newBindings[0].personaId).toBeNull()
 	})
 
 	test("a background binding's name/aliases survive export then re-import", async () => {
@@ -608,7 +617,6 @@ describe("lorebooks import/export (PGlite integration)", () => {
 		await testDb.insert(schema.lorebookBindings).values({
 			lorebookId: lorebook.id,
 			characterId: null,
-			personaId: null,
 			binding: "{{char:1}}",
 			name: "Old Man Willow",
 			aliases: ["Willow"]
@@ -637,7 +645,6 @@ describe("lorebooks import/export (PGlite integration)", () => {
 		})
 		expect(newBindings).toHaveLength(1)
 		expect(newBindings[0].characterId).toBeNull()
-		expect(newBindings[0].personaId).toBeNull()
 		expect(newBindings[0].name).toBe("Old Man Willow")
 		expect(newBindings[0].aliases).toEqual(["Willow"])
 	})
@@ -940,9 +947,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 		// These 4 payload nodes are all unbound (bindingLocalId: null), so
 		// they're the only lorebookBindings rows for this fresh lorebook —
 		// filtering to unbound rows just documents that expectation.
-		const nodes = allBindings.filter(
-			(b) => b.characterId === null && b.personaId === null
-		)
+		const nodes = allBindings.filter((b) => b.characterId === null)
 		expect(nodes).toHaveLength(4)
 
 		const byName = Object.fromEntries(nodes.map((n) => [n.name, n]))

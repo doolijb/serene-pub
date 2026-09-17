@@ -32,7 +32,7 @@ const SLUG = "acme.dice:spec/roll"
 const rollSpec = () =>
 	compile(
 		spec(SLUG, { version: "1.0.0" })
-			.input("input", C.userMessage.v1())
+			.inlet("input", C.userMessage.v1())
 			.query("history", ($) =>
 				C.sessionHistory.v1({ scope: $.input.sessionScope })
 			)

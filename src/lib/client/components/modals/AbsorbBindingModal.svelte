@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { onDestroy, onMount } from "svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 
 	const socket = useTypedSocket()
 
@@ -31,13 +31,14 @@
 	let isMerging = $state(false)
 	let mergeError = $state<string | null>(null)
 
-	// A row is "bound" when it has a real character/persona attached. Two
-	// bound rows can never be absorbed into each other (they're distinct
-	// individuals, enforced server-side too); a bound + unbound pair is
-	// allowed, but the server always makes the bound row survive regardless
-	// of which one is picked here as the "target" (see the note below).
+	// A row is "bound" when it has a real character attached (a persona is a
+	// character, so that is the only bound arc). Two bound rows can never be
+	// absorbed into each other (they're distinct individuals, enforced
+	// server-side too); a bound + unbound pair is allowed, but the server
+	// always makes the bound row survive regardless of which one is picked
+	// here as the "target" (see the note below).
 	function isBound(n: NarrativeNode): boolean {
-		return n.characterId != null || n.personaId != null
+		return n.characterId != null
 	}
 
 	let candidates = $derived(
@@ -96,13 +97,16 @@
 		mergeError = msg?.error || "Failed to merge — please try again."
 	}
 
-	onMount(() => {
-		socket.on("narrativeGraph:mergeNode:error", handleMergeNodeError)
-	})
-
-	onDestroy(() => {
-		socket.off("narrativeGraph:mergeNode:error", handleMergeNodeError)
-	})
+	/**
+	 * BARE, and standing for the modal's life: `narrativeGraph:mergeNode:error`
+	 * has no entry in `SCOPED_EVENTS`, so a `#<id>` key would match no payload
+	 * at all. Errors are never gated (plan ruling 2) — the registry is simply
+	 * the only listener path now.
+	 */
+	useInterest<"narrativeGraph:mergeNode:error">(
+		"narrativeGraph:mergeNode:error",
+		handleMergeNodeError
+	)
 
 	const NODE_STATE_COLOR: Record<string, string> = {
 		active: "preset-tonal-primary",

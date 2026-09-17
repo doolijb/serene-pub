@@ -32,47 +32,68 @@ const wid = (over: Partial<WidgetConfig> = {}): WidgetConfig => ({
 })
 
 describe("the normal chat falls out of the model", () => {
-	it("is two required widgets in the middle zone, in order", () => {
+	it("is ONE required widget in the middle zone", () => {
+		// The conversation — the log and the field you write into — is one
+		// widget, so the middle has one anchor to guarantee rather than two.
 		const l = defaultChatLayout()
 		const mid = widgetsInZone(l, "middle")
-		expect(mid.map((w) => w.id)).toEqual(["messages", "composer"])
+		expect(mid.map((w) => w.id)).toEqual(["messages"])
 		expect(mid.every((w) => w.required)).toBe(true)
 		expect(widgetsInZone(l, "left")).toEqual([])
 		expect(widgetsInZone(l, "right")).toEqual([])
 	})
 
-	it("messages GROW-fill the top; composer is FIXED at the bottom", () => {
+	it("messages GROW-fill the middle, anchored to all four edges", () => {
 		const l = defaultChatLayout()
-		const [messages, composer] = widgetsInZone(l, "middle")
-		expect(messages.size.h).toBe("grow")
-		expect(messages.anchor).toMatchObject({ top: true, left: true, right: true })
-		expect(composer.size.h).toBe("fixed")
-		expect(composer.anchor).toMatchObject({
+		const [messages] = widgetsInZone(l, "middle")
+		expect(messages.size).toEqual({ w: "grow", h: "grow" })
+		expect(messages.anchor).toMatchObject({
+			top: true,
 			bottom: true,
 			left: true,
 			right: true
 		})
 	})
 
-	it("the middle zone grid is infinite cells across, [grow fixed] down", () => {
+	it("the middle zone grid is infinite cells across, [grow] down", () => {
 		const l = defaultChatLayout()
 		const style = zoneGridStyle(widgetsInZone(l, "middle"), l.cell)
 		expect(style).toContain(
 			`grid-template-columns:repeat(auto-fill, minmax(${DEFAULT_CELL}px, 1fr))`
 		)
-		// messages GROW → 1fr, composer FIXED → auto
-		expect(style).toContain("grid-template-rows:1fr auto")
+		// messages GROW → 1fr, and nothing else in the stack
+		expect(style).toContain("grid-template-rows:1fr")
 	})
 
-	it("messages stretch to fill; composer anchors to the bottom edge", () => {
+	it("messages stretch to fill", () => {
 		const l = defaultChatLayout()
-		const [messages, composer] = widgetsInZone(l, "middle")
+		const [messages] = widgetsInZone(l, "middle")
 		const m = widgetItemStyle(messages, l.cell)
 		expect(m).toContain("justify-self:stretch")
 		expect(m).toContain("align-self:stretch")
 		expect(m).toContain("grid-column:1 / -1")
-		const c = widgetItemStyle(composer, l.cell)
-		expect(c).toContain("align-self:end") // bottom-anchored, not stretched
+	})
+
+	it("a bottom-anchored strip beside it still ends at the floor", () => {
+		// The anchor is the model's, not the conversation's: an Adventure-style
+		// strip docked under the messages reads the same as before.
+		const l = loadChatLayout({
+			version: 1,
+			cell: DEFAULT_CELL,
+			widgets: [
+				{
+					id: "world-state",
+					zone: "middle",
+					order: 2,
+					size: { w: "grow", h: "fixed" },
+					anchor: { bottom: true, left: true, right: true }
+				}
+			]
+		})
+		const strip = widgetsInZone(l, "middle").find(
+			(w) => w.id === "world-state"
+		)!
+		expect(widgetItemStyle(strip, l.cell)).toContain("align-self:end")
 	})
 })
 
@@ -103,7 +124,7 @@ describe("size specs → grid tracks / bounds", () => {
 	})
 })
 
-describe("cellsFromPx — seeding a drag from a measured size", () => {
+describe("cellsFromPx — a measured size as whole cells", () => {
 	it("rounds to the nearest whole cell, floored at 1", () => {
 		expect(cellsFromPx(133, 44)).toBe(3) // 3.02 -> 3
 		expect(cellsFromPx(176, 44)).toBe(4)
@@ -114,21 +135,22 @@ describe("cellsFromPx — seeding a drag from a measured size", () => {
 
 describe("updateWidget — immutable edit", () => {
 	it("patches one widget by id and leaves the rest (and the input) untouched", () => {
-		const l = defaultChatLayout()
-		const next = updateWidget(l, "composer", {
+		const l = loadChatLayout(ADVENTURE_LAYOUT.widgetGrid)
+		const next = updateWidget(l, "world-state", {
 			size: { w: "grow", h: { minCells: 4 } }
 		})
-		const composer = widgetsInZone(next, "middle").find(
-			(w) => w.id === "composer"
+		const strip = widgetsInZone(next, "middle").find(
+			(w) => w.id === "world-state"
 		)!
 		const messages = widgetsInZone(next, "middle").find(
 			(w) => w.id === "messages"
 		)!
-		expect(composer.size.h).toEqual({ minCells: 4 })
+		expect(strip.size.h).toEqual({ minCells: 4 })
 		expect(messages.size.h).toBe("grow") // untouched
 		// input not mutated
 		expect(
-			widgetsInZone(l, "middle").find((w) => w.id === "composer")!.size.h
+			widgetsInZone(l, "middle").find((w) => w.id === "world-state")!.size
+				.h
 		).toBe("fixed")
 		expect(next).not.toBe(l)
 	})
@@ -143,19 +165,18 @@ describe("loadChatLayout — defensive rehydrate", () => {
 		}
 	})
 
-	it("round-trips a saved composer min-height while keeping required widgets", () => {
-		const saved = updateWidget(defaultChatLayout(), "composer", {
+	it("round-trips a saved min-height while keeping the required widget", () => {
+		const saved = updateWidget(defaultChatLayout(), "messages", {
 			size: { w: "grow", h: { minCells: 4 } }
 		})
 		const loaded = loadChatLayout(JSON.parse(JSON.stringify(saved)))
-		const composer = widgetsInZone(loaded, "middle").find(
-			(w) => w.id === "composer"
+		const messages = widgetsInZone(loaded, "middle").find(
+			(w) => w.id === "messages"
 		)!
-		expect(composer.size.h).toEqual({ minCells: 4 })
-		expect(composer.required).toBe(true) // identity kept from the default
+		expect(messages.size.h).toEqual({ minCells: 4 })
+		expect(messages.required).toBe(true) // identity kept from the default
 		expect(widgetsInZone(loaded, "middle").map((w) => w.id)).toEqual([
-			"messages",
-			"composer"
+			"messages"
 		])
 	})
 
@@ -163,24 +184,51 @@ describe("loadChatLayout — defensive rehydrate", () => {
 		const loaded = loadChatLayout({
 			version: 1,
 			cell: 44,
-			widgets: [{ id: "composer", size: { w: "grow" } /* no h */ }]
+			widgets: [{ id: "messages", size: { w: "grow" } /* no h */ }]
 		})
-		const composer = widgetsInZone(loaded, "middle").find(
-			(w) => w.id === "composer"
+		const messages = widgetsInZone(loaded, "middle").find(
+			(w) => w.id === "messages"
 		)!
-		expect(composer.size.h).toBe("fixed") // default preserved
+		expect(messages.size.h).toBe("grow") // default preserved
 	})
 
-	it("guarantees both required widgets even if the blob dropped one", () => {
+	it("guarantees the required widget even if the blob dropped it", () => {
 		const loaded = loadChatLayout({
 			version: 1,
 			cell: 44,
-			widgets: [{ id: "messages", size: { w: "grow", h: "grow" } }]
+			widgets: [
+				{
+					id: "world-state",
+					zone: "middle",
+					order: 0,
+					size: { w: "grow", h: "fixed" }
+				}
+			]
 		})
-		expect(widgetsInZone(loaded, "middle").map((w) => w.id)).toEqual([
-			"messages",
-			"composer"
-		])
+		expect(widgetsInZone(loaded, "middle").map((w) => w.id)).toContain(
+			"messages"
+		)
+	})
+
+	it("drops a retired widget id rather than placing it beside the conversation", () => {
+		// A layout saved when the composer was its own widget still names it.
+		// Admitting it would put an empty card under every restored chat, and
+		// the editor would offer it in the tray as something to move.
+		const loaded = loadChatLayout({
+			version: 1,
+			cell: 44,
+			widgets: [
+				{ id: "messages", size: { w: "grow", h: "grow" } },
+				{
+					id: "composer",
+					zone: "middle",
+					order: 1,
+					size: { w: "grow", h: "fixed" },
+					anchor: { bottom: true, left: true, right: true }
+				}
+			]
+		})
+		expect(loaded.widgets.map((w) => w.id)).toEqual(["messages"])
 	})
 })
 
@@ -196,8 +244,7 @@ describe("preset → effective middle zone", () => {
 		const loaded = loadChatLayout(ADVENTURE_LAYOUT.widgetGrid)
 		expect(widgetsInZone(loaded, "middle").map((w) => w.id)).toEqual([
 			"world-state",
-			"messages",
-			"composer"
+			"messages"
 		])
 		const strip = widgetsInZone(loaded, "middle")[0]
 		expect(strip.size).toEqual({ w: "grow", h: "fixed" })
@@ -223,8 +270,7 @@ describe("preset → effective middle zone", () => {
 		])
 		// The anchor guarantee is untouched by a newcomer.
 		expect(widgetsInZone(loaded, "middle").map((w) => w.id)).toEqual([
-			"messages",
-			"composer"
+			"messages"
 		])
 	})
 
@@ -237,10 +283,7 @@ describe("preset → effective middle zone", () => {
 				{ id: "sizeless", zone: "middle" }
 			]
 		})
-		expect(loaded.widgets.map((w) => w.id)).toEqual([
-			"messages",
-			"composer"
-		])
+		expect(loaded.widgets.map((w) => w.id)).toEqual(["messages"])
 	})
 })
 
@@ -382,27 +425,33 @@ describe("placementOf — a widget's cell geometry", () => {
 })
 
 describe("stackPlacements — the MVP zone stack", () => {
+	// The Adventure middle, which is the two-widget stack the model has to
+	// place: a strip over the conversation that fills what is left.
+	const adventureMiddle = () =>
+		widgetsInZone(loadChatLayout(ADVENTURE_LAYOUT.widgetGrid), "middle")
+
 	it("gives each stacked widget its own row, full width", () => {
-		const ws = widgetsInZone(defaultChatLayout(), "middle")
-		const ps = stackPlacements(ws, { columns: 6, widthPx: 700 })
+		const ps = stackPlacements(adventureMiddle(), {
+			columns: 6,
+			widthPx: 700
+		})
 		expect(ps.map((p) => p.zone.row)).toEqual([1, 2])
 		expect(ps.every((p) => p.zone.rows === 2)).toBe(true)
 		expect(ps.every((p) => p.zone.columns === 6 && p.box.cols === 6)).toBe(true)
 	})
 
-	it("messages touch the top, composer the bottom, both the sides", () => {
-		const ws = widgetsInZone(defaultChatLayout(), "middle")
-		const [messages, composer] = stackPlacements(ws, {
+	it("the strip touches the top, the conversation the bottom, both the sides", () => {
+		const [strip, messages] = stackPlacements(adventureMiddle(), {
 			columns: 6,
 			widthPx: 700
 		})
-		expect(messages.box.edges).toEqual({
+		expect(strip.box.edges).toEqual({
 			top: true,
 			right: true,
 			bottom: false,
 			left: true
 		})
-		expect(composer.box.edges).toEqual({
+		expect(messages.box.edges).toEqual({
 			top: false,
 			right: true,
 			bottom: true,
@@ -410,20 +459,34 @@ describe("stackPlacements — the MVP zone stack", () => {
 		})
 	})
 
+	it("the lone conversation touches every edge of the middle", () => {
+		const [messages] = stackPlacements(
+			widgetsInZone(defaultChatLayout(), "middle"),
+			{ columns: 6, widthPx: 700 }
+		)
+		expect(messages.box.edges).toEqual({
+			top: true,
+			right: true,
+			bottom: true,
+			left: true
+		})
+	})
+
 	it("a grow/fixed height is unbounded; a cell-bounded one reports its cells", () => {
-		const base = defaultChatLayout()
 		const ws = widgetsInZone(
-			updateWidget(base, "composer", {
-				size: { w: "grow", h: { minCells: 3 } }
-			}),
+			updateWidget(
+				loadChatLayout(ADVENTURE_LAYOUT.widgetGrid),
+				"world-state",
+				{ size: { w: "grow", h: { minCells: 3 } } }
+			),
 			"middle"
 		)
-		const [messages, composer] = stackPlacements(ws, {
+		const [strip, messages] = stackPlacements(ws, {
 			columns: 6,
 			widthPx: 700
 		})
 		expect(messages.box.rows).toBeNull() // grow
-		expect(composer.box.rows).toBe(3)
+		expect(strip.box.rows).toBe(3)
 	})
 })
 

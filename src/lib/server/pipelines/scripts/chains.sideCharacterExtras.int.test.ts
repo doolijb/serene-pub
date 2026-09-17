@@ -7,7 +7,7 @@
  * business. So there are exactly two things to pin, and they are the two that
  * can rot independently:
  *
- *  1. the **declaration** — `core:input/side-character-turn@1` names
+ *  1. the **declaration** — `core:inlet/side-character-turn@1` names
  *     `speakerIsKnown` in its scripts hook's `extras`, so `scriptTypeInfos`
  *     offers it in the script editor's fixed choice set. A read a hook does not
  *     declare is a name typed on faith, and the editor refuses it;
@@ -37,7 +37,7 @@ const TEXT_TRANSFORM = "core:script:text/transform@1"
 
 /**
  * The input node's hook, exactly as
- * `core:input/side-character-turn@1` declares it. Restated here rather than
+ * `core:inlet/side-character-turn@1` declares it. Restated here rather than
  * read from the registry on purpose: the declaration itself is asserted
  * separately below, and a site derived from the thing under test would agree
  * with it however wrong both were.

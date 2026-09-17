@@ -102,7 +102,7 @@ describe("parse-tool-call", () => {
 
 describe("run-tool", () => {
 	const runTool = (input: any, call: any) =>
-		coreBindings()["core:provider/run-tool@1"]!(input, {
+		coreBindings()["core:oracle/run-tool@1"]!(input, {
 			call
 		} as any) as any
 

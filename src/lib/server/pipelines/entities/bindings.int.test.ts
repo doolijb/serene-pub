@@ -54,6 +54,35 @@ vi.mock("$lib/server/utils/resolveTaskConfig", () => ({
 		sampling: { id: 1 }
 	})
 }))
+// The reply dispatch consumes the run's own resolution now (R-8) and asks the
+// resolver only to load the pair — so the stand-in connection is supplied
+// where dispatch actually reads it. The real resolver answers first: a test
+// that registers a capability default of its own gets that connection (and
+// its stop guards), and only an instance with nothing registered falls back
+// to the stand-in.
+vi.mock("$lib/server/connections/capabilityTarget", async (importOriginal) => {
+	const real = await importOriginal<
+		typeof import("$lib/server/connections/capabilityTarget")
+	>()
+	return {
+		...real,
+		resolveCapabilityTarget: async (
+			db: Db,
+			req: Parameters<typeof real.resolveCapabilityTarget>[1]
+		) => {
+			const target = await real.resolveCapabilityTarget(db, req)
+			if (target.ok) return target
+			return {
+				ok: true,
+				capability: req.capability,
+				connection: { id: 1, type: "koboldcpp", promptFormat: "vicuna" },
+				sampling: { id: 1 },
+				connectionVia: "pipelineConfig",
+				samplingVia: "pipelineConfig"
+			}
+		}
+	}
+})
 vi.mock("$lib/server/utils/getUserConfigurations", () => ({
 	getUserConfigurations: async () => ({
 		sampling: { id: 1 },
@@ -96,12 +125,12 @@ beforeAll(async () => {
 		.returning()
 	characterId = character.id
 	const [persona] = await db
-		.insert(schema.personas)
+		.insert(schema.characters)
 		.values({
 			userId,
+			isPersona: true,
 			name: "Bob",
-			description: "A traveller.",
-			isDefault: false
+			description: "A traveller."
 		})
 		.returning()
 	const [session] = await db
@@ -109,14 +138,12 @@ beforeAll(async () => {
 		.values({ userId, isGroup: false })
 		.returning()
 	sessionId = session.id
-	await db
-		.insert(schema.sessionCharacters)
-		.values({
-			sessionId,
-			characterId,
-			isActive: true,
-			visibility: "visible"
-		})
+	await db.insert(schema.sessionCharacters).values({
+		sessionId,
+		characterId,
+		isActive: true,
+		visibility: "visible"
+	})
 	await db
 		.insert(schema.sessionPersonas)
 		.values({ sessionId, personaId: persona.id })
@@ -183,9 +210,9 @@ describe("function bindings (19 §3)", () => {
 		)
 
 		// Both serve; the companion (core) wins by default.
-		expect(
-			await functionCandidates(db, STANDARD, "narrate")
-		).toEqual(expect.arrayContaining([CORE_NARRATE, STAGE_NARRATE]))
+		expect(await functionCandidates(db, STANDARD, "narrate")).toEqual(
+			expect.arrayContaining([CORE_NARRATE, STAGE_NARRATE])
+		)
 		expect(
 			await resolveFunctionSpec(db, STANDARD, "narrate", {
 				sessionId
@@ -284,7 +311,7 @@ describe("the strategy swap (19 §5)", () => {
 		const set = await setSessionSpeakerStrategy(db, {
 			sessionId,
 			userId,
-			typeId: "core:task/turn-round-robin@1"
+			definitionId: "core:task/turn-round-robin@1"
 		})
 		expect(set.error).toBeUndefined()
 		expect(await getSessionSpeakerStrategy(db, sessionId)).toBe(
@@ -304,7 +331,7 @@ describe("the strategy swap (19 §5)", () => {
 			skipReceipt: true
 		})
 		const speaker = receipt.nodes.find((n: any) => n.nodeKey === "speaker")
-		expect(speaker!.typeId).toBe("core:task/turn-round-robin@1")
+		expect(speaker!.definitionId).toBe("core:task/turn-round-robin@1")
 		expect(speaker!.output).toMatchObject({
 			characterId,
 			strategy: "round-robin",
@@ -322,7 +349,7 @@ describe("the strategy swap (19 §5)", () => {
 		const refused = await setSessionSpeakerStrategy(db, {
 			sessionId,
 			userId,
-			typeId: "core:task/assemble@2"
+			definitionId: "core:task/assemble@2"
 		})
 		expect(refused.error).toContain("not a next-speaker strategy")
 
@@ -331,7 +358,7 @@ describe("the strategy swap (19 §5)", () => {
 			scope: { kind: "session", id: sessionId },
 			specSlug: "core:spec/respond",
 			nodeKey: "speaker",
-			typeId: "core:task/assemble@2",
+			definitionId: "core:task/assemble@2",
 			userId
 		})
 		expect(generic.error).toContain("does not publish the same shape")
@@ -347,7 +374,7 @@ describe("the strategy swap (19 §5)", () => {
 			scopeKind: "session",
 			scopeId: sessionId,
 			nodeKey: "prompt",
-			typeId: "core:task/turn-none@1", // wrong shape for `prompt`
+			definitionId: "core:task/turn-none@1", // wrong shape for `prompt`
 			updatedBy: userId
 		})
 		const doc = await applyNodeRebinds(
@@ -356,11 +383,11 @@ describe("the strategy swap (19 §5)", () => {
 			{ specSlug: "core:spec/respond", sessionId }
 		)
 		const prompt = (doc.nodes as any[]).find((n) => n.key === "prompt")
-		expect(prompt.typeId).toBe("core:task/assemble")
+		expect(prompt.definitionId).toBe("core:task/assemble")
 
 		// And the good rebind from the previous test is still in force.
 		const speaker = (doc.nodes as any[]).find((n) => n.key === "speaker")
-		expect(speaker.typeId).toBe("core:task/turn-round-robin")
+		expect(speaker.definitionId).toBe("core:task/turn-round-robin")
 	})
 
 	it("clearing restores the pin — reset-is-delete", async () => {
@@ -369,7 +396,7 @@ describe("the strategy swap (19 §5)", () => {
 		const cleared = await setSessionSpeakerStrategy(db, {
 			sessionId,
 			userId,
-			typeId: null
+			definitionId: null
 		})
 		expect(cleared.error).toBeUndefined()
 		expect(await getSessionSpeakerStrategy(db, sessionId)).toBe(null)

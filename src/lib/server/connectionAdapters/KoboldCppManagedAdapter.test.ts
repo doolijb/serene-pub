@@ -161,22 +161,37 @@ describe("KoboldCppManagedAdapter — base URL resolution", () => {
 		)
 	})
 
-	test("listModels() also prefers the normalized manager base URL", async () => {
+	test("listModels() also prefers the normalized manager base URL, and lists the directory as identifiers", async () => {
 		findFirstMock.mockResolvedValue({
 			koboldCppManagerBaseUrl: "http://manager-host:5001/"
 		})
-		fetchCurrentModelNameMock.mockResolvedValue("loaded-model")
 		fetchMock.mockResolvedValue({
 			ok: true,
-			json: async () => []
+			json: async () => ["a.gguf", "b.gguf"]
 		})
 		const result = await exportsDefault.listModels(
 			makeConnection({ baseUrl: "http://connection-host:5001" })
 		)
-		expect(fetchCurrentModelNameMock).toHaveBeenCalledWith(
-			"http://manager-host:5001"
+		expect(fetchMock).toHaveBeenLastCalledWith(
+			"http://manager-host:5001/api/admin/list_options",
+			expect.anything()
 		)
-		expect(result.models[0].name).toContain("loaded-model")
+		// Real identifiers only — no "[current]" sentinel, which a persisted
+		// sync would have turned into a row no host lists.
+		expect(result.models).toEqual([
+			{ model: "a.gguf", name: "a.gguf" },
+			{ model: "b.gguf", name: "b.gguf" }
+		])
+	})
+
+	test("listModels() answers with an ERROR when the admin API is unreachable, never an empty list", async () => {
+		findFirstMock.mockResolvedValue({
+			koboldCppManagerBaseUrl: "http://manager-host:5001/"
+		})
+		fetchMock.mockRejectedValue(new Error("ECONNREFUSED"))
+		const result = await exportsDefault.listModels(makeConnection({}))
+		expect(result.models).toEqual([])
+		expect(result.error).toMatch(/could not be reached/)
 	})
 })
 

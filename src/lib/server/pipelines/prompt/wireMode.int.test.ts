@@ -98,6 +98,8 @@ let sessionId: number
 let userId: number
 let anthropicId: number
 let koboldId: number
+/** The explicit model row per endpoint — every registration names the pair. */
+const modelByConnection = new Map<number, number>()
 
 /** The line a real user typed. Present in the assembled prompt; not in "Hello". */
 const USER_LINE = "Where do the riders patrol?"
@@ -129,8 +131,7 @@ const TEMPLATE = [
 const wirePipeline = () =>
 	compile(
 		spec("core:spec/wire-mode", { version: "1.0.0" })
-			.on("core:event/message-created@1")
-			.input("input", C.userMessage.v1())
+			.inlet("input", C.userMessage.v1())
 			.query("history", ($) =>
 				C.sessionHistory.v1({ scope: $.input.sessionScope })
 			)
@@ -160,7 +161,7 @@ const wirePipeline = () =>
 					connection: slot.connectionOf("generate")
 				})
 			)
-			.provider("generate", ($) =>
+			.oracle("generate", ($) =>
 				C.generateText.v1({ context: $.prompt.context })
 			)
 			.build()
@@ -181,12 +182,12 @@ beforeAll(async () => {
 		.returning()
 
 	const [persona] = await db
-		.insert(schema.personas)
+		.insert(schema.characters)
 		.values({
 			userId,
+			isPersona: true,
 			name: "Bob",
-			description: "A traveller.",
-			isDefault: false
+			description: "A traveller."
 		})
 		.returning()
 
@@ -221,7 +222,6 @@ beforeAll(async () => {
 			name: "Claude",
 			type: CONNECTION_TYPE.ANTHROPIC,
 			baseUrl: "",
-			model: "claude-sonnet-4-5",
 			// A format is SET, and it must make no difference: the native
 			// Messages API declares no `wire_completion` at all, so this
 			// connection resolves to chat and the delimiters have nothing to
@@ -233,6 +233,15 @@ beforeAll(async () => {
 		})
 		.returning()
 	anthropicId = anthropic.id
+	const [anthropicModel] = await db
+		.insert(schema.connectionModels)
+		.values({
+			connectionId: anthropic.id,
+			model: "claude-sonnet-4-5",
+			name: "claude-sonnet-4-5"
+		})
+		.returning()
+	modelByConnection.set(anthropic.id, anthropicModel.id)
 
 	const [kobold] = await db
 		.insert(schema.connections)
@@ -240,18 +249,25 @@ beforeAll(async () => {
 			name: "KoboldCPP",
 			type: CONNECTION_TYPE.KOBOLDCPP,
 			baseUrl: "http://localhost:5001",
-			model: "test",
 			promptFormat: PromptFormats.VICUNA,
 			tokenCounter: "estimate",
 			extraJson: { stream: false }
 		})
 		.returning()
 	koboldId = kobold.id
+	const [koboldModel] = await db
+		.insert(schema.connectionModels)
+		.values({ connectionId: kobold.id, model: "test", name: "test" })
+		.returning()
+	modelByConnection.set(kobold.id, koboldModel.id)
 }, 60_000)
 
 /** Register a connection as the instance's `text->text` default and render. */
 async function renderFor(connectionId: number) {
-	await setCapabilityDefault(db, "text->text", { connectionId })
+	await setCapabilityDefault(db, "text->text", {
+		connectionId,
+		connectionModelId: modelByConnection.get(connectionId) ?? null
+	})
 
 	const world = await buildWorld(db, { sessionId })
 	// The story string, layered the way `pipelinePreview` does it: this ad-hoc
@@ -298,14 +314,26 @@ async function renderFor(connectionId: number) {
 	return payload
 }
 
-/** The row as an adapter receives it — the same two wrappers the loader applies. */
+/** The pair as an adapter receives it — the same wrappers the loader applies. */
 async function adapterConnection(connectionId: number) {
 	const [row] = await db
 		.select()
 		.from(schema.connections)
 		.where(eq(schema.connections.id, connectionId))
 		.limit(1)
-	return withWireMode(await withCompletionTemplate(db, row))
+	const modelId = modelByConnection.get(connectionId)
+	const { connectionModelById, mergeEndpointModel } = await import(
+		"$lib/server/connections/models"
+	)
+	const modelRow = modelId
+		? await connectionModelById(db, modelId)
+		: undefined
+	return withWireMode(
+		await withCompletionTemplate(
+			db,
+			mergeEndpointModel(row, modelRow) as any
+		)
+	)
 }
 
 const adapterArgs = (connection: any) => ({

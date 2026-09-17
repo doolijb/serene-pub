@@ -6,10 +6,11 @@
 	 * only takes effect once the user has produced a code from it. Enabling on
 	 * generation would lock people out with a secret their app never received.
 	 */
-	import { onDestroy, onMount } from "svelte"
+	import { onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 
 	const socket = useTypedSocket()
 
@@ -59,22 +60,30 @@
 		"totp:disable:error"
 	] as const
 
+	/**
+	 * All ten keys BARE — no `totp:` event is in `SCOPED_EVENTS`; every one is
+	 * about the signed-in account and there is nothing to narrow to. Standing
+	 * rather than one-shot because `totp:status` is a cascade target: enrolling,
+	 * regenerating codes and disabling each re-send it, which is how the panel
+	 * swaps between its enrolled and not-enrolled halves without asking again.
+	 */
+	useInterest<"totp:status">("totp:status", handleStatus)
+	useInterest<"totp:enroll:begin">("totp:enroll:begin", handleBegin)
+	useInterest<"totp:enroll:confirm">("totp:enroll:confirm", handleCodes)
+	useInterest<"totp:regenerateCodes">("totp:regenerateCodes", handleCodes)
+	useInterest<"totp:disable">("totp:disable", handleDisabled)
+
+	/**
+	 * The five refusals, one `useInterest` per key so each gets its own effect
+	 * and releases with the component. Errors are never gated (plan ruling 2);
+	 * the registry is simply the only listener path now.
+	 */
+	for (const e of ERRORS) {
+		useInterest<"totp:status:error">(e, handleError)
+	}
+
 	onMount(() => {
-		socket.on("totp:status", handleStatus)
-		socket.on("totp:enroll:begin", handleBegin)
-		socket.on("totp:enroll:confirm", handleCodes)
-		socket.on("totp:regenerateCodes", handleCodes)
-		socket.on("totp:disable", handleDisabled)
-		for (const e of ERRORS) socket.on(e, handleError)
 		socket.emit("totp:status", {})
-	})
-	onDestroy(() => {
-		socket.off("totp:status", handleStatus)
-		socket.off("totp:enroll:begin", handleBegin)
-		socket.off("totp:enroll:confirm", handleCodes)
-		socket.off("totp:regenerateCodes", handleCodes)
-		socket.off("totp:disable", handleDisabled)
-		for (const e of ERRORS) socket.off(e, handleError)
 	})
 
 	const lowOnCodes = $derived(!!status?.enabled && status.remainingCodes <= 2)
@@ -127,7 +136,9 @@
 				Each one works once, and they are the only way back in if you
 				lose your authenticator.
 			</p>
-			<ul class="grid grid-cols-2 gap-1 font-mono text-sm">
+			<ul
+				class="grid grid-cols-1 gap-1 font-mono text-sm @lg/view:grid-cols-2"
+			>
 				{#each recoveryCodes as rc (rc)}
 					<li>{rc}</li>
 				{/each}

@@ -1,7 +1,11 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
-	import { getContext, onDestroy, onMount } from "svelte"
+	import {
+		declareInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
+	import { getContext, onDestroy } from "svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import AiTaskModal, { type AiTaskStep } from "./AiTaskModal.svelte"
 
@@ -335,9 +339,16 @@
 		// server's real message. Toasting again would double it.
 	}
 
-	onMount(() => {
-		socket.on("narrativeGraph:build:error", handleBuildError)
-	})
+	/**
+	 * BARE, and standing for the modal's life: `narrativeGraph:build:error` has
+	 * no entry in `SCOPED_EVENTS`, so a `#<id>` key would match no payload at
+	 * all, and `handleBuildError`'s own `msg.lorebookId !== lorebookId` check
+	 * stays what keeps another book's failure from un-sticking this modal.
+	 */
+	useInterest<"narrativeGraph:build:error">(
+		"narrativeGraph:build:error",
+		handleBuildError
+	)
 
 	// Shared by the error step's "Start Over" and the review step's
 	// "Rebuild" — both mean the same thing: discard whatever build is
@@ -351,13 +362,20 @@
 		showRaw = false
 	}
 
-	// Hoisted to component scope (out of apply()) so this reference is stable
-	// across calls and `off` in onDestroy can name it — a bare
-	// `socket.off("narrativeGraph:applyProposal")` removes EVERY listener for
-	// that event, including other components' listeners for the same event.
+	/**
+	 * The apply reply's **interest**, held only while an apply is in flight —
+	 * declared in `apply()`, dropped on the first answer of either kind and
+	 * again when the modal is destroyed (a release is idempotent, so the
+	 * second call is a no-op).
+	 *
+	 * Both keys BARE: neither is in `SCOPED_EVENTS`, so a `#<id>` key would
+	 * match no payload at all, and each handler's own
+	 * `msg.lorebookId !== lorebookId` check stays the filter.
+	 */
+	let applyProposalReleases: Array<() => void> = []
 	function cleanupApplyProposal() {
-		socket.off("narrativeGraph:applyProposal", handleApplied)
-		socket.off("narrativeGraph:applyProposal:error", handleApplyError)
+		for (const release of applyProposalReleases) release()
+		applyProposalReleases = []
 	}
 	function handleApplied() {
 		cleanupApplyProposal()
@@ -396,24 +414,35 @@
 			updatedNodes: activeNodeUpdates.map(({ _deleted, ...u }) => u)
 		}
 
+		// Declared BEFORE the emit, not after it as the raw listeners were:
+		// the registry flushes its interest sync on the way out of every typed
+		// `emit`, so the key this reply needs is on the server before the
+		// request that produces it arrives. Any stale pair is dropped first —
+		// the handlers are one stable reference, so declaring twice would
+		// leave a subscriber a single release could not clear.
+		cleanupApplyProposal()
+		applyProposalReleases = [
+			declareInterest<"narrativeGraph:applyProposal">(
+				"narrativeGraph:applyProposal",
+				handleApplied
+			),
+			declareInterest<"narrativeGraph:applyProposal:error">(
+				"narrativeGraph:applyProposal:error",
+				handleApplyError
+			)
+		]
+
 		socket.emit("narrativeGraph:applyProposal", {
 			lorebookId,
 			proposal: filteredProposal,
 			mode
 		} satisfies Sockets.NarrativeGraph.ApplyProposal.Params)
-
-		// Now that the handlers are one stable reference rather than a fresh
-		// closure per call, registering twice would leave a duplicate that a
-		// single `off` cannot clear. Drop any stale pair first.
-		cleanupApplyProposal()
-		socket.on("narrativeGraph:applyProposal", handleApplied)
-		socket.on("narrativeGraph:applyProposal:error", handleApplyError)
 	}
 
 	onDestroy(() => {
-		socket.off("narrativeGraph:applyProposal", handleApplied)
-		socket.off("narrativeGraph:applyProposal:error", handleApplyError)
-		socket.off("narrativeGraph:build:error", handleBuildError)
+		// `narrativeGraph:build:error` is not here: the interest registry
+		// releases this modal's subscriber as its effect is destroyed.
+		cleanupApplyProposal()
 	})
 
 	function nodeLabel(tempId: string): string {

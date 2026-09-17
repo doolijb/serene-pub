@@ -8,10 +8,12 @@
 	 * "everything gets its own page" rather than duplicating a second wizard
 	 * UI. Once every step is complete, shows a plain dashboard instead.
 	 */
-	import { getContext, onMount } from "svelte"
+	import { getContext } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { getInterestContext } from "$lib/client/sockets/interest.svelte"
 
 	const socket = useTypedSocket()
+	const interest = getInterestContext()
 	const userCtx: UserCtx = getContext("userCtx")
 	const systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
 
@@ -28,7 +30,6 @@
 	let characters: Sockets.Characters.List.Response["characterList"] = $state(
 		[]
 	)
-	let personas: Sockets.Personas.List.Response["personaList"] = $state([])
 	let sessions: Sockets.Sessions.List.Response["sessionList"] = $state([])
 	let setupData: {
 		ragStepComplete: boolean
@@ -36,7 +37,9 @@
 	let loaded = $state(false)
 
 	let hasCharacter = $derived(characters.length > 0)
-	let hasPersona = $derived(personas.length > 0)
+	// A persona is a character with the flag set, so this is a read of the SAME
+	// list rather than a second one — there is no `personas:list` to ask.
+	let hasPersona = $derived(characters.some((c) => c.isPersona))
 	let hasSession = $derived(sessions.length > 0)
 
 	interface Step {
@@ -46,7 +49,7 @@
 		done: boolean
 		href?: string
 		// Where "Review" should go once the step is done, if different from
-		// `href` (which for persona/character/session points at their "new"
+		// `href` (which for character/session points at their "new"
 		// creation form — reusing that for Review would drop a returning
 		// user straight into a blank form instead of showing what they
 		// already made).
@@ -68,10 +71,11 @@
 		list.push({
 			id: "persona",
 			label: "Create a persona",
-			description: "A persona represents you in conversations.",
+			description:
+				"A persona represents you in conversations. It is a character with Persona switched on.",
 			done: hasPersona,
-			href: "/document-view/personas/new",
-			doneHref: "/document-view/personas"
+			href: "/document-view/characters/new",
+			doneHref: "/document-view/characters"
 		})
 		list.push({
 			id: "character",
@@ -111,13 +115,28 @@
 	function handleCharactersList(msg: Sockets.Characters.List.Response) {
 		characters = msg.characterList || []
 	}
-	function handlePersonasList(msg: Sockets.Personas.List.Response) {
-		personas = msg.personaList || []
-	}
 	function handleSessionsList(msg: Sockets.Sessions.List.Response) {
 		sessions = msg.sessionList || []
 		loaded = true
 	}
+
+	/**
+	 * The checklist's two lists, each asked for and listened for in one.
+	 * All BARE — these are the user's whole lists, with nothing to scope them
+	 * to — and all STANDING, because the server re-emits the cast lists as a
+	 * cascade after any write and this checklist should show the new count.
+	 */
+	$effect(() =>
+		interest.requestWithInterest(
+			"characters:list",
+			{},
+			handleCharactersList
+		)
+	)
+	$effect(() =>
+		interest.requestWithInterest("sessions:list", {}, handleSessionsList)
+	)
+
 	function handleSetupGet(msg: any) {
 		setupData = msg.setup
 	}
@@ -125,24 +144,17 @@
 		if (msg.setup) setupData = msg.setup
 	}
 
-	onMount(() => {
-		socket.on("characters:list", handleCharactersList)
-		socket.on("personas:list", handlePersonasList)
-		socket.on("sessions:list", handleSessionsList)
-		socket.on("setup:get", handleSetupGet)
-		socket.on("setup:markComplete", handleSetupMarkComplete)
-		socket.emit("characters:list", {})
-		socket.emit("personas:list", {})
-		socket.emit("sessions:list", {})
-		socket.emit("setup:get", {})
-		return () => {
-			socket.off("characters:list", handleCharactersList)
-			socket.off("personas:list", handlePersonasList)
-			socket.off("sessions:list", handleSessionsList)
-			socket.off("setup:get", handleSetupGet)
-			socket.off("setup:markComplete", handleSetupMarkComplete)
-		}
-	})
+	/**
+	 * The setup record, BARE — it is the instance's, with nothing to scope it
+	 * to. `setup:get` is asked for and listened for in one; `setup:markComplete`
+	 * is a STANDING key, because it answers the `skipStep` write above and the
+	 * checklist has to redraw when it lands.
+	 */
+	$effect(() => interest.requestWithInterest("setup:get", {}, handleSetupGet))
+	interest.useInterest<"setup:markComplete">(
+		"setup:markComplete",
+		handleSetupMarkComplete
+	)
 </script>
 
 <svelte:head>
@@ -222,9 +234,6 @@
 	<ul class="a11y-list">
 		<li class="a11y-list-item">
 			<a href="/document-view/characters">Characters</a>
-		</li>
-		<li class="a11y-list-item">
-			<a href="/document-view/personas">Personas</a>
 		</li>
 		<li class="a11y-list-item">
 			<a href="/document-view/sessions/new">Start a new session</a>

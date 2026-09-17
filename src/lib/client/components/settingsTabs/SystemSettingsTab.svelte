@@ -6,6 +6,7 @@
 	import { z } from "zod"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { declareInterest } from "$lib/client/sockets/interest.svelte"
 	import LanguagePicker from "$lib/client/components/inputs/LanguagePicker.svelte"
 	import Select from "$lib/client/components/inputs/Select.svelte"
 
@@ -469,15 +470,13 @@
 
 		// ────────────────────────────────────────────────────────────────────
 
-		// "systemSettings:updateAccountsEnabled:error" isn't in the typed
-		// SocketEventMap (only its success variant is), so this listener is
-		// registered via the same `(socket as any).on(...)` cast used
-		// elsewhere in the app for ad hoc error listeners (eg. +page.svelte's
-		// "koboldcpp:connectModel:error"). Note: the "systemSettings:*Enabled"
-		// switches are bound directly to `systemSettingsCtx.settings`, which
-		// is only updated by the server on success, so on failure they
-		// already revert to their prior (correct) state - this listener's
-		// job is just to surface *why* it failed.
+		// The "systemSettings:*Enabled" switches are bound directly to
+		// `systemSettingsCtx.settings`, which the server only updates on
+		// success, so on failure they already revert to their prior (correct)
+		// state - this handler's job is just to surface *why* it failed. It is
+		// declared through the interest registry below, like every other
+		// listener here; `:error` events are typed members of SocketEventMap
+		// and are never gated (plan ruling 2).
 		const handleAccountsEnabledError = (message: { error?: string }) => {
 			toaster.error({
 				title: "Cannot enable user accounts",
@@ -566,81 +565,93 @@
 			}
 		}
 
-		// Register event listeners
-		socket.on(
-			"systemSettings:updateKoboldCppManagerEnabled",
-			handleKoboldCppManagerEnabled
-		)
-		socket.on("koboldcpp:setBaseUrl", handleKoboldCppSetBaseUrl)
-		socket.on(
-			"systemSettings:updateOllamaManagerEnabled",
-			handleOllamaManagerEnabled
-		)
-		socket.on("systemSettings:updateAccountsEnabled", handleAccountsEnabled)
-		;(socket as any).on(
-			"systemSettings:updateAccountsEnabled:error",
-			handleAccountsEnabledError
-		)
-		socket.on("users:current:hasPassphrase", handleHasPassphrase)
-		socket.on("users:current:setPassphrase", handleSetPassphrase)
-		socket.on("cardSources:charaVault:status", handleCharaVaultStatus)
-		socket.on("cardSources:charaVault:connect", handleCharaVaultConnect)
-		;(socket as any).on(
-			"cardSources:charaVault:connect:error",
-			handleCharaVaultConnectError
-		)
-		socket.on(
-			"cardSources:charaVault:disconnect",
-			handleCharaVaultDisconnect
-		)
-		socket.on(
-			"cardSources:charaVault:disconnect:error",
-			handleCharaVaultDisconnectError
-		)
+		// The KoboldCPP URL save's own reply. BARE like the rest — the family
+		// has no interest scope — and standing, because the field can be saved
+		// again without this tab remounting. `koboldcpp:` is RESTRICTED
+		// interest, so the registry itself refuses the key for a known
+		// non-admin and holds it while the user is still unknown.
+		const koboldCppReleases = [
+			declareInterest<"koboldcpp:setBaseUrl">(
+				"koboldcpp:setBaseUrl",
+				handleKoboldCppSetBaseUrl
+			)
+		]
+
+		// The three instance-setting write replies and the two passphrase
+		// ones, on the interest registry. All BARE — none is in
+		// `SCOPED_EVENTS`; each is about this instance or this account, with
+		// nothing to narrow to — and all standing, because every one of these
+		// toggles can be pressed again while the tab stays open.
+		//
+		// The ordinary app-wide registry, not `adminInterest`: that context
+		// exists only under `/admin`, and this tab is in the Settings sidebar.
+		// Neither `systemSettings:` nor `users:` is a restricted prefix, so the
+		// admin boundary here is the one the server's own handlers hold.
+		const settingReleases = [
+			declareInterest<"systemSettings:updateKoboldCppManagerEnabled">(
+				"systemSettings:updateKoboldCppManagerEnabled",
+				handleKoboldCppManagerEnabled
+			),
+			declareInterest<"systemSettings:updateOllamaManagerEnabled">(
+				"systemSettings:updateOllamaManagerEnabled",
+				handleOllamaManagerEnabled
+			),
+			declareInterest<"systemSettings:updateAccountsEnabled">(
+				"systemSettings:updateAccountsEnabled",
+				handleAccountsEnabled
+			),
+			declareInterest<"systemSettings:updateAccountsEnabled:error">(
+				"systemSettings:updateAccountsEnabled:error",
+				handleAccountsEnabledError
+			),
+			declareInterest<"users:current:hasPassphrase">(
+				"users:current:hasPassphrase",
+				handleHasPassphrase
+			),
+			declareInterest<"users:current:setPassphrase">(
+				"users:current:setPassphrase",
+				handleSetPassphrase
+			)
+		]
+
+		// The CharaVault card source, on the interest registry. All five keys
+		// are BARE: one account is connected at a time, so none of these
+		// replies is about a particular row and none has an interest scope to
+		// narrow to. Standing, because `status` is re-sent after a connect or
+		// a disconnect.
+		const cardSourceReleases = [
+			declareInterest<"cardSources:charaVault:status">(
+				"cardSources:charaVault:status",
+				handleCharaVaultStatus
+			),
+			declareInterest<"cardSources:charaVault:connect">(
+				"cardSources:charaVault:connect",
+				handleCharaVaultConnect
+			),
+			declareInterest<"cardSources:charaVault:connect:error">(
+				"cardSources:charaVault:connect:error",
+				handleCharaVaultConnectError
+			),
+			declareInterest<"cardSources:charaVault:disconnect">(
+				"cardSources:charaVault:disconnect",
+				handleCharaVaultDisconnect
+			),
+			declareInterest<"cardSources:charaVault:disconnect:error">(
+				"cardSources:charaVault:disconnect:error",
+				handleCharaVaultDisconnectError
+			)
+		]
 
 		if (userCtx.user?.isAdmin) {
 			socket.emit("cardSources:charaVault:status", {})
 		}
 
-		// Cleanup function to remove listeners
+		// Cleanup function to release this tab's interest
 		return () => {
 			hasUnsavedChanges = false
-			socket.off(
-				"systemSettings:updateKoboldCppManagerEnabled",
-				handleKoboldCppManagerEnabled
-			)
-			socket.off("koboldcpp:setBaseUrl", handleKoboldCppSetBaseUrl)
-			socket.off(
-				"systemSettings:updateOllamaManagerEnabled",
-				handleOllamaManagerEnabled
-			)
-			socket.off(
-				"systemSettings:updateAccountsEnabled",
-				handleAccountsEnabled
-			)
-			;(socket as any).off(
-				"systemSettings:updateAccountsEnabled:error",
-				handleAccountsEnabledError
-			)
-			socket.off("users:current:hasPassphrase", handleHasPassphrase)
-			socket.off("users:current:setPassphrase", handleSetPassphrase)
-			socket.off("cardSources:charaVault:status", handleCharaVaultStatus)
-			socket.off(
-				"cardSources:charaVault:connect",
-				handleCharaVaultConnect
-			)
-			;(socket as any).off(
-				"cardSources:charaVault:connect:error",
-				handleCharaVaultConnectError
-			)
-			socket.off(
-				"cardSources:charaVault:disconnect",
-				handleCharaVaultDisconnect
-			)
-			socket.off(
-				"cardSources:charaVault:disconnect:error",
-				handleCharaVaultDisconnectError
-			)
+			for (const release of koboldCppReleases) release()
+			for (const release of settingReleases) release()
+			for (const release of cardSourceReleases) release()
 		}
 	})
 </script>

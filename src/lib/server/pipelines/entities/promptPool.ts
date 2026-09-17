@@ -36,5 +36,5 @@ import { poolKeyFor } from "./contextTemplateDefaults"
  * the rows it names. `#` rather than `:` because both halves already contain
  * colons.
  */
-export const promptPoolKeyFor = (nodeTypeId: string, slot: string): string =>
-	`${poolKeyFor(nodeTypeId)}#${slot}`
+export const promptPoolKeyFor = (nodeDefinitionId: string, slot: string): string =>
+	`${poolKeyFor(nodeDefinitionId)}#${slot}`

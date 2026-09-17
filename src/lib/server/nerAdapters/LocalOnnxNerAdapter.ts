@@ -22,6 +22,7 @@ import {
 	type NerModelOption
 } from "./BaseNerAdapter"
 import { NER_MODELS } from "$lib/server/ner/models"
+import { recommendedNerModels } from "$lib/server/localModels/onnxList"
 
 export class LocalOnnxNerAdapter extends BaseNerAdapter {
 	async extractEntities(req: ExtractEntitiesRequest): Promise<EntitySpan[]> {
@@ -63,15 +64,19 @@ export class LocalOnnxNerAdapter extends BaseNerAdapter {
 }
 
 /**
- * What this machine can extract with: the shipped catalogue, plus any ONNX file
+ * What this machine can extract with: the recommended list, plus any ONNX file
  * the local model registry holds whose modality is `ner`.
  *
- * Both halves matter and neither replaces the other. The catalogue is two
- * curated models with known label sets and sizes, which is what a first-time
- * setup needs; `local_models` is whatever the user actually downloaded, and its
- * `modality` column is the one place that says an `.onnx` file is an entity
- * model rather than an embedding one (`kind` cannot: the header sniff files a
- * BERT as `text`).
+ * Both halves matter and neither replaces the other. The list is curated models
+ * with known label sets and sizes, which is what a first-time setup needs;
+ * `local_models` is whatever the user actually downloaded, and its `modality`
+ * column is the one place that says an `.onnx` file is an entity model rather
+ * than an embedding one (`kind` cannot: the header sniff files a BERT as
+ * `text`).
+ *
+ * ⚠ The list is the PUBLISHED one merged over the compiled catalogue
+ * (`localModels/onnxList`) — the same ids, and the same reasoning as the
+ * embedding adapter next door.
  *
  * The registry half is behind a dynamic import and a try/catch because a model
  * list must still answer when the database is unavailable — the catalogue is the
@@ -80,11 +85,25 @@ export class LocalOnnxNerAdapter extends BaseNerAdapter {
 async function listModels(
 	_connection: SelectConnection
 ): Promise<{ models: NerModelOption[]; error?: string }> {
-	const catalogue: NerModelOption[] = NER_MODELS.map((m) => ({
-		model: m.id,
-		name: m.name,
-		description: `${m.sizeLabel} · ${m.labels.join(", ")} · ${m.description}`
-	}))
+	// ⚠ One id, one entry, first occurrence winning — across BOTH halves, for
+	// the reason the embedding adapter next door states: the consumer is
+	// `syncConnectionModels`, whose `(connection_id, model)` unique index
+	// refuses a second row for an id it already wrote, so a listing naming one
+	// model twice would abort that endpoint's whole sync.
+	const catalogue: NerModelOption[] = []
+	const have = new Set<string>()
+	const add = (option: NerModelOption) => {
+		if (!option.model || have.has(option.model)) return
+		have.add(option.model)
+		catalogue.push(option)
+	}
+
+	for (const m of await recommendedNerModels())
+		add({
+			model: m.id,
+			name: m.name,
+			description: `${m.sizeLabel} · ${m.labels.join(", ")} · ${m.description}`
+		})
 
 	try {
 		const { db } = await import("$lib/server/db")
@@ -103,17 +122,12 @@ async function listModels(
 					eq(schema.localModels.status, "complete")
 				)
 			)
-		const have = new Set(catalogue.map((m) => m.model))
-		for (const r of rows) {
-			const id = r.modelName || r.filename
-			if (!id || have.has(id)) continue
-			have.add(id)
-			catalogue.push({
-				model: id,
+		for (const r of rows)
+			add({
+				model: r.modelName || r.filename,
 				name: r.modelName || r.filename,
 				description: r.description ?? "Downloaded model"
 			})
-		}
 	} catch (e: any) {
 		return { models: catalogue, error: e?.message ?? String(e) }
 	}
@@ -133,17 +147,15 @@ async function listModels(
 async function testConnection(
 	connection: SelectConnection
 ): Promise<{ ok: boolean; error?: string; extra?: Record<string, unknown> }> {
-	const { getLocalNerUnsupportedReason } = await import("$lib/server/ner")
+	const { getLocalNerUnsupportedReason } = await import(
+		"$lib/server/ner"
+	)
 	const reason = await getLocalNerUnsupportedReason()
 	if (reason) return { ok: false, error: reason }
-	if (!connection.model)
-		return { ok: false, error: "No model is chosen for this connection." }
+	// The endpoint only: connections have no default model, so a test names
+	// none. Reachability is the platform probe above; the catalogue rides
+	// along for the models section to offer.
 	const { models } = await listModels(connection)
-	if (!models.some((m) => m.model === connection.model))
-		return {
-			ok: false,
-			error: `"${connection.model}" is not in the shipped catalogue or the local model registry.`
-		}
 	return { ok: true, extra: { models } }
 }
 

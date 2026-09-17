@@ -1,6 +1,10 @@
 <script lang="ts">
-	import { onMount, getContext } from "svelte"
+	import { getContext } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import {
+		requestWithInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
 
 	const socket = useTypedSocket()
 	let userCtx: UserCtx = getContext("userCtx")
@@ -21,15 +25,17 @@
 		socket.emit("users:list", {})
 	}
 
-	onMount(() => {
-		socket.on("users:list", handleUsersList)
-		socket.on("users:delete", handleUsersDelete)
-		socket.emit("users:list", {})
-		return () => {
-			socket.off("users:list", handleUsersList)
-			socket.off("users:delete", handleUsersDelete)
-		}
-	})
+	/**
+	 * The roster, asked for and listened for in one, and the delete's answer —
+	 * a STANDING key, since it lands whenever somebody presses Delete rather
+	 * than in reply to anything asked here. Both BARE: `users:` has no
+	 * `SCOPED_EVENTS` entry, so a key naming an id would match nothing.
+	 *
+	 * `users:delete` is declared ahead of the request below so the key exists
+	 * before either goes out.
+	 */
+	useInterest<"users:delete">("users:delete", handleUsersDelete)
+	$effect(() => requestWithInterest("users:list", {}, handleUsersList))
 </script>
 
 <svelte:head>

@@ -2,6 +2,8 @@
 	import { onMount } from "svelte"
 	import { page } from "$app/state"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { declareInterest } from "$lib/client/sockets/interest.svelte"
+	import { interestKey } from "$lib/shared/sockets/interest"
 
 	const socket = useTypedSocket()
 	const characterId = $derived(Number(page.params.id))
@@ -30,12 +32,32 @@
 		character = msg.character
 	}
 
+	/**
+	 * SCOPED to the character in the route, and no bare key beside it: the
+	 * not-found reply carries `characterId` next to a null character, so it has
+	 * this same scope. A bare key would match every OTHER character's reply
+	 * too — which on the server is the gate open for every id while this page
+	 * is open.
+	 *
+	 * An effect rather than `useInterest` because that helper reads its key
+	 * once: a client-side move between two characters changes `characterId`, and
+	 * this releases the old scope as it takes the new one.
+	 *
+	 * Declared ahead of `onMount` so the key is held before `load()` sends its
+	 * request — effects run in declaration order, and the typed `emit` flushes
+	 * the interest sync ahead of the request itself (plan ruling 3).
+	 */
+	$effect(() => {
+		if (!Number.isFinite(characterId)) return
+		return declareInterest<"characters:get">(
+			interestKey("characters:get", characterId),
+			handleCharactersGet
+		)
+	})
+
 	onMount(() => {
-		socket.on("characters:get", handleCharactersGet)
+		// The `characters:get` reply is an interest, declared above.
 		load()
-		return () => {
-			socket.off("characters:get", handleCharactersGet)
-		}
 	})
 </script>
 

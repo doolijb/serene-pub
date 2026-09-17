@@ -7,16 +7,16 @@
 import { describe, it, expect, beforeAll } from "vitest"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import {
-	syncTypeRegistry,
-	readTypeRegistry
+	syncDefinitionRegistry,
+	readDefinitionRegistry
 } from "$lib/server/pipelines/boot/registrySync"
 import { saveDocument, loadDocument } from "$lib/server/pipelines/boot/store"
 import type { Descriptor } from "@serene-pub/sdk"
 import {
 	S,
-	allTypes,
-	allScriptTypes,
-	getScriptType,
+	allDefinitions,
+	allScriptKinds,
+	getScriptKind,
 	snapshotRegistry,
 	checkInstall,
 	installable,
@@ -39,18 +39,18 @@ beforeAll(async () => {
 
 describe("type registry sync", () => {
 	it("seeds the registry from the core contracts", async () => {
-		const r = await syncTypeRegistry(db, allTypes(), {
+		const r = await syncDefinitionRegistry(db, allDefinitions(), {
 			release: "0.6.0"
 		})
 		expect(r.inserted.length).toBeGreaterThan(20)
-		expect(r.inserted).toContain("core:provider/generate-text@1")
+		expect(r.inserted).toContain("core:oracle/generate-text@1")
 
-		const rows = await db.select().from(schema.pipelineTypeRegistry)
+		const rows = await db.select().from(schema.pipelineDefinitionRegistry)
 		expect(rows.length).toBe(r.inserted.length)
 	})
 
 	it("is idempotent, which is why it can run unconditionally at boot", async () => {
-		const again = await syncTypeRegistry(db, allTypes(), {
+		const again = await syncDefinitionRegistry(db, allDefinitions(), {
 			release: "0.6.0"
 		})
 		expect(again.inserted).toEqual([])
@@ -63,7 +63,7 @@ describe("type registry sync", () => {
 		// can change without a bump; the row must pick them up, because the
 		// row is what a form renders from (F6). Same pin, same contract, new
 		// wording → the stored slots move and nothing raises.
-		const base = allTypes().find(
+		const base = allDefinitions().find(
 			(d: any) => d.id === "core:query/session-history@1"
 		)! as any
 		const reworded = {
@@ -82,12 +82,12 @@ describe("type registry sync", () => {
 				}
 			}
 		}
-		const r = await syncTypeRegistry(db, [reworded], {
+		const r = await syncDefinitionRegistry(db, [reworded], {
 			release: "0.6.0"
 		})
 		expect(r.updated).toContain("core:query/session-history@1")
 
-		const rows = await readTypeRegistry(db)
+		const rows = await readDefinitionRegistry(db)
 		// Registry entries carry the bare id; the version is its own column.
 		const row = rows.find(
 			(e) => `${e.id}@${e.version}` === "core:query/session-history@1"
@@ -97,7 +97,7 @@ describe("type registry sync", () => {
 		)
 
 		// Put the original wording back so later assertions see the build's own.
-		const restore = await syncTypeRegistry(db, [base], {
+		const restore = await syncDefinitionRegistry(db, [base], {
 			release: "0.6.0"
 		})
 		expect(restore.updated).toContain("core:query/session-history@1")
@@ -109,7 +109,7 @@ describe("type registry sync", () => {
 		// descriptor edit stopped every pipeline on an upgrading install and
 		// the only way to ship one was a migration deleting rows.
 		//
-		// Built as a plain descriptor rather than through describeTaskType,
+		// Built as a plain descriptor rather than through describeTaskDefinition,
 		// because a type id may only be registered once per process (F5) — and
 		// what this test simulates is core's *next build*, not a second
 		// declaration in this one.
@@ -126,26 +126,26 @@ describe("type registry sync", () => {
 		const before = (
 			await db
 				.select()
-				.from(schema.pipelineTypeRegistry)
+				.from(schema.pipelineDefinitionRegistry)
 				.where(
 					and(
 						eq(
-							schema.pipelineTypeRegistry.typeId,
+							schema.pipelineDefinitionRegistry.definitionId,
 							"core:task/chunk-text"
 						),
-						eq(schema.pipelineTypeRegistry.version, 1)
+						eq(schema.pipelineDefinitionRegistry.version, 1)
 					)
 				)
 		)[0]! as any
 
-		const moved = await syncTypeRegistry(db, [drifted], {
+		const moved = await syncDefinitionRegistry(db, [drifted], {
 			release: "0.6.1"
 		})
 		expect(moved.republished).toContain("core:task/chunk-text@1")
 
 		// Idempotent from there: the same declaration a second time is not a
 		// second pointer move.
-		const again = await syncTypeRegistry(db, [drifted], {
+		const again = await syncDefinitionRegistry(db, [drifted], {
 			release: "0.6.1"
 		})
 		expect(again.republished).toEqual([])
@@ -154,10 +154,10 @@ describe("type registry sync", () => {
 		// is the whole reason the refusal could be dropped.
 		const archived = await db
 			.select()
-			.from(schema.pipelineTypeDeclarations)
+			.from(schema.pipelineDefinitionDeclarations)
 			.where(
 				eq(
-					schema.pipelineTypeDeclarations.contentHash,
+					schema.pipelineDefinitionDeclarations.contentHash,
 					before.contentHash
 				)
 			)
@@ -174,10 +174,10 @@ describe("type registry sync", () => {
 				out: { main: S.json, chunks: S.json }
 			}
 		} as unknown as Descriptor
-		const r = await syncTypeRegistry(db, [v2], { release: "0.6.1" })
+		const r = await syncDefinitionRegistry(db, [v2], { release: "0.6.1" })
 		expect(r.inserted).toEqual(["core:task/chunk-text@2"])
 
-		const registry = await readTypeRegistry(db)
+		const registry = await readDefinitionRegistry(db)
 		const versions = registry
 			.filter((e) => e.id === "core:task/chunk-text")
 			.map((e) => e.version)
@@ -190,14 +190,14 @@ describe("type registry sync", () => {
 	it("checkInstall validates a stored document against the stored registry", async () => {
 		const doc = compile(
 			spec("chariot.demo:turn", { version: "1.0.0" })
-				.input("input", C.userMessage.v1())
+				.inlet("input", C.userMessage.v1())
 				.query("history", ($) =>
 					C.sessionHistory.v1({ scope: $.input.sessionScope })
 				)
 				.task("prompt", ($) =>
 					C.assemble.v2({ candidates: $.history.messages })
 				)
-				.provider("generate", ($) =>
+				.oracle("generate", ($) =>
 					C.generateText.v1({
 						context: $.prompt.context,
 						connection: slot.connection()
@@ -211,7 +211,7 @@ describe("type registry sync", () => {
 		const findings = checkInstall({
 			declares: [],
 			documents: [stored],
-			registry: await readTypeRegistry(db)
+			registry: await readDefinitionRegistry(db)
 		})
 		expect(installable(findings), renderInstall(findings)).toBe(true)
 	})
@@ -222,7 +222,7 @@ describe("type registry sync", () => {
 		// the shape each edge was compiled against.
 		const doc = compile(
 			spec("chariot.demo:stale", { version: "1.0.0" })
-				.input("input", C.userMessage.v1())
+				.inlet("input", C.userMessage.v1())
 				.query("history", ($) =>
 					C.sessionHistory.v1({ scope: $.input.sessionScope })
 				)
@@ -233,7 +233,7 @@ describe("type registry sync", () => {
 		const findings = checkInstall({
 			declares: [],
 			documents: [doc],
-			registry: await readTypeRegistry(db)
+			registry: await readDefinitionRegistry(db)
 		})
 		expect(installable(findings)).toBe(false)
 		expect(findings.find((f) => f.code === "E_SHAPE_DRIFT")?.fix).toMatch(
@@ -258,28 +258,28 @@ describe("the optional flag is stored, and self-corrects", () => {
 		// and removing the insert write entirely changes nothing — which is
 		// exactly what a mutation showed.
 		await db
-			.delete(schema.pipelineTypeRegistry)
+			.delete(schema.pipelineDefinitionRegistry)
 			.where(
 				and(
 					eq(
-						schema.pipelineTypeRegistry.typeId,
+						schema.pipelineDefinitionRegistry.definitionId,
 						"core:query/relationships-perspectives"
 					),
-					eq(schema.pipelineTypeRegistry.version, 1)
+					eq(schema.pipelineDefinitionRegistry.version, 1)
 				)
 			)
-		await syncTypeRegistry(db, allTypes(), { release: "test" })
+		await syncDefinitionRegistry(db, allDefinitions(), { release: "test" })
 
 		const [row] = await db
 			.select()
-			.from(schema.pipelineTypeRegistry)
+			.from(schema.pipelineDefinitionRegistry)
 			.where(
 				and(
 					eq(
-						schema.pipelineTypeRegistry.typeId,
+						schema.pipelineDefinitionRegistry.definitionId,
 						"core:query/relationships-perspectives"
 					),
-					eq(schema.pipelineTypeRegistry.version, 1)
+					eq(schema.pipelineDefinitionRegistry.version, 1)
 				)
 			)
 		expect(
@@ -295,27 +295,27 @@ describe("the optional flag is stored, and self-corrects", () => {
 		// column, so nothing that keys on the hash would ever look at it.
 		const [before] = await db
 			.select()
-			.from(schema.pipelineTypeRegistry)
+			.from(schema.pipelineDefinitionRegistry)
 			.where(
 				and(
 					eq(
-						schema.pipelineTypeRegistry.typeId,
+						schema.pipelineDefinitionRegistry.definitionId,
 						"core:query/relationships-perspectives"
 					),
-					eq(schema.pipelineTypeRegistry.version, 1)
+					eq(schema.pipelineDefinitionRegistry.version, 1)
 				)
 			)
 		await db
-			.update(schema.pipelineTypeRegistry)
+			.update(schema.pipelineDefinitionRegistry)
 			.set({ optional: false })
-			.where(eq(schema.pipelineTypeRegistry.id, before.id))
+			.where(eq(schema.pipelineDefinitionRegistry.id, before.id))
 
-		await syncTypeRegistry(db, allTypes(), { release: "test" })
+		await syncDefinitionRegistry(db, allDefinitions(), { release: "test" })
 
 		const [after] = await db
 			.select()
-			.from(schema.pipelineTypeRegistry)
-			.where(eq(schema.pipelineTypeRegistry.id, before.id))
+			.from(schema.pipelineDefinitionRegistry)
+			.where(eq(schema.pipelineDefinitionRegistry.id, before.id))
 		expect(after.optional, "a stale column survived a boot").toBe(true)
 		expect(after.contentHash, "the hash moved").toBe(before.contentHash)
 	})
@@ -323,14 +323,14 @@ describe("the optional flag is stored, and self-corrects", () => {
 	it("leaves a genuinely non-optional type alone", async () => {
 		const [row] = await db
 			.select()
-			.from(schema.pipelineTypeRegistry)
+			.from(schema.pipelineDefinitionRegistry)
 			.where(
 				and(
 					eq(
-						schema.pipelineTypeRegistry.typeId,
+						schema.pipelineDefinitionRegistry.definitionId,
 						"core:query/session-history"
 					),
-					eq(schema.pipelineTypeRegistry.version, 1)
+					eq(schema.pipelineDefinitionRegistry.version, 1)
 				)
 			)
 		expect(row.optional).toBe(false)
@@ -351,14 +351,14 @@ describe("the declared name is stored, and self-corrects", () => {
 	const PIN = "core:query/relationships-perspectives"
 	const NAME = "Relationships: their perspective"
 
-	const rowFor = async (typeId: string) => {
+	const rowFor = async (definitionId: string) => {
 		const [row] = await db
 			.select()
-			.from(schema.pipelineTypeRegistry)
+			.from(schema.pipelineDefinitionRegistry)
 			.where(
 				and(
-					eq(schema.pipelineTypeRegistry.typeId, typeId),
-					eq(schema.pipelineTypeRegistry.version, 1)
+					eq(schema.pipelineDefinitionRegistry.definitionId, definitionId),
+					eq(schema.pipelineDefinitionRegistry.version, 1)
 				)
 			)
 		return row
@@ -368,14 +368,14 @@ describe("the declared name is stored, and self-corrects", () => {
 		// Deleted first, so this is the insert path rather than a row the heal
 		// corrected — the mistake the `optional` test above records.
 		await db
-			.delete(schema.pipelineTypeRegistry)
+			.delete(schema.pipelineDefinitionRegistry)
 			.where(
 				and(
-					eq(schema.pipelineTypeRegistry.typeId, PIN),
-					eq(schema.pipelineTypeRegistry.version, 1)
+					eq(schema.pipelineDefinitionRegistry.definitionId, PIN),
+					eq(schema.pipelineDefinitionRegistry.version, 1)
 				)
 			)
-		await syncTypeRegistry(db, allTypes(), { release: "test" })
+		await syncDefinitionRegistry(db, allDefinitions(), { release: "test" })
 
 		const row = await rowFor(PIN)
 		expect(row, "the row was not re-inserted").toBeTruthy()
@@ -385,16 +385,16 @@ describe("the declared name is stored, and self-corrects", () => {
 	it("fills in a row that predates the column, without changing its hash", async () => {
 		const before = await rowFor(PIN)
 		await db
-			.update(schema.pipelineTypeRegistry)
+			.update(schema.pipelineDefinitionRegistry)
 			.set({ i18n: null })
-			.where(eq(schema.pipelineTypeRegistry.id, before.id))
+			.where(eq(schema.pipelineDefinitionRegistry.id, before.id))
 
-		await syncTypeRegistry(db, allTypes(), { release: "test" })
+		await syncDefinitionRegistry(db, allDefinitions(), { release: "test" })
 
 		const [after] = await db
 			.select()
-			.from(schema.pipelineTypeRegistry)
-			.where(eq(schema.pipelineTypeRegistry.id, before.id))
+			.from(schema.pipelineDefinitionRegistry)
+			.where(eq(schema.pipelineDefinitionRegistry.id, before.id))
 		expect(
 			(after.i18n as any)?.name?.en,
 			"a NULL name survived a boot, so every upgraded install keeps the invented one"
@@ -405,16 +405,16 @@ describe("the declared name is stored, and self-corrects", () => {
 	it("picks up a rename, which is the promise that keeps it out of the hash", async () => {
 		const before = await rowFor(PIN)
 		await db
-			.update(schema.pipelineTypeRegistry)
+			.update(schema.pipelineDefinitionRegistry)
 			.set({ i18n: { name: { en: "Something else entirely" } } })
-			.where(eq(schema.pipelineTypeRegistry.id, before.id))
+			.where(eq(schema.pipelineDefinitionRegistry.id, before.id))
 
-		await syncTypeRegistry(db, allTypes(), { release: "test" })
+		await syncDefinitionRegistry(db, allDefinitions(), { release: "test" })
 
 		const [after] = await db
 			.select()
-			.from(schema.pipelineTypeRegistry)
-			.where(eq(schema.pipelineTypeRegistry.id, before.id))
+			.from(schema.pipelineDefinitionRegistry)
+			.where(eq(schema.pipelineDefinitionRegistry.id, before.id))
 		expect((after.i18n as any)?.name?.en).toBe(NAME)
 	})
 })
@@ -428,30 +428,30 @@ describe("the declared name is stored, and self-corrects", () => {
  * drifting after. These assert the shared machinery actually carries them.
  */
 describe("script types ride the node-type sync", () => {
-	const ALL = () => [...allTypes(), ...allScriptTypes()]
+	const ALL = () => [...allDefinitions(), ...allScriptKinds()]
 
-	const scriptRow = async (typeId: string) => {
+	const scriptRow = async (definitionId: string) => {
 		const [row] = await db
 			.select()
-			.from(schema.pipelineTypeRegistry)
+			.from(schema.pipelineDefinitionRegistry)
 			.where(
 				and(
-					eq(schema.pipelineTypeRegistry.typeId, typeId),
-					eq(schema.pipelineTypeRegistry.version, 1)
+					eq(schema.pipelineDefinitionRegistry.definitionId, definitionId),
+					eq(schema.pipelineDefinitionRegistry.version, 1)
 				)
 			)
 		return row
 	}
 
 	it("projects all seven core contracts as rows of kind 'script'", async () => {
-		await syncTypeRegistry(db, ALL(), { release: "test" })
+		await syncDefinitionRegistry(db, ALL(), { release: "test" })
 
 		const rows = await db
 			.select()
-			.from(schema.pipelineTypeRegistry)
-			.where(eq(schema.pipelineTypeRegistry.kind, "script"))
-		expect(rows.map((r: any) => r.typeId).sort()).toEqual(
-			allScriptTypes()
+			.from(schema.pipelineDefinitionRegistry)
+			.where(eq(schema.pipelineDefinitionRegistry.kind, "script"))
+		expect(rows.map((r: any) => r.definitionId).sort()).toEqual(
+			allScriptKinds()
 				.map((t) => t.id.replace(/@\d+$/, ""))
 				.sort()
 		)
@@ -478,7 +478,7 @@ describe("script types ride the node-type sync", () => {
 	})
 
 	it("is idempotent, which is what lets it run unconditionally at boot", async () => {
-		const again = await syncTypeRegistry(db, ALL(), {
+		const again = await syncDefinitionRegistry(db, ALL(), {
 			release: "test"
 		})
 		expect(again.inserted).toEqual([])
@@ -491,11 +491,11 @@ describe("script types ride the node-type sync", () => {
 		// answer to every question this file asks.
 		const before = await scriptRow("core:script:text/stop")
 		await db
-			.update(schema.pipelineTypeRegistry)
+			.update(schema.pipelineDefinitionRegistry)
 			.set({ contentHash: "stale-from-the-previous-build" })
-			.where(eq(schema.pipelineTypeRegistry.id, before.id))
+			.where(eq(schema.pipelineDefinitionRegistry.id, before.id))
 
-		const moved = await syncTypeRegistry(db, ALL(), { release: "test" })
+		const moved = await syncDefinitionRegistry(db, ALL(), { release: "test" })
 		expect(moved.republished).toContain("core:script:text/stop@1")
 
 		// The row is back on the build's own declaration, so the rest of this
@@ -511,46 +511,108 @@ describe("script types ride the node-type sync", () => {
 
 		// Copyediting it must not be a contract change — the promise that lets
 		// a warning be reworded without a version bump.
-		const { typeContentHash } = await import(
+		const { definitionContentHash } = await import(
 			"$lib/server/pipelines/boot/registrySync"
 		)
 		const [entry] = snapshotRegistry(
-			[getScriptType("core:script:messages/inject@1")!],
+			[getScriptKind("core:script:messages/inject@1")!],
 			{ release: "test" }
 		)
-		const reworded = typeContentHash({
+		const reworded = definitionContentHash({
 			...entry,
 			i18n: { blastRadius: { en: "Something else entirely" } }
 		} as any)
-		expect(reworded).toBe(typeContentHash(entry))
+		expect(reworded).toBe(definitionContentHash(entry))
 	})
 })
 
 /**
  * The row → entry read is lossless for the fields the hash depends on.
  *
- * ⚠ `readTypeRegistry` is what install-time validation reads, and it rebuilds a
+ * ⚠ `readDefinitionRegistry` is what install-time validation reads, and it rebuilds a
  * `RegistryEntry` field by field — so a field added to the projection and not
  * to the reader silently disappears on the way back. For a *hashed* field that
  * is not a cosmetic loss: the same row would hash differently depending on
  * which direction it was travelling, and every script type would look
  * conflicted to anything that compared them.
  */
+describe("the substrate's settings slot is projected, and self-corrects", () => {
+	it("a row projected before R-9 gains the slot at the next boot, without its hash moving", async () => {
+		// The upgrade case (2026-09-16): every install's rows for optional and
+		// gated definitions predate the projected `settings` slot. The slot is
+		// outside the hash on purpose, so this row is the shape the display
+		// refresh handles — `updated`, never `republished` — and the panel
+		// reads the switch from the row on the first boot after upgrading.
+		const [before] = await db
+			.select()
+			.from(schema.pipelineDefinitionRegistry)
+			.where(
+				and(
+					eq(
+						schema.pipelineDefinitionRegistry.definitionId,
+						"core:query/world-lore"
+					),
+					eq(schema.pipelineDefinitionRegistry.version, 1)
+				)
+			)
+		expect((before.slots as any).settings?.kind).toBe("settings")
+		const { settings: _settings, ...authored } = before.slots as any
+		await db
+			.update(schema.pipelineDefinitionRegistry)
+			.set({ slots: authored })
+			.where(eq(schema.pipelineDefinitionRegistry.id, before.id))
+
+		const r = await syncDefinitionRegistry(db, allDefinitions(), {
+			release: "test"
+		})
+		expect(r.updated).toContain("core:query/world-lore@1")
+		expect(r.republished).not.toContain("core:query/world-lore@1")
+
+		const [after] = await db
+			.select()
+			.from(schema.pipelineDefinitionRegistry)
+			.where(eq(schema.pipelineDefinitionRegistry.id, before.id))
+		expect((after.slots as any).settings?.schema?.enabled?.type).toBe("boolean")
+		expect(after.contentHash, "the hash moved").toBe(before.contentHash)
+	})
+
+	it("a gated row carries `review` at the declaration's default", async () => {
+		const [row] = await db
+			.select()
+			.from(schema.pipelineDefinitionRegistry)
+			.where(
+				and(
+					eq(
+						schema.pipelineDefinitionRegistry.definitionId,
+						"core:outlet/attach-image"
+					),
+					eq(schema.pipelineDefinitionRegistry.version, 1)
+				)
+			)
+		expect((row.slots as any).settings?.schema?.review).toMatchObject({
+			type: "enum",
+			of: ["off", "on"],
+			default: "on",
+			facet: "review"
+		})
+	})
+})
+
 describe("a registry row round-trips through the reader", () => {
 	it("returns the same content hash it was written with", async () => {
-		await syncTypeRegistry(
+		await syncDefinitionRegistry(
 			db,
-			[...allTypes(), ...allScriptTypes()],
+			[...allDefinitions(), ...allScriptKinds()],
 			{
 				release: "test"
 			}
 		)
-		const { typeContentHash } = await import(
+		const { definitionContentHash } = await import(
 			"$lib/server/pipelines/boot/registrySync"
 		)
 
 		const readBack = new Map(
-			(await readTypeRegistry(db)).map((e) => [
+			(await readDefinitionRegistry(db)).map((e) => [
 				`${e.id}@${e.version}`,
 				e
 			])
@@ -561,13 +623,13 @@ describe("a registry row round-trips through the reader", () => {
 		// projection had `undefined` — was never about scripts. It had been
 		// true of every node type since the column was added, and nothing
 		// compared the two directions until now.
-		for (const t of [...allScriptTypes(), ...allTypes()]) {
+		for (const t of [...allScriptKinds(), ...allDefinitions()]) {
 			const [projected] = snapshotRegistry([t], { release: "test" })
 			const pin = `${projected!.id}@${projected!.version}`
 			const back = readBack.get(pin)
 			expect(back, `${pin} did not come back`).toBeTruthy()
-			expect(typeContentHash(back!), pin).toBe(
-				typeContentHash(projected!)
+			expect(definitionContentHash(back!), pin).toBe(
+				definitionContentHash(projected!)
 			)
 		}
 	})

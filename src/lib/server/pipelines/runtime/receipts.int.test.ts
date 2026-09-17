@@ -47,6 +47,35 @@ vi.mock("$lib/server/utils/resolveTaskConfig", () => ({
 		sampling: { id: 1 }
 	})
 }))
+// The reply dispatch consumes the run's own resolution now (R-8) and asks the
+// resolver only to load the pair — so the stand-in connection is supplied
+// where dispatch actually reads it. The real resolver answers first: a test
+// that registers a capability default of its own gets that connection (and
+// its stop guards), and only an instance with nothing registered falls back
+// to the stand-in.
+vi.mock("$lib/server/connections/capabilityTarget", async (importOriginal) => {
+	const real = await importOriginal<
+		typeof import("$lib/server/connections/capabilityTarget")
+	>()
+	return {
+		...real,
+		resolveCapabilityTarget: async (
+			db: Db,
+			req: Parameters<typeof real.resolveCapabilityTarget>[1]
+		) => {
+			const target = await real.resolveCapabilityTarget(db, req)
+			if (target.ok) return target
+			return {
+				ok: true,
+				capability: req.capability,
+				connection: { id: 1, type: "koboldcpp", promptFormat: "vicuna" },
+				sampling: { id: 1 },
+				connectionVia: "pipelineConfig",
+				samplingVia: "pipelineConfig"
+			}
+		}
+	}
+})
 vi.mock("$lib/server/utils/getUserConfigurations", () => ({
 	getUserConfigurations: async () => ({
 		sampling: { id: 1 },
@@ -84,12 +113,12 @@ beforeAll(async () => {
 		.returning()
 	characterId = character.id
 	const [persona] = await db
-		.insert(schema.personas)
+		.insert(schema.characters)
 		.values({
 			userId,
+			isPersona: true,
 			name: "Bob",
-			description: "A traveller.",
-			isDefault: false
+			description: "A traveller."
 		})
 		.returning()
 	const [session] = await db
@@ -193,6 +222,10 @@ describe("recording what a run did", () => {
 		expect(found).toBeTruthy()
 		expect(found!.nodes.map((n: any) => n.nodeKey)).toEqual([
 			"input",
+			// 09-B B4: the pipeline owns its row. The placeholder outlet
+			// creates the reply row straight after the inlet; `save` at the
+			// end is the update that fills it.
+			"placeholder",
 			// Spec 1.6.0: the four reads moved into an `async` block, which
 			// qualifies the keys inside it. They still each appear, and still
 			// in declaration order — the receipt is ordered by assignment, not
@@ -290,7 +323,7 @@ describe("recording what a run did", () => {
 		const speakerRow = found!.nodes.find(
 			(n: any) => n.nodeKey === "speaker"
 		)
-		expect(speakerRow!.typeId).toBe("core:task/turn-manual@1")
+		expect(speakerRow!.definitionId).toBe("core:task/turn-manual@1")
 		const speaker = receipt.nodes.find((n: any) => n.nodeKey === "speaker")
 		expect(speaker!.output).toMatchObject({
 			characterId,
@@ -307,14 +340,24 @@ describe("recording what a run did", () => {
 		const receipt = await turn({ seed: "receipt:3" })
 		const { run, artifacts } = await recordFor(receipt)
 
-		expect(artifacts).toHaveLength(1)
+		// One row, two facts about it (09-B B4): the placeholder created it
+		// and the save filled it. Both name the node that did it, which the
+		// old column could not say at all.
+		expect(artifacts).toHaveLength(2)
 		expect(artifacts[0]).toMatchObject({
 			runId: run.id,
 			seq: 0,
 			kind: "message",
 			action: "created",
-			// Which node did it, which the old column could not say at all.
-			nodeKey: "save"
+			nodeKey: "placeholder"
+		})
+		expect(artifacts[1]).toMatchObject({
+			runId: run.id,
+			seq: 1,
+			kind: "message",
+			action: "updated",
+			nodeKey: "save",
+			entityId: artifacts[0].entityId
 		})
 		expect(typeof artifacts[0].entityId).toBe("number")
 
@@ -387,6 +430,135 @@ describe("recording what a run did", () => {
 		expect((row.receipt as any).nodes.length).toBe(receipt.nodes.length)
 	}, 30_000)
 
+	it("bounds the reply text on the stored receipt at the wire cap, and says so", async () => {
+		// Since the one road the generate node's output IS the reply, and it
+		// landed in `pipeline_runs.receipt` unbounded once the adapter road's
+		// cap on `reply.text` went with it. The published value is untouched —
+		// the save read the whole reply — only what the column keeps of it.
+		const { saveReceipt, boundedForStorage } = await import(
+			"$lib/server/pipelines/runtime/receipts"
+		)
+		const { WIRE_RAW_LIMIT } = await import(
+			"$lib/server/connectionAdapters/BaseConnectionAdapter"
+		)
+		const long = "x".repeat(WIRE_RAW_LIMIT + 1000)
+		const receipt: any = {
+			runId: "receipt:cap",
+			specId: "core:spec/respond",
+			specVersion: "1.0.0",
+			outcome: "ok",
+			triggerSource: "event",
+			seed: "receipt:cap",
+			startedAt: 0,
+			endedAt: 1,
+			nodes: [
+				{
+					seq: 0,
+					nodeKey: "generate",
+					kind: "oracle",
+					definitionId: "core:oracle/generate-text@1",
+					result: "ok",
+					output: { main: long, text: long, thinking: "short" }
+				},
+				{
+					seq: 1,
+					nodeKey: "save",
+					kind: "outlet",
+					definitionId: "core:outlet/update-message@1",
+					result: "ok",
+					output: { text: long }
+				}
+			],
+			emitted: [],
+			consumption: { tokens: 0, nodeExecutions: 2 }
+		}
+		const id = await saveReceipt(db, receipt, { sessionId, userId })
+		expect(id).not.toBeNull()
+		const [row] = await db
+			.select()
+			.from(schema.pipelineRuns)
+			.where(eq(schema.pipelineRuns.id, id!))
+		const stored = row.receipt as any
+		const generate = stored.nodes.find((n: any) => n.nodeKey === "generate")
+		expect(generate.output.text.length).toBe(WIRE_RAW_LIMIT)
+		expect(generate.output.main.length).toBe(WIRE_RAW_LIMIT)
+		expect(generate.output.thinking).toBe("short")
+		expect(generate.output.textTruncated).toEqual({
+			bytes: WIRE_RAW_LIMIT + 1000,
+			kept: WIRE_RAW_LIMIT,
+			marker: `truncated, ${WIRE_RAW_LIMIT + 1000} bytes`
+		})
+		expect(generate.notes.join(" ")).toMatch(/truncated, \d+ bytes/)
+		// Only the generate nodes: an outlet's input is its own record.
+		expect(
+			stored.nodes.find((n: any) => n.nodeKey === "save").output.text
+				.length
+		).toBe(long.length)
+		// The receipt in hand was not mutated — it is also what the trigger
+		// returns and the run-end hook was handed.
+		expect(receipt.nodes[0].output.text.length).toBe(long.length)
+		expect(receipt.nodes[0].output.textTruncated).toBeUndefined()
+
+		// A reply under the cap is stored exactly as it was.
+		const short = { ...receipt, nodes: [{ ...receipt.nodes[0], output: { text: "brief" } }] }
+		expect(boundedForStorage(short)).toBe(short)
+	})
+
+	it("bounds the save node's stored input at the wire cap, and says so", async () => {
+		// `update-message`'s `input.text`/`input.thinking` carry the same reply
+		// a generate node already published, recorded a second time as this
+		// node's own input — the same wire cap applies there.
+		const { saveReceipt } = await import(
+			"$lib/server/pipelines/runtime/receipts"
+		)
+		const { WIRE_RAW_LIMIT } = await import(
+			"$lib/server/connectionAdapters/BaseConnectionAdapter"
+		)
+		const long = "x".repeat(WIRE_RAW_LIMIT + 1000)
+		const receipt: any = {
+			runId: "receipt:cap-input",
+			specId: "core:spec/respond",
+			specVersion: "1.0.0",
+			outcome: "ok",
+			triggerSource: "event",
+			seed: "receipt:cap-input",
+			startedAt: 0,
+			endedAt: 1,
+			nodes: [
+				{
+					seq: 0,
+					nodeKey: "save",
+					kind: "outlet",
+					definitionId: "core:outlet/update-message@1",
+					result: "ok",
+					input: { text: long, thinking: "short" },
+					output: { id: 1 }
+				}
+			],
+			emitted: [],
+			consumption: { tokens: 0, nodeExecutions: 1 }
+		}
+		const id = await saveReceipt(db, receipt, { sessionId, userId })
+		expect(id).not.toBeNull()
+		const [row] = await db
+			.select()
+			.from(schema.pipelineRuns)
+			.where(eq(schema.pipelineRuns.id, id!))
+		const stored = row.receipt as any
+		const save = stored.nodes.find((n: any) => n.nodeKey === "save")
+		expect(save.input.text.length).toBe(WIRE_RAW_LIMIT)
+		expect(save.input.thinking).toBe("short")
+		expect(save.input.textTruncated).toEqual({
+			bytes: WIRE_RAW_LIMIT + 1000,
+			kept: WIRE_RAW_LIMIT,
+			marker: `truncated, ${WIRE_RAW_LIMIT + 1000} bytes`
+		})
+		expect(save.notes.join(" ")).toMatch(/truncated, \d+ bytes/)
+		// The receipt in hand was not mutated.
+		expect(receipt.nodes[0].input.text.length).toBe(long.length)
+		expect(receipt.nodes[0].input.textTruncated).toBeUndefined()
+	})
+
 	it("a failed write does not fail the turn", async () => {
 		// A run that produced a good reply and then could not record itself has
 		// still produced a good reply. Getting this backwards loses a user's
@@ -415,68 +587,11 @@ describe("recording what a run did", () => {
 	}, 30_000)
 
 	/**
-	 * The stop sequences, on the receipt for the generate node (ruling
-	 * 2026-09-10).
-	 *
-	 * ⚠ **Written AFTER the row, and only on the reply path.** A reply halts at
-	 * the pre-call substrate — the pipeline compiles, the adapter sends — so the
-	 * receipt is already stored by the time anything composes a stop list. On
-	 * every other path the binding's own output carries it and no patch is
-	 * needed. Recorded rather than left off, because "why did my reply not stop
-	 * on that" and "why did nothing I typed reach the model" are the two
-	 * questions this whole area exists to answer, and a run that shows neither
-	 * answers neither.
+	 * The stop sequences ride the generate node's OWN output since the one
+	 * road (09-B B4): the binding runs on every reply and publishes `stops`,
+	 * so there is no receipt patch any more and nothing here to pin. The
+	 * shape of that output is `dispatch.int.test.ts`'s to assert.
 	 */
-	it("patches the composed stops onto the generate node afterwards", async () => {
-		const { recordGenerateStops } = await import(
-			"$lib/server/pipelines/runtime/receipts"
-		)
-		const receipt = await turn({ seed: "receipt:stops", preview: true })
-
-		await recordGenerateStops(db, receipt.runId, {
-			sent: [{ value: "<<END>>", kind: "explicit" }],
-			dropped: [{ value: "Bob:", kind: "speaker" }],
-			wire: "chat",
-			hit: "<<END>>"
-		})
-
-		const [row] = await db
-			.select()
-			.from(schema.pipelineRuns)
-			.where(eq(schema.pipelineRuns.runId, receipt.runId))
-		const generate = (row.receipt as any).nodes.find((n: any) =>
-			String(n.typeId).startsWith("core:provider/generate-text")
-		)
-		expect(
-			generate,
-			"the reply pipeline recorded no generate node to attach stops to"
-		).toBeTruthy()
-		expect(generate.output.stops).toEqual({
-			sent: [{ value: "<<END>>", kind: "explicit" }],
-			dropped: [{ value: "Bob:", kind: "speaker" }],
-			wire: "chat",
-			hit: "<<END>>"
-		})
-		// The node's own verdict is untouched — it really did halt before
-		// sending, and the patch must not rewrite that into a success.
-		expect(generate.result).toBe("halt")
-	}, 30_000)
-
-	it("a stops patch for a run that is not there is a quiet no-op", async () => {
-		// Same rule as `saveReceipt`: evidence about a turn never fails the
-		// turn. A run row that was skipped, pruned or never written must not
-		// turn into a thrown error in the middle of a reply.
-		const { recordGenerateStops } = await import(
-			"$lib/server/pipelines/runtime/receipts"
-		)
-		await expect(
-			recordGenerateStops(db, "no-such-run", {
-				sent: [],
-				dropped: [],
-				wire: "completion"
-			})
-		).resolves.toBeUndefined()
-	}, 30_000)
 
 	it("records a preview as a preview, when it does record one", async () => {
 		const { runsForSession } = await import(

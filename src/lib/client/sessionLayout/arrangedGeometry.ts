@@ -23,6 +23,7 @@
  * round trip can be tested without a browser, a gridstack, or a window size.
  */
 import type { GsItem, GsLayout, GsPos } from "./GridStackZone.svelte"
+import { isRetiredWidget } from "./widgetGrid"
 
 /** The three editor zones' captured arrangements — the persisted blob's shape. */
 export type Arranged = { left?: GsLayout; middle?: GsLayout; right?: GsLayout }
@@ -46,7 +47,17 @@ export function isGsLayout(z: unknown): z is GsLayout {
 	)
 }
 
-/** Defensively rehydrate the persisted per-zone geometry (verbatim blob). */
+/** A saved position naming a widget this build still places. */
+const isLivePos = (pos: { id: string }): boolean => !isRetiredWidget(pos.id)
+
+/**
+ * Defensively rehydrate the persisted per-zone geometry (verbatim blob).
+ *
+ * Retired ids are dropped here, which is the one place every reader of a saved
+ * arrangement passes through — the live render, the editor, and the picture a
+ * preset draws. An arrangement captured under an older build keeps its cells
+ * and loses the cards this build has no widget for.
+ */
 export function loadArranged(saved: unknown): Arranged {
 	if (!saved || typeof saved !== "object") return {}
 	const out: Arranged = {}
@@ -56,7 +67,7 @@ export function loadArranged(saved: unknown): Arranged {
 			out[key] = {
 				cols: z.cols,
 				rows: z.rows,
-				items: z.items.filter(isGsPos)
+				items: z.items.filter(isGsPos).filter(isLivePos)
 			}
 	}
 	return out

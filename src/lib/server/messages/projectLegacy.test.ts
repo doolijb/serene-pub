@@ -144,6 +144,16 @@ describe("projectLegacy", () => {
 		).toEqual({ core: { isGreeting: true } })
 	})
 
+	it("a live generationStatus (R-19) wins over the retired stage enum", () => {
+		expect(
+			project({
+				isGenerating: true,
+				generationStage: "queued",
+				generationStatus: { i18n: { en: "{speaker} is typing" } }
+			}).message.status
+		).toBe("generating")
+	})
+
 	it("is deterministic — re-projection is byte-identical", () => {
 		const row = base({
 			metadata: {

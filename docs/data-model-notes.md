@@ -8,8 +8,21 @@ present-tense rule and, where it points here, the paragraph behind it.
 
 `connections` stays the ENDPOINT (its id, and every foreign key pointing at
 it, is untouched); `connection_models` holds the models reachable through
-that endpoint. Selection everywhere is an (endpoint, model) PAIR, and where a
-pair names only the endpoint, `is_default` says which model it meant.
+that endpoint. Selection everywhere is an (endpoint, model) PAIR, and both
+halves are required: connections have no default model (0128 dropped
+`is_default` and the endpoint's `model` mirror), so a pair naming only the
+endpoint is incomplete and resolves as unconfigured rather than guessing.
+
+**Rows are synced from the service, not imported (0129).** `missing_since`
+on a model row is set when a successful listing of its endpoint stops naming
+it, kept at its first value across later syncs, and cleared when the model is
+listed again. A missing model is refused at dispatch and by the star, and
+every picker shows it greyed with the reason; the row is kept so the overrides
+and selections naming it survive the model's return. `models_synced_at` /
+`models_sync_error` on the endpoint record the last attempt; a FAILED listing
+writes only those two and touches no model row, because an unreachable host
+is a fact about the host, not about any model. See
+`server/connections/modelSync.ts`.
 
 Before this split, a `connections` row was a URL, an auth bag, a wire mode,
 ONE model string and ONE capability set — conflating where the compute is

@@ -83,12 +83,12 @@ beforeAll(async () => {
 	characterId = character.id
 
 	const [persona] = await db
-		.insert(schema.personas)
+		.insert(schema.characters)
 		.values({
 			userId,
+			isPersona: true,
 			name: "Bob",
-			description: "A traveller.",
-			isDefault: false
+			description: "A traveller."
 		})
 		.returning()
 
@@ -181,7 +181,7 @@ beforeAll(async () => {
 	)
 	const { declarations } = await import("$lib/server/pipelines/config/panel")
 	const template = await createContextTemplate(db, {
-		nodeTypeId: CONTEXT_TEMPLATE_NODE_TYPE,
+		nodeDefinitionId: CONTEXT_TEMPLATE_NODE_TYPE,
 		name: "Continue Template",
 		source: contextConfig.template!
 	})
@@ -195,7 +195,7 @@ beforeAll(async () => {
 	).find(
 		(d) =>
 			d.control === "context-template-ref" &&
-			d.nodeTypeId === CONTEXT_TEMPLATE_NODE_TYPE
+			d.nodeDefinitionId === CONTEXT_TEMPLATE_NODE_TYPE
 	)!
 	const { resolveSelectedConfig, duplicateConfig, selectConfig } =
 		await import("$lib/server/pipelines/config/named")
@@ -293,7 +293,7 @@ describe("the partial is not a stored message", () => {
 
 		// 1. The history query — the window every downstream mechanism reads.
 		const history = receipt.nodes.find(
-			(n: any) => n.typeId === "core:query/session-history@1"
+			(n: any) => n.definitionId === "core:query/session-history@1"
 		)
 		expect(history, "the history query did not run").toBeTruthy()
 		const ids = ((history!.output as any)?.messages ?? []).map(

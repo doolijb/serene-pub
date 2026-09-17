@@ -1,6 +1,7 @@
 /**
- * What `resolveCapabilityTarget` hands an adapter after the split (0114): a ROW,
- * with the model merged into it.
+ * What `resolveCapabilityTarget` hands an adapter after the split (0114) once
+ * the per-connection default is gone (0128): a ROW, with the model merged
+ * into it — and only when the pair names BOTH halves explicitly.
  *
  * ## Why the merge is the thing under test
  *
@@ -18,12 +19,18 @@
  * the endpoint's. Nothing downstream had to move, and that is only true if this
  * file passes.
  *
+ * ## No default model (0128)
+ *
+ * Connections have no default model, so a pair naming only the endpoint is
+ * incomplete and resolves as unconfigured — kind `model`, "No model is chosen
+ * ... Pick a model on that connection." — rather than guessing a row. Every
+ * default registered below therefore names both halves explicitly.
+ *
  * ## Real PGlite, unlike `capabilityTarget.test.ts` beside it
  *
  * That file pins the ORDER of the chain against a fake db, which is the right
  * shape for asserting a walk over a constant. This one is about a JOIN, a
- * foreign key, a partial unique index and a merge, and three of those four are
- * database behaviour.
+ * foreign key and a merge, and two of those three are database behaviour.
  */
 
 import { beforeAll, describe, expect, it, vi } from "vitest"
@@ -93,42 +100,52 @@ async function resolveWithDefault(
 }
 
 describe("a pair that names only the endpoint", () => {
-	it("resolves to its DEFAULT model, not to the legacy mirror", async () => {
-		// The mirror is deliberately WRONG here. On a healthy install the two
-		// agree, and that is exactly what would make a resolver still reading
-		// the column look correct forever — so this row pins the difference.
-		const e = await endpoint({ model: "stale-mirror" })
-		await model(e.id, { model: "real-default", isDefault: true })
+	it("is refused as incomplete rather than guessing a row", async () => {
+		// Connections have no default model (0128): even with exactly one
+		// model on the endpoint, a bare-endpoint choice resolves as
+		// unconfigured, with the fix attached.
+		const e = await endpoint()
+		await model(e.id, { model: "only-model" })
 		const res = await resolveWithDefault(e.id)
-		expect(res.ok).toBe(true)
-		if (!res.ok) return
-		expect(res.connection.model).toBe("real-default")
-		expect(res.connection.connectionModelId).toBeTruthy()
+		expect(res.ok).toBe(false)
+		if (res.ok) return
+		expect(res.problem.kind).toBe("model")
+		expect(res.problem.message).toMatch(/No model is chosen/i)
+		expect(res.problem.message).toMatch(/Pick a model/i)
+		expect(res.problem.connection?.name).toBeTruthy()
 	}, 60_000)
 
-	it("merges to the endpoint itself when it has no models at all", async () => {
-		// The pre-0114 row, exactly: an endpoint whose model column was never
-		// filled in has no model rows, and the pair is then the endpoint alone.
-		// Nothing that worked before the split stops working.
-		const e = await endpoint({ model: null })
+	it("is refused when the endpoint has no models at all", async () => {
+		// An endpoint with no model rows is nobody finished setting it up.
+		// The sentence is the same: the endpoint is fine, the missing half
+		// is the model beside it.
+		const e = await endpoint()
 		const res = await resolveWithDefault(e.id)
+		expect(res.ok).toBe(false)
+		if (res.ok) return
+		expect(res.problem.kind).toBe("model")
+		expect(res.problem.message).toMatch(/No model is chosen/i)
+	}, 60_000)
+
+	it("resolves when the pair names both halves explicitly", async () => {
+		const e = await endpoint()
+		const m = await model(e.id, { model: "real-model" })
+		const res = await resolveWithDefault(e.id, m.id)
 		expect(res.ok).toBe(true)
 		if (!res.ok) return
-		expect(res.connection.model).toBeNull()
-		expect(res.connection.connectionModelId).toBeNull()
+		expect(res.connection.model).toBe("real-model")
+		expect(res.connection.connectionModelId).toBe(m.id)
 	}, 60_000)
 })
 
 describe("the per-model overrides", () => {
 	it("substitute the model's template, tokenizer and context window", async () => {
 		const e = await endpoint({
-			model: "endpoint-mirror",
 			promptFormat: "vicuna",
 			tokenCounter: "estimate"
 		})
 		const m = await model(e.id, {
 			model: "the-model",
-			isDefault: true,
 			promptFormat: "chatml",
 			tokenCounter: "openai",
 			contextWindow: 32768
@@ -148,13 +165,13 @@ describe("the per-model overrides", () => {
 	}, 60_000)
 
 	it("falls through to the endpoint for everything it does not state", async () => {
-		// The whole safety argument for the 0114 backfill: a model row with no
+		// The whole safety argument for explicit rows: a model row with no
 		// overrides resolves byte-identically to the endpoint it hangs off.
 		const e = await endpoint({
 			promptFormat: "chatml",
 			tokenCounter: "openai"
 		})
-		const m = await model(e.id, { model: "bare", isDefault: true })
+		const m = await model(e.id, { model: "bare" })
 		const res = await resolveWithDefault(e.id, m.id)
 		expect(res.ok).toBe(true)
 		if (!res.ok) return
@@ -176,7 +193,6 @@ describe("the per-model overrides", () => {
 		})
 		const m = await model(e.id, {
 			model: "text-only",
-			isDefault: true,
 			capabilities: { overrides: { "text+image->text": false } }
 		})
 		const res = await resolveWithDefault(e.id, m.id)
@@ -200,8 +216,8 @@ describe("a pair whose halves disagree", () => {
 	it("refuses a model that belongs to a different endpoint", async () => {
 		const a = await endpoint()
 		const b = await endpoint()
-		await model(a.id, { model: "a-default", isDefault: true })
-		const mB = await model(b.id, { model: "b-model", isDefault: true })
+		await model(a.id, { model: "a-model" })
+		const mB = await model(b.id, { model: "b-model" })
 		const res = await resolveWithDefault(a.id, mB.id)
 		expect(res.ok).toBe(false)
 		if (res.ok) return
@@ -210,11 +226,11 @@ describe("a pair whose halves disagree", () => {
 	}, 60_000)
 
 	it("refuses a model that has been switched off", async () => {
-		// Not a fallback to the default. Silently substituting a different MODEL
-		// is a run that succeeds against something nobody picked, which is the
-		// defect class this whole resolver exists to close.
+		// Not a fallback to another model. Silently substituting a different
+		// MODEL is a run that succeeds against something nobody picked, which
+		// is the defect class this whole resolver exists to close.
 		const e = await endpoint()
-		await model(e.id, { model: "on", isDefault: true })
+		await model(e.id, { model: "on" })
 		const off = await model(e.id, { model: "off", enabled: false })
 		const res = await resolveWithDefault(e.id, off.id)
 		expect(res.ok).toBe(false)
@@ -240,45 +256,57 @@ describe("a pair whose halves disagree", () => {
 })
 
 describe("the model comes from whichever tier won the connection", () => {
-	it("drops the default's model when a higher tier names another endpoint", async () => {
+	it("refuses when a higher tier names another endpoint without its model", async () => {
 		// ⚠ The half of the walk that is not independent. A `connection_models`
 		// row belongs to one endpoint, so carrying the default tier's model past
 		// the pipeline tier's endpoint change would build a pair whose two
 		// halves name different connections — turning an ordinary "this pipeline
 		// overrides the default connection" into a hard refusal about a model
-		// nobody selected.
+		// nobody selected. Instead the model resets to null with the endpoint,
+		// and a tier naming only the endpoint is incomplete on its own terms.
 		const registered = await endpoint()
 		const rModel = await model(registered.id, {
-			model: "registered-model",
-			isDefault: true
+			model: "registered-model"
 		})
 		const override = await endpoint()
-		await model(override.id, {
-			model: "override-default",
-			isDefault: true
+		const oModel = await model(override.id, {
+			model: "override-model"
 		})
 		await setCapabilityDefault(db, TEXT_CAPABILITY, {
 			connectionId: registered.id,
 			connectionModelId: rModel.id
 		})
-		const res = await resolveCapabilityTarget(db, {
+		const bare = await resolveCapabilityTarget(db, {
 			capability: TEXT_CAPABILITY,
 			pipelineConfig: { connectionId: override.id }
 		})
-		expect(res.ok).toBe(true)
-		if (!res.ok) return
-		expect(res.connection.id).toBe(override.id)
-		expect(res.connection.model).toBe("override-default")
+		expect(bare.ok).toBe(false)
+		if (bare.ok) return
+		expect(bare.problem.kind).toBe("model")
+		expect(bare.problem.message).toMatch(/No model is chosen/i)
+		// Naming the pair explicitly at the winning tier resolves to it.
+		const paired = await resolveCapabilityTarget(db, {
+			capability: TEXT_CAPABILITY,
+			pipelineConfig: {
+				connectionId: override.id,
+				connectionModelId: oModel.id
+			}
+		})
+		expect(paired.ok).toBe(true)
+		if (!paired.ok) return
+		expect(paired.connection.id).toBe(override.id)
+		expect(paired.connection.model).toBe("override-model")
 	}, 60_000)
 
 	it("honours a model named by the tier that also named the endpoint", async () => {
 		const registered = await endpoint()
-		await model(registered.id, { model: "reg", isDefault: true })
+		const regModel = await model(registered.id, { model: "reg" })
 		const override = await endpoint()
-		await model(override.id, { model: "its-default", isDefault: true })
+		await model(override.id, { model: "its-other" })
 		const chosen = await model(override.id, { model: "chosen" })
 		await setCapabilityDefault(db, TEXT_CAPABILITY, {
-			connectionId: registered.id
+			connectionId: registered.id,
+			connectionModelId: regModel.id
 		})
 		const res = await resolveCapabilityTarget(db, {
 			capability: TEXT_CAPABILITY,

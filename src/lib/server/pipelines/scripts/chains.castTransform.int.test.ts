@@ -7,7 +7,7 @@ import { makeScriptApplier } from "./chains"
  * The cast scope (migration 0146), through the applier.
  *
  * `core:script:cast/transform@1` is the paste-rung half of replaceable cast
- * extraction: scripts over what `core:provider/extract-cast@1` publishes on
+ * extraction: scripts over what `core:oracle/extract-cast@1` publishes on
  * its `cast` port — rename, merge, drop, add — attached at the node's
  * `castScripts` hook (phase `after`). This pins the two laws the new content
  * scope adds to the fold:
@@ -57,8 +57,8 @@ beforeAll(async () => {
 	// The registry row boot sync projects from the SDK catalog — inserted
 	// directly because this test targets the applier, not the projection
 	// (`registrySync.int.test.ts` owns that half).
-	await db.insert(schema.pipelineTypeRegistry).values({
-		typeId: TYPE,
+	await db.insert(schema.pipelineDefinitionRegistry).values({
+		definitionId: TYPE,
 		version: 1,
 		kind: "script",
 		transport: "node",

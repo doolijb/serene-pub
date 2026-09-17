@@ -90,12 +90,12 @@ beforeAll(async () => {
 	vellId = vell.id
 
 	const [persona] = await db
-		.insert(schema.personas)
+		.insert(schema.characters)
 		.values({
 			userId,
+			isPersona: true,
 			name: "Bob",
-			description: "A traveller.",
-			isDefault: false
+			description: "A traveller."
 		})
 		.returning()
 
@@ -192,7 +192,13 @@ const turnAs = async (speaker: {
 			text: "have you seen the ashguard?",
 			sessionId,
 			characterId: speaker.characterId,
-			speaker,
+			// The fact on its own port; the participant reference beside it
+			// (R-18 (3)) — null for a free-form name, who is nobody's row.
+			sideCharacter: speaker,
+			speaker:
+				speaker.characterId != null
+					? `character:${speaker.characterId}`
+					: null,
 			sessionScope: {
 				sessionId,
 				currentCharacterId: speaker.characterId
@@ -335,7 +341,8 @@ describe("a side-character turn speaks as that character", () => {
 				text: "have you seen the ashguard?",
 				sessionId,
 				characterId: null,
-				speaker: vellSpeaker(),
+				sideCharacter: vellSpeaker(),
+				speaker: null,
 				sessionScope: { sessionId, currentCharacterId: null }
 			},
 			seed: "seed:narrate-character-port",

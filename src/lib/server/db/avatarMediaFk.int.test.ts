@@ -58,7 +58,7 @@ beforeAll(async () => {
 }, 60_000)
 
 /** The FK's own row in the catalog, plus its delete rule. */
-async function foreignKey(table: "characters" | "personas") {
+async function foreignKey(table: "characters") {
 	const rows = await db.execute(sql`
 		SELECT tc.constraint_name, rc.delete_rule, ccu.table_name AS referenced_table,
 		       kcu.column_name
@@ -82,7 +82,7 @@ async function foreignKey(table: "characters" | "personas") {
  * vacuously — `createTestDb` has already applied 0109.
  */
 async function dropAvatarFks() {
-	for (const table of ["characters", "personas"] as const) {
+	for (const table of ["characters"] as const) {
 		for (const fk of await foreignKey(table)) {
 			await db.execute(
 				sql.raw(
@@ -100,10 +100,17 @@ async function dropAvatarFks() {
  * Not one `db.execute` over the whole file: PGlite refuses multiple commands in
  * a prepared statement, and more importantly, running it as one blob would not
  * be how it reaches a real install. The breakpoints are the unit of application.
+ *
+ * Two of 0109's four statements target the `personas` table verbatim — and
+ * 0133 (folding personas into characters) has ALREADY run by the time this
+ * replays, since `createTestDb` migrates to head. Skip those two: the table
+ * they name is gone, and what this file tests post-0133 is the `characters`
+ * half only (see the class comment above).
  */
 async function replayMigration() {
 	for (const statement of migrationSql.split("--> statement-breakpoint")) {
 		if (!statement.trim()) continue
+		if (statement.includes('"personas"')) continue
 		await db.execute(sql.raw(statement))
 	}
 }
@@ -117,8 +124,8 @@ async function makeFile(hash: string) {
 }
 
 describe("0109 turns the two avatar pointers into foreign keys", () => {
-	it("declares an ON DELETE SET NULL foreign key into files on both tables", async () => {
-		for (const table of ["characters", "personas"] as const) {
+	it("declares an ON DELETE SET NULL foreign key into files on the one avatar-bearing table (personas folded into characters by 0133)", async () => {
+		for (const table of ["characters"] as const) {
 			const [fk] = await foreignKey(table)
 			expect(
 				fk,
@@ -148,10 +155,10 @@ describe("0109 turns the two avatar pointers into foreign keys", () => {
 			})
 			.returning()
 		const [persona] = await db
-			.insert(schema.personas)
+			.insert(schema.characters)
 			.values({
 				userId,
-				isDefault: false,
+				isPersona: true,
 				name: "Dangling Persona",
 				description: "same",
 				avatarMediaId: 987654321
@@ -165,13 +172,12 @@ describe("0109 turns the two avatar pointers into foreign keys", () => {
 		const after = await db.query.characters.findFirst({
 			where: (c, { eq }) => eq(c.id, character.id)
 		})
-		const afterPersona = await db.query.personas.findFirst({
-			where: (p, { eq }) => eq(p.id, persona.id)
+		const afterPersona = await db.query.characters.findFirst({
+			where: (c, { eq }) => eq(c.id, persona.id)
 		})
 		expect(after?.avatarMediaId).toBeNull()
 		expect(afterPersona?.avatarMediaId).toBeNull()
 		expect(await foreignKey("characters")).toHaveLength(1)
-		expect(await foreignKey("personas")).toHaveLength(1)
 	}, 60_000)
 
 	it("leaves a VALID pointer alone — the backfill matches orphans, not every row", async () => {
@@ -211,10 +217,10 @@ describe("0109 turns the two avatar pointers into foreign keys", () => {
 			})
 			.returning()
 		const [persona] = await db
-			.insert(schema.personas)
+			.insert(schema.characters)
 			.values({
 				userId,
-				isDefault: false,
+				isPersona: true,
 				name: "Also Loses It",
 				description: "d",
 				avatarMediaId: file.id
@@ -235,8 +241,8 @@ describe("0109 turns the two avatar pointers into foreign keys", () => {
 		).toBeNull()
 		expect(
 			(
-				await db.query.personas.findFirst({
-					where: (p, { eq }) => eq(p.id, persona.id)
+				await db.query.characters.findFirst({
+					where: (c, { eq }) => eq(c.id, persona.id)
 				})
 			)?.avatarMediaId
 		).toBeNull()

@@ -99,7 +99,7 @@ import {
 } from "$lib/server/pipelines/parity/harness"
 import { wrapFor } from "$lib/server/pipelines/entities/variableLayouts"
 import { SHIPPED_CONTEXT_TEMPLATE } from "$lib/server/pipelines/entities/contextTemplateDefaults"
-import { renderParity, parityGate } from "@serene-pub/sdk"
+import { renderParity, parityGate, splitCandidates } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
 import {
@@ -241,8 +241,8 @@ async function seedWorld(
 	opts: {
 		characters: Array<Omit<InsertCharacter, "userId">>
 		personas?: Array<
-			Omit<InsertPersona, "userId" | "isDefault"> & {
-				isDefault?: boolean
+			Omit<InsertCharacter, "userId" | "isPersona" | "isDefaultPersona"> & {
+				isDefaultPersona?: boolean
 			}
 		>
 		lore?: Array<Record<string, unknown>>
@@ -274,8 +274,8 @@ async function seedWorld(
 		personas.push(
 			(
 				await db
-					.insert(schema.personas)
-					.values({ userId: user.id, isDefault: false, ...p })
+					.insert(schema.characters)
+					.values({ userId: user.id, isPersona: true, ...p })
 					.returning()
 			)[0]
 		)
@@ -1151,7 +1151,8 @@ describe("the parity corpus", () => {
 		const worldLore = (run.nodes as any[]).find(
 			(n) => n.nodeKey === "worldLore"
 		)
-		const scored = (worldLore?.output?.main ?? []).map((c: any) => ({
+		// The items, past the lane's band intent at the head of the list (R-7 P5).
+		const scored = splitCandidates<any>(worldLore?.output?.main ?? []).items.map((c: any) => ({
 			name: c.payload?.name as string,
 			entityCooccurrence: c.signals?.entityCooccurrence as number,
 			total: score(c.signals, DEFAULT_SIGNAL_WEIGHTS.worldLore, 1),

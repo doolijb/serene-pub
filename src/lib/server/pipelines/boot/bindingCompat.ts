@@ -2,7 +2,7 @@
  * Structural compatibility, asserted at boot (ruling 2026-09-10).
  *
  * The same shape of check `assertHookCompleteness` makes one file over, and for
- * the same reason: core declares its node types in `@serene-pub/contracts` and
+ * the same reason: core declares its node definitions in `@serene-pub/contracts` and
  * implements them in `bindings.ts`, and a mismatch between the two halves is a
  * **packaging error** — something that should stop the build, not surface as a
  * run that quietly retrieves nothing.
@@ -22,19 +22,21 @@
  *  2. **A shared handler whose group lost a member.** `SHARED_CORE_HANDLERS`
  *     names the type ids each multi-type handler serves, in the runtime half of
  *     what its `SharedInput<[…]>` says. A member that is no longer bound, or no
- *     longer declared, means one of those node types is now being served by a
+ *     longer declared, means one of those node definitions is now being served by a
  *     handler nobody re-read.
- *  3. **A handler that declares its reads** — `declaresReads` in the SDK, which
- *     is how a plugin says what it needs — bound to a type that does not supply
- *     them. Core's handlers do not carry one, because theirs is *generated*:
- *     `requiresOf(...contracts)` derives it from the same contracts the type
- *     annotation names, so there is no second declaration to go stale.
+ *  3. **A handler that declares its reads** — `reads<C>()` / `declaresReads`
+ *     in the SDK — bound to a type that does not supply them. Since R-12
+ *     (2026-09-16) EVERY core handler carries one, typed against its own
+ *     contract, so this point now holds core to its word at boot exactly as it
+ *     holds a plugin; `requiresOf(...contracts)` stays for point 2, the
+ *     *supplies* direction. The reverse question — a declared name NO handler
+ *     reads — is `boot/declaredReads.ts`'s, in the suite rather than at boot.
  *
  * Point 3 is the one the plugin host and the coming orchestrator use, through
  * `structuralCompat` directly; this file is the core-side application of it.
  */
 
-import { getType, readsOf } from "@serene-pub/sdk"
+import { getDefinition, readsOf } from "@serene-pub/sdk"
 import {
 	requiresOf,
 	structuralCompat
@@ -60,7 +62,7 @@ export function checkCoreBindings(): string[] {
 
 	// 1 — every binding key names a type this build declares.
 	for (const id of boundIds)
-		if (!getType(id))
+		if (!getDefinition(id))
 			findings.push(
 				`core binds a handler to ${id}, which no type in this build ` +
 					`declares. A binding key is a string literal the compiler ` +
@@ -81,7 +83,7 @@ export function checkCoreBindings(): string[] {
 					`SharedInput<[…]>; the two are kept adjacent so this cannot ` +
 					`drift silently.`
 			)
-		const contracts = typeIds.map((id) => getType(id)).filter(Boolean)
+		const contracts = typeIds.map((id) => getDefinition(id)).filter(Boolean)
 		if (contracts.length !== typeIds.length) continue
 		// The intersection of what the group supplies — exactly what the
 		// handler's type says it may read. Then each member is asked whether it
@@ -106,7 +108,7 @@ export function checkCoreBindings(): string[] {
 	for (const [id, hook] of Object.entries(bindings)) {
 		const requires = readsOf(hook)
 		if (!requires) continue
-		const contract = getType(id)
+		const contract = getDefinition(id)
 		if (!contract) continue
 		const verdict = structuralCompat(requires, contract, id)
 		if (!verdict.ok) findings.push(verdict.message)

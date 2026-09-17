@@ -185,7 +185,8 @@ const narrationTurn = async (
 			characterId: null,
 			// A world narrator speaks as nobody; the side-character spec is
 			// handed a free-form name so the two runs differ only in document.
-			speaker: {
+			speaker: null,
+			sideCharacter: {
 				name: "The innkeeper",
 				characterId: null,
 				known: false,
@@ -322,16 +323,16 @@ describe("the retrieval controls are all wired, not just the ones with a test", 
 		const reference = new Set<string>(
 			(respondSpec().nodes ?? [])
 				.filter((n: any) => (n.config ?? {}).params)
-				.map((n: any) => String(n.typeId))
+				.map((n: any) => String(n.definitionId))
 		)
 		expect(reference.size, "the reference set is empty").toBeGreaterThan(3)
 
 		const missing = (spec().nodes ?? [])
 			.filter(
 				(n: any) =>
-					reference.has(String(n.typeId)) && !(n.config ?? {}).params
+					reference.has(String(n.definitionId)) && !(n.config ?? {}).params
 			)
-			.map((n: any) => `${n.key} (${n.typeId})`)
+			.map((n: any) => `${n.key} (${n.definitionId})`)
 
 		expect(
 			missing,

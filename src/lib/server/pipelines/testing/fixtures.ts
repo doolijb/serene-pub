@@ -305,30 +305,27 @@ export function character(
 	} as unknown as SelectCharacter
 }
 
-export function persona(overrides: Partial<SelectPersona> = {}): SelectPersona {
+/**
+ * A character the user voices — a CHARACTER row, flagged `isPersona` so a
+ * fixture built here matches what the app writes. Kept under its own name
+ * because the role it stands for is its own thing.
+ */
+export function persona(
+	overrides: Partial<SelectCharacter> = {}
+): SelectCharacter {
 	const id = overrides.id ?? nextId()
 	return {
-		id,
-		uuid: `persona-uuid-${id}`,
-		userId: 1,
-		isDefault: false,
-		avatar: null,
-		name: `Persona ${id}`,
-		description: "A persona.",
-		position: 0,
-		createdAt: new Date() as any,
-		updatedAt: new Date() as any,
-		lorebookId: null,
-		aliases: [],
-		summary: null,
-		creator: null,
-		category: null,
-		isDeleted: false,
-		embedding: null,
-		embeddingModel: null,
-		vectorizedAt: null,
+		...character({
+			id,
+			uuid: `persona-uuid-${id}`,
+			name: `Persona ${id}`,
+			description: "A persona.",
+			isPersona: true,
+			isDefaultPersona: false,
+			folderId: null
+		}),
 		...overrides
-	} as unknown as SelectPersona
+	} as unknown as SelectCharacter
 }
 
 export function sessionCharacter(
@@ -347,9 +344,9 @@ export function sessionCharacter(
 }
 
 export function sessionPersona(
-	p: SelectPersona,
+	p: SelectCharacter,
 	overrides: Partial<SelectSessionPersona> = {}
-): SelectSessionPersona & { persona: SelectPersona } {
+): SelectSessionPersona & { persona: SelectCharacter } {
 	return {
 		sessionId: 1,
 		personaId: p.id,
@@ -393,7 +390,7 @@ export type TestLorebook = {
 	id: number
 	lorebookBindings: (SelectLorebookBinding & {
 		character?: SelectCharacter | null
-		persona?: SelectPersona | null
+		persona?: SelectCharacter | null
 	})[]
 	worldLoreEntries: LorebookEntry<typeof WORLD_LORE_TYPE_ID>[]
 	characterLoreEntries: LorebookEntry<typeof CHARACTER_LORE_TYPE_ID>[]
@@ -466,16 +463,17 @@ export async function insertCharacterRow(
 	return row
 }
 
+/** A character row flagged as one the user plays — see `persona()` above. */
 export async function insertPersonaRow(
 	db: TestDb,
 	userId: number,
-	overrides: Partial<InsertPersona> = {}
+	overrides: Partial<InsertCharacter> = {}
 ) {
 	const [row] = await db
-		.insert(schema.personas)
+		.insert(schema.characters)
 		.values({
 			userId,
-			isDefault: false,
+			isPersona: true,
 			name: "Persona",
 			description: "A persona.",
 			...overrides

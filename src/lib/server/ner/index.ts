@@ -26,8 +26,8 @@
  * does not say it would put a wrong key in the annotation store.
  */
 
-import path from "path"
-import { getAppDataDir, isAndroidWrapper } from "$lib/server/utils"
+import { isAndroidWrapper } from "$lib/server/utils"
+import { cacheDirFor } from "$lib/server/localModels/onnxCache"
 import type { EntitySpan } from "$lib/server/adapters/actions"
 import { findNerModel, isRegisteredLocalNerModel } from "./models"
 
@@ -103,9 +103,28 @@ let loadError: string | null = null
 let ttlMinutes = 5
 let ttlTimer: ReturnType<typeof setTimeout> | null = null
 
+/**
+ * When the lane last ANNOTATED something, not when it last loaded.
+ *
+ * The mirror of the embedding lane's field, and set in the same one place for
+ * the same reason: the timer is also reset by a load, and "loaded four minutes
+ * ago, never used" is a different sentence from "last used four minutes ago".
+ */
+let lastUsedAt: Date | null = null
+
 export function setNerTtlMinutes(minutes: number) {
 	ttlMinutes = minutes
 	resetTtlTimer()
+}
+
+/** The idle window in force right now, in minutes. */
+export function getNerTtlMinutes(): number {
+	return ttlMinutes
+}
+
+/** ISO time of the last extraction, or null since the last unload. */
+export function getNerLastUsedAt(): string | null {
+	return lastUsedAt?.toISOString() ?? null
 }
 
 function resetTtlTimer() {
@@ -167,9 +186,7 @@ export async function loadNerModel(modelId: string): Promise<void> {
 			 * data directory: the two catalogues can name one repo id, and a
 			 * shared directory would make one cache entry mean two things.
 			 */
-			cache_dir:
-				process.env.TRANSFORMERS_CACHE ??
-				path.join(getAppDataDir(), "models", "ner"),
+			cache_dir: cacheDirFor("ner"),
 			...(modelDef?.dtype ? { dtype: modelDef.dtype } : {})
 		})) as unknown as TokenClassifier
 		loadedModelId = modelId
@@ -194,6 +211,8 @@ export function unloadNerModel(reason?: string): void {
 	classifier = null
 	loadedModelId = null
 	loadError = null
+	// Nothing resident, so there is nothing a "last used" could be about.
+	lastUsedAt = null
 	if (had) console.log(`[ner] Model unloaded${reason ? ` ${reason}` : ""}`)
 }
 
@@ -287,6 +306,7 @@ export function locateSpans(
 export async function extractNerSpans(text: string): Promise<EntitySpan[]> {
 	if (!classifier || !text.trim()) return []
 	const found = await classifier(text, { aggregation_strategy: "simple" })
+	lastUsedAt = new Date()
 	resetTtlTimer()
 	return locateSpans(text, found ?? [])
 }

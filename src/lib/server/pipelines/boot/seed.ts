@@ -6,12 +6,12 @@
  *
  * | kind | what it is | what a changed declaration does |
  * |---|---|---|
- * | the type registry | a *fact about the running code* | publishes under a new hash, and the slug's pointer moves (`registrySync.ts`) |
+ * | the definition registry | a *fact about the running code* | publishes under a new hash, and the slug's pointer moves (`registrySync.ts`) |
  * | the event registry | a *fact about the running code* | overwrites the row, because nothing pins an event |
  * | core's spec documents | *content* | publishes as a new version row, and the slug's pointer moves |
  *
- * The type registry's rule lives in `registrySync.ts` because that is where the
- * archive is. The other two live here.
+ * The definition registry's rule lives in `registrySync.ts` because that is where
+ * the archive is. The other two live here.
  *
  * ⚠ The first and third are one rule under two names: **a slug resolves to a
  * content hash, and publishing moves the pointer** (ruling 2026-09-10). What
@@ -27,24 +27,36 @@
  * pipeline makes that unrepresentable.
  */
 
-import { allTypes, canonicalHash } from "@serene-pub/sdk"
+import {
+	allDefinitions,
+	allEvents,
+	canonicalHash,
+	sessionEvents
+} from "@serene-pub/sdk"
 import { and, asc, eq, ne } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { CORE_SPECS } from "$lib/server/pipelines/specs"
 import { reconcileConfigs } from "$lib/server/pipelines/config/named"
 import { seedPipelinePrompts } from "$lib/server/pipelines/boot/seedPrompts"
 import { reconcilePromptFields } from "$lib/server/pipelines/boot/reconcilePromptFields"
+import { parseActionIdentity } from "$lib/shared/actions/identity"
 
 /* ------------------------------------------------------------------ *
  * Events
  * ------------------------------------------------------------------ */
 
 /**
- * A core event, as core defines it.
+ * A core event, as the SDK defines it — `pipeline_event_registry` is a
+ * **projection of `CORE_EVENTS`** and of nothing else (R-4, ruled 2026-09-15,
+ * landed 2026-09-16). This file kept its own list until then — `UNCAUSED_EVENTS`
+ * plus a derivation off `causesEvent` — and the two disagreed about
+ * `session-created`'s family (plans/29a §4). One registry now: the genre's
+ * session events and the data events core's outlets cause are all
+ * `defineEvent`s in `@serene-pub/sdk`, and this reads them.
  *
  * `affectsUser` is the load-bearing field: 11 §4 makes consent enforceable
  * *without hand-classifying every subscription* by declaring it once, on the
- * event. An event that touches somebody's content is marked here and every
+ * event. An event that touches somebody's content is marked there and every
  * subscription to it inherits the consequence.
  */
 export interface CoreEvent {
@@ -58,115 +70,42 @@ export interface CoreEvent {
 	family: "data" | "action"
 	affectsUser: boolean
 	description: string
+	/**
+	 * The shape id of what a listener receives (`core:shape/session-change@1`),
+	 * when the SDK declares one — projected into `payload_shape` as
+	 * `{ shape }`. Null for an event whose payload is still prose.
+	 */
+	payload: string | null
 }
 
 /**
- * The events nothing in the type registry causes.
+ * The core event set, read off the SDK's registry. `slug` is the id without
+ * its version (`core:event/message-created`), which is how the row keys it.
  *
- * Kept short and explicit. An ACTION event has no causing Consumer by
- * definition — a person clicked something, or a clock ticked — so it cannot be
- * derived the way the DATA events below are.
- */
-const UNCAUSED_EVENTS: CoreEvent[] = [
-	{
-		slug: "core:event/ui-action",
-		version: 1,
-		family: "action",
-		affectsUser: false,
-		description: "Somebody pressed something in the interface."
-	},
-	{
-		slug: "core:event/schedule-tick",
-		version: 1,
-		family: "action",
-		affectsUser: false,
-		description: "A scheduled moment arrived."
-	},
-	// The session lifecycle events (24 §5). ACTION family: a person created
-	// the session or changed its membership — no Consumer causes these.
-	{
-		slug: "core:event/session-created",
-		version: 1,
-		family: "action",
-		affectsUser: false,
-		description:
-			"A session was created — the genre's create pipeline answers this."
-	},
-	{
-		slug: "core:event/member-added",
-		version: 1,
-		family: "action",
-		affectsUser: false,
-		description:
-			"A character or persona joined a session; the payload carries which."
-	},
-	{
-		slug: "core:event/member-removed",
-		version: 1,
-		family: "action",
-		affectsUser: false,
-		description:
-			"A character or persona left a session; the payload carries which."
-	}
-]
-
-/**
- * What each DATA event means, and whether it touches a person's content.
- *
- * Keyed by bare slug. An event core's Consumers cause but this table does not
- * describe is still registered — as `affectsUser: true`, because the safe
- * default for an unclassified event that writes something is that it writes
- * something of the user's. Being wrong in that direction over-asks for consent;
- * being wrong in the other direction is the failure 11 §4 exists to prevent.
- */
-const DATA_EVENTS: Record<
-	string,
-	{ affectsUser: boolean; description: string }
-> = {
-	"core:event/message-created": {
-		affectsUser: true,
-		description: "A message was written into a session."
-	},
-	"core:event/message-updated": {
-		affectsUser: true,
-		description: "An existing message was changed."
-	}
-}
-
-const bareSlug = (ref: string) => ref.replace(/@\d+$/, "")
-const refVersion = (ref: string) => Number(/@(\d+)$/.exec(ref)?.[1] ?? 1)
-
-/**
- * The core event set, derived from the code rather than maintained beside it.
- *
- * 11 §2: *"the cause of each event is declared on the core consumer target, not
- * per spec"*. So the DATA half of this list **is** the set of `causesEvent`
- * declarations in the type registry, read off the descriptors. A Consumer that
- * starts causing a new event registers it by existing, which is the same
- * property `syncTypeRegistry` has and for the same reason: a list somebody
- * maintains by hand is a list that is eventually wrong.
+ * A DATA event an outlet declares as `causesEvent` but the SDK does not define
+ * is refused here rather than invented: the registry is one list, and a cause
+ * naming an event outside it is a declaration error, not a row to synthesise.
  */
 export function coreEvents(): CoreEvent[] {
-	const out = new Map<string, CoreEvent>()
-	for (const e of UNCAUSED_EVENTS) out.set(`${e.slug}@${e.version}`, e)
-
-	for (const d of allTypes()) {
+	const out = allEvents().map<CoreEvent>((e) => ({
+		slug: `core:event/${e.slug}`,
+		version: e.version,
+		family: e.family,
+		affectsUser: e.affectsUser,
+		description: e.description,
+		payload: e.payload ?? null
+	}))
+	const known = new Set(out.map((e) => `${e.slug}@${e.version}`))
+	for (const d of allDefinitions()) {
 		if (!d.causesEvent) continue
-		const slug = bareSlug(d.causesEvent)
-		const version = refVersion(d.causesEvent)
-		const known = DATA_EVENTS[slug]
-		out.set(`${slug}@${version}`, {
-			slug,
-			version,
-			family: "data",
-			affectsUser: known?.affectsUser ?? true,
-			description:
-				known?.description ??
-				`A ${slug.split("/").pop()} occurred. Caused by ${d.id}.`
-		})
+		if (!known.has(d.causesEvent))
+			throw new Error(
+				`${d.id} causes ${d.causesEvent}, which CORE_EVENTS does not define. ` +
+					`The event registry is one list (R-4): add the event to the SDK's ` +
+					`CORE_EVENTS or drop the cause.`
+			)
 	}
-
-	return [...out.values()].sort((a, b) =>
+	return out.sort((a, b) =>
 		a.slug === b.slug ? a.version - b.version : a.slug.localeCompare(b.slug)
 	)
 }
@@ -175,13 +114,15 @@ export interface EventSyncResult {
 	inserted: string[]
 	updated: string[]
 	unchanged: string[]
+	/** Rows for events outside the SDK's set — a projection has no strays. */
+	removed: string[]
 }
 
 /**
  * Project the core event set into rows.
  *
- * Unlike the type registry, this **updates on change rather than refusing**, and
- * the difference is not an inconsistency. A type version is a *pin*: a spec
+ * Unlike the definition registry, this **updates on change rather than refusing**,
+ * and the difference is not an inconsistency. A definition version is a *pin*: a spec
  * names `assemble@2` and every run resolves that name, so rewriting the row
  * changes what an approved spec does. Nothing pins an event's description or its
  * `affects_user` flag — a subscription names the event, and the row is core
@@ -189,17 +130,36 @@ export interface EventSyncResult {
  * never ship without a version bump nobody can act on.
  *
  * The one field where that reasoning would fail is `payload_shape`, which a
- * subscription's shape-compatibility check reads. It is left NULL until
- * something populates it, rather than written speculatively.
+ * subscription's shape-compatibility check reads. It carries the SDK's
+ * declared `payload` shape id where an event has one (the built-in writes'
+ * events, R-15) and stays NULL where none is declared, rather than being
+ * written speculatively.
  */
 export async function syncEventRegistry(db: Db): Promise<EventSyncResult> {
 	const result: EventSyncResult = {
 		inserted: [],
 		updated: [],
-		unchanged: []
+		unchanged: [],
+		removed: []
 	}
 
-	for (const event of coreEvents()) {
+	const events = coreEvents()
+	// A projection carries exactly its source: a row for an event the SDK has
+	// stopped defining is deleted, because nothing pins an event row (see
+	// below) and a stray would offer the panel a subscription to nothing.
+	const wanted = new Set(events.map((e) => e.slug))
+	const existing = await db
+		.select({ id: schema.pipelineEventRegistry.id, slug: schema.pipelineEventRegistry.slug })
+		.from(schema.pipelineEventRegistry)
+	for (const row of existing) {
+		if (wanted.has(row.slug)) continue
+		await db
+			.delete(schema.pipelineEventRegistry)
+			.where(eq(schema.pipelineEventRegistry.id, row.id))
+		result.removed.push(row.slug)
+	}
+
+	for (const event of events) {
 		const pin = `${event.slug}@${event.version}`
 		const [row] = await db
 			.select()
@@ -212,7 +172,11 @@ export async function syncEventRegistry(db: Db): Promise<EventSyncResult> {
 			version: event.version,
 			family: event.family,
 			affectsUser: event.affectsUser,
-			descriptionI18n: { en: event.description }
+			descriptionI18n: { en: event.description },
+			// The one field the header said would stay NULL "until something
+			// populates it": the SDK's `EventDef.payload` does, since the
+			// built-in writes' events (R-15, 2026-09-16).
+			payloadShape: event.payload ? { shape: event.payload } : null
 		}
 
 		if (!row) {
@@ -226,7 +190,9 @@ export async function syncEventRegistry(db: Db): Promise<EventSyncResult> {
 			row.family === event.family &&
 			row.affectsUser === event.affectsUser &&
 			(row.descriptionI18n as { en?: string } | null)?.en ===
-				event.description
+				event.description &&
+			((row.payloadShape as { shape?: string } | null)?.shape ?? null) ===
+				(event.payload ?? null)
 
 		if (same) {
 			result.unchanged.push(pin)
@@ -285,8 +251,20 @@ export interface SpecSeedReport {
  * the pointer resolves to is what moves.
  */
 export async function seedCoreSpecs(db: Db): Promise<SpecSeedReport[]> {
-	const { saveDocument } = await import("$lib/server/pipelines/boot/store")
+	const { saveDocument, assertInstallSlashNamesFree } = await import(
+		"$lib/server/pipelines/boot/store"
+	)
 	const out: SpecSeedReport[] = []
+	/**
+	 * The batch (U5c review, S2): every slug this build republishes. Each
+	 * publish below checks its slash names against the install *minus* these
+	 * — a release swapping two names between two core specs would otherwise
+	 * be refused on whichever landed first, against the other's old claim —
+	 * and the install-wide rule runs once, after the loop, where the new
+	 * claims meet.
+	 */
+	const docs = CORE_SPECS.map((entry) => ({ entry, doc: entry.build() }))
+	const batch: ReadonlySet<string> = new Set(docs.map(({ doc }) => doc.id))
 
 	// Four passes, in the only order where each step's inputs already exist.
 	// The reason for the ordering changed with the pool: a prompt used to be
@@ -299,9 +277,7 @@ export async function seedCoreSpecs(db: Db): Promise<SpecSeedReport[]> {
 	// pools four times and seed the first arrival as though it owned them.
 
 	// 1 — publish
-	for (const entry of CORE_SPECS) {
-		const doc = entry.build()
-
+	for (const { entry, doc } of docs) {
 		// Whether this instance already resolves the slug to *this* document —
 		// the row exists AND the spec's pointer is on it. Both halves: a hash
 		// this instance stored under an earlier boot but has since moved off is
@@ -331,11 +307,15 @@ export async function seedCoreSpecs(db: Db): Promise<SpecSeedReport[]> {
 
 		const action = current ? "present" : "published"
 		if (action === "published")
-			await saveDocument(db, doc, { publish: true, name: entry.name })
+			await saveDocument(db, doc, {
+				publish: true,
+				name: entry.name,
+				batch
+			})
 		else
 			// The display name is display, not content: a copyedit in the
 			// catalog reaches existing installs without a version bump —
-			// the same rule the type registry applies to i18n.
+			// the same rule the definition registry applies to i18n.
 			await db
 				.update(schema.pipelineSpecs)
 				.set({ name: entry.name })
@@ -353,6 +333,9 @@ export async function seedCoreSpecs(db: Db): Promise<SpecSeedReport[]> {
 			reconciled: []
 		})
 	}
+	// One slash name means one function across the install — checked once,
+	// now that every spec of this build is where it will stay.
+	await assertInstallSlashNamesFree(db)
 
 	// 2 — the prompts each pool ships
 	await seedPipelinePrompts(db)
@@ -447,7 +430,7 @@ export async function reconcilePublishedConfigs(
  */
 export async function seedSessionPresets(
 	db: Db
-): Promise<{ created: number; present: number }> {
+): Promise<{ created: number; present: number; bareIncluded: BareIncludedNotice[] }> {
 	// The catalog declares the shipped presets (24 T6b) — one list, mapped
 	// into the row shape there so the announcement and the seed cannot
 	// disagree. Matched on seedKey, never a fixed id (the standing rule).
@@ -484,18 +467,62 @@ export async function seedSessionPresets(
 		const create = await resolveSessionEventSpec(
 			db,
 			row.genreId,
-			"session-created"
+			sessionEvents.sessionCreated
 		)
-		if (create) bindings["session-created"] = { spec: create }
+		if (create) bindings[sessionEvents.sessionCreated] = { spec: create }
 		const respond =
 			row.primarySlug ??
-			(await resolveSessionEventSpec(db, row.genreId, "message-respond"))
-		if (respond) bindings["message-respond"] = { spec: respond }
+			(await resolveSessionEventSpec(
+				db,
+				row.genreId,
+				sessionEvents.messageRespond
+			))
+		if (respond) bindings[sessionEvents.messageRespond] = { spec: respond }
 		if (Object.keys(bindings).length)
 			await db
 				.update(schema.sessionPresets)
 				.set({ bindings })
 				.where(eq(schema.sessionPresets.id, row.id))
 	}
-	return { created, present }
+	return { created, present, bareIncluded: noticeBareIncludedKeys(rows) }
+}
+
+/** One preset whose included set still carries bare function keys. */
+export interface BareIncludedNotice {
+	presetId: number
+	name: string
+	/** The entries that are not identities, in stored order. */
+	keys: string[]
+}
+
+/**
+ * ⏳ One release, with `presetIncludes`' bare-key fallback. Migration 0137
+ * rewrote a preset's bare function keys to identities where exactly one
+ * action declared the function (third pass, W4+W2); the keys it could not
+ * — none declared it, or several — stay bare and are still answered by the
+ * fallback, which promotes them by the same rule at read time. That is
+ * silent, so this says which presets are living on it: logged once per
+ * preset on every boot, the way `syncPluginPresets` reports a bare binding
+ * key, and returned so a caller can assert on it. Pure over the rows the
+ * seed already read; no second query.
+ */
+export function noticeBareIncludedKeys(
+	rows: ReadonlyArray<{ id: number; name: string; includedActions: unknown }>
+): BareIncludedNotice[] {
+	const out: BareIncludedNotice[] = []
+	for (const row of rows) {
+		if (!Array.isArray(row.includedActions)) continue
+		const keys = row.includedActions
+			.map(String)
+			.filter((entry) => !parseActionIdentity(entry))
+		if (!keys.length) continue
+		out.push({ presetId: row.id, name: row.name, keys })
+		console.warn(
+			`[pipelines] preset '${row.name}' (#${row.id}) includes bare function keys ` +
+				`${keys.map((k) => `'${k}'`).join(", ")} — no single action declares them, so ` +
+				`the read-side fallback serves them one release; re-save the preset naming ` +
+				`each action by identity ('<spec slug>#<key>')`
+		)
+	}
+	return out
 }

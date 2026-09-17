@@ -20,8 +20,8 @@
 	 * timeout are ordinary connection controls above, and "off" is unstarring.
 	 */
 	import * as Icons from "@lucide/svelte"
-	import { onDestroy, onMount } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import { requestWithInterest } from "$lib/client/sockets/interest.svelte"
 
 	interface Props {
 		/** Whether the connection this is mounted under is the one starred. */
@@ -37,15 +37,13 @@
 		status = msg
 	}
 
-	onMount(() => {
-		// ⚠ The `off` below names its handler. A bare `socket.off(event)`
-		// removes EVERY listener for that event, app-wide.
-		socket.on("ner:status", handleStatus)
-		socket.emit("ner:status", {})
-	})
-
-	onDestroy(() => {
-		socket.off("ner:status", handleStatus)
+	$effect(() => {
+		// The interest and the request that fills it, in one: the sync naming
+		// `ner:status` leaves before the request, so the handler answering it
+		// already sees the key. `ner:` is restricted interest, so a non-admin is
+		// refused the key AND sends no request — which is what the admin-only
+		// handler would have answered with anyway.
+		return requestWithInterest("ner:status", {}, handleStatus)
 	})
 </script>
 
@@ -70,7 +68,9 @@
 		{#if status === null}
 			<p class="text-muted text-xs">Reading the lane…</p>
 		{:else}
-			<dl class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+			<dl
+				class="grid grid-cols-1 gap-x-4 gap-y-1 text-xs @lg/view:grid-cols-2"
+			>
 				<dt class="text-muted">Model</dt>
 				<dd class="truncate font-medium">
 					{status.modelId ?? "None"}
@@ -104,7 +104,7 @@
 			{/if}
 			<button
 				type="button"
-				class="btn preset-tonal-surface w-fit text-xs"
+				class="btn preset-filled-surface-400-600 w-fit text-xs"
 				onclick={() => socket.emit("ner:status", {})}
 			>
 				<Icons.RefreshCw size={14} aria-hidden="true" />

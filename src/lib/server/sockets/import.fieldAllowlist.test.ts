@@ -14,7 +14,7 @@
  */
 import { describe, expect, test, vi } from "vitest"
 import { characterFieldsFromParsedData } from "./characters"
-import { personaFieldsFromParsedData } from "./personas"
+import { personaFieldsFromParsedData } from "$lib/server/utils/personaCard"
 
 // Pure-function test — doesn't touch the DB at all — but characters.ts/
 // personas.ts both import the real `db` at module scope, which otherwise

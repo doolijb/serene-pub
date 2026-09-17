@@ -157,10 +157,10 @@ export function priorityBoost(
 /**
  * Drop the long tail.
  *
- * `max(floor, topScore × fraction)` — the two clauses answer different
- * questions. The floor rejects a turn where nothing is relevant at all; the
- * relative one rejects the tail of a turn where something is. Either alone
- * fails on the other's case.
+ * `max(threshold, topScore × fraction)` — the two clauses answer different
+ * questions. The threshold rejects a turn where nothing is relevant at all;
+ * the relative one rejects the tail of a turn where something is. Either
+ * alone fails on the other's case.
  */
 export function adaptiveThreshold(
 	candidates: readonly RagCandidate[],

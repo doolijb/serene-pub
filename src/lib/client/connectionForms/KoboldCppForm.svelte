@@ -7,8 +7,9 @@
 	import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
-	import { onMount, onDestroy, getContext } from "svelte"
+	import { onMount, getContext } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { z } from "zod"
 
 	/**
@@ -45,7 +46,6 @@
 
 	// Zod validation schema
 	const koboldCppConnectionSchema = z.object({
-		model: z.string().min(1, "Model is required"),
 		baseUrl: z
 			.string()
 			.url("Invalid URL format")
@@ -98,9 +98,10 @@
 	let testResult: { ok: boolean; error?: string; models?: any[] } | null =
 		$state(null)
 
-	// Named so `off` can name it too. A bare `socket.off("connections:test")`
-	// removes EVERY listener for that event — including the parent sidebar's,
-	// which then stops updating for the rest of the session.
+	// Standing interest in the test result, held by the registry for as long as
+	// this form is mounted and released with it. The registry keeps ONE raw
+	// listener for the event and fans it out, so the parent sidebar's own
+	// interest is untouched by this form coming and going.
 	const onConnectionsTest = (msg: Sockets.Connections.Test.Response) => {
 		testResult = {
 			ok: msg.ok,
@@ -108,7 +109,7 @@
 			models: msg.models
 		}
 	}
-	socket.on("connections:test", onConnectionsTest)
+	useInterest<"connections:test">("connections:test", onConnectionsTest)
 
 	function handleTestConnection() {
 		if (!validateConnection()) return
@@ -120,7 +121,6 @@
 
 	function validateConnection(): boolean {
 		const data = {
-			model: connection.model || "",
 			baseUrl: connection.baseUrl || ""
 		}
 
@@ -209,13 +209,10 @@
 			koboldCppFields = extraJsonToExtraFields(defaultExtraJson)
 		}
 	})
-
-	onDestroy(() => {
-		socket.off("connections:test", onConnectionsTest)
-	})
 </script>
 
 {#if connection}
+	<!-- Model input removed: models live in the Models section below. -->
 	{#if managerEnabled}
 		<div
 			class="border-warning-500 bg-warning-500/10 mt-4 flex items-start gap-2 rounded-lg border p-3"

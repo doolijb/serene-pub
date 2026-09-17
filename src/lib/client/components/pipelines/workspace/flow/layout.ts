@@ -3,7 +3,7 @@
  * layered algorithm into Svelte Flow nodes and edges.
  *
  * The wire carries three facts — nodes in position order, blocks (with
- * `parentBlockId`, so nesting is representable), and data edges. The drawing
+ * `parentClauseId`, so nesting is representable), and data edges. The drawing
  * wants *flow*, so the edges built here are structural: the spine connects
  * consecutive top-level elements, and inside a block each chain runs its
  * members in sequence behind a small chain-label node (which is where a
@@ -22,7 +22,7 @@ type WireGraph = NonNullable<
 	NonNullable<Sockets.Pipelines.Detail.Response["spec"]>["graph"]
 >
 type WireNode = WireGraph["nodes"][number]
-type WireBlock = WireGraph["blocks"][number]
+type WireBlock = WireGraph["clauses"][number]
 
 export type FlowDirection = "DOWN" | "RIGHT"
 
@@ -35,14 +35,14 @@ const BLOCK_PAD_TOP = 46
 const BLOCK_PAD = 14
 
 /**
- * A route branch's predicate, as the sentence its declaration is:
+ * A junction branch's predicate, as the sentence its declaration is:
  * "when call = search" / "when hasText" / "otherwise".
  */
-const routeWhen = (
+const junctionWhen = (
 	block: WireBlock | undefined,
 	chain: string
 ): string | null => {
-	const r = block?.routes?.[chain]
+	const r = block?.branches?.[chain]
 	if (!r) return null
 	if (r.default) return "otherwise"
 	const subject = r.path ? r.path : "value"
@@ -59,14 +59,14 @@ const humanizeChain = (v: string) =>
 
 /** Walks a node's block ancestry up to the child of `scope` (null = root). */
 function containerWithin(
-	blockId: string | null,
+	clauseId: string | null,
 	scope: string | null,
 	byId: Map<string, WireBlock>
 ): string | null {
-	let current = blockId
+	let current = clauseId
 	while (current) {
 		const block = byId.get(current)
-		const parent = block?.parentBlockId ?? null
+		const parent = block?.parentClauseId ?? null
 		if (parent === scope) return current
 		current = parent
 	}
@@ -75,7 +75,7 @@ function containerWithin(
 
 interface Scope {
 	/** null = the root spine. */
-	blockId: string | null
+	clauseId: string | null
 	/** Ordered element ids: node keys and (for blocks in this scope) block ids. */
 	sequence: string[]
 	elkChildren: any[]
@@ -86,8 +86,8 @@ export async function layoutPipeline(
 	graph: WireGraph,
 	direction: FlowDirection
 ): Promise<{ nodes: Node[]; edges: Edge[] }> {
-	const blocks = graph.blocks ?? []
-	const blockById = new Map(blocks.map((b) => [b.id, b]))
+	const clauses = graph.clauses ?? []
+	const clauseById = new Map(clauses.map((b) => [b.id, b]))
 	const vertical = direction === "DOWN"
 	const sourcePosition = vertical ? Position.Bottom : Position.Right
 	const targetPosition = vertical ? Position.Top : Position.Left
@@ -113,7 +113,7 @@ export async function layoutPipeline(
 	/** Builds one scope (root or a block) into ELK children + edges. */
 	function buildScope(scopeId: string | null): Scope {
 		const scope: Scope = {
-			blockId: scopeId,
+			clauseId: scopeId,
 			sequence: [],
 			elkChildren: [],
 			elkEdges: []
@@ -122,15 +122,15 @@ export async function layoutPipeline(
 		const chains = new Map<string, WireNode[]>()
 
 		for (const n of graph.nodes) {
-			const container = containerWithin(n.blockId, scopeId, blockById)
-			if (n.blockId === scopeId || (scopeId === null && !n.blockId)) {
+			const container = containerWithin(n.clauseId, scopeId, clauseById)
+			if (n.clauseId === scopeId || (scopeId === null && !n.clauseId)) {
 				// A direct member of this scope.
 				if (scopeId === null) {
 					scope.sequence.push(n.key)
 					scope.elkChildren.push(stepElk(n.key))
 					nodeData.set(n.key, { wire: n })
 				} else {
-					const chainKey = n.blockChain ?? ""
+					const chainKey = n.clauseChain ?? ""
 					if (!chains.has(chainKey)) chains.set(chainKey, [])
 					chains.get(chainKey)!.push(n)
 				}
@@ -140,7 +140,7 @@ export async function layoutPipeline(
 				seen.add(container)
 				scope.sequence.push(container)
 				const inner = buildScope(container)
-				const block = blockById.get(container)!
+				const block = clauseById.get(container)!
 				scope.elkChildren.push({
 					id: container,
 					layoutOptions: {
@@ -160,10 +160,10 @@ export async function layoutPipeline(
 			// chain is usually named after its node, so a label there reads
 			// as a duplicated title; it earns its place only for a route's
 			// predicate or to name a multi-node branch.
-			const block = blockById.get(scopeId)
+			const block = clauseById.get(scopeId)
 			for (const [chainKey, members] of chains) {
 				const labelId = `${scopeId}::chain::${chainKey}`
-				const predicate = routeWhen(block, chainKey)
+				const predicate = junctionWhen(block, chainKey)
 				const withLabel = predicate !== null || members.length > 1
 				if (withLabel) {
 					scope.elkChildren.push({

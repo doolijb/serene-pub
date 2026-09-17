@@ -41,7 +41,7 @@ import {
 	loadBookEntries
 } from "$lib/server/utils/lorebookEntries"
 import { buildCharacterCardV3 } from "$lib/server/utils/characterCardParser"
-import { buildPersonaExportCard } from "$lib/server/sockets/personas"
+import { buildPersonaExportCard } from "$lib/server/utils/personaCard"
 
 export async function buildLorebookExportData(
 	lorebookId: number,
@@ -85,11 +85,13 @@ export async function buildLorebookExportData(
 	// Embed every bound character/persona's full card (when opted into),
 	// plus the binding structure itself (always, even for bindings whose
 	// card isn't embedded) — see attachBoundEntities.
+	// ONE relation. A bound persona is a bound CHARACTER; which half of the
+	// export it lands in is decided by `isPersona` below, not by the column
+	// the id sits in.
 	const bindingRows = await db.query.lorebookBindings.findMany({
 		where: eq(schema.lorebookBindings.lorebookId, lorebook.id),
 		with: {
-			character: { with: { characterTags: { with: { tag: true } } } },
-			persona: true
+			character: { with: { characterTags: { with: { tag: true } } } }
 		}
 	})
 
@@ -103,8 +105,8 @@ export async function buildLorebookExportData(
 		let characterLocalId: number | null = null
 		let personaLocalId: number | null = null
 
-		// Binding a character/persona only requires being able to *view* it
-		// (canViewCharacter/canViewPersona — true for anything shared into a
+		// Binding a character only requires being able to *view* it
+		// (canViewCharacter — true for anything shared into a
 		// session you're in, not just things you own), but export is a
 		// data-extraction action, not a viewing action — the direct
 		// characters:exportCard/personas:exportCard handlers are deliberately
@@ -115,11 +117,13 @@ export async function buildLorebookExportData(
 		// the already-supported "binding present, no card embedded" path
 		// (same as includeCharacters/includePersonas: false) rather than
 		// needing new branching.
-		if (
-			binding.character &&
-			includeCharacters &&
-			binding.character.userId === userId
-		) {
+		// `extensions.serenepub.personas` is a WIRE FORMAT other programs
+		// hold, so it stays — the split is now made from `isPersona` rather
+		// than from which id column was set, and a persona still exports as a
+		// persona card (the small shape; see personaCard.ts).
+		const isOwned = binding.character?.userId === userId
+		const asPersona = !!binding.character?.isPersona
+		if (binding.character && isOwned && !asPersona && includeCharacters) {
 			characterLocalId = nextLocalId++
 			characters.push({
 				localId: characterLocalId,
@@ -134,15 +138,11 @@ export async function buildLorebookExportData(
 				})
 			})
 		}
-		if (
-			binding.persona &&
-			includePersonas &&
-			binding.persona.userId === userId
-		) {
+		if (binding.character && isOwned && asPersona && includePersonas) {
 			personaLocalId = nextLocalId++
 			personas.push({
 				localId: personaLocalId,
-				card: buildPersonaExportCard(binding.persona)
+				card: buildPersonaExportCard(binding.character)
 			})
 		}
 
@@ -151,7 +151,7 @@ export async function buildLorebookExportData(
 		bindings.push({
 			localId: bindingLocalId,
 			bindingText: binding.binding,
-			kind: binding.characterId ? "character" : "persona",
+			kind: asPersona ? "persona" : "character",
 			characterLocalId,
 			personaLocalId
 		})
@@ -247,15 +247,13 @@ export async function buildLorebookExportData(
 		const narrativeNodes = bindingRows.map((node) => {
 			// Mirrors the characters[]/personas[] ownership check above —
 			// a binding's name/aliases/summary are kept in sync with the
-			// bound character/persona's real values regardless of who owns
+			// bound character's real values regardless of who owns
 			// it (binding only requires viewing access), so without this,
-			// a node for a shared-but-not-owned character/persona would
+			// a node for a shared-but-not-owned character would
 			// leak their real identity here even though its full card was
 			// correctly excluded from characters[]/personas[].
 			const isOwnedOrUnbound =
-				(!node.characterId && !node.personaId) ||
-				node.character?.userId === userId ||
-				node.persona?.userId === userId
+				!node.characterId || node.character?.userId === userId
 			const safeNode = isOwnedOrUnbound
 				? node
 				: {

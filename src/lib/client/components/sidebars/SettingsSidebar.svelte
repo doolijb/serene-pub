@@ -16,6 +16,7 @@
 	import MediaManagerTab from "../media/MediaManagerTab.svelte"
 	import CustomThemeManager from "../CustomThemeManager.svelte"
 	import SettingsUnsavedChangesModal from "../modals/SettingsUnsavedChangesModal.svelte"
+	import { ViewModeTracker } from "$lib/client/shell/viewMode.svelte"
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
@@ -31,6 +32,18 @@
 	// media, your theme.
 	let activeTab = $state<"user" | "media" | "data" | "themes" | "about">(
 		"user"
+	)
+
+	/**
+	 * Given a view's worth of room the icon strip becomes a labelled rail down
+	 * the left with the section beside it — one `orientation`, and PanelTabList
+	 * / PanelTab carry the rest. Measured rather than asked of the window: this
+	 * panel is 400px wide in the dock on the same desktop where it is 1376px
+	 * full page, and only the first of those has room for a rail.
+	 */
+	const viewMode = new ViewModeTracker()
+	const tabsOrientation = $derived(
+		viewMode.mode === "desk" ? "vertical" : "horizontal"
 	)
 
 	// Section names. The tab triggers are icon-only (see PanelTab), so
@@ -113,7 +126,7 @@
 	})
 </script>
 
-<div class="flex h-full flex-col p-4">
+<div class="flex h-full flex-col p-4" use:viewMode.observe>
 	<!-- Admin-only: a non-admin can't upgrade the install, so an update
 	     notice is noise for them. Same rule as UpdateNoticeBar. -->
 	{#if page.data?.isNewerReleaseAvailable && userCtx.user?.isAdmin}
@@ -138,7 +151,11 @@
 
 	<!-- Settings Tabs -->
 	<div class="flex-1 overflow-y-auto">
-		<Tabs value={activeTab} onValueChange={handleTabChange}>
+		<Tabs
+			value={activeTab}
+			onValueChange={handleTabChange}
+			orientation={tabsOrientation}
+		>
 			<PanelTabList>
 				<PanelTab value="user" label="User" icon={Icons.UserCog} />
 				<PanelTab value="media" label="Media" icon={Icons.Images} />
@@ -146,137 +163,152 @@
 				<PanelTab value="themes" label="Themes" icon={Icons.Palette} />
 				<PanelTab value="about" label="About" icon={Icons.Info} />
 			</PanelTabList>
-			<PanelSectionTitle title={sectionLabel} />
-			<Tabs.Content value="user">
-				{#if activeTab === "user"}
-					<UserSettingsTab
-						bind:hasUnsavedChanges={tabHasUnsavedChanges}
-					/>
-				{/if}
-			</Tabs.Content>
-			<Tabs.Content value="media">
-				{#if activeTab === "media"}
-					<MediaManagerTab />
-				{/if}
-			</Tabs.Content>
-			<Tabs.Content value="data">
-				{#if activeTab === "data"}
-					<DataSettingsTab />
-				{/if}
-			</Tabs.Content>
-			<Tabs.Content value="themes">
-				{#if activeTab === "themes"}
-					<CustomThemeManager />
-				{/if}
-			</Tabs.Content>
-			<Tabs.Content value="about">
-				{#if activeTab === "about"}
-					<div class="flex flex-col gap-4">
-						<div class="mb-1 flex items-center gap-2">
-							<Icons.Info size={20} class="text-primary-500" />
-							<span class="text-lg font-bold tracking-wide">
-								Serene Pub
-							</span>
-							<span
-								class="bg-primary-200-800 text-primary-700 dark:text-primary-200 ml-2 rounded px-2 py-0.5 font-mono text-xs"
-							>
-								{appVersionDisplay}
-							</span>
-						</div>
-						<div class="text-surface-700-300 mb-2 text-xs">
-							Build: <span class="font-mono">
-								{appVersion}
-							</span>
-						</div>
-						<div class="flex flex-wrap items-center gap-3">
-							<a
-								href="https://serenepub.com"
-								target="_blank"
-								rel="noopener noreferrer"
-								class="btn preset-filled-primary-500 gap-1"
-								aria-label="Visit the Serene Pub website"
-							>
-								<Icons.Globe size={16} aria-hidden="true" />
-								<span>Website</span>
-							</a>
-							<a
-								href="https://github.com/doolijb/serene-pub"
-								target="_blank"
-								rel="noopener noreferrer"
-								class="btn preset-filled-surface-500 gap-1"
-								aria-label="Visit Serene Pub GitHub repository"
-							>
-								<Icons.GitBranch size={16} aria-hidden="true" />
-								<span>Repository</span>
-							</a>
-							<a
-								href="https://github.com/doolijb/serene-pub/milestones"
-								target="_blank"
-								rel="noopener noreferrer"
-								class="btn preset-filled-surface-500"
-								aria-label="View Serene Pub release milestones"
-							>
-								<Icons.Milestone size={16} aria-hidden="true" />
-								<span>Milestones</span>
-							</a>
-							<a
-								href="https://discord.gg/3kUx3MDcSa"
-								target="_blank"
-								rel="noopener noreferrer"
-								class="btn preset-filled-tertiary-500"
-								aria-label="Join Serene Pub Discord community"
-							>
-								<Icons.MessageSquare
-									size={16}
-									aria-hidden="true"
+			<!-- Title and panels share one box because the rail form lays the
+			     root out as a ROW: loose, each of the six would be a column of
+			     its own beside the rail. (Only the selected panel is in flow —
+			     zag marks the rest `hidden` — but the title never is.) -->
+			<div class="min-w-0 flex-1">
+				<PanelSectionTitle title={sectionLabel} />
+				<Tabs.Content value="user">
+					{#if activeTab === "user"}
+						<UserSettingsTab
+							bind:hasUnsavedChanges={tabHasUnsavedChanges}
+						/>
+					{/if}
+				</Tabs.Content>
+				<Tabs.Content value="media">
+					{#if activeTab === "media"}
+						<MediaManagerTab />
+					{/if}
+				</Tabs.Content>
+				<Tabs.Content value="data">
+					{#if activeTab === "data"}
+						<DataSettingsTab />
+					{/if}
+				</Tabs.Content>
+				<Tabs.Content value="themes">
+					{#if activeTab === "themes"}
+						<CustomThemeManager />
+					{/if}
+				</Tabs.Content>
+				<Tabs.Content value="about">
+					{#if activeTab === "about"}
+						<div class="flex flex-col gap-4">
+							<div class="mb-1 flex items-center gap-2">
+								<Icons.Info
+									size={20}
+									class="text-primary-500"
 								/>
-								<span>Discord</span>
-							</a>
-							<a
-								href="https://github.com/doolijb/serene-pub/issues"
-								target="_blank"
-								rel="noopener noreferrer"
-								class="btn preset-filled-error-500"
-								aria-label="Report issues on GitHub"
-							>
-								<Icons.AlertCircle
-									size={16}
-									aria-hidden="true"
-								/>
-								<span>Issues</span>
-							</a>
-							<a
-								href="https://github.com/doolijb/serene-pub/discussions"
-								target="_blank"
-								rel="noopener noreferrer"
-								class="btn preset-filled-secondary-500"
-								aria-label="Join discussions on GitHub"
-							>
-								<Icons.MessageCircle
-									size={16}
-									aria-hidden="true"
-								/>
-								<span>Discussions</span>
-							</a>
+								<span class="text-lg font-bold tracking-wide">
+									Serene Pub
+								</span>
+								<span
+									class="bg-primary-200-800 text-primary-700 dark:text-primary-200 ml-2 rounded px-2 py-0.5 font-mono text-xs"
+								>
+									{appVersionDisplay}
+								</span>
+							</div>
+							<div class="text-surface-700-300 mb-2 text-xs">
+								Build: <span class="font-mono">
+									{appVersion}
+								</span>
+							</div>
+							<div class="flex flex-wrap items-center gap-3">
+								<a
+									href="https://serenepub.com"
+									target="_blank"
+									rel="noopener noreferrer"
+									class="btn preset-filled-primary-500 gap-1"
+									aria-label="Visit the Serene Pub website"
+								>
+									<Icons.Globe size={16} aria-hidden="true" />
+									<span>Website</span>
+								</a>
+								<a
+									href="https://github.com/doolijb/serene-pub"
+									target="_blank"
+									rel="noopener noreferrer"
+									class="btn preset-filled-surface-500 gap-1"
+									aria-label="Visit Serene Pub GitHub repository"
+								>
+									<Icons.GitBranch
+										size={16}
+										aria-hidden="true"
+									/>
+									<span>Repository</span>
+								</a>
+								<a
+									href="https://github.com/doolijb/serene-pub/milestones"
+									target="_blank"
+									rel="noopener noreferrer"
+									class="btn preset-filled-surface-500"
+									aria-label="View Serene Pub release milestones"
+								>
+									<Icons.Milestone
+										size={16}
+										aria-hidden="true"
+									/>
+									<span>Milestones</span>
+								</a>
+								<a
+									href="https://discord.gg/3kUx3MDcSa"
+									target="_blank"
+									rel="noopener noreferrer"
+									class="btn preset-filled-tertiary-500"
+									aria-label="Join Serene Pub Discord community"
+								>
+									<Icons.MessageSquare
+										size={16}
+										aria-hidden="true"
+									/>
+									<span>Discord</span>
+								</a>
+								<a
+									href="https://github.com/doolijb/serene-pub/issues"
+									target="_blank"
+									rel="noopener noreferrer"
+									class="btn preset-filled-error-500"
+									aria-label="Report issues on GitHub"
+								>
+									<Icons.AlertCircle
+										size={16}
+										aria-hidden="true"
+									/>
+									<span>Issues</span>
+								</a>
+								<a
+									href="https://github.com/doolijb/serene-pub/discussions"
+									target="_blank"
+									rel="noopener noreferrer"
+									class="btn preset-filled-secondary-500"
+									aria-label="Join discussions on GitHub"
+								>
+									<Icons.MessageCircle
+										size={16}
+										aria-hidden="true"
+									/>
+									<span>Discussions</span>
+								</a>
+							</div>
+							<div class="text-muted-foreground mt-2 text-xs">
+								&copy; {new Date().getFullYear()} Serene Pub (
+								<a
+									href="https://github.com/doolijb"
+									target="_blank"
+									rel="noopener noreferrer"
+									class="text-primary-500 hover:underline"
+								>
+									Jody Doolittle
+								</a>
+								).
+							</div>
+							<div class="text-muted-foreground mt-2 text-xs">
+								Distributed under the AGPL-3.0 License.
+							</div>
 						</div>
-						<div class="text-muted-foreground mt-2 text-xs">
-							&copy; {new Date().getFullYear()} Serene Pub (
-							<a
-								href="https://github.com/doolijb"
-								target="_blank"
-								rel="noopener noreferrer"
-								class="text-primary-500 hover:underline"
-							>
-								Jody Doolittle
-							</a>
-							).
-						</div>
-						<div class="text-muted-foreground mt-2 text-xs">
-							Distributed under the AGPL-3.0 License.
-						</div>
-					</div>
-				{/if}
-			</Tabs.Content>
+					{/if}
+				</Tabs.Content>
+			</div>
 		</Tabs>
 	</div>
 </div>

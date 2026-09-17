@@ -4,7 +4,7 @@
 	interface Props {
 		open: boolean
 		onOpenChange: (e: OpenChangeDetails) => void
-		entityLabel: "Lorebook" | "Character" | "Persona"
+		entityLabel: "Lorebook" | "Character"
 		existingName: string
 		onOverwrite: () => void
 		onImportAsNew: () => void

@@ -43,6 +43,7 @@ import { describe, it, expect, beforeAll, vi } from "vitest"
 import { and, eq } from "drizzle-orm"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
+import { connectionSlotValue } from "$lib/shared/connections/slotRef"
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
@@ -150,50 +151,35 @@ vi.mock("$lib/server/embedding", () => ({
 }))
 
 /**
- * What `dispatch` handed the tier walk. `pipelineSamplingId` is the value that
- * was `null` on every run no matter what the panel said.
+ * What `dispatch` handed the resolver — the run's own resolution (R-8).
+ *
+ * Since the one road, dispatch consumes the executor's resolved connection
+ * and sampling and re-walks no tier of its own: `resolveCapabilityTarget` is
+ * handed the run's ids as `pipelineConfig` and only loads the pair, checks the
+ * model and attaches the template. The spy records what arrived and delegates
+ * to the real resolver against THIS database — `capabilityDefault` reads the
+ * global `db` otherwise, which in an int test is the app's own.
+ *
+ * ⚠ The session tier is not modelled, and does not need to be: it is in the
+ * WORLD now (`sessions.sampling_config_id` at session scope), and no test in
+ * this file sets it.
  */
 let resolveArgs: any = null
-/**
- * The tier walk, run against THIS database.
- *
- * ⚠ Not a stub of the resolution — a redirect of the CONNECTION. `resolveTaskConfig`
- * and `getUserConfigurations` both `import { db } from "$lib/server/db"`, so in an
- * int test they read the app's own database rather than the one the fixture built,
- * and the reply step refuses for a reason that has nothing to do with this file.
- * `resolveCapabilityTarget` — the thing actually under test, including the
- * `samplingConfigId != null` guard that read `null` as "this tier said nothing" —
- * is the real one, handed the real params.
- */
-vi.mock("$lib/server/utils/resolveTaskConfig", () => ({
-	resolveTaskConfig: async (params: any) => {
-		resolveArgs = params
-		const { resolveCapabilityTarget, TEXT_CAPABILITY } = await import(
-			"$lib/server/connections/capabilityTarget"
-		)
-		const target: any = await resolveCapabilityTarget(db, {
-			capability: TEXT_CAPABILITY,
-			pipelineConfig: {
-				connectionId: params.pipelineConnectionId ?? null,
-				samplingConfigId: params.pipelineSamplingId ?? null
+vi.mock("$lib/server/connections/capabilityTarget", async (importOriginal) => {
+	const real: any = await importOriginal()
+	return {
+		...real,
+		resolveCapabilityTarget: async (_db: any, req: any) => {
+			resolveArgs = {
+				pipelineConnectionId: req.pipelineConfig?.connectionId ?? null,
+				pipelineConnectionModelId:
+					req.pipelineConfig?.connectionModelId ?? null,
+				pipelineSamplingId: req.pipelineConfig?.samplingConfigId ?? null
 			}
-		})
-		return target.ok
-			? {
-					connection: target.connection,
-					sampling: target.sampling,
-					connectionName: target.connection.name ?? "System default",
-					samplingName: target.sampling?.name ?? "System default"
-				}
-			: {
-					connection: null,
-					sampling: null,
-					connectionName: "System default",
-					samplingName: "System default",
-					problem: target.problem
-				}
+			return await real.resolveCapabilityTarget(db, req)
+		}
 	}
-}))
+})
 vi.mock("$lib/server/utils/getUserConfigurations", () => ({
 	getUserConfigurations: async () => ({
 		contextConfig: { id: 1, template: "{{instructions}}" },
@@ -235,6 +221,13 @@ let defaultImageSamplingId: number
 let pickedImageSamplingId: number
 let defaultConnectionId: number
 let pickedConnectionId: number
+/**
+ * The MODEL half of each pair (0128). A connection has no default model, so
+ * every registration and every slot value below names both halves; an endpoint
+ * on its own resolves as unconfigured.
+ */
+let defaultModelId: number
+let pickedModelId: number
 
 /** Spec slugs, hoisted so the pick helper and the runs cannot disagree. */
 let RESPOND: string
@@ -292,8 +285,10 @@ async function setSlot(
 	)
 	await db.delete(schema.pipelineConfigValues).where(where)
 	if (value === null) return
-	// A NUMBER, because that is what the panel commits — and the string/number
-	// divide is the second, independent break on this path (`sameId`).
+	// Committed as the panel commits it: a number for a sampling or context id,
+	// and whatever `connectionSlotValue` builds for a connection — the
+	// string/number divide is the second, independent break on this path
+	// (`sameId`).
 	await db.insert(schema.pipelineConfigValues).values({
 		configId,
 		nodeKey,
@@ -372,13 +367,34 @@ beforeAll(async () => {
 			name: "Image",
 			type: "a1111",
 			baseUrl: "http://image",
-			model: "juggernaut.safetensors",
 			// Stated outright rather than inferred from the type: the guard reads
 			// an explicit override above everything else, so the fixture cannot
 			// be broken by a change to how a type's modality is judged.
 			capabilities: { overrides: { "text->image": "good" } }
 		} as any)
 		.returning()
+
+	// The model half of each endpoint. The checkpoint is a property of the
+	// model row, and the merge is what puts it back on `connection.model` for
+	// the adapter.
+	const { ensureConnectionModel } = await import(
+		"$lib/server/connections/models"
+	)
+	defaultModelId = (await ensureConnectionModel(
+		db,
+		textConn.id,
+		"default-7b"
+	))!.id
+	pickedModelId = (await ensureConnectionModel(
+		db,
+		secondTextConn.id,
+		"picked-7b"
+	))!.id
+	const imageModelId = (await ensureConnectionModel(
+		db,
+		imageConn.id,
+		"juggernaut.safetensors"
+	))!.id
 
 	const sampling = async (name: string, values: any, enabled: string[]) =>
 		(
@@ -428,10 +444,12 @@ beforeAll(async () => {
 	)
 	await setCapabilityDefault(db, "text->text", {
 		connectionId: textConn.id,
+		connectionModelId: defaultModelId,
 		samplingConfigId: defaultSamplingId
 	})
 	await setCapabilityDefault(db, "text->image", {
 		connectionId: imageConn.id,
+		connectionModelId: imageModelId,
 		samplingConfigId: defaultImageSamplingId
 	})
 
@@ -537,10 +555,11 @@ const drafts = () => textCalls.filter((c) => c.prompt.includes("old iron"))
 
 describe("dispatch — the reply step's own Sampling", () => {
 	it("sends the picked config's samplers, not the capability default's", async () => {
-		// The `generate` node's slot, through the panel's address, into
-		// `resolveTaskConfig`'s pipelineConfig tier. Before the executor carried
-		// the reference this arrived as `null`, which reads as "the pipeline
-		// chose nothing" — and the default temperature went out instead.
+		// The `generate` node's slot, through the panel's address, resolved by
+		// the executor and consumed by dispatch (R-8). Before the executor
+		// carried the reference this arrived as `null`, which reads as "the
+		// pipeline chose nothing" — and the default temperature went out
+		// instead.
 		await setSlot(RESPOND, "generate", "sampling", pickedSamplingId)
 		textCalls.length = 0
 		resolveArgs = null
@@ -657,11 +676,33 @@ describe("dispatch — the reply step's own Connection", () => {
 	 * not on the id handed to the resolver. `refId(p.connection)` reducing a
 	 * resolved slot to an id and `resolveCapabilityTarget` walking the tiers are
 	 * two separate steps, and only the second one decides where the bytes go —
-	 * `pipelineConfig` sits *below* `sessionOverride`, so an id arriving there
-	 * is a proposal rather than a verdict.
+	 * an id arriving at `pipelineConfig` is a proposal until the walk has read
+	 * the whole chain. It happens to be the TOP tier since 0130, which is a fact
+	 * about today's chain and not a reason to assert one step earlier.
 	 */
 	it("sends to the picked connection, not the capability default's", async () => {
-		await setSlot(RESPOND, "generate", "connection", pickedConnectionId)
+		/**
+		 * ⚠ RED against a live defect in the SDK executor, not against this
+		 * fixture. `connectionSlotValue` writes the pair a picker commits —
+		 * `{ ref, modelId }` — and `executor.ts`'s connection branch compares
+		 * the whole stored value with `sameId(c.id, chosenId)`, which
+		 * stringifies the object to `[object Object]` and matches no
+		 * connection. The slot then falls through to `activeConnection[kind]`
+		 * and the pick is silently replaced by the instance default: the exact
+		 * disguise `slotAddress.test.ts` was written about.
+		 *
+		 * The fix is in that branch — read the two halves with
+		 * `slotConnectionId` / `slotModelId` and carry `modelId` on the
+		 * descriptor it returns, so `host.ts`'s `slotModelId(p.connection)`
+		 * has something to read. Writing a bare connection id here instead
+		 * would make this green while leaving the defect in place.
+		 */
+		await setSlot(
+			RESPOND,
+			"generate",
+			"connection",
+			connectionSlotValue(pickedConnectionId, pickedModelId)
+		)
 		textCalls.length = 0
 		resolveArgs = null
 		await runRespond()
@@ -673,6 +714,12 @@ describe("dispatch — the reply step's own Connection", () => {
 		expect(textCalls[0]!.connection?.id).toBe(pickedConnectionId)
 		expect(textCalls[0]!.connection?.baseUrl).toBe(PICKED_BASE_URL)
 		expect(textCalls[0]!.connection?.id).not.toBe(defaultConnectionId)
+		// And the MODEL half of the same pick, all the way to the adapter. The
+		// endpoint alone was never the whole assertion: a pair that loses its
+		// model still reaches the right server and still answers, out of
+		// whatever model that server happens to load — which is the half of this
+		// defect that produces no wrong URL to notice.
+		expect(textCalls[0]!.connection?.model).toBe("picked-7b")
 	})
 
 	it("resolves the capability default when nothing is picked", async () => {

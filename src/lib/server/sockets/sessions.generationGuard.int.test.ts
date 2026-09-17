@@ -5,7 +5,7 @@
  * in the session is already generating — mirroring
  * triggerGenerateMessageHandler's own in-lock "hasGeneratingMessages" check.
  * Before this fix, none of the three had any freshness guard at all: they
- * unconditionally set isGenerating and called generateResponse, so wrapping
+ * unconditionally set isGenerating and started the reply, so wrapping
  * them in the lock alone (without also adding the guard) would only have
  * serialized two overlapping generations into two sequential ones — not
  * prevented the second one from happening. This test seeds a session with an
@@ -13,7 +13,7 @@
  * realistic way this state occurs in practice, since the lock itself
  * prevents any live caller from leaving two messages simultaneously
  * generating) and asserts the guard rejects a regenerate attempt against it
- * without mutating the target message or invoking generateResponse.
+ * without mutating the target message or invoking the reply road.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
@@ -26,7 +26,7 @@ import type { TestDb } from "$lib/server/utils/testDb"
 let testDb: TestDb
 let dataDir: string
 
-const generateResponseMock = vi.fn(async (..._args: any[]) => true)
+const runReplyMock = vi.fn(async (..._args: any[]) => ({ ok: true }))
 
 vi.mock("$lib/server/db", async () => {
 	const { createTestDb } = await import("$lib/server/utils/testDb")
@@ -34,8 +34,8 @@ vi.mock("$lib/server/db", async () => {
 	return { db }
 })
 
-vi.mock("$lib/server/utils/generateResponse", () => ({
-	generateResponse: (...args: any[]) => generateResponseMock(...args)
+vi.mock("$lib/server/utils/runReply", () => ({
+	runReply: (...args: any[]) => runReplyMock(...args)
 }))
 
 beforeAll(async () => {
@@ -67,8 +67,8 @@ function fakeSocket(userId: number) {
 const noopEmit = () => {}
 
 describe("sessionMessages:regenerate — generation guard (PGlite integration)", () => {
-	test("rejects when another message in the same session is already generating, without mutating the target or calling generateResponse", async () => {
-		generateResponseMock.mockClear()
+	test("rejects when another message in the same session is already generating, without mutating the target or starting the reply", async () => {
+		runReplyMock.mockClear()
 		const { sessionMessagesRegenerateHandler } = await import("./sessions")
 
 		const user = await makeUser("regen-guard-user")
@@ -108,7 +108,7 @@ describe("sessionMessages:regenerate — generation guard (PGlite integration)",
 
 		expect(res.error).toMatch(/already generating/i)
 		expect(res.sessionMessage).toBeUndefined()
-		expect(generateResponseMock).not.toHaveBeenCalled()
+		expect(runReplyMock).not.toHaveBeenCalled()
 
 		const after = await testDb.query.sessionMessages.findFirst({
 			where: eq(schema.sessionMessages.id, target.id)
@@ -118,7 +118,7 @@ describe("sessionMessages:regenerate — generation guard (PGlite integration)",
 	})
 
 	test("proceeds normally when nothing else in the session is generating", async () => {
-		generateResponseMock.mockClear()
+		runReplyMock.mockClear()
 		const { sessionMessagesRegenerateHandler } = await import("./sessions")
 
 		const user = await makeUser("regen-guard-clear-user")
@@ -145,7 +145,7 @@ describe("sessionMessages:regenerate — generation guard (PGlite integration)",
 		)
 
 		expect(res.error).toBeUndefined()
-		expect(generateResponseMock).toHaveBeenCalledTimes(1)
+		expect(runReplyMock).toHaveBeenCalledTimes(1)
 
 		const after = await testDb.query.sessionMessages.findFirst({
 			where: eq(schema.sessionMessages.id, target.id)

@@ -94,7 +94,7 @@ import ts from "typescript"
 // until that package is rebuilt.
 import "@serene-pub/contracts"
 import {
-	allTypes,
+	allDefinitions,
 	assignable,
 	JSON_SHAPE,
 	type Descriptor,
@@ -199,7 +199,7 @@ const rel = (p: string) => relative(ROOT, p)
 
 // ── §1 Node ports ───────────────────────────────────────────────────────────
 
-const TYPES = allTypes() as Descriptor[]
+const TYPES = allDefinitions() as Descriptor[]
 const TYPE_BY_ID = new Map(TYPES.map((t) => [t.id, t]))
 
 interface Port {
@@ -232,7 +232,7 @@ const OUT_PORTS = portsOf("out")
  */
 const nonJson = (p: Port) => p.shape !== JSON_SHAPE
 
-/** `write-result@1 :: core:consumer/create-message@1.main, …` */
+/** `write-result@1 :: core:outlet/create-message@1.main, …` */
 const shapeSubject = (shape: string, ports: readonly Port[]) =>
 	`${shape} :: ${ports.map((p) => `${p.type}.${p.port}`).join(", ")}`
 
@@ -254,23 +254,6 @@ const UNPRODUCED_IN_SHAPES: Deliberate[] = []
  * the case this list exists for.
  */
 const UNCONSUMED_OUT_SHAPES: Deliberate[] = [
-	{
-		subject: shapeSubject(
-			"core:shape/write-result@1",
-			OUT_PORTS.filter((p) => p.shape === "core:shape/write-result@1")
-		),
-		reason:
-			"Deliberately not assignable to row-ids@1, and deliberately not " +
-			"accepted anywhere: under async review a Consumer's write is a " +
-			"PROPOSAL a reviewer may still reject, so a downstream node that " +
-			"wants ids must declare this shape and handle both cases in its " +
-			"hook. There is no branch node to check `status` with, so the " +
-			"obligation belongs to the type. See `write-result` in the SDK's " +
-			"shapes.ts. Nothing reads the ids back off the receipt any more " +
-			"either: `HostScope.artifacts` in runtime/host.ts is the collector " +
-			"the commit itself pushes to, which is the only place the " +
-			"discriminant is not a guess."
-	},
 	{
 		subject: shapeSubject(
 			"core:shape/speaker-selection@1",
@@ -300,7 +283,7 @@ const UNCONSUMED_OUT_SHAPES: Deliberate[] = [
 ]
 
 /**
- * Every pipeline core ships, as a set of `typeId@version.port` addresses that
+ * Every pipeline core ships, as a set of `definitionId@version.port` addresses that
  * something actually puts a value in.
  *
  * Both routes count as filling a port, and both have to: a `$ref` becomes an
@@ -327,7 +310,7 @@ function shippedWiring(): {
 		const doc = entry.build() as SpecDocument
 		const byKey = new Map(doc.nodes.map((n) => [n.key, n]))
 		for (const node of doc.nodes) {
-			const pin = `${node.typeId}@${node.typeVersion}`
+			const pin = `${node.definitionId}@${node.definitionVersion}`
 			pins.add(pin)
 			const descriptor = TYPE_BY_ID.get(pin)
 			if (!descriptor) {
@@ -343,7 +326,7 @@ function shippedWiring(): {
 			// A ref into a nested config path compiles to `sources.0`; the port
 			// is the first segment.
 			const port = String(edge.toPort).split(".")[0]
-			filled.add(`${to.typeId}@${to.typeVersion}.${port}`)
+			filled.add(`${to.definitionId}@${to.definitionVersion}.${port}`)
 		}
 	}
 	return { pins, filled, unknownPins: [...unknownPins].sort() }
@@ -373,7 +356,7 @@ const unfilledInPorts = (): string[] => {
  */
 const UNFILLED_IN_PORTS: Deliberate[] = [
 	{
-		subject: "core:provider/generate-text@1.attachments",
+		subject: "core:oracle/generate-text@1.attachments",
 		reason:
 			"⚠ THE INSTANCE THIS FILE WAS BUILT FOR. Media travelling with a " +
 			"request: declared in contracts, forwarded by bindings.ts and " +
@@ -384,14 +367,14 @@ const UNFILLED_IN_PORTS: Deliberate[] = [
 			"feed it; nothing does. Delete this entry the day a spec wires it."
 	},
 	{
-		subject: "core:provider/generate-image@1.init",
+		subject: "core:oracle/generate-image@1.init",
 		reason:
 			"img2img. Declared for backends that report it, read by the " +
 			"binding (`init: input?.init`), and no shipped spec offers an " +
 			"input image — the generate-image spec renders from text only."
 	},
 	{
-		subject: "core:provider/generate-image@1.negative",
+		subject: "core:oracle/generate-image@1.negative",
 		reason:
 			"Supplied through the node's `prompts` slot (`negative` field), " +
 			"which is where a person writes it, rather than through the port. " +
@@ -399,7 +382,17 @@ const UNFILLED_IN_PORTS: Deliberate[] = [
 			"upstream; the binding reads whichever arrives."
 	},
 	{
-		subject: "core:provider/embed-text@1.text",
+		subject: "core:outlet/create-message@1.channel",
+		reason:
+			"Declared 2026-09-16 (U2 residual): the host read `channel` off " +
+			"the payload while no declaration supplied it. The create specs " +
+			"wire it on `seed-greetings` (the genre's greeting channel); the " +
+			"reply specs write to `main` and say nothing, which is the " +
+			"declared default — a spec that redirects a reply to another " +
+			"channel is what fills it. Delete this entry the day one does."
+	},
+	{
+		subject: "core:oracle/embed-text@1.text",
 		reason:
 			"The singular half of a pair — `text` embeds one string, `texts` " +
 			"embeds a batch and returns one vector each, in order. The host " +
@@ -409,40 +402,12 @@ const UNFILLED_IN_PORTS: Deliberate[] = [
 			"reachable at all — the node was in no shipped spec before it, so " +
 			"neither port had an excuse and neither needed one."
 	},
-	{
-		subject: "core:query/session-history@1.budget",
-		reason:
-			"Read by nothing on either end: no spec fills it and the binding " +
-			"reads `params.limit`/`params.channel` and never `budget`. Declared " +
-			"ahead of history being budgeted at retrieval rather than after " +
-			"ranking."
-	},
-	{
-		subject: "core:query/world-lore@1.text",
-		reason:
-			"The scan text as an explicit input. All three lore gather branches and " +
-			"`lorebook-triggers` derive their scan window from `scope` inside " +
-			"`loreFor` instead, so the port is filled by nothing and read by " +
-			"nothing — see the sibling entries."
-	},
-	{
-		subject: "core:query/character-lore@1.text",
-		reason:
-			"As `world-lore@1.text`: the shared `loreFor` scan reads messages " +
-			"through `scope` and ignores `input.text`."
-	},
-	{
-		subject: "core:query/history-entries@1.text",
-		reason:
-			"As `world-lore@1.text`: the third gather branch of the same shared scan."
-	},
-	{
-		subject: "core:query/lorebook-triggers@1.text",
-		reason:
-			"As `world-lore@1.text`. This is the pre-split single-branch query, " +
-			"kept for the specs and the parity harness that still pin it; its " +
-			"binding reads `scope` too."
-	},
+	// ⚠ Five entries were here and are gone rather than annotated (R-12,
+	// 2026-09-16): `session-history@1.budget` and the `text` in-port on the
+	// three lore lanes and `lorebook-triggers`. Each was "filled by nothing and
+	// read by nothing" — the shape `boot/declaredReads.ts` now refuses at the
+	// declaration — and each was culled from its definition, so there is no
+	// port left to excuse.
 	{
 		subject: "core:task/build-narrator-context@1.currentCharacterId",
 		reason:
@@ -774,6 +739,30 @@ const RUN_OPTIONS: Record<string, true | string> = {
 	// wired: unwiring it fails here rather than in a cancelled run that
 	// quietly finishes.
 	cancelSignal: true,
+	// The run-level guarantee (09-B B4, R-17): the executor tells the host
+	// once when a run ends, with the live row, and `runSpec` finalises the
+	// row there — stopped with the partial, failed with the reason. The one
+	// seam Stop has; unwiring it leaves a placeholder generating forever.
+	onRunEnd: true,
+	// Who portrays whom (R-21 (4), U5a): `runSpec` resolves it before the
+	// first node and hands it in here, so the receipt pins the answer at
+	// construction. Unwiring it leaves every receipt without `portrayals`
+	// and the inspector's line empty — loudly, here.
+	portrayals: true,
+	// A node's status (R-19, U5h): the executor hands each change here and
+	// `runSpec` routes it — `{speaker}` filled, the live row, the session
+	// list, the caller's frame (`runtime/runStatus.ts`). Unwiring it leaves
+	// every reply row saying *working* and the receipt's `lastStatus` still
+	// present but never shown — quietly, which is why this line exists.
+	onStatus: true,
+	dry:
+		"Defaults to the preview flag inside the executor, and every preview " +
+		"the app runs (`sessions:promptTokenCount`, the retrieval previews, " +
+		"the prompt-diff tool) is a dry run through that default — outlets " +
+		"commit nothing and the receipt says `dry`. Nothing in the app wants " +
+		"a dry run that is NOT a preview yet, so nothing passes it explicitly; " +
+		"the option exists for a host that wants to run a document to the end " +
+		"and write nothing.",
 
 	triggerRef:
 		"Recorded on the receipt only. The app links a run to its cause " +
@@ -1133,8 +1122,10 @@ describe("§4 socket events — every declared event is one some code uses", () 
  *
  * **Declared** is parsed off the built `dist/*.d.ts` — the same trade §3 makes
  * for `RunOptions`, and for the same reason: an interface has no runtime form.
- * Every interface in `hooks.d.ts` whose name ends `HookSurface` is a subject, so
- * a third kind of hook becomes one by existing rather than by being added here.
+ * Every interface in `hooks.d.ts` whose name ends `Surface` — the
+ * `EventListenerSurface` and `LifecycleCallbackSurface` since R-1 renamed the
+ * three callables (2026-09-16) — is a subject, so a third kind becomes one by
+ * existing rather than by being added here.
  *
  * **Endowed** is parsed off the guest program each backend BUILDS, not off the
  * concatenation that builds it — `buildProgram` is lifted out of the worker
@@ -1279,7 +1270,7 @@ function deprecationTargets(m: ts.TypeElement): string[] {
 	return []
 }
 
-/** The union of every `*HookSurface` in `hooks.d.ts`, expanded to the bottom. */
+/** The union of every `*Surface` in `hooks.d.ts`, expanded to the bottom. */
 function declaredHookCtx(): DeclaredMember[] {
 	const ifaces = sdkInterfaces()
 	const raw: {
@@ -1323,7 +1314,7 @@ function declaredHookCtx(): DeclaredMember[] {
 	}
 
 	for (const [name, rec] of ifaces)
-		if (rec.file === "hooks.d.ts" && /HookSurface$/.test(name))
+		if (rec.file === "hooks.d.ts" && /Surface$/.test(name))
 			walk(name, "", new Set([name]))
 
 	// A replacement only counts once it is itself a declared member, which is
@@ -1574,7 +1565,7 @@ const UNENDOWED_HOOK_CTX: Deliberate[] = [
 	{
 		subject: "readCore",
 		reason:
-			"⚠ `LifecycleHookSurface`'s whole reason to exist beside the event " +
+			"⚠ `LifecycleCallbackSurface`'s whole reason to exist beside the event " +
 			"surface — 'scoped core reads' is the first line of its docblock — " +
 			"and no backend endows it. `CoreQuery` and `CorePage` beside it " +
 			"are types with no producer. Declared ahead of a host-side reader " +

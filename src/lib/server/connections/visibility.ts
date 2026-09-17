@@ -12,11 +12,18 @@
  * write path was guarded. The leak was a read.
  *
  * ⚠ "The write path was guarded" is true of `sockets/connections.ts` and of
- * nowhere else. The 0.6 audit found two writes outside it that took a
- * `connectionId` from the client with no check at all: `sessions:create` and
- * `sessions:update` (and `sessions.connection_id` is the HIGHEST-precedence
- * tier in `resolveCapabilityTarget`), plus `images:generate`, which rendered on
+ * nowhere else. The 0.6 audit found three writes outside it that took a
+ * `connectionId` from the client with no check at all: `sessions:create`,
+ * `sessions:update` — `sessions.connection_id` was the highest-precedence tier
+ * in `resolveCapabilityTarget` — and `images:generate`, which rendered on
  * whatever id it was handed. Guarding the table is not guarding the choice.
+ *
+ * ⚠ The two session writes are not among them: a session names no connection
+ * at all — overrides are by model, never by connection — so there is nothing
+ * there for anybody to name or guard. What remains is the OUTBOUND projection
+ * below, which is not about sessions — a `connectionId` reaching a non-admin
+ * in any payload is still identity, and `images:generate` and the review gate
+ * still refuse a choice by name.
  *
  * So this module does not add a guard. It **removes the field**, everywhere, for
  * anyone who is not an administrator:
@@ -69,8 +76,8 @@ import type { ConnectionIdentity } from "$lib/shared/connections/identity"
  *
  * Names rather than paths, because the same fact is spelled at a dozen depths:
  * `connection` is a resolved slot inside a node's receipt input, an echoed test
- * payload, and a review form field; `connectionId` is a session column, a
- * capability default, and a progress event's subject. A path list would have to
+ * payload, and a review form field; `connectionId` is a capability default, a
+ * pipeline config's provider slot, and a progress event's subject. A path list would have to
  * be extended by whoever adds the thirteenth, which is the failure mode this
  * whole module exists to remove.
  *
@@ -222,10 +229,9 @@ export interface ConnectionSubject {
  *
  * Admin, and nothing else — deliberately not "owns the session" or "started the
  * run". A session owner is not an administrator in 0.6. `broadcastHelpers.ts`
- * used to hold a helper that said otherwise — it fed the session owner the raw
- * service error as being about "their own connection/credentials" — and it is
- * gone rather than unused, because that sentence stopped being true when
- * accounts arrived and a helper shaped around it is a trap.
+ * holds no helper that treats a service error as the session owner's "own
+ * connection/credentials" — a session owner is not an administrator, and a
+ * helper shaped around that assumption is a trap.
  *
  * An absent/undefined `isAdmin` reads as false. The one posture where that would
  * be wrong — accounts disabled — cannot reach it: `sockets/auth.ts` attaches the
@@ -279,71 +285,19 @@ export function refuseConnectionChoice(): never {
 }
 
 /**
- * Did a non-admin supply a connection at all?
- *
- * `null`/`undefined` is not a choice, and this distinction is load bearing: a
- * non-admin's client now receives its own session with `connectionId` already
- * stripped, so an ordinary "rename my session" round-trips that field back as
- * null. Refusing THAT would break editing a session for everyone who is not an
- * administrator; applying it would clear the connection an administrator set.
- * Ignoring it is the only reading that is both honest and non-destructive —
- * they changed nothing, because they were shown nothing.
- */
-export const isConnectionChoice = (value: unknown): boolean =>
-	value !== undefined && value !== null
-
-/**
  * Does this bag of submitted values name a connection at all?
  *
  * For form-shaped submissions (the review card), where PRESENCE is the attempt:
  * a non-admin's form is generated from a schema this module already emptied of
- * connection identity, so the key cannot arrive by accident. Contrast
- * `isConnectionChoice`, which is for a fixed-shape payload whose field is always
- * present and usually null.
+ * connection identity, so the key cannot arrive by accident.
+ *
+ * PRESENCE is the whole test, and it is the only inbound check this module
+ * needs: nothing puts a `connectionId` key on a form-shaped submission by
+ * default, so anything that names a connection meant to.
  */
 export const namesAConnection = (values: unknown): boolean =>
 	isPlainObject(values) &&
 	Object.keys(values).some((key) => CONNECTION_IDENTITY_KEYS.has(key))
-
-/**
- * Drop a subject's connection columns from a row they are about to write.
- *
- * SHALLOW, unlike `withoutConnectionIdentity`, and the asymmetry is deliberate.
- * Outbound, depth is the whole point — the connection blob that started this
- * sits at `receipt.nodes[].input.connection`, three levels down. Inbound, a
- * session's `metadata` and `drafts` are free-form JSON that belongs to the
- * person writing it, and deleting a key of theirs that happens to be spelled
- * `connection` would be silent data loss to protect a column two levels up.
- * Columns are what resolve to a connection; a user's own JSON is not.
- */
-export function withoutConnectionColumns<T extends object>(
-	row: T,
-	subject: ConnectionSubject | null | undefined
-): T {
-	if (connectionsVisibleTo(subject)) return row
-	const out = { ...row } as Record<string, unknown>
-	for (const key of CONNECTION_IDENTITY_KEYS) delete out[key]
-	return out as T
-}
-
-/**
- * Is this write a connection choice the subject may not make?
- *
- * Shallow, and paired with `isConnectionChoice` rather than mere presence: the
- * writes this guards (`sessions:create`, `sessions:update`) carry a fixed row
- * shape whose `connectionId` is present-and-null on every ordinary edit made by
- * someone whose copy of the row was redacted. Only a real id is an attempt.
- */
-export function refusesConnectionWrite(
-	patch: unknown,
-	subject: ConnectionSubject | null | undefined
-): boolean {
-	if (connectionsVisibleTo(subject)) return false
-	if (!isPlainObject(patch)) return false
-	for (const key of CONNECTION_IDENTITY_KEYS)
-		if (key in patch && isConnectionChoice(patch[key])) return true
-	return false
-}
 
 const isPlainObject = (v: unknown): v is Record<string, unknown> => {
 	if (typeof v !== "object" || v === null) return false

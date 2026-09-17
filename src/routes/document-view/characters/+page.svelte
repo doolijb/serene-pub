@@ -1,6 +1,9 @@
 <script lang="ts">
-	import { onMount } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import {
+		requestWithInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
 
 	const socket = useTypedSocket()
 	let characters: Partial<SelectCharacter>[] = $state([])
@@ -20,15 +23,22 @@
 		socket.emit("characters:list", {})
 	}
 
-	onMount(() => {
-		socket.on("characters:list", handleCharactersList)
-		socket.on("characters:delete", handleCharactersDelete)
-		socket.emit("characters:list", {})
-		return () => {
-			socket.off("characters:list", handleCharactersList)
-			socket.off("characters:delete", handleCharactersDelete)
-		}
-	})
+	/**
+	 * Both BARE: neither event is in `SCOPED_EVENTS`, and this page is the
+	 * whole library rather than one character.
+	 *
+	 * `characters:delete` first, so its key is held before the list request
+	 * below flushes the interest sync — effects run in declaration order.
+	 * `characters:list` is a STANDING key, not a one-shot: the server
+	 * re-emits it after every write, and the delete handler asks for it again.
+	 */
+	useInterest<"characters:delete">(
+		"characters:delete",
+		handleCharactersDelete
+	)
+	$effect(() =>
+		requestWithInterest("characters:list", {}, handleCharactersList)
+	)
 </script>
 
 <svelte:head>

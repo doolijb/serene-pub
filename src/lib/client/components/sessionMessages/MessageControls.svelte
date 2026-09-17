@@ -2,7 +2,15 @@
 	import * as Icons from "@lucide/svelte"
 	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import { declareInterest } from "$lib/client/sockets/interest.svelte"
 	import { runInspector } from "$lib/client/stores/runInspector.svelte"
+	import { actionIcon } from "$lib/client/components/sessionMessages/actionIcon"
+	import {
+		coreVerbState,
+		verbKeyOf,
+		type VerbContext
+	} from "$lib/client/components/sessionMessages/messageVerbState"
+	import { actionIdentity } from "$lib/shared/actions/identity"
 
 	interface Props {
 		msg: SelectSessionMessage
@@ -30,23 +38,43 @@
 		// and where it lives. Session-level, so it arrives once (sessions:view)
 		// rather than being asked per message.
 		//
-		// ⚠ It reaches the accessible name as well as the tooltip, not
-		// `aria-description`: that attribute is not supported on the implicit
-		// `button` role (svelte-check fails the build on it), and a `title` is
-		// not reliably announced — least of all on a disabled control, which a
-		// screen reader may skip entirely.
+		// ⚠ It reaches assistive tech through `aria-describedby` → an sr-only
+		// note beside the row, plus the tooltip — the chips' shape (UI nit 2)
+		// — not `aria-description`: that attribute is not supported on the
+		// implicit `button` role (svelte-check fails the build on it), and a
+		// `title` is not reliably announced. The row is `aria-disabled`, not
+		// `disabled`, for the same reason the chips are: a natively disabled
+		// control is skipped and says nothing.
 		continueRefusal?: string
+		/**
+		 * The `message` venue of `sessions:actions` (R-15, U5c): every verb
+		 * this session offers on a message, core's and contributed alike, in
+		 * a primary set and an overflow. The ⋮ menu lists the lot — nothing
+		 * is reachable only by hovering — and the quick row draws the primary
+		 * set. Core's verbs (`specSlug: "core"`) map to the handlers below;
+		 * a contributed one fires through `onFireTrigger` with this message
+		 * as the subject. Absent (an older server, a standalone mount) reads
+		 * as the floors alone.
+		 */
+		messageActions?: {
+			primary: Sockets.Sessions.Actions.Action[]
+			overflow: Sockets.Sessions.Actions.Action[]
+		}
+		/** A swipe can be taken on this message now. */
+		canSwipe?: boolean
+		onSwipeMessage?: (e: Event, msg: SelectSessionMessage) => void
 		onStartSummarization?: (msg: SelectSessionMessage) => void
-		// The contributed menu-trigger set (19 §4, `kind: 'menu'`): presence
-		// is rows, so a retired contributor takes its entry with it. Fired
-		// with this message as the subject.
-		menuTriggers?: Array<{
-			function: string
-			name: string
-			icon?: string
-			specSlug: string
-		}>
-		onFireTrigger?: (fn: string, msg: SelectSessionMessage) => void
+		/**
+		 * A contributed action pressed on this message — the whole
+		 * declaration, so the fire can name its identity (W1), with this
+		 * message as the subject.
+		 */
+		onFireTrigger?: (
+			action: Sockets.Sessions.Actions.Action,
+			msg: SelectSessionMessage
+		) => void
+		/** The person opened a list showing these newcomers (`sessions:actionsSeen`). */
+		onActionsSeen?: (keys: string[]) => void
 		debugMeta?: Record<string, any> | null
 		onShowDebugMeta?: (meta: Record<string, any>) => void
 		// The "more actions" popover is opened/closed by the parent list so
@@ -71,9 +99,12 @@
 		onBranchMessage,
 		onContinueMessage,
 		continueRefusal = undefined,
+		messageActions = undefined,
+		canSwipe = false,
+		onSwipeMessage = undefined,
 		onStartSummarization,
-		menuTriggers = [],
 		onFireTrigger = undefined,
+		onActionsSeen = undefined,
 		debugMeta = null,
 		onShowDebugMeta = undefined,
 		open,
@@ -83,6 +114,117 @@
 	function closeMenu() {
 		onOpenChange(false)
 	}
+
+	/**
+	 * The floors, for a mount with no list: stop, edit and branch are present
+	 * in every genre, and a server too old to send the list still offers them.
+	 */
+	const FLOORS: Sockets.Sessions.Actions.Action[] = [
+		{ key: "stop", name: "Stop generating", icon: "square", quick: true },
+		{ key: "edit", name: "Edit", icon: "pencil", quick: true },
+		{ key: "branch", name: "Branch from here", icon: "git-branch", quick: false }
+	].map((a) => ({
+		...a,
+		function: a.key,
+		specSlug: "core",
+		slash: a.key,
+		audience: { see: ["participant"], act: ["item"] },
+		venue: "message",
+		origin: "core" as const,
+		floor: true,
+		canAct: true,
+		itemGated: a.key !== "branch",
+		isNew: false
+	}))
+
+	/** The whole list, primary first — the menu is the complete list. */
+	const listed = $derived(
+		messageActions
+			? [...messageActions.primary, ...messageActions.overflow]
+			: FLOORS
+	)
+
+	/** This message's state, for the verb table. */
+	const verbCtx = $derived<Omit<VerbContext, "canAct" | "itemGated">>({
+		msg,
+		isLastMessage,
+		canRegenerateLastMessage,
+		editing: !!editSessionMessage,
+		hasGeneratingMessage,
+		canControl,
+		continueRefusal,
+		canSwipe
+	})
+	// `itemGated` rides with `canAct` (W6): a contributed action whose
+	// audience is `item` was answered `true` ahead of any message, and this
+	// message's ownership rule is what decides.
+	const stateOf = (a: Sockets.Sessions.Actions.Action) =>
+		coreVerbState(verbKeyOf(a), {
+			...verbCtx,
+			canAct: a.canAct,
+			itemGated: a.itemGated
+		})
+
+	/** The rows the menu draws: shown by the table, core's before contributed. */
+	const rows = $derived(
+		listed
+			.map((a) => ({ action: a, state: stateOf(a) }))
+			.filter((r) => r.state.shown)
+	)
+	const coreRows = $derived(rows.filter((r) => r.action.specSlug === "core"))
+	const contributedRows = $derived(
+		rows.filter((r) => r.action.specSlug !== "core")
+	)
+	const hasNew = $derived(contributedRows.some((r) => r.action.isNew))
+
+	/** Fire a core verb by its key, through the handler the page wired. */
+	function fireCore(e: Event, key: string) {
+		closeMenu()
+		switch (key) {
+			case "stop":
+				return onAbortMessage(e, msg)
+			case "retry":
+				return onRegenerateMessage(e, msg)
+			case "continue":
+				return onContinueMessage?.(e, msg)
+			case "edit":
+				return onEditMessage(e, msg)
+			case "branch":
+				return onBranchMessage?.(e, msg)
+			case "swipe":
+				return onSwipeMessage?.(e, msg)
+			case "hide":
+				return onHideMessage(e, msg)
+			case "delete":
+				return onDeleteMessage(e, msg)
+		}
+	}
+
+	/** The row's name: the verb, with hide's read off the message's state. */
+	function nameOf(a: Sockets.Sessions.Actions.Action) {
+		return a.key === "hide" && a.specSlug === "core"
+			? msg.isHidden
+				? "Unhide"
+				: "Hide"
+			: a.name
+	}
+	/**
+	 * The tooltip for one row, the chips' shape: the name, then the reason
+	 * when it is grey (UI nit 2). The reason also reaches assistive tech
+	 * through `aria-describedby` → an sr-only note, so the accessible NAME
+	 * stays the verb — a name that also carries the reason is read twice.
+	 */
+	const titleOf = (a: Sockets.Sessions.Actions.Action, reason?: string) =>
+		reason ? `${nameOf(a)} — ${reason}` : nameOf(a)
+	/** One note id per row; the identity's punctuation is not an id's. */
+	const noteIdOf = (a: Sockets.Sessions.Actions.Action) =>
+		`msg-${msg.id}-note-${actionIdentity(a).replace(/[^a-z0-9-]/g, "-")}`
+	const itemClass = (a: Sockets.Sessions.Actions.Action) =>
+		"btn btn-sm popover-menu-btn hover:preset-tonal-surface" +
+		(a.key === "delete" && a.specSlug === "core"
+			? " text-error-600-400"
+			: "") +
+		(a.key === "stop" && a.specSlug === "core" ? " text-error-600-400" : "")
 
 	/* ── which run produced this reply ──────────────────────────────────
 	 *
@@ -104,15 +246,40 @@
 
 	const onArtifactRuns = (res: Sockets.Pipelines.ArtifactRuns.Response) => {
 		if (res.kind !== "message" || res.entityId !== msg.id) return
+		// The run that WROTE the reply — a built-in's run (an edit, a hide;
+		// R-15) is the newest one naming the row after a person touched it,
+		// and its receipt has no prompt to explain.
+		const wrote = (r: { actions?: string[] }) =>
+			!r.actions ||
+			r.actions.some((a) => a === "created" || a === "updated")
 		runId =
+			res.runs.find((r) => !r.isPreview && wrote(r))?.runId ??
 			res.runs.find((r) => !r.isPreview)?.runId ??
 			res.runs[0]?.runId ??
 			null
 	}
 
+	/**
+	 * The interest is declared for as long as the menu is open, and the request
+	 * only when the message under it changed — which is where the raw listener
+	 * and the emit already sat.
+	 *
+	 * `declareInterest` rather than `requestWithInterest`: this effect re-runs
+	 * whenever the parent hands down a fresh `msg` object, and a request-shaped
+	 * interest would be released on that re-run without being re-declared (the
+	 * ask is guarded by `askedFor`), losing a reply still in flight. Declaring
+	 * first and emitting second keeps ruling 3 either way — the typed `emit`
+	 * flushes the pending interest sync before the packet leaves.
+	 *
+	 * BARE: `pipelines:artifactRuns` has no entry in `SCOPED_EVENTS`, and
+	 * `onArtifactRuns`'s own kind/entity check stays the filter.
+	 */
 	$effect(() => {
 		if (!open || !isReply) return
-		socket.on("pipelines:artifactRuns", onArtifactRuns)
+		const release = declareInterest<"pipelines:artifactRuns">(
+			"pipelines:artifactRuns",
+			onArtifactRuns
+		)
 		if (askedFor !== msg.id) {
 			askedFor = msg.id
 			runId = null
@@ -121,130 +288,91 @@
 				entityId: msg.id
 			})
 		}
-		// Named handler, always: `off(event)` with no handler removes every
-		// listener on that event, app-wide.
-		return () => socket.off("pipelines:artifactRuns", onArtifactRuns)
+		return release
 	})
 
-	/** `book-open-text` → `BookOpenText`, resolved against the lucide set. */
-	function triggerIcon(name?: string) {
-		const pascal = (name ?? "")
-			.split("-")
-			.map((p) => p.charAt(0).toUpperCase() + p.slice(1))
-			.join("")
-		return (Icons as any)[pascal] ?? Icons.Play
-	}
+	/**
+	 * The mark clears the moment the menu that lists the newcomers opens:
+	 * the person has now met them.
+	 */
+	$effect(() => {
+		if (!open || !hasNew || !onActionsSeen) return
+		onActionsSeen(
+			contributedRows
+				.filter((r) => r.action.isNew)
+				.map((r) => actionIdentity(r.action))
+		)
+	})
 </script>
 
-<div role="group" aria-label="Message actions" class="flex items-center gap-2">
-	{#if msg.isGenerating}
-		<!-- Label is hidden below lg: so the button stays the same square box as
-		     every other message control on mobile, where the extra ~110px would
-		     wrap the header onto a second line mid-generation. aria-label covers
-		     the icon-only case. -->
-		<button
-			class="btn msg-ctrl-btn-labeled preset-filled-error-500"
-			title="Stop Generation"
-			aria-label="Stop Generation"
-			onclick={(e) => onAbortMessage(e, msg)}
-		>
-			<Icons.Square aria-hidden="true" />
-			<span class="hidden lg:inline">Stop Generation</span>
-		</button>
-	{/if}
+<!-- The ⋮ menu: every action this message offers, named in words. The row's
+     quick icons call the same handlers; this is the complete list. -->
+<div class="sp-msg-menu-root">
 	<Popover
 		{open}
 		onOpenChange={(e) => onOpenChange(e.open)}
-		positioning={{ placement: "bottom" }}
+		positioning={{ placement: "bottom-end" }}
 	>
 		<Popover.Trigger
-			class="btn msg-ctrl-btn hover:bg-primary-600-400 {open
-				? 'bg-primary-600-400'
-				: ''}"
+			class="sp-msg-icon-btn"
 			aria-label="Message options"
+			aria-expanded={open}
 		>
-			<Icons.EllipsisVertical aria-hidden="true" />
+			<Icons.EllipsisVertical size={16} aria-hidden="true" />
 		</Popover.Trigger>
 		<Portal>
 			<Popover.Positioner class="z-[1000]!">
 				<Popover.Content
-					class="card bg-primary-200-800 w-[min(90vw,320px)] space-y-4 p-4"
+					class="card bg-surface-200-800 w-[min(90vw,320px)] space-y-4 p-4"
 				>
 					<header class="popover-menu-title">
 						<Icons.EllipsisVertical size={18} aria-hidden="true" />
-						<p>Message Options</p>
+						<p>Message options</p>
 					</header>
 					<article class="flex flex-col gap-2">
-						{#if (!!msg.characterId || msg.isNarratorResponse) && isLastMessage && !msg.isGenerating}
+						<!-- Core's verbs, from the list (R-15, U5c): every one
+						     the session offers on this message, primary set
+						     first, then the overflow — nothing is reachable
+						     only by hovering. Disabled and explained rather
+						     than hidden where the message's own state says no. -->
+						<!-- Greyed, not disabled, like the chips (S6): `aria-disabled`
+						     keeps the row reachable and the reason reaches a screen
+						     reader through `aria-describedby`; a native `disabled`
+						     is skipped and says nothing. The click is guarded. -->
+						{#each coreRows as { action, state } (action.key)}
+							{@const Icon = actionIcon(action.icon)}
 							<button
-								class="btn btn-sm popover-menu-btn hover:preset-filled-warning-500"
-								title="Regenerate Response"
-								disabled={!canRegenerateLastMessage ||
-									!canControl}
-								onclick={(e) => {
-									closeMenu()
-									onRegenerateMessage(e, msg)
-								}}
+								class={itemClass(action)}
+								class:preset-tonal-surface={action.key ===
+									"hide" && msg.isHidden}
+								class:opacity-60={state.disabled}
+								class:cursor-not-allowed={state.disabled}
+								title={titleOf(action, state.reason)}
+								aria-pressed={action.key === "hide"
+									? !!msg.isHidden
+									: undefined}
+								aria-disabled={state.disabled}
+								aria-describedby={state.reason
+									? noteIdOf(action)
+									: undefined}
+								onclick={(e) =>
+									state.disabled
+										? e.preventDefault()
+										: fireCore(e, action.key)}
 							>
-								<Icons.RefreshCw size={16} />
-								<span>Regenerate Response</span>
+								<Icon size={16} aria-hidden="true" />
+								<span>{nameOf(action)}</span>
 							</button>
-						{/if}
-						{#if onContinueMessage && (!!msg.characterId || msg.isNarratorResponse) && isLastMessage && !msg.isGenerating && msg.content}
-							<button
-								class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
-								title={continueRefusal ?? "Continue Response"}
-								aria-label={continueRefusal
-									? `Continue generating this response — unavailable. ${continueRefusal}`
-									: "Continue generating this response"}
-								disabled={!!editSessionMessage ||
-									!canControl ||
-									!!continueRefusal}
-								onclick={(e) => {
-									closeMenu()
-									onContinueMessage(e, msg)
-								}}
-							>
-								<Icons.ArrowDown size={16} aria-hidden="true" />
-								<span>Continue Response</span>
-							</button>
-						{/if}
-						<button
-							class="btn btn-sm popover-menu-btn hover:preset-filled-success-500"
-							title="Edit Message"
-							aria-label="Edit this message"
-							disabled={!!editSessionMessage ||
-								hasGeneratingMessage ||
-								msg.isHidden ||
-								!canControl}
-							onclick={(e) => {
-								closeMenu()
-								onEditMessage(e, msg)
-							}}
-						>
-							<Icons.Edit size={16} aria-hidden="true" />
-							<span>Edit Message</span>
-						</button>
-						{#if onBranchMessage}
-							<button
-								class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
-								title="Branch Session"
-								aria-label="Create a new session branch from this message"
-								disabled={!!editSessionMessage ||
-									hasGeneratingMessage}
-								onclick={(e) => {
-									closeMenu()
-									onBranchMessage(e, msg)
-								}}
-							>
-								<Icons.GitBranch size={16} aria-hidden="true" />
-								<span>Branch Session</span>
-							</button>
-						{/if}
+							{#if state.reason}
+								<span id={noteIdOf(action)} class="sr-only">
+									{state.reason}
+								</span>
+							{/if}
+						{/each}
 						{#if onStartSummarization && !msg.isGenerating}
 							<button
-								class="btn btn-sm popover-menu-btn hover:preset-filled-warning-500"
-								title="Select for Summarization"
+								class="btn btn-sm popover-menu-btn hover:preset-tonal-surface"
+								title="Select for summary"
 								aria-label="Select this message for summarization"
 								disabled={!!editSessionMessage ||
 									hasGeneratingMessage}
@@ -257,12 +385,12 @@
 									size={16}
 									aria-hidden="true"
 								/>
-								<span>Select for Summarization</span>
+								<span>Select for summary</span>
 							</button>
 						{/if}
 						{#if runId && !msg.isGenerating}
 							<button
-								class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
+								class="btn btn-sm popover-menu-btn hover:preset-tonal-surface"
 								title="See what the pipeline did for this reply"
 								onclick={() => {
 									closeMenu()
@@ -275,87 +403,62 @@
 						{/if}
 						{#if onShowDebugMeta && debugMeta && !msg.isGenerating}
 							<button
-								class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
-								title="View Prompt Details"
+								class="btn btn-sm popover-menu-btn hover:preset-tonal-surface"
+								title="Prompt details"
 								onclick={() => {
 									closeMenu()
 									onShowDebugMeta!(debugMeta!)
 								}}
 							>
-								<Icons.Info size={16} />
-								<span>Prompt Details</span>
+								<Icons.Info size={16} aria-hidden="true" />
+								<span>Prompt details</span>
 							</button>
 						{/if}
-						<button
-							class="btn btn-sm popover-menu-btn hover:preset-filled-secondary-500"
-							class:preset-filled-secondary-500={msg.isHidden}
-							title={msg.isHidden
-								? "Unhide Message"
-								: "Hide Message"}
-							aria-label={msg.isHidden
-								? "Unhide this message"
-								: "Hide this message"}
-							disabled={!!editSessionMessage ||
-								hasGeneratingMessage ||
-								!canControl}
-							onclick={(e) => {
-								closeMenu()
-								onHideMessage(e, msg)
-							}}
-						>
-							<Icons.Ghost size={16} aria-hidden="true" />
-							<span>
-								{msg.isHidden
-									? "Unhide Message"
-									: "Hide Message"}
-							</span>
-						</button>
-						<button
-							class="btn btn-sm popover-menu-btn hover:preset-filled-error-500"
-							title="Delete Message"
-							aria-label="Delete this message"
-							disabled={!!editSessionMessage ||
-								hasGeneratingMessage ||
-								!canControl}
-							onclick={(e) => {
-								closeMenu()
-								onDeleteMessage(e, msg)
-							}}
-						>
-							<Icons.Trash2 size={16} aria-hidden="true" />
-							<span>Delete Message</span>
-						</button>
-						{#if onFireTrigger && menuTriggers.length && !msg.isGenerating}
+						{#if onFireTrigger && contributedRows.length}
 							<!-- The contributed entries (19 §4): after core's
-							     actions, separated so a plugin's verb never
-							     reads as one of core's. -->
+							     verbs, separated so a plugin's never reads as
+							     one of core's. A newcomer wears its mark until
+							     this menu has been opened once. -->
 							<hr class="hr" />
-							{#each menuTriggers as t (t.specSlug + t.function)}
-								{@const TriggerIconComponent = triggerIcon(
-									t.icon
-								)}
+							{#each contributedRows as { action, state } (actionIdentity(action))}
+								{@const Icon = actionIcon(action.icon)}
 								<button
-									class="btn btn-sm popover-menu-btn hover:preset-filled-success-500"
-									title={t.name}
-									disabled={!!editSessionMessage ||
-										hasGeneratingMessage}
-									onclick={() => {
+									class="btn btn-sm popover-menu-btn hover:preset-tonal-surface"
+									class:opacity-60={state.disabled}
+									class:cursor-not-allowed={state.disabled}
+									title={titleOf(action, state.reason)}
+									aria-disabled={state.disabled}
+									aria-describedby={state.reason
+										? noteIdOf(action)
+										: undefined}
+									onclick={(e) => {
+										if (state.disabled) {
+											e.preventDefault()
+											return
+										}
 										closeMenu()
-										onFireTrigger!(t.function, msg)
+										onFireTrigger!(action, msg)
 									}}
 								>
-									<TriggerIconComponent
-										size={16}
-										aria-hidden="true"
-									/>
-									<span>{t.name}</span>
+									<Icon size={16} aria-hidden="true" />
+									<span>{action.name}</span>
+									{#if action.isNew}
+										<span class="sp-action-new" aria-label="New">
+											New
+										</span>
+									{/if}
 								</button>
+								{#if state.reason}
+									<span id={noteIdOf(action)} class="sr-only">
+										{state.reason}
+									</span>
+								{/if}
 							{/each}
 						{/if}
 					</article>
 					<Popover.Arrow>
 						<Popover.ArrowTip
-							class="!bg-primary-200 dark:!bg-primary-800"
+							class="!bg-surface-200 dark:!bg-surface-800"
 						/>
 					</Popover.Arrow>
 				</Popover.Content>

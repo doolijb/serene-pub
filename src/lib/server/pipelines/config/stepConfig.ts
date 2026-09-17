@@ -23,7 +23,6 @@ import { withCompletionTemplate } from "$lib/server/connections/completionTempla
 import { withWireMode } from "$lib/server/connections/resolve"
 import {
 	connectionModelById,
-	defaultConnectionModel,
 	mergeEndpointModel
 } from "$lib/server/connections/models"
 import { slotModelId } from "$lib/shared/connections/slotRef"
@@ -127,13 +126,15 @@ export async function resolveStepConfigs(
 		 * describes, arriving by a new route.
 		 *
 		 * A slot naming a model that has gone, or that belongs to another
-		 * endpoint, resolves to the endpoint's DEFAULT here rather than refusing
+		 * endpoint, resolves WITHOUT it here rather than refusing
 		 * the way `resolveCapabilityTarget` does. These two callers are the graph
 		 * builder and the history compile: neither has a refusal channel a person
 		 * ever sees — `resolveStepConfigs` returns configuration, not a verdict —
 		 * so a throw would surface as an unexplained failure mid-build. The
 		 * resolver refuses because it CAN say why; this degrades because it
-		 * cannot.
+		 * cannot. There is no fallback to any "default" — connections have
+		 * none — so a model-less pair merges to the endpoint alone, exactly as
+		 * an endpoint with no models at all does.
 		 */
 		const modelId = slotModelId(slot)
 		let model: SelectConnectionModel | undefined
@@ -143,9 +144,7 @@ export async function resolveStepConfigs(
 					? undefined
 					: await connectionModelById(db, modelId)
 			model =
-				named && named.connectionId === connection.id
-					? named
-					: await defaultConnectionModel(db, connection.id)
+				named && named.connectionId === connection.id ? named : undefined
 		}
 		out[nodeKey] = {
 			prompts,

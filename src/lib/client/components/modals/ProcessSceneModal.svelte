@@ -1,7 +1,12 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import { onDestroy, onMount, untrack } from "svelte"
+	import { untrack } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import {
+		declareInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
+	import { interestKey } from "$lib/shared/sockets/interest"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { resolveOrCreateBindingByName } from "$lib/client/utils/createLorebookBinding"
 	import AiTaskModal, { type AiTaskStep } from "./AiTaskModal.svelte"
@@ -318,19 +323,46 @@
 		step = "error"
 	}
 
-	onMount(() => {
-		socket.on("scenes:process:progress", handleProgress)
-		socket.on("scenes:process:complete", handleComplete)
-		socket.on("scenes:process:error", handleError)
-		socket.on("scenes:process:trace", handleTrace)
+	/**
+	 * The run this modal is watching, SCOPED to its scene — every one of these
+	 * payloads carries `sceneId` (see `SCOPED_EVENTS`), so a second review
+	 * modal open on another scene is not sent this one's ticks, and the server
+	 * skips the push entirely when nobody has the scene open.
+	 *
+	 * An effect rather than `useInterest` because the key moves: `sceneId` is a
+	 * prop, and `useInterest` keeps the key it was first given. Each handler's
+	 * own `msg.sceneId !== sceneId` check stays as belt and braces.
+	 *
+	 * The `:error` key is scoped like the other two — the refusal carries the
+	 * same `sceneId` — and is never gated (plan ruling 2); the registry is
+	 * simply the only listener path now.
+	 */
+	$effect(() => {
+		const releases = [
+			declareInterest<"scenes:process:progress">(
+				interestKey("scenes:process:progress", sceneId),
+				handleProgress
+			),
+			declareInterest<"scenes:process:complete">(
+				interestKey("scenes:process:complete", sceneId),
+				handleComplete
+			),
+			declareInterest<"scenes:process:error">(
+				interestKey("scenes:process:error", sceneId),
+				handleError
+			)
+		]
+		return () => {
+			for (const release of releases) release()
+		}
 	})
 
-	onDestroy(() => {
-		socket.off("scenes:process:progress", handleProgress)
-		socket.off("scenes:process:complete", handleComplete)
-		socket.off("scenes:process:error", handleError)
-		socket.off("scenes:process:trace", handleTrace)
-	})
+	/**
+	 * BARE: `scenes:process:trace` has no server emitter today, so it is not in
+	 * `SCOPED_EVENTS` and a `#<id>` key would match no payload at all.
+	 * `handleTrace`'s own `msg.sceneId !== sceneId` check is the filter.
+	 */
+	useInterest<"scenes:process:trace">("scenes:process:trace", handleTrace)
 
 	// In confirm step (pre-rerun): cancel goes back to review; otherwise discard + close
 	let handleCancel = $derived(

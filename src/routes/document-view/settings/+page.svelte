@@ -4,6 +4,10 @@
 	import { page } from "$app/state"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import {
+		requestWithInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
+	import {
 		accessibilityModeStore,
 		disableAccessibility,
 		enableAccessibility,
@@ -196,40 +200,49 @@
 		}
 	}
 
+	/**
+	 * This account's own answers, all BARE — `users:current:*` is already one
+	 * user's, so there is nothing to scope it to — and all STANDING: each is
+	 * the reply to a form on this page, submitted long after mount. The three
+	 * `:error` halves are declared too, and never gated (plan ruling 2).
+	 */
+	useInterest<"users:current:updateDisplayName">(
+		"users:current:updateDisplayName",
+		handleUpdateDisplayName
+	)
+	useInterest<"users:current:updateDisplayName:error">(
+		"users:current:updateDisplayName:error",
+		handleUpdateDisplayNameError
+	)
+	useInterest<"users:current:changePassphrase">(
+		"users:current:changePassphrase",
+		handleChangePassphrase
+	)
+	useInterest<"users:current:changePassphrase:error">(
+		"users:current:changePassphrase:error",
+		handleChangePassphraseError
+	)
+	useInterest<"users:current:setPassphrase">(
+		"users:current:setPassphrase",
+		handleSetPassphrase
+	)
+
+	/**
+	 * Whether this account has a passphrase at all — which of the two forms
+	 * below renders. Asked for and listened for in one, and STANDING because
+	 * the server re-emits it after a passphrase is set.
+	 */
+	$effect(() =>
+		requestWithInterest(
+			"users:current:hasPassphrase",
+			{},
+			handleHasPassphrase
+		)
+	)
+
 	onMount(() => {
 		darkMode = isDarkMode()
 		fontScaleIndex = getFontScaleIndex()
-
-		socket.on("users:current:updateDisplayName", handleUpdateDisplayName)
-		socket.on(
-			"users:current:updateDisplayName:error",
-			handleUpdateDisplayNameError
-		)
-		socket.on("users:current:hasPassphrase", handleHasPassphrase)
-		socket.on("users:current:changePassphrase", handleChangePassphrase)
-		socket.on(
-			"users:current:changePassphrase:error",
-			handleChangePassphraseError
-		)
-		socket.on("users:current:setPassphrase", handleSetPassphrase)
-		socket.emit("users:current:hasPassphrase", {})
-		return () => {
-			socket.off(
-				"users:current:updateDisplayName",
-				handleUpdateDisplayName
-			)
-			socket.off(
-				"users:current:updateDisplayName:error",
-				handleUpdateDisplayNameError
-			)
-			socket.off("users:current:hasPassphrase", handleHasPassphrase)
-			socket.off("users:current:changePassphrase", handleChangePassphrase)
-			socket.off(
-				"users:current:changePassphrase:error",
-				handleChangePassphraseError
-			)
-			socket.off("users:current:setPassphrase", handleSetPassphrase)
-		}
 	})
 </script>
 

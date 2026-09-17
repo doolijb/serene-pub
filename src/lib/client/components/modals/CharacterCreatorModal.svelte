@@ -3,7 +3,7 @@
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
-	import { onDestroy, onMount } from "svelte"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { z } from "zod"
 	import Avatar from "../Avatar.svelte"
 	import FileDropzone from "../FileDropzone.svelte"
@@ -15,9 +15,26 @@
 		// itself. Lets a host (eg. the session form's character picker) select
 		// the new character immediately instead of re-finding it in a list.
 		onCreated?: (character: SelectCharacter) => void
+		/**
+		 * Fields the draft starts with, applied to the create payload.
+		 *
+		 * The one that matters today is `isPersona`: "Write a persona" is
+		 * "Write a character" with this already true — the same creator, not a
+		 * second one, because a persona IS a character and a parallel modal
+		 * would be the parallel form the merge just deleted.
+		 */
+		initial?: Partial<Pick<SelectCharacter, "isPersona">>
 	}
 
-	let { open = $bindable(), onOpenChange, onCreated }: Props = $props()
+	let {
+		open = $bindable(),
+		onOpenChange,
+		onCreated,
+		initial
+	}: Props = $props()
+
+	/** What this creator calls what it is making — the preset decides. */
+	const noun = $derived(initial?.isPersona ? "Persona" : "Character")
 
 	const socket = useTypedSocket()
 
@@ -175,7 +192,8 @@
 			postHistoryInstructions: "",
 			isFavorite: false,
 			lorebookId: null,
-			scenario: ""
+			scenario: "",
+			...initial
 		}
 
 		const avatarFile = newCharacter._avatarFile
@@ -255,8 +273,6 @@
 			!!characterData._avatarFile
 	)
 
-	// Keep the reference: socket.off(event) with no listener drops *every*
-	// listener for that event across the whole app, not just this one.
 	const handleCharacterCreated = (
 		res: Sockets.Characters.Create.Response
 	) => {
@@ -266,13 +282,13 @@
 		onCreated?.(created)
 	}
 
-	onMount(() => {
-		socket.on("characters:create", handleCharacterCreated)
-	})
-
-	onDestroy(() => {
-		socket.off("characters:create", handleCharacterCreated)
-	})
+	// BARE: a character being created has no id yet to key the reply on. The
+	// `awaitingCreate` guard above is what keeps this modal from reacting to
+	// somebody else's create, exactly as before.
+	useInterest<"characters:create">(
+		"characters:create",
+		handleCharacterCreated
+	)
 </script>
 
 <Dialog
@@ -349,7 +365,7 @@
 					<!-- Normal Form View -->
 					<header class="flex items-center justify-between">
 						<div>
-							<h2 class="h2">Create Character</h2>
+							<h2 class="h2">Create {noun}</h2>
 							<p class="text-sm opacity-60">
 								Step {currentStep + 1} of {steps.length}: {steps[
 									currentStep
@@ -918,7 +934,7 @@
 									onclick={handleSave}
 								>
 									<Icons.Save size={16} />
-									Create Character
+									Create {noun}
 								</button>
 							{:else}
 								<button

@@ -12,7 +12,7 @@
 import { describe, it, expect } from "vitest"
 import "@serene-pub/contracts"
 import "@serene-pub/core-catalog"
-import { getType } from "@serene-pub/sdk"
+import { getDefinition } from "@serene-pub/sdk"
 import {
 	assertCoreBindingsCompatible,
 	checkCoreBindings
@@ -36,11 +36,11 @@ describe("core bindings fit the types this build declares", () => {
 
 	it("asked something — a walk that visited nothing would also be green", () => {
 		// The guard this file would be worthless without. An empty binding
-		// table, a contracts import dropped, a `getType` answering nothing:
+		// table, a contracts import dropped, a `getDefinition` answering nothing:
 		// each reports zero findings by having asked zero questions.
 		expect(boundTypeIds().length).toBeGreaterThan(40)
 		expect(SHARED_CORE_HANDLERS.length).toBeGreaterThan(0)
-		for (const id of boundTypeIds()) expect(getType(id)).toBeTruthy()
+		for (const id of boundTypeIds()) expect(getDefinition(id)).toBeTruthy()
 	})
 
 	it("every shared handler's group is whole and bound", () => {
@@ -49,7 +49,7 @@ describe("core bindings fit the types this build declares", () => {
 			expect(typeIds.length, handler).toBeGreaterThan(1)
 			for (const id of typeIds) {
 				expect(bound.has(id), `${handler} → ${id}`).toBe(true)
-				expect(getType(id), `${handler} → ${id}`).toBeTruthy()
+				expect(getDefinition(id), `${handler} → ${id}`).toBeTruthy()
 			}
 		}
 	})
@@ -59,7 +59,7 @@ describe("core bindings fit the types this build declares", () => {
 		// empty one means the group has diverged into types with nothing in
 		// common — a handler bound to all of them could read nothing at all.
 		for (const { handler, typeIds } of SHARED_CORE_HANDLERS) {
-			const contracts = typeIds.map((id) => getType(id))
+			const contracts = typeIds.map((id) => getDefinition(id))
 			const requires = requiresOf(...contracts)
 			expect(requires.ports.length, handler).toBeGreaterThan(0)
 			for (const c of contracts)

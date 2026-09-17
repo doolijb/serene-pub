@@ -68,7 +68,7 @@ describe("the shipped reply pipeline after the bump", () => {
 			.limit(1)
 
 		const [node] = await db
-			.select({ typeId: schema.pipelineNodes.typeId })
+			.select({ definitionId: schema.pipelineNodes.definitionId })
 			.from(schema.pipelineNodes)
 			.where(
 				and(
@@ -82,7 +82,7 @@ describe("the shipped reply pipeline after the bump", () => {
 			.limit(1)
 
 		expect(
-			(node as any)?.typeId,
+			(node as any)?.definitionId,
 			"the `lore` node is still fusing three disjoint gather branches, so every " +
 				"signal weight downstream is inert"
 		).toBe("core:task/concat-candidates")

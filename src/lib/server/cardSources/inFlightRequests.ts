@@ -1,8 +1,8 @@
 /**
  * Tracks, per socket, the single most recent still-in-flight request of a
- * given kind (currently: CharaVault-bound library search and card-detail
- * fetches) — so that when the SAME socket fires a new request of the same
- * kind, the previous one is cancelled: removed from rateLimiter's queue if
+ * given kind (currently: CharaVault-bound library search, card-detail fetches
+ * and jump search) — so that when the SAME socket fires a new request of the
+ * same kind, the previous one is cancelled: removed from rateLimiter's queue if
  * not yet granted a slot, or has its in-flight fetch aborted if already
  * past the queue. See charaVault/rateLimiter.ts's acquire() and
  * cardSources/pendingAbortableFetch.ts for how the signal is honored
@@ -17,7 +17,12 @@
 
 const REQUEST_KINDS = [
 	"characters:searchLibrary",
-	"cardSources:cardDetail"
+	"cardSources:cardDetail",
+	// `jump:search` (the shell's universal search) is the one kind here whose
+	// work is LOCAL: PGlite has no query cancellation, so its signal does not
+	// stop the search, it suppresses a superseded reply. Still the same
+	// property — one answer per socket, and it is the newest question's.
+	"jump:search"
 ] as const
 type RequestKind = (typeof REQUEST_KINDS)[number]
 

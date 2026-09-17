@@ -106,10 +106,12 @@ export interface RenderConfigs {
 export const parityPipeline = () =>
 	compile(
 		spec("core:spec/parity-respond", { version: "1.0.0" })
-			.on("core:event/message-created@1")
-			.input("input", C.userMessage.v1())
+			.inlet("input", C.userMessage.v1())
 			.query("history", ($) =>
-				C.sessionHistory.v1({ scope: $.input.sessionScope })
+				C.sessionHistory.v1({
+					scope: $.input.sessionScope,
+					params: slot.params()
+				})
 			)
 			/**
 			 * The three retrieval gather branches, mirroring the shipped document.
@@ -124,15 +126,36 @@ export const parityPipeline = () =>
 			 * The comment further down already said a harness that diverges
 			 * from the document it is meant to prove stops proving it. It was
 			 * right, and it was about the wrong line.
+			 *
+			 * `params` on all four, as the shipped document wires them (R-7 P2
+			 * / P5; U3b review S3): the world-lore lane owns the seven scan
+			 * knobs and the other two read that slot through `slot.params({
+			 * node })`, while each lane's OWN band intent — `share`,
+			 * `maxEntries`, `priority` — resolves at its own address through
+			 * the same reference. This harness builds no config world for the
+			 * spec, so every field resolves to its declared default — which is
+			 * exactly the number the ranker's fallback table holds, and the
+			 * corpus stays byte-identical; what changes is that the shipped
+			 * wiring is now the wiring the corpus exercises rather than a
+			 * shape the ranker happens to default into.
 			 */
 			.query("worldLore", ($) =>
-				C.worldLore.v1({ scope: $.input.sessionScope })
+				C.worldLore.v1({
+					scope: $.input.sessionScope,
+					params: slot.params()
+				})
 			)
 			.query("characterLore", ($) =>
-				C.characterLore.v1({ scope: $.input.sessionScope })
+				C.characterLore.v1({
+					scope: $.input.sessionScope,
+					params: slot.params({ node: "worldLore" })
+				})
 			)
 			.query("historyEntries", ($) =>
-				C.historyEntries.v1({ scope: $.input.sessionScope })
+				C.historyEntries.v1({
+					scope: $.input.sessionScope,
+					params: slot.params({ node: "worldLore" })
+				})
 			)
 			/**
 			 * Concatenation, mirroring the shipped document's 1.17.0.
@@ -146,10 +169,19 @@ export const parityPipeline = () =>
 			 * sides of this comparison. `session/entity-cooccurrence` is the
 			 * fixture that could see it, and it sat in `OPEN` until this line
 			 * changed.
+			 *
+			 * The conversation's `band` port leads, as in the shipped document
+			 * (R-7 P5): `session-history` ranks nothing, but its intent is what
+			 * reserves the transcript's half of the window before the lore
+			 * divides the rest. The ranker's fallback table holds that same
+			 * 0.5, so the corpus is byte-identical with the port wired or
+			 * not; wiring it is what makes the corpus exercise the shipped
+			 * wiring rather than a shape the fallback happens to match.
 			 */
 			.task("lore", ($) =>
 				C.concatCandidates.v1({
 					sources: [
+						$.history.band,
 						$.worldLore.main,
 						$.characterLore.main,
 						$.historyEntries.main
@@ -262,7 +294,7 @@ export const parityPipeline = () =>
 					connection: slot.connectionOf("generate")
 				})
 			)
-			.provider("generate", ($) =>
+			.oracle("generate", ($) =>
 				C.generateText.v1({ context: $.prompt.context })
 			)
 			.build()
@@ -468,10 +500,12 @@ export async function runFixture(
 export const ragParityPipeline = () =>
 	compile(
 		spec("core:spec/parity-rag", { version: "1.0.0" })
-			.on("core:event/message-created@1")
-			.input("input", C.userMessage.v1())
+			.inlet("input", C.userMessage.v1())
 			.query("history", ($) =>
-				C.sessionHistory.v1({ scope: $.input.sessionScope })
+				C.sessionHistory.v1({
+					scope: $.input.sessionScope,
+					params: slot.params()
+				})
 			)
 			.query("cast", ($) =>
 				C.sessionCast.v1({ scope: $.input.sessionScope })
@@ -496,11 +530,11 @@ export const ragParityPipeline = () =>
 			// query strings — which is a correct application of the rule and a
 			// useless preview. Inside a block they are exactly where the rule
 			// expects retrieval to be.
-			.async("gather", { mode: "parallel" }, (b) =>
+			.gather("gather", { mode: "parallel" }, (b) =>
 				b
 					.chain("current", (c) =>
 						c
-							.provider("embed", ($) =>
+							.oracle("embed", ($) =>
 								C.embedText.v1({ texts: $.queries.current })
 							)
 							.query("search", ($) =>
@@ -523,7 +557,7 @@ export const ragParityPipeline = () =>
 					)
 					.chain("recent", (c) =>
 						c
-							.provider("embed", ($) =>
+							.oracle("embed", ($) =>
 								C.embedText.v1({ texts: $.queries.recent })
 							)
 							.query("search", ($) =>
@@ -565,9 +599,23 @@ export const ragParityPipeline = () =>
 					params: slot.params()
 				})
 			)
+			// The conversation's band intent, ahead of the semantic
+			// mechanism's candidates, mirroring the keyword harness's
+			// `lore` task: `session-history` ranks nothing here either,
+			// but its intent is what reserves the transcript's slice of
+			// the window before `select` divides the rest. `DEFAULT_GROUPS`
+			// holds the same 0.5 share the intent declares, so the corpus
+			// stays byte-identical with the port wired or not; wiring it
+			// is what makes the corpus exercise the shipped wiring rather
+			// than a shape the fallback happens to match.
+			.task("pool", ($) =>
+				C.concatCandidates.v1({
+					sources: [$.history.band, $.rank.candidates] as any
+				})
+			)
 			.task("select", ($) =>
 				C.rankHybrid.v1({
-					candidates: $.rank.candidates,
+					candidates: $.pool.candidates,
 					budget: $.contextBudget.available,
 					params: slot.params()
 				})
@@ -606,7 +654,7 @@ export const ragParityPipeline = () =>
 					params: slot.params()
 				})
 			)
-			.provider("generate", ($) =>
+			.oracle("generate", ($) =>
 				C.generateText.v1({ context: $.prompt.context })
 			)
 			.build()

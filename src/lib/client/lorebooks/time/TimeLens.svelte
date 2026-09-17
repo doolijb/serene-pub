@@ -2,6 +2,8 @@
 	import * as Icons from "@lucide/svelte"
 	import { onDestroy, onMount } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import { declareInterest } from "$lib/client/sockets/interest.svelte"
+	import { interestKey } from "$lib/shared/sockets/interest"
 	import { toaster } from "$lib/client/utils/toaster"
 	import CompileHistoryEntryModal from "$lib/client/components/modals/CompileHistoryEntryModal.svelte"
 	import type { BindingWithRelations } from "$lib/client/components/lorebookForms/entryManager"
@@ -363,8 +365,6 @@
 		hasUnsavedChanges = dirty
 	})
 
-	// Named so `off` can name them too: a bare off() removes every listener for
-	// the event, including any other open lorebooks UI.
 	function handleBindingList(msg: Sockets.Lorebooks.BindingList.Response) {
 		if (msg.lorebookId !== lorebookId) return
 		bindings = msg.lorebookBindingList as BindingWithRelations[]
@@ -384,16 +384,32 @@
 		void loreRoute.navigate({ type: "openEntry", entryId: entry.id })
 	}
 
+	/**
+	 * Both keys name the open book — `entries:create` is scoped on
+	 * `payload.entry.lorebookId`, which is the id the handler above already
+	 * refuses anything else on. Effects rather than `useInterest` because
+	 * `lorebookId` is a prop and the key moves with it; declared above
+	 * `onMount` so the interest exists before the request goes out.
+	 */
+	$effect(() =>
+		declareInterest<"lorebooks:bindingList">(
+			interestKey("lorebooks:bindingList", lorebookId),
+			handleBindingList
+		)
+	)
+	$effect(() =>
+		declareInterest<"entries:create">(
+			interestKey("entries:create", lorebookId),
+			handleEntryCreated
+		)
+	)
+
 	onMount(() => {
-		socket.on("lorebooks:bindingList", handleBindingList)
-		socket.on("entries:create", handleEntryCreated)
 		socket.emit("lorebooks:bindingList", { lorebookId })
 	})
 
 	onDestroy(() => {
 		hasUnsavedChanges = false
-		socket.off("lorebooks:bindingList", handleBindingList)
-		socket.off("entries:create", handleEntryCreated)
 	})
 </script>
 

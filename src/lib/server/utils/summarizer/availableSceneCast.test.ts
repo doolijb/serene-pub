@@ -146,8 +146,9 @@ describe("resolveCharacterNamesToBindingIds", () => {
 			where: eq(schema.lorebookBindings.id, ids[0])
 		})
 		expect(created?.name).toBe("Bram the Blacksmith")
+		// `personaId` is gone (0133): `characterId` null is now the whole
+		// story for an unbound row.
 		expect(created?.characterId).toBeNull()
-		expect(created?.personaId).toBeNull()
 		// Token comes from the lorebook's own per-lorebook counter, not the
 		// row's own global id — a fresh lorebook's first binding is always
 		// {{char:1}}.
@@ -401,8 +402,9 @@ describe("resolveOrCreateBindingByName", () => {
 			where: eq(schema.lorebookBindings.id, result.id)
 		})
 		expect(created?.name).toBe("Brand New NPC")
+		// `personaId` is gone (0133): `characterId` null is now the whole
+		// story for an unbound row.
 		expect(created?.characterId).toBeNull()
-		expect(created?.personaId).toBeNull()
 	})
 
 	test("two concurrent calls for the same unmatched name serialize to a single row", async () => {

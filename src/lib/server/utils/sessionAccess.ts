@@ -32,35 +32,37 @@ export async function checkSessionAccess(
 	return { isOwner, isGuest, hasAccess }
 }
 
-// A user may view (not edit) a character/persona they don't own if it's
-// bound into a session they have access to as owner or guest — mirrors the
-// "view details for characters in sessions they participate in" requirement
-// that already governs adding characters/personas to a session.
+/**
+ * A user may view (not edit) a character they don't own if it is in a session
+ * they have access to as owner or guest — mirrors the "view details for
+ * characters in sessions they participate in" requirement that already governs
+ * adding a character to a session.
+ *
+ * BOTH member tables. One character row can be in a session as cast
+ * (`session_characters`) or as the voice one of its users speaks with
+ * (`session_personas`), and either is a reason to be allowed to look at it.
+ * Checking only the first makes a guest's own persona invisible to the
+ * session's owner.
+ */
 export async function canViewCharacter(
 	characterId: number,
 	userId: number
 ): Promise<boolean> {
-	const bindings = await db.query.sessionCharacters.findMany({
-		where: eq(schema.sessionCharacters.characterId, characterId),
-		columns: { sessionId: true }
-	})
-	for (const binding of bindings) {
-		const access = await checkSessionAccess(binding.sessionId, userId)
-		if (access.hasAccess) return true
-	}
-	return false
-}
-
-export async function canViewPersona(
-	personaId: number,
-	userId: number
-): Promise<boolean> {
-	const bindings = await db.query.sessionPersonas.findMany({
-		where: eq(schema.sessionPersonas.personaId, personaId),
-		columns: { sessionId: true }
-	})
-	for (const binding of bindings) {
-		const access = await checkSessionAccess(binding.sessionId, userId)
+	const [asCast, asVoice] = await Promise.all([
+		db.query.sessionCharacters.findMany({
+			where: eq(schema.sessionCharacters.characterId, characterId),
+			columns: { sessionId: true }
+		}),
+		db.query.sessionPersonas.findMany({
+			where: eq(schema.sessionPersonas.personaId, characterId),
+			columns: { sessionId: true }
+		})
+	])
+	const sessionIds = new Set<number>()
+	for (const row of asCast) sessionIds.add(row.sessionId)
+	for (const row of asVoice) sessionIds.add(row.sessionId)
+	for (const sessionId of sessionIds) {
+		const access = await checkSessionAccess(sessionId, userId)
 		if (access.hasAccess) return true
 	}
 	return false

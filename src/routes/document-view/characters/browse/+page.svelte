@@ -3,6 +3,10 @@
 	import { goto } from "$app/navigation"
 	import { v4 as uuid } from "uuid"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import {
+		requestWithInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
 	import { announce } from "$lib/client/accessibility/state.svelte"
 	import type {
 		LibraryCatalogItem,
@@ -203,47 +207,53 @@
 		announce(status)
 	}
 
+	/**
+	 * All BARE, and all STANDING for as long as this page is open.
+	 *
+	 * `characters:searchLibrary` and `cardSources:cardDetail` carry the
+	 * client-generated `requestId` this page echoes back, but that is NOT an
+	 * interest scope: `SCOPED_EVENTS` is the one table both sides read, it has
+	 * no entry for these events, and a `#<requestId>` key would therefore match
+	 * no payload at all. Each handler's own `msg.requestId !== latest…` check
+	 * stays the filter — it is what makes a stale page's reply harmless, which
+	 * is a different job from deciding who gets sent the reply.
+	 *
+	 * Declared ahead of the requests below so the keys are held before either
+	 * of them flushes the interest sync (effects run in declaration order).
+	 */
+	useInterest<"characters:searchLibrary">(
+		"characters:searchLibrary",
+		handleCharactersSearchLibrary
+	)
+	useInterest<"characters:searchLibrary:error">(
+		"characters:searchLibrary:error",
+		handleCharactersSearchLibraryError
+	)
+	useInterest<"cardSources:cardDetail">(
+		"cardSources:cardDetail",
+		handleCardSourcesCardDetail
+	)
+	useInterest<"characters:importFromLibrary">(
+		"characters:importFromLibrary",
+		handleCharactersImportFromLibrary
+	)
+	useInterest<"characters:importFromLibrary:error">(
+		"characters:importFromLibrary:error",
+		handleCharactersImportFromLibraryError
+	)
+	$effect(() =>
+		requestWithInterest(
+			"cardSources:capabilities",
+			{},
+			handleCardSourcesCapabilities
+		)
+	)
+
 	onMount(() => {
-		socket.on("cardSources:capabilities", handleCardSourcesCapabilities)
-		socket.on("characters:searchLibrary", handleCharactersSearchLibrary)
-		socket.on(
-			"characters:searchLibrary:error",
-			handleCharactersSearchLibraryError
-		)
-		socket.on("cardSources:cardDetail", handleCardSourcesCardDetail)
-		socket.on(
-			"characters:importFromLibrary",
-			handleCharactersImportFromLibrary
-		)
-		socket.on(
-			"characters:importFromLibrary:error",
-			handleCharactersImportFromLibraryError
-		)
-		socket.emit("cardSources:capabilities", {})
+		// Every listener above is an interest; the first search is the one
+		// request left to send, and the typed `emit` inside it flushes the
+		// interest sync ahead of itself (plan ruling 3).
 		fetchLibrary(false)
-		return () => {
-			socket.off(
-				"cardSources:capabilities",
-				handleCardSourcesCapabilities
-			)
-			socket.off(
-				"characters:searchLibrary",
-				handleCharactersSearchLibrary
-			)
-			socket.off(
-				"characters:searchLibrary:error",
-				handleCharactersSearchLibraryError
-			)
-			socket.off("cardSources:cardDetail", handleCardSourcesCardDetail)
-			socket.off(
-				"characters:importFromLibrary",
-				handleCharactersImportFromLibrary
-			)
-			socket.off(
-				"characters:importFromLibrary:error",
-				handleCharactersImportFromLibraryError
-			)
-		}
 	})
 </script>
 

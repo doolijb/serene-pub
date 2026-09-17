@@ -108,10 +108,12 @@ describe("charactersUpdate — bound binding sync (PGlite integration)", () => {
 	})
 })
 
-describe("personasUpdate — bound binding sync (PGlite integration)", () => {
+describe("charactersUpdate — bound binding sync for a persona character (PGlite integration)", () => {
 	test("renaming a persona propagates to its bound lorebookBindings row", async () => {
-		const { personasUpdate } = await import("./personas")
-		const { createPersonaFromParsedData } = await import("./personas")
+		const { charactersUpdate } = await import("./characters")
+		const { createPersonaFromParsedData } = await import(
+			"$lib/server/utils/personaCard"
+		)
 		const user = await makeUser("persona-sync-user")
 		const [lorebook] = await testDb
 			.insert(schema.lorebooks)
@@ -126,16 +128,16 @@ describe("personasUpdate — bound binding sync (PGlite integration)", () => {
 			.insert(schema.lorebookBindings)
 			.values({
 				lorebookId: lorebook.id,
-				personaId: persona.id,
+				characterId: persona.id,
 				binding: "{{char:1}}",
 				name: "Original Persona"
 			})
 			.returning()
 
-		await personasUpdate.handler(
+		await charactersUpdate.handler(
 			fakeSocket(user.id),
 			{
-				persona: {
+				character: {
 					id: persona.id,
 					name: "Renamed Persona"
 				} as any

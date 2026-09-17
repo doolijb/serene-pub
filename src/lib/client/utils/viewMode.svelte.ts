@@ -2,8 +2,8 @@ export type ViewMode = "list" | "cards"
 
 /**
  * A `$state`-backed list/card view-mode toggle, persisted to localStorage
- * under its own key so characters sidebar, personas sidebar, and the home
- * page each remember the user's choice independently.
+ * under its own key so the characters sidebar and the home page each remember
+ * the user's choice independently.
  */
 export function createViewMode(
 	storageKey: string,

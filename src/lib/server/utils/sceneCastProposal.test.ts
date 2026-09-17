@@ -60,13 +60,13 @@ import {
 //   T6 A NAME THAT IS A PLACE — the Hollow is the inn, and it is a lore entry.
 
 const HOLLOW_GAZETTEER = buildGazetteer([
-	{ name: "Rell Vantage", ref: { kind: "persona", id: 20 } },
+	{ name: "Rell Vantage", ref: { kind: "character", id: 20 } },
 	{ name: "Sister Adaeze", ref: { kind: "character", id: 21 } },
 	{ name: "The Hollow", ref: { kind: "entry", id: 22 } }
 ])
 
 const HOLLOW_ROSTER: RosterMember[] = [
-	{ key: "persona:20", name: "Rell Vantage" },
+	{ key: "character:20", name: "Rell Vantage" },
 	{ key: "character:21", name: "Sister Adaeze" }
 ]
 
@@ -79,7 +79,7 @@ const HOLLOW: CastTurn[] = [
 	},
 	{
 		index: 2,
-		senderKey: "persona:20",
+		senderKey: "character:20",
 		senderName: "Rell Vantage",
 		content:
 			'I took the corner bench with my back to the stone and put my hat on the table where he could see it. "Grust. Two."'
@@ -92,7 +92,7 @@ const HOLLOW: CastTurn[] = [
 	},
 	{
 		index: 4,
-		senderKey: "persona:20",
+		senderKey: "character:20",
 		senderName: "Rell Vantage",
 		content: '"Then tell me about the magistrate."'
 	},
@@ -104,7 +104,7 @@ const HOLLOW: CastTurn[] = [
 	},
 	{
 		index: 6,
-		senderKey: "persona:20",
+		senderKey: "character:20",
 		senderName: "Rell Vantage",
 		content:
 			"I drank one of the two and left the other where it was. Beside me the second cup went untouched, which was the answer I had expected and did not enjoy getting."
@@ -123,7 +123,7 @@ const HOLLOW: CastTurn[] = [
 	},
 	{
 		index: 9,
-		senderKey: "persona:20",
+		senderKey: "character:20",
 		senderName: "Rell Vantage",
 		content: '"From Venn?"'
 	},
@@ -135,7 +135,7 @@ const HOLLOW: CastTurn[] = [
 	},
 	{
 		index: 11,
-		senderKey: "persona:20",
+		senderKey: "character:20",
 		senderName: "Rell Vantage",
 		content: '"Did Mabry read it?"'
 	},
@@ -147,7 +147,7 @@ const HOLLOW: CastTurn[] = [
 	},
 	{
 		index: 13,
-		senderKey: "persona:20",
+		senderKey: "character:20",
 		senderName: "Rell Vantage",
 		content:
 			"I broke the seal with a thumbnail and read it twice, and then I turned it round on the table so that the second cup's owner could read it too, which is as close to asking for an opinion as I get."
@@ -176,19 +176,19 @@ const labelled = (roster?: RosterMember[]) =>
 // is never seen; he is the one measured miss, and the reason is stated below.
 
 const FERRY_GAZETTEER = buildGazetteer([
-	{ name: "Ines Marek", ref: { kind: "persona", id: 30 } },
+	{ name: "Ines Marek", ref: { kind: "character", id: 30 } },
 	{ name: "Toma", ref: { kind: "character", id: 31 } }
 ])
 
 const FERRY_ROSTER: RosterMember[] = [
-	{ key: "persona:30", name: "Ines Marek" },
+	{ key: "character:30", name: "Ines Marek" },
 	{ key: "character:31", name: "Toma" }
 ]
 
 const FERRY: CastTurn[] = [
 	{
 		index: 1,
-		senderKey: "persona:30",
+		senderKey: "character:30",
 		senderName: "Ines Marek",
 		content:
 			"The hut is one room and the stove is in the wrong corner of it, which I have said before and will say again. I had the ledger open and the lamp turned down and my coat still on."
@@ -202,7 +202,7 @@ const FERRY: CastTurn[] = [
 	},
 	{
 		index: 3,
-		senderKey: "persona:30",
+		senderKey: "character:30",
 		senderName: "Ines Marek",
 		content:
 			"I got up and shut it. Through the boards I could hear him at the winch, the ratchet and then the pause and then the ratchet, and I could tell from the pauses that it was worse than he had said."
@@ -216,7 +216,7 @@ const FERRY: CastTurn[] = [
 	},
 	{
 		index: 5,
-		senderKey: "persona:30",
+		senderKey: "character:30",
 		senderName: "Ines Marek",
 		content:
 			"I did not come out. I wrote the tide in the ledger and left the line for the crossing blank, because a blank line is easier to fill than a wrong one is to cross out."
@@ -229,7 +229,7 @@ const FERRY: CastTurn[] = [
 	},
 	{
 		index: 7,
-		senderKey: "persona:30",
+		senderKey: "character:30",
 		senderName: "Ines Marek",
 		content:
 			'"It is running in an hour," I said to the shutter, which is a thing you can only say to a shutter if you are certain, and I was not certain, and Ostrek went away up the bank sounding no happier than he had arrived.'
@@ -242,14 +242,14 @@ const FERRY: CastTurn[] = [
 	},
 	{
 		index: 9,
-		senderKey: "persona:30",
+		senderKey: "character:30",
 		senderName: "Ines Marek",
 		content:
 			'"Ostrek. Four carts." I did not open the door and he did not ask me to.'
 	},
 	{
 		index: 10,
-		senderKey: "persona:30",
+		senderKey: "character:30",
 		senderName: "Ines Marek",
 		content:
 			"The ratchet stopped at about the half hour and did not start again, and then the door came open on Toma with his hands black to the wrist and the third link in his fist, and he put it on the ledger where the tide line was, which ruined the page and made the point."
@@ -332,7 +332,7 @@ describe("the narrow question: participants with no session row", () => {
 describe("the evidence a person reviews", () => {
 	it("cites the kind and the turns, for every member", () => {
 		expect(labelled()).toEqual({
-			"persona:20": "sender@2,4,6,9,11,13 + roster",
+			"character:20": "sender@2,4,6,9,11,13 + roster",
 			"character:21": "roster",
 			"open:grust": "speech-tag@5,12",
 			"open:petra kell": "speech-tag@10,12"
@@ -470,7 +470,8 @@ describe("the extractor's own recall limits, pinned rather than hidden", () => {
 	it("leaves an unbound background binding unresolved, so it arrives looking new", () => {
 		// ⚠ The structural recall limit named in the module docblock.
 		// `annotations/loadVocabulary` contributes a gazetteer name only for a
-		// binding that names a CHARACTER or a PERSONA. The narrative graph's
+		// binding that names a CHARACTER (a persona included — 0133 folded it
+		// in, so there is no separate kind left to name). The narrative graph's
 		// unbound "background" bindings — precisely the NPC rows this mechanism
 		// is best at finding — have no row to resolve to, so they stay open-tier
 		// strings and reach the review screen as *suggested new characters*.
@@ -691,7 +692,7 @@ describe("the structural tier on its own", () => {
 	})
 
 	it("cites each sender turn once, in order", () => {
-		expect(labelled()["persona:20"]).toBe("sender@2,4,6,9,11,13 + roster")
+		expect(labelled()["character:20"]).toBe("sender@2,4,6,9,11,13 + roster")
 	})
 
 	it("without the roster, the silent member disappears rather than being demoted", () => {
@@ -702,7 +703,7 @@ describe("the structural tier on its own", () => {
 		expect(keys).not.toContain("character:21")
 		expect(keys).toEqual(
 			expect.arrayContaining([
-				"persona:20",
+				"character:20",
 				"open:grust",
 				"open:petra kell"
 			])

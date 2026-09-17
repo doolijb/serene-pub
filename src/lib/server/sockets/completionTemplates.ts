@@ -62,6 +62,26 @@ function refuse(
 	throw new Error(error)
 }
 
+/**
+ * Every completion template, as one function, so the four write cascades below
+ * can be handed the BUILDER rather than the handler.
+ *
+ * `completionTemplates:list` is gated, so a create, an edit or a clone made from
+ * anywhere but the list pays for no re-read at all. Skipping the emit alone
+ * would save nothing; the query is the cost.
+ *
+ * No admin check here — the check belongs to the handler, which is the surface a
+ * client can reach. Every cascade below has already made it.
+ */
+async function buildCompletionTemplatesList(): Promise<Sockets.CompletionTemplates.List.Response> {
+	// Built-ins first, then by name — the ordering /admin/sampling uses, so
+	// the shipped rows a person is looking to clone are at the top.
+	const completionTemplatesList = await db.query.completionTemplates.findMany({
+		orderBy: (t, { asc, desc }) => [desc(t.isImmutable), asc(t.name)]
+	})
+	return { completionTemplatesList }
+}
+
 export const completionTemplatesListHandler: Handler<
 	Sockets.CompletionTemplates.List.Params,
 	Sockets.CompletionTemplates.List.Response
@@ -70,15 +90,7 @@ export const completionTemplatesListHandler: Handler<
 	handler: async (socket, params, emitToUser) => {
 		requireAdmin(socket, emitToUser)
 
-		// Built-ins first, then by name — the ordering /admin/sampling uses, so
-		// the shipped rows a person is looking to clone are at the top.
-		const completionTemplatesList =
-			await db.query.completionTemplates.findMany({
-				orderBy: (t, { asc, desc }) => [desc(t.isImmutable), asc(t.name)]
-			})
-		const res: Sockets.CompletionTemplates.List.Response = {
-			completionTemplatesList
-		}
+		const res = await buildCompletionTemplatesList()
 		emitToUser("completionTemplates:list", res)
 		return res
 	}
@@ -261,7 +273,11 @@ export const completionTemplatesCreate: Handler<
 				seedKey: null
 			})
 			.returning()
-		await completionTemplatesListHandler.handler(socket, {}, emitToUser)
+		// Lazy: the admin list this write came from wants the refreshed rows,
+		// and nothing else does. See `buildCompletionTemplatesList`.
+		await emitToUser("completionTemplates:list", () =>
+			buildCompletionTemplatesList()
+		)
 		const res: Sockets.CompletionTemplates.Create.Response = {
 			completionTemplate
 		}
@@ -334,7 +350,10 @@ export const completionTemplatesUpdate: Handler<
 			.set({ ...patch, key: current.key, renderMode: "flat" })
 			.where(eq(schema.completionTemplates.id, id))
 			.returning()
-		await completionTemplatesListHandler.handler(socket, {}, emitToUser)
+		// Lazy — see `buildCompletionTemplatesList`.
+		await emitToUser("completionTemplates:list", () =>
+			buildCompletionTemplatesList()
+		)
 		const res: Sockets.CompletionTemplates.Update.Response = {
 			completionTemplate
 		}
@@ -379,7 +398,10 @@ export const completionTemplatesDelete: Handler<
 			.delete(schema.completionTemplates)
 			.where(eq(schema.completionTemplates.id, params.id))
 
-		await completionTemplatesListHandler.handler(socket, {}, emitToUser)
+		// Lazy — see `buildCompletionTemplatesList`.
+		await emitToUser("completionTemplates:list", () =>
+			buildCompletionTemplatesList()
+		)
 		const res: Sockets.CompletionTemplates.Delete.Response = {
 			success: affected.length
 				? `Completion template deleted. ${affected.length} connection` +
@@ -440,7 +462,10 @@ export const completionTemplatesClone: Handler<
 				isSelectable: source.isSelectable
 			})
 			.returning()
-		await completionTemplatesListHandler.handler(socket, {}, emitToUser)
+		// Lazy — see `buildCompletionTemplatesList`.
+		await emitToUser("completionTemplates:list", () =>
+			buildCompletionTemplatesList()
+		)
 		const res: Sockets.CompletionTemplates.Clone.Response = {
 			completionTemplate
 		}

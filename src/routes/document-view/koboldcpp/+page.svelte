@@ -1,14 +1,17 @@
 <script lang="ts">
 	import { onMount, getContext } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { announce } from "$lib/client/accessibility/state.svelte"
 	import { isListedUnder } from "$lib/client/components/koboldcppManager/modelKindView"
+	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 
 	const socket = useTypedSocket()
 	let userCtx: UserCtx = getContext("userCtx")
 	let koboldCppSettingsCtx: KoboldCppSettingsCtx = getContext(
 		"koboldCppSettingsCtx"
 	)
+	let systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
 
 	let allowed = $derived(
 		!!userCtx.user?.isAdmin &&
@@ -28,6 +31,31 @@
 		$state([])
 	let modelsDirSet = $state(true)
 	let loaded = $state(false)
+	// Only source for "which text model is the instance's chat default": a
+	// capability default is an (endpoint, model) PAIR, and an endpoint alone
+	// names nothing.
+	let connectionsList = $state<Sockets.Connections.List.Row[]>([])
+
+	/**
+	 * The (endpoint, model) pair the chat capability default names, read the
+	 * same way KoboldCppModelsTab does: the endpoint must be THIS manager's
+	 * own connection type, not some other KoboldCPP endpoint or a different
+	 * provider entirely.
+	 */
+	function defaultTextModelName(): string | null {
+		const pair = systemSettingsCtx.capabilityDefaults?.["text->text"]
+		if (!pair?.connectionId || !pair.connectionModelId) return null
+		const connection = connectionsList.find(
+			(c) =>
+				c.id === pair.connectionId &&
+				c.type === CONNECTION_TYPE.KOBOLDCPP_MANAGED
+		)
+		return (
+			connection?.models.find((m) => m.id === pair.connectionModelId)
+				?.model ?? null
+		)
+	}
+	let inUseForChat = $derived(defaultTextModelName())
 
 	let subprocessStatus:
 		| Sockets.KoboldCPP.SubprocessStatus.Response
@@ -51,6 +79,7 @@
 	function refresh() {
 		socket.emit("koboldcpp:listModels", {})
 		socket.emit("koboldcpp:getSubprocessStatus", {})
+		socket.emit("connections:list", {})
 	}
 
 	function saveBaseUrl(event: SubmitEvent) {
@@ -176,7 +205,7 @@
 		currentModel = msg.currentModel
 		// Text models only. The listing now carries image models too (the scan
 		// picks up `.safetensors`, and the curated SD models are `.gguf`), and
-		// every action on this page — Load, Use as Default Connection — treats
+		// every action on this page — Load, Use for chat — treats
 		// what it is given as a TEXT model. Offering an SD checkpoint here would
 		// star a connection whose model cannot answer a chat, failing later with
 		// an error naming the connection rather than the model.
@@ -221,8 +250,11 @@
 		refresh()
 	}
 	function handleConnectModel() {
-		status = "Connection set as system default."
+		status = "Now using this model for chat."
 		announce(status)
+		// Re-requests `connections:list` so `inUseForChat` picks up the new
+		// pair and the marker moves to this model.
+		refresh()
 	}
 	function handleDeleteModel() {
 		announce("Model deleted.")
@@ -273,69 +305,93 @@
 		announce(error)
 	}
 
-	onMount(() => {
-		socket.on("koboldcpp:listModels", handleListModels)
-		socket.on("koboldcpp:setBaseUrl", handleSetBaseUrl)
-		socket.on("koboldcpp:setModelsDir", handleSetModelsDir)
-		socket.on("koboldcpp:setManagedMode", handleSetManagedMode)
-		socket.on(
-			"koboldcpp:setManagedAdminPassword",
-			handleSetManagedAdminPassword
-		)
-		socket.on("koboldcpp:loadModel", handleLoadModel)
-		socket.on("koboldcpp:connectModel", handleConnectModel)
-		socket.on("koboldcpp:deleteModel", handleDeleteModel)
-		socket.on("koboldcpp:getSubprocessStatus", handleGetSubprocessStatus)
-		socket.on("koboldcpp:startSubprocess", handleStartSubprocess)
-		socket.on("koboldcpp:stopSubprocess", handleStopSubprocess)
-		socket.on("koboldcpp:searchModels", handleSearchModels)
-		socket.on("koboldcpp:downloadModel", handleDownloadModel)
-		socket.on("koboldcpp:downloadModel:error", handleDownloadModelError)
-		socket.on("koboldcpp:getDownloadProgress", handleGetDownloadProgress)
-		socket.on("koboldcpp:downloadProgress", handleDownloadProgress)
-		socket.on("koboldcpp:recommendedModels", handleRecommendedModels)
-		socket.on(
-			"koboldcpp:recommendedModels:error",
-			handleRecommendedModelsError
-		)
+	// Every key is BARE — nothing in `koboldcpp:` carries an interest scope —
+	// and every one is standing: this page is a long-lived form where each save,
+	// search, download and subprocess control can be used again and again, and
+	// `downloadProgress` is pushed for the life of a download.
+	//
+	// Declared ABOVE the mount that emits, because effects run in creation
+	// order and `onMount` is an effect: the recommended-models and refresh
+	// requests below would otherwise leave before the sync naming their keys.
+	useInterest<"koboldcpp:listModels">(
+		"koboldcpp:listModels",
+		handleListModels
+	)
+	useInterest<"koboldcpp:setBaseUrl">(
+		"koboldcpp:setBaseUrl",
+		handleSetBaseUrl
+	)
+	useInterest<"koboldcpp:setModelsDir">(
+		"koboldcpp:setModelsDir",
+		handleSetModelsDir
+	)
+	useInterest<"koboldcpp:setManagedMode">(
+		"koboldcpp:setManagedMode",
+		handleSetManagedMode
+	)
+	useInterest<"koboldcpp:setManagedAdminPassword">(
+		"koboldcpp:setManagedAdminPassword",
+		handleSetManagedAdminPassword
+	)
+	useInterest<"koboldcpp:loadModel">("koboldcpp:loadModel", handleLoadModel)
+	useInterest<"koboldcpp:connectModel">(
+		"koboldcpp:connectModel",
+		handleConnectModel
+	)
+	useInterest<"koboldcpp:deleteModel">(
+		"koboldcpp:deleteModel",
+		handleDeleteModel
+	)
+	useInterest<"koboldcpp:getSubprocessStatus">(
+		"koboldcpp:getSubprocessStatus",
+		handleGetSubprocessStatus
+	)
+	useInterest<"koboldcpp:startSubprocess">(
+		"koboldcpp:startSubprocess",
+		handleStartSubprocess
+	)
+	useInterest<"koboldcpp:stopSubprocess">(
+		"koboldcpp:stopSubprocess",
+		handleStopSubprocess
+	)
+	useInterest<"koboldcpp:searchModels">(
+		"koboldcpp:searchModels",
+		handleSearchModels
+	)
+	useInterest<"koboldcpp:downloadModel">(
+		"koboldcpp:downloadModel",
+		handleDownloadModel
+	)
+	useInterest<"koboldcpp:downloadModel:error">(
+		"koboldcpp:downloadModel:error",
+		handleDownloadModelError
+	)
+	useInterest<"koboldcpp:getDownloadProgress">(
+		"koboldcpp:getDownloadProgress",
+		handleGetDownloadProgress
+	)
+	useInterest<"koboldcpp:downloadProgress">(
+		"koboldcpp:downloadProgress",
+		handleDownloadProgress
+	)
+	useInterest<"koboldcpp:recommendedModels">(
+		"koboldcpp:recommendedModels",
+		handleRecommendedModels
+	)
+	useInterest<"koboldcpp:recommendedModels:error">(
+		"koboldcpp:recommendedModels:error",
+		handleRecommendedModelsError
+	)
+	// `connections:list` names the (endpoint, model) pair a capability
+	// default points at; held here only to compute the "in use for chat"
+	// marker below.
+	useInterest<"connections:list">("connections:list", (msg) => {
+		connectionsList = msg.connectionsList ?? []
+	})
 
+	onMount(() => {
 		socket.emit("koboldcpp:recommendedModels", {})
 		refresh()
-		return () => {
-			socket.off("koboldcpp:listModels", handleListModels)
-			socket.off("koboldcpp:setBaseUrl", handleSetBaseUrl)
-			socket.off("koboldcpp:setModelsDir", handleSetModelsDir)
-			socket.off("koboldcpp:setManagedMode", handleSetManagedMode)
-			socket.off(
-				"koboldcpp:setManagedAdminPassword",
-				handleSetManagedAdminPassword
-			)
-			socket.off("koboldcpp:loadModel", handleLoadModel)
-			socket.off("koboldcpp:connectModel", handleConnectModel)
-			socket.off("koboldcpp:deleteModel", handleDeleteModel)
-			socket.off(
-				"koboldcpp:getSubprocessStatus",
-				handleGetSubprocessStatus
-			)
-			socket.off("koboldcpp:startSubprocess", handleStartSubprocess)
-			socket.off("koboldcpp:stopSubprocess", handleStopSubprocess)
-			socket.off("koboldcpp:searchModels", handleSearchModels)
-			socket.off("koboldcpp:downloadModel", handleDownloadModel)
-			socket.off(
-				"koboldcpp:downloadModel:error",
-				handleDownloadModelError
-			)
-			socket.off(
-				"koboldcpp:getDownloadProgress",
-				handleGetDownloadProgress
-			)
-			socket.off("koboldcpp:downloadProgress", handleDownloadProgress)
-			socket.off("koboldcpp:recommendedModels", handleRecommendedModels)
-			socket.off(
-				"koboldcpp:recommendedModels:error",
-				handleRecommendedModelsError
-			)
-		}
 	})
 </script>
 
@@ -597,8 +653,10 @@
 	{:else}
 		<ul class="a11y-list">
 			{#each availableModels as m (m.name)}
+				{@const modelName = m.modelName || m.name}
+				{@const inUse = inUseForChat === modelName}
 				<li class="a11y-list-item">
-					<h3>{m.modelName || m.name}</h3>
+					<h3>{modelName}</h3>
 					{#if m.name === currentModel}
 						<p><strong>Currently loaded.</strong></p>
 					{/if}
@@ -614,9 +672,11 @@
 						<button
 							type="button"
 							class="a11y-btn a11y-btn-small"
-							onclick={() => connectModel(m.modelName || m.name)}
+							onclick={() => connectModel(modelName)}
+							disabled={inUse}
+							aria-pressed={inUse}
 						>
-							Use as Default Connection
+							{inUse ? "In use for chat" : "Use for chat"}
 						</button>
 						<button
 							type="button"

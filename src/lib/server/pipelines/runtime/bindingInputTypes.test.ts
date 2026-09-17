@@ -169,6 +169,55 @@ describe("a handler's input type comes from its contract", () => {
 		expect(out).toContain("params")
 	})
 
+	/**
+	 * The declaration side (R-12). `reads<C>()` types its arrays against the
+	 * same contract `InputOf<C>` derives from, so the list a handler SAYS it
+	 * reads cannot name what the definition lacks — the diagnostic names the
+	 * bad literal and the accepted union, which is what makes the guard in
+	 * `boot/declaredReads.ts` able to trust a declaration.
+	 */
+	it("REFUSES a `reads` declaration naming a parameter the definition lacks, and names it", () => {
+		const out = typecheck(
+			PRELUDE +
+				`import { reads, ok } from "@serene-pub/sdk"
+export const h = reads<typeof C.vectorSearch>(
+	async (input: InputOf<typeof C.vectorSearch>) => ok({ main: input.vectors }),
+	{ ports: ["scope", "vectors"], params: ["topK", "minScore"] }
+)
+`
+		)
+		expect(out).toContain("error TS2322")
+		expect(out).toContain("minScore")
+		expect(out).toContain('"similarityFalloff"')
+	})
+
+	it("REFUSES a `reads` declaration naming a parameter as a port — the shipped confusion", () => {
+		const out = typecheck(
+			PRELUDE +
+				`import { reads, ok } from "@serene-pub/sdk"
+export const h = reads<typeof C.vectorSearch>(
+	async (input: InputOf<typeof C.vectorSearch>) => ok({ main: input.vectors }),
+	{ ports: ["topK"] }
+)
+`
+		)
+		expect(out).toContain("error TS2322")
+		expect(out).toContain("topK")
+	})
+
+	it("compiles a `reads` declaration that names only what the definition declares", () => {
+		const out = typecheck(
+			PRELUDE +
+				`import { reads, ok } from "@serene-pub/sdk"
+export const h = reads<typeof C.vectorSearch>(
+	async (input: InputOf<typeof C.vectorSearch>) => ok({ main: input.vectors }),
+	{ ports: ["scope", "vectors"], params: ["maxEntries", "topK", "similarityFalloff"] }
+)
+`
+		)
+		expect(out).toBe("")
+	})
+
 	it("types a parameter's VALUE from the schema, not just its name", () => {
 		const out = typecheck(
 			PRELUDE +

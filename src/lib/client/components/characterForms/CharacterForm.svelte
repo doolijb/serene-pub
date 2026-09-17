@@ -1,14 +1,18 @@
 <script lang="ts">
 	import { avatarSrc } from "$lib/client/utils/media"
-	import { Switch, Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
+	import { Switch, Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
-	import { onMount, onDestroy, getContext } from "svelte"
+	import {
+		declareInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
+	import { interestKey } from "$lib/shared/sockets/interest"
+	import { onMount, onDestroy, getContext, type Component } from "svelte"
 	import { z } from "zod"
 	import CharacterUnsavedChangesModal from "../modals/CharacterUnsavedChangesModal.svelte"
-	import Avatar from "../Avatar.svelte"
-	import FileDropzone from "../FileDropzone.svelte"
 	import AvatarCropEditor from "../media/AvatarCropEditor.svelte"
+	import PanelTabStrip from "$lib/client/components/panels/PanelTabStrip.svelte"
 	import {
 		avatarFrameCommit,
 		type PendingAvatarFrame
@@ -35,6 +39,10 @@
 		groupOnlyGreetings: string[]
 		postHistoryInstructions: string
 		isFavorite: boolean
+		/** "A character you play" — `characters.is_persona`. */
+		isPersona: boolean
+		/** The persona a new session starts with. At most one per user. */
+		isDefaultPersona: boolean
 		_avatarFile?: File | undefined
 		_avatar: string
 		lorebookId: number | null
@@ -62,6 +70,8 @@
 		creator: z.string().optional(),
 		category: z.string().optional(),
 		isFavorite: z.boolean().optional(),
+		isPersona: z.boolean().optional(),
+		isDefaultPersona: z.boolean().optional(),
 		lorebookId: z.number().nullable().optional(),
 		tags: z.array(z.string()).optional()
 	})
@@ -80,6 +90,14 @@
 		hideFavorite?: boolean
 		hideTitle?: boolean
 		hideTags?: boolean
+		/**
+		 * Whether the header shows its back chevron. Pass `false` where the
+		 * list this form was opened from is already on screen beside it (a
+		 * two-pane desk layout), where a "back" that goes nowhere visible is
+		 * only a button to explain. The chevron runs the same cancel path as
+		 * Escape, so the unsaved-changes gate holds either way.
+		 */
+		showBack?: boolean
 	}
 
 	let {
@@ -93,7 +111,8 @@
 		hideActionButtons = false,
 		hideFavorite = false,
 		hideTitle = false,
-		hideTags = false
+		hideTags = false,
+		showBack = true
 	}: Props = $props()
 
 	const socket = useTypedSocket()
@@ -122,6 +141,8 @@
 		groupOnlyGreetings: [],
 		postHistoryInstructions: "",
 		isFavorite: false,
+		isPersona: false,
+		isDefaultPersona: false,
 		characterVersion: "",
 		creator: "",
 		category: "",
@@ -148,6 +169,8 @@
 		groupOnlyGreetings: [],
 		postHistoryInstructions: "",
 		isFavorite: false,
+		isPersona: false,
+		isDefaultPersona: false,
 		characterVersion: "",
 		creator: "",
 		category: "",
@@ -156,20 +179,69 @@
 		lorebookId: null,
 		tags: []
 	})
-	let expanded = $state({
-		description: true,
-		personality: false,
-		scenario: false,
-		firstMessage: false,
-		exampleDialogues: false,
-		creatorNotes: false,
-		creatorNotesMultilingual: false,
-		alternateGreetings: false,
-		groupOnlyGreetings: false,
-		postHistoryInstructions: false,
-		aliases: false,
-		summary: false
-	})
+	/**
+	 * The three groups this form's fields belong to. A field is always open
+	 * inside its group: folding one away hides whether it is filled, which is
+	 * the question a character sheet answers at a glance.
+	 */
+	type FormTab = "profile" | "voice" | "notes"
+	const FORM_TABS: Array<{
+		value: FormTab
+		label: string
+		icon: Component<any>
+	}> = [
+		{ value: "profile", label: "Profile", icon: Icons.UserRound },
+		{ value: "voice", label: "Voice", icon: Icons.MessageSquareQuote },
+		{ value: "notes", label: "Notes", icon: Icons.NotebookPen }
+	]
+	let activeFormTab: FormTab = $state("profile")
+
+	/**
+	 * Which group each validated field sits in, so a group can mark itself when
+	 * something inside it fails while another group is on show. Name is the
+	 * exception: it is in the hero above the tabs and shows its error there.
+	 */
+	const TAB_FIELDS: Record<FormTab, string[]> = {
+		profile: [
+			"summary",
+			"description",
+			"aliases",
+			"tags",
+			"isFavorite",
+			"isPersona",
+			"isDefaultPersona",
+			"characterVersion",
+			"creator",
+			"category"
+		],
+		voice: [
+			"personality",
+			"firstMessage",
+			"scenario",
+			"alternateGreetings",
+			"exampleDialogues",
+			"groupOnlyGreetings",
+			"postHistoryInstructions"
+		],
+		notes: ["creatorNotes", "creatorNotesMultilingual"]
+	}
+
+	function tabHasError(tab: FormTab): boolean {
+		return TAB_FIELDS[tab].some((field) => !!validationErrors[field])
+	}
+
+	/** The strip's tabs, each carrying whether its group currently fails. */
+	let formTabs = $derived(
+		FORM_TABS.map((tab) => ({ ...tab, hasError: tabHasError(tab.value) }))
+	)
+
+	/**
+	 * The one input/textarea chrome this form uses: Skeleton's field preset —
+	 * theme-aware background and a focus ring that is already primary — with
+	 * this view's corner radius.
+	 */
+	const FIELD_CLASS = "input rounded-[10px]"
+
 	let character: Sockets.Characters.Get.Response["character"] | undefined =
 		$state(undefined)
 	let mode: "create" | "edit" = $derived.by(() =>
@@ -360,6 +432,79 @@
 		pendingFrame = null
 		if (commit) socket.emit("media:setFrame", commit)
 	}
+
+	/**
+	 * The hero avatar IS the upload control: it takes a click and it takes a
+	 * drop, and both land in `handleAvatarChange` — the one place a chosen file
+	 * becomes a preview, a crop source and a pending upload.
+	 */
+	let avatarInputRef = $state<HTMLInputElement | null>(null)
+	let avatarMenuOpen = $state(false)
+	let isAvatarDragOver = $state(false)
+
+	function openAvatarPicker() {
+		avatarInputRef?.click()
+	}
+
+	function handleAvatarInputChange(e: Event) {
+		const input = e.currentTarget as HTMLInputElement
+		const file = input.files?.[0]
+		if (file) handleAvatarChange({ files: [file] } as FileAcceptDetails)
+		// Cleared so choosing the same file twice in a row fires `change` again.
+		input.value = ""
+	}
+
+	function handleAvatarDragOver(e: DragEvent) {
+		// A drop only happens where the default is prevented, so this is what
+		// makes the avatar a target rather than a page the browser navigates.
+		e.preventDefault()
+		if (e.dataTransfer) e.dataTransfer.dropEffect = "copy"
+		isAvatarDragOver = true
+	}
+
+	function handleAvatarDragLeave(e: DragEvent) {
+		const next = e.relatedTarget
+		if (
+			next instanceof Node &&
+			(e.currentTarget as HTMLElement).contains(next)
+		)
+			return
+		isAvatarDragOver = false
+	}
+
+	function handleAvatarDrop(e: DragEvent) {
+		e.preventDefault()
+		isAvatarDragOver = false
+		const file = e.dataTransfer?.files?.[0]
+		if (file) handleAvatarChange({ files: [file] } as FileAcceptDetails)
+	}
+
+	/** The crop editor, on whichever source there is: a chosen file that has
+	 *  not been uploaded, or the stored original. */
+	function openCropEditor() {
+		if (editCharacterData._avatarFile) cropOpen = true
+		else adjustCrop()
+	}
+
+	/** Drops the picked file and its preview, back to the stored avatar. */
+	function clearAvatarSelection() {
+		editCharacterData._avatarFile = undefined
+		editCharacterData._avatar = ""
+		pendingFrame = null
+		releaseCropUrl()
+		// The editor is mounted whether or not it is open, so a revoked url
+		// left here is one it would try to load.
+		cropSrc = ""
+	}
+
+	/** The header's title: who is being edited, or that nobody is yet. */
+	let formTitle = $derived.by(
+		() =>
+			customTitle ||
+			(mode === "edit"
+				? character?.nickname || character?.name || "Character"
+				: "New character")
+	)
 
 	function onSave() {
 		// Guard against double-submit (eg. an impatient re-click while the
@@ -592,6 +737,8 @@
 			postHistoryInstructions:
 				characterData.postHistoryInstructions ?? "",
 			isFavorite: characterData.isFavorite ?? false,
+			isPersona: characterData.isPersona ?? false,
+			isDefaultPersona: characterData.isDefaultPersona ?? false,
 			lorebookId: characterData.lorebookId ?? null,
 			characterVersion: characterData.characterVersion ?? undefined,
 			creator: characterData.creator ?? "",
@@ -624,22 +771,88 @@
 		}
 	}
 
+	/**
+	 * The write replies this form reads, on the interest registry. All BARE:
+	 * `characters:create` has no id to key on yet, and `characters:update` is
+	 * an `emitToUser` push whose own handler already filters by `characterId`
+	 * — the same reason it keeps that check. The two `:error` keys stop the
+	 * save button spinning; `tags:list` is a cascade target, so it is standing
+	 * rather than one-shot.
+	 */
+	useInterest<"characters:create">(
+		"characters:create",
+		handleCharactersCreate
+	)
+	useInterest<"characters:update">(
+		"characters:update",
+		handleCharactersUpdate
+	)
+	useInterest<"characters:create:error">(
+		"characters:create:error",
+		handleCharactersCreateError
+	)
+	useInterest<"characters:update:error">(
+		"characters:update:error",
+		handleCharactersUpdateError
+	)
+	useInterest<"tags:list">("tags:list", handleTagsList)
+
+	/**
+	 * The lorebook picker's list — BARE, and standing rather than one-shot:
+	 * `lorebooks:list` has no entry in `SCOPED_EVENTS` (it is this user's whole
+	 * list, with nothing to key it to) and the server re-emits it as a cascade
+	 * after a lorebook write, which is how a book created elsewhere appears in
+	 * this picker without a reload.
+	 */
+	useInterest<"lorebooks:list">("lorebooks:list", handleLorebooksList)
+
+	/**
+	 * The "show every field" toggle's confirmation — BARE and standing. The
+	 * setting is per user with nothing to scope on, and the reply is what
+	 * actually flips the sections open, so the key has to outlive each press.
+	 */
+	useInterest<"userSettings:updateShowAllCharacterFields">(
+		"userSettings:updateShowAllCharacterFields",
+		handleUpdateShowAllCharacterFields
+	)
+
+	/**
+	 * Edit mode only: this character's row, as a SCOPED interest
+	 * (`characters:get#<id>`; the payload carries the id on `character.id`,
+	 * see `SCOPED_EVENTS`), declared and asked for in one effect so a form
+	 * re-pointed at another character releases the old key as it takes the
+	 * new one.
+	 *
+	 * A form handed its fields outright (`initialData`, from the creator
+	 * modal) never asks the server for them, which is what the first guard
+	 * says.
+	 *
+	 * Released on the first reply — this replaces a `socket.once`, and the
+	 * one-shot is deliberate: `characters:get` is re-sent after a write
+	 * elsewhere, and a standing key here would refill the fields under
+	 * whatever is being typed.
+	 */
+	$effect(() => {
+		if (initialData || !characterId) return
+		const id = characterId
+		let release: (() => void) | undefined
+		release = declareInterest<"characters:get">(
+			interestKey("characters:get", id),
+			(msg: Sockets.Characters.Get.Response) => {
+				handleCharactersGet(msg)
+				release?.()
+			}
+		)
+		socket.emit("characters:get", { id })
+		// Idempotent, so releasing an already-released key is a no-op.
+		return () => release?.()
+	})
+
 	onMount(() => {
 		onCancel = handleCancel
 
 		// Add keyboard event listener
 		document.addEventListener("keydown", handleKeydown)
-
-		socket.on("characters:create", handleCharactersCreate)
-		socket.on("characters:update", handleCharactersUpdate)
-		socket.on("characters:create:error", handleCharactersCreateError)
-		socket.on("characters:update:error", handleCharactersUpdateError)
-		socket.on("lorebooks:list", handleLorebooksList)
-		socket.on("tags:list", handleTagsList)
-		socket.on(
-			"userSettings:updateShowAllCharacterFields",
-			handleUpdateShowAllCharacterFields
-		)
 
 		// Initialize with initialData if provided
 		if (initialData) {
@@ -648,9 +861,6 @@
 				...initialData
 			}
 			originalCharacterData = $state.snapshot(editCharacterData)
-		} else if (characterId) {
-			socket.once("characters:get", handleCharactersGet)
-			socket.emit("characters:get", { id: characterId })
 		}
 		socket.emit("lorebooks:list", {})
 		socket.emit("tags:list", {})
@@ -662,17 +872,9 @@
 	})
 
 	onDestroy(() => {
-		socket.off("characters:create", handleCharactersCreate)
-		socket.off("characters:update", handleCharactersUpdate)
-		socket.off("characters:create:error", handleCharactersCreateError)
-		socket.off("characters:update:error", handleCharactersUpdateError)
-		socket.off("characters:get", handleCharactersGet)
-		socket.off("lorebooks:list", handleLorebooksList)
-		socket.off("tags:list", handleTagsList)
-		socket.off(
-			"userSettings:updateShowAllCharacterFields",
-			handleUpdateShowAllCharacterFields
-		)
+		// The `characters:*`, `tags:list`, `lorebooks:list` and
+		// `userSettings:*` listeners are not here: the interest registry
+		// releases this form's subscribers as its effects are destroyed.
 
 		// Remove keyboard event listener and clear timeout
 		document.removeEventListener("keydown", handleKeydown)
@@ -701,8 +903,49 @@
 	})
 </script>
 
+<!-- The prompt-visibility badge, beside the label of every field whose text
+     reaches the model. -->
+{#snippet promptBadge(hint: string)}
+	<span
+		class="flex items-center opacity-50 transition-opacity duration-200 hover:opacity-100"
+		title={hint}
+		aria-label={hint}
+	>
+		<Icons.ScanEye
+			size={14}
+			class="relative top-[1px] inline"
+			aria-hidden="true"
+		/>
+	</span>
+{/snippet}
+
+<!-- The delete on one row of an array editor: an icon at the row's top-right,
+     so a list of textareas stays a list rather than alternating field, button,
+     field, button. -->
+{#snippet removeRowButton(label: string, onRemove: () => void)}
+	<button
+		type="button"
+		class="text-surface-400 hover:bg-surface-800 hover:text-error-500 grid size-8 shrink-0 place-items-center rounded-lg"
+		onclick={onRemove}
+		aria-label={label}
+		title={label}
+	>
+		<Icons.X size={14} aria-hidden="true" />
+	</button>
+{/snippet}
+
+{#snippet addRowButton(label: string, onAdd: () => void)}
+	<button
+		type="button"
+		class="text-surface-400 hover:text-foreground self-start text-xs"
+		onclick={onAdd}
+	>
+		+ {label}
+	</button>
+{/snippet}
+
 <div
-	class="animate-fade-inmin-h-full"
+	class="animate-fade-in min-h-full max-w-[760px]"
 	bind:this={formContainer}
 	role="dialog"
 	aria-labelledby="form-title"
@@ -714,37 +957,44 @@
 			role="group"
 			aria-label="Form actions"
 		>
-			{#if !hideActionButtons}
+			{#if !hideActionButtons && showBack}
 				<button
 					type="button"
 					class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-2"
 					onclick={handleCancel}
-					title="Cancel"
-					aria-label="Cancel and go back"
+					title="Back to list"
+					aria-label="Back to list"
 				>
 					<Icons.ChevronLeft size={16} aria-hidden="true" />
 				</button>
 			{/if}
 			{#if !hideTitle}
-				<h1 class="flex-1 text-lg font-bold" id="form-title">
-					{customTitle ||
-						(mode === "edit"
-							? `Edit: ${character?.nickname || character?.name || "Character"}`
-							: "Create Character")}
+				<h1
+					class="min-w-0 flex-1 truncate text-lg font-semibold"
+					id="form-title"
+				>
+					{formTitle}
 				</h1>
 			{:else}
 				<span class="flex-1"></span>
 			{/if}
 			{#if !hideActionButtons}
+				{#if hasChanges}
+					<span class="text-surface-500 shrink-0 text-xs">
+						Unsaved changes
+					</span>
+				{/if}
+				<!-- Filled primary only while there is something to save: a
+				     permanently lit call to action stops being one. -->
 				<button
 					type="button"
 					class="btn btn-sm shrink-0"
-					class:preset-filled-success-500={hasChanges}
-					class:preset-tonal-success={!hasChanges}
+					class:preset-filled-primary-500={hasChanges}
+					class:preset-tonal-surface={!hasChanges}
 					onclick={onSave}
 					disabled={isSaving}
 					aria-describedby="form-title"
-					aria-label={`${mode === "edit" ? "Update" : "Create"} character${hasChanges ? " (has unsaved changes)" : ""}`}
+					aria-label={`Save character${hasChanges ? " (has unsaved changes)" : ""}`}
 				>
 					{#if isSaving}
 						<Icons.Loader2
@@ -755,873 +1005,897 @@
 					{:else}
 						<Icons.Save size={16} aria-hidden="true" />
 					{/if}
-					{mode === "edit" ? "Update" : "Create"}
+					Save
 				</button>
 			{/if}
 		</div>
 	{/if}
 	<div class="flex flex-col gap-4" role="form" aria-labelledby="form-title">
 		{#if !hideAvatar}
+			<!-- The avatar IS the upload control: it takes a click, it takes a
+			     drop, and the camera badge says so. Anything the picture itself
+			     cannot carry — re-cropping, clearing a pick — is in the menu
+			     under it. -->
 			<fieldset
-				class="flex items-center gap-4"
+				class="flex items-start gap-4"
 				aria-labelledby="avatar-section"
 			>
 				<legend id="avatar-section" class="sr-only">
 					Avatar Settings
 				</legend>
-				<div aria-label="Current avatar preview">
-					<Avatar
-						src={editCharacterData._avatar ||
-							avatarSrc(editCharacterData)}
-						char={editCharacterData}
-					/>
-				</div>
-				<div class="flex w-full flex-col gap-2">
-					<div class="flex w-full items-center justify-center">
-						<FileDropzone
-							name="character-avatar"
-							accept="image/*"
-							hint="PNG, JPG or GIF"
-							onFileAccept={handleAvatarChange}
-						/>
-					</div>
-					<div class="mt-1 flex flex-wrap gap-2">
-						<button
-							type="button"
-							class="btn btn-sm preset-tonal-error"
-							onclick={() => {
-								editCharacterData._avatarFile = undefined
-								editCharacterData._avatar = ""
-								pendingFrame = null
-								releaseCropUrl()
-								// The editor is mounted whether or not it is
-								// open, so a revoked url left here is one it
-								// would try to load.
-								cropSrc = ""
-							}}
-							disabled={!editCharacterData._avatarFile}
-							aria-label="Clear selected avatar image"
-						>
-							Clear Selection
-						</button>
-						<button
-							type="button"
-							class="btn btn-sm preset-tonal"
-							onclick={() =>
-								editCharacterData._avatarFile
-									? (cropOpen = true)
-									: adjustCrop()}
-							disabled={!editCharacterData._avatarFile &&
-								!character?.avatarMedia}
-							aria-label="Adjust the avatar crop"
-						>
-							<Icons.Crop size={16} aria-hidden="true" />
-							Adjust crop
-						</button>
-					</div>
-				</div>
-			</fieldset>
-		{/if}
-		<fieldset class="flex flex-col gap-1">
-			<label class="flex gap-1 font-semibold" for="charName">
-				Name* <span
-					class="flex items-center opacity-50 transition-opacity duration-200 hover:opacity-100"
-					title="This field will be visible in prompts"
-					aria-label="This field will be visible in prompts"
-				>
-					<Icons.ScanEye
-						size={16}
-						class="relative top-[1px] inline"
-						aria-hidden="true"
-					/>
-				</span>
-			</label>
-			<input
-				id="charName"
-				type="text"
-				bind:value={editCharacterData.name}
-				class="input {validationErrors.name
-					? 'border-error-500 focus:border-error-500'
-					: ''}"
-				oninput={() => {
-					// Clear validation error when user starts typing
-					if (validationErrors.name) {
-						const { name, ...rest } = validationErrors
-						validationErrors = rest
-					}
-				}}
-				aria-required="true"
-				aria-invalid={validationErrors.name ? "true" : "false"}
-				aria-describedby={validationErrors.name
-					? "name-error"
-					: undefined}
-			/>
-			{#if validationErrors.name}
-				<p
-					class="text-error-500 mt-1 text-sm"
-					id="name-error"
-					role="alert"
-				>
-					{validationErrors.name}
-				</p>
-			{/if}
-		</fieldset>
-		<fieldset class="flex flex-col gap-1">
-			<label class="flex gap-1 font-semibold" for="charNickname">
-				Nickname <span
-					class="flex items-center opacity-50 transition-opacity duration-200 hover:opacity-100"
-					title="This field will be visible in prompts"
-					aria-label="This field will be visible in prompts"
-				>
-					<Icons.ScanEye
-						size={16}
-						class="relative top-[1px] inline"
-						aria-hidden="true"
-					/>
-				</span>
-			</label>
-			<input
-				id="charNickname"
-				type="text"
-				bind:value={editCharacterData.nickname}
-				class="input"
-			/>
-		</fieldset>
-		<div class="flex flex-col gap-2">
-			<button
-				type="button"
-				class="flex items-center gap-2 text-sm font-semibold"
-				onclick={() => (expanded.aliases = !expanded.aliases)}
-			>
-				<span class="flex gap-1">
-					Aliases <span
-						class="flex items-center opacity-50 transition-opacity duration-200 hover:opacity-100"
-						title="This field will be visible in prompts"
-						aria-label="This field will be visible in prompts"
-					>
-						<Icons.ScanEye
-							size={16}
-							class="relative top-[1px] inline"
-							aria-hidden="true"
-						/>
-					</span>
-				</span>
-				<span class="ml-1">{expanded.aliases ? "▼" : "►"}</span>
-			</button>
-			{#if expanded.aliases}
-				<div class="flex flex-col gap-1">
-					{#each editCharacterData.aliases as _alias, idx (idx)}
-						<div class="flex gap-2">
-							<input
-								type="text"
-								bind:value={editCharacterData.aliases[idx]}
-								class="input flex-1"
-								placeholder="Alias..."
-							/>
-							<button
-								class="btn btn-sm preset-tonal-error"
-								type="button"
-								onclick={() =>
-									removeFromArray(
-										editCharacterData.aliases,
-										idx
-									)}
-							>
-								<Icons.Minus class="h-4 w-4" />
-							</button>
-						</div>
-					{/each}
+				<div class="flex flex-col items-center gap-1.5">
 					<button
-						class="btn btn-sm preset-filled-primary-500 mt-1"
 						type="button"
-						onclick={() => addToArray(editCharacterData.aliases)}
-					>
-						<Icons.Plus class="h-4 w-4" />
-						Add Alias
-					</button>
-				</div>
-			{/if}
-		</div>
-		<div class="flex flex-col gap-2">
-			<button
-				type="button"
-				class="flex items-center gap-2 text-sm font-semibold"
-				onclick={() => (expanded.summary = !expanded.summary)}
-			>
-				Summary
-				<span class="ml-1">{expanded.summary ? "▼" : "►"}</span>
-			</button>
-			{#if expanded.summary}
-				<div class="flex flex-col gap-1">
-					<textarea
-						bind:value={editCharacterData.summary}
-						class="textarea min-h-16 text-sm"
-						placeholder="One or two sentences describing who this character is…"
-						maxlength="200"
-					></textarea>
-					<p class="text-surface-700-300 text-right text-xs">
-						{editCharacterData.summary.length} / 200
-					</p>
-					<p class="text-surface-400 text-xs">
-						Used as a concise graph node description. Not injected
-						into session context.
-					</p>
-				</div>
-			{/if}
-		</div>
-		<fieldset class="flex flex-col gap-2">
-			<button
-				type="button"
-				class="flex items-center gap-2 text-sm font-semibold"
-				onclick={() => (expanded.description = !expanded.description)}
-				aria-expanded={expanded.description}
-				aria-controls="description-content"
-				id="description-toggle"
-			>
-				<span class="flex gap-1">
-					Description* <span
-						class="flex items-center opacity-50 transition-opacity duration-200 hover:opacity-100"
-						title="This field will be visible in prompts"
-						aria-label="This field will be visible in prompts"
-					>
-						<Icons.ScanEye
-							size={16}
-							class="relative top-[1px] inline"
-							aria-hidden="true"
-						/>
-					</span>
-				</span>
-				<span class="ml-1" aria-hidden="true">
-					{expanded.description ? "▼" : "►"}
-				</span>
-			</button>
-			{#if expanded.description}
-				<div
-					id="description-content"
-					role="region"
-					aria-labelledby="description-toggle"
-				>
-					<textarea
-						rows="8"
-						bind:value={editCharacterData.description}
-						class="input {validationErrors.description
-							? 'border-error-500 focus:border-error-500'
+						class="border-surface-800 relative h-[88px] w-[88px] shrink-0 overflow-hidden rounded-[14px] border {isAvatarDragOver
+							? 'ring-primary-500 ring-2'
 							: ''}"
-						placeholder="Description..."
-						aria-label="Character description"
-						aria-required="true"
-						aria-invalid={validationErrors.description
-							? "true"
-							: "false"}
-						aria-describedby={validationErrors.description
-							? "description-error"
-							: undefined}
-						oninput={() => {
-							// Clear validation error when user starts typing
-							if (validationErrors.description) {
-								const { description, ...rest } =
-									validationErrors
-								validationErrors = rest
-							}
-						}}
-					></textarea>
-					{#if validationErrors.description}
-						<p
-							class="text-error-500 mt-1 text-sm"
-							id="description-error"
-							role="alert"
-						>
-							{validationErrors.description}
-						</p>
-					{/if}
-				</div>
-			{/if}
-		</fieldset>
-		<fieldset class="flex flex-col gap-2">
-			<button
-				type="button"
-				class="flex items-center gap-2 text-sm font-semibold"
-				onclick={() => (expanded.personality = !expanded.personality)}
-				aria-expanded={expanded.personality}
-				aria-controls="personality-content"
-				id="personality-toggle"
-			>
-				<span class="flex gap-1">
-					Personality <span
-						class="flex items-center opacity-50 transition-opacity duration-200 hover:opacity-100"
-						title="This field will be visible in prompts"
-						aria-label="This field will be visible in prompts"
+						onclick={openAvatarPicker}
+						ondragover={handleAvatarDragOver}
+						ondragleave={handleAvatarDragLeave}
+						ondrop={handleAvatarDrop}
+						title="Choose an avatar image"
+						aria-label="Choose an avatar image, or drop one here"
 					>
-						<Icons.ScanEye
-							size={16}
-							class="relative top-[1px] inline"
-							aria-hidden="true"
-						/>
-					</span>
-				</span>
-				<span class="ml-1" aria-hidden="true">
-					{expanded.personality ? "▼" : "►"}
-				</span>
-			</button>
-			{#if expanded.personality}
-				<div
-					id="personality-content"
-					role="region"
-					aria-labelledby="personality-toggle"
-				>
-					<textarea
-						rows="8"
-						bind:value={editCharacterData.personality}
-						class="input"
-						placeholder="Personality..."
-						aria-label="Character personality"
-					></textarea>
-				</div>
-			{/if}
-		</fieldset>
-		{#if userSettingsCtx.settings?.showAllCharacterFields}
-			<div class="flex flex-col gap-2">
-				<button
-					type="button"
-					class="flex items-center gap-2 text-sm font-semibold"
-					onclick={() => (expanded.scenario = !expanded.scenario)}
-				>
-					<span class="flex gap-1">
-						Scenario <span
-							class="flex items-center opacity-50 transition-opacity duration-200 hover:opacity-100"
-							title="This field will be visible in prompts (excluded from group sessions)"
-						>
-							<Icons.ScanEye
-								size={16}
-								class="relative top-[1px] inline"
+						{#if avatarSrc(editCharacterData, { full: true })}
+							<img
+								src={avatarSrc(editCharacterData, {
+									full: true
+								})}
+								alt=""
+								class="absolute inset-0 h-full w-full object-cover object-top"
 							/>
+						{:else}
+							<span
+								class="bg-surface-800 absolute inset-0 grid place-items-center"
+							>
+								<Icons.UsersRound
+									size={36}
+									class="text-surface-400"
+									aria-hidden="true"
+								/>
+							</span>
+						{/if}
+						<span
+							class="bg-surface-900/90 text-surface-200 absolute right-1 bottom-1 grid size-6 place-items-center rounded-full backdrop-blur-sm"
+						>
+							<Icons.Camera size={14} aria-hidden="true" />
 						</span>
-					</span>
-					<span class="ml-1">{expanded.scenario ? "▼" : "►"}</span>
-				</button>
-				{#if expanded.scenario}
-					<textarea
-						rows="8"
-						bind:value={editCharacterData.scenario}
-						class="input"
-						placeholder="Scenario..."
-					></textarea>
-				{/if}
-			</div>
-		{/if}
-		<div class="flex flex-col gap-2">
-			<button
-				type="button"
-				class="flex items-center gap-2 text-sm font-semibold"
-				onclick={() => (expanded.firstMessage = !expanded.firstMessage)}
-			>
-				<span>Greeting (First Message)</span>
-				<span class="ml-1">{expanded.firstMessage ? "▼" : "►"}</span>
-			</button>
-			{#if expanded.firstMessage}
-				<textarea
-					rows="8"
-					bind:value={editCharacterData.firstMessage}
-					class="input"
-					placeholder="First message..."
-				></textarea>
-			{/if}
-		</div>
-		{#if userSettingsCtx.settings?.showAllCharacterFields}
-			<div class="flex flex-col gap-2">
-				<button
-					type="button"
-					class="flex items-center gap-2 text-sm font-semibold"
-					onclick={() =>
-						(expanded.alternateGreetings =
-							!expanded.alternateGreetings)}
-				>
-					<span>Alternate Greetings</span>
-					<span class="ml-1">
-						{expanded.alternateGreetings ? "▼" : "►"}
-					</span>
-				</button>
-				{#if expanded.alternateGreetings}
-					<div class="flex flex-col gap-1">
-						{#each editCharacterData.alternateGreetings as greeting, idx (idx)}
-							<div class="flex flex-col items-center gap-2">
-								<div class="w-full">
-									<textarea
-										rows="2"
-										bind:value={
-											editCharacterData
-												.alternateGreetings[idx]
-										}
-										class="input input-xs bg-background border-muted w-full resize-y rounded border"
-										placeholder="Greeting..."
-									></textarea>
-								</div>
-								<button
-									class="btn btn-sm preset-tonal-error w-full"
-									type="button"
-									onclick={() =>
-										removeFromArray(
-											editCharacterData.alternateGreetings,
-											idx
-										)}
-								>
-									<Icons.Minus class="h-4 w-4" /> Delete
-								</button>
-							</div>
-						{/each}
-						<button
-							class="btn btn-sm preset-filled-primary-500 mt-1"
-							type="button"
-							onclick={() =>
-								addToArray(
-									editCharacterData.alternateGreetings
-								)}
+					</button>
+					<input
+						type="file"
+						accept="image/*"
+						class="hidden"
+						tabindex="-1"
+						bind:this={avatarInputRef}
+						onchange={handleAvatarInputChange}
+						aria-hidden="true"
+					/>
+					<Popover
+						open={avatarMenuOpen}
+						onOpenChange={(e) => (avatarMenuOpen = e.open)}
+						positioning={{ placement: "bottom-end" }}
+					>
+						<Popover.Trigger
+							class="btn-icon hover:bg-primary-600-400 h-7 min-h-0 w-7 p-0 {avatarMenuOpen
+								? 'bg-primary-600-400'
+								: ''}"
+							aria-label="Avatar options"
 						>
-							<Icons.Plus class="h-4 w-4" />
-							Add Greeting
-						</button>
-					</div>
-				{/if}
-			</div>
-			<fieldset class="flex flex-col gap-2">
-				<button
-					type="button"
-					class="flex items-center gap-2 text-sm font-semibold"
-					onclick={() =>
-						(expanded.exampleDialogues =
-							!expanded.exampleDialogues)}
-					aria-expanded={expanded.exampleDialogues}
-					aria-controls="example-dialogues-content"
-					id="example-dialogues-toggle"
-				>
-					<span class="flex gap-1">
-						Example Dialogues <span
-							class="flex items-center opacity-50 transition-opacity duration-200 hover:opacity-100"
-							title="This field will be visible in prompts"
-							aria-label="This field will be visible in prompts"
-						>
-							<Icons.ScanEye
+							<Icons.EllipsisVertical
 								size={16}
-								class="relative top-[1px] inline"
 								aria-hidden="true"
 							/>
+						</Popover.Trigger>
+						<Portal>
+							<Popover.Positioner class="z-[1000]!">
+								<Popover.Content
+									class="card bg-surface-200-800 w-[min(90vw,240px)] space-y-4 p-4 shadow-xl"
+								>
+									<header class="popover-menu-title">
+										<Icons.Image
+											size={18}
+											aria-hidden="true"
+										/>
+										<p>Avatar</p>
+									</header>
+									<article class="flex flex-col gap-2">
+										<button
+											type="button"
+											class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
+											onclick={() => {
+												avatarMenuOpen = false
+												openCropEditor()
+											}}
+											disabled={!editCharacterData._avatarFile &&
+												!character?.avatarMedia}
+										>
+											<Icons.Crop
+												size={16}
+												aria-hidden="true"
+											/>
+											<span>Adjust crop</span>
+										</button>
+										<button
+											type="button"
+											class="btn btn-sm popover-menu-btn hover:preset-filled-error-500"
+											onclick={() => {
+												avatarMenuOpen = false
+												clearAvatarSelection()
+											}}
+											disabled={!editCharacterData._avatarFile}
+										>
+											<Icons.Trash2
+												size={16}
+												aria-hidden="true"
+											/>
+											<span>Remove image</span>
+										</button>
+									</article>
+									<Popover.Arrow>
+										<Popover.ArrowTip
+											class="!bg-surface-200 dark:!bg-surface-800"
+										/>
+									</Popover.Arrow>
+								</Popover.Content>
+							</Popover.Positioner>
+						</Portal>
+					</Popover>
+				</div>
+				<div
+					class="grid min-w-0 flex-1 grid-cols-1 gap-3 @lg/view:grid-cols-2"
+				>
+					{@render nameField()}
+					{@render nicknameField()}
+				</div>
+			</fieldset>
+		{:else}
+			<div class="grid grid-cols-1 gap-3 @lg/view:grid-cols-2">
+				{@render nameField()}
+				{@render nicknameField()}
+			</div>
+		{/if}
+
+		<!-- Three groups, always open inside the one on show. A field that has
+		     to be unfolded before it can be read hides whether it is filled,
+		     which is the question a character sheet answers at a glance.
+
+		     The strip is PanelTabStrip, the same component the read-only
+		     character view wears, so the two screens are one idiom rather than
+		     two that resemble each other. -->
+		<PanelTabStrip
+			bind:value={activeFormTab}
+			tabs={formTabs}
+			ariaLabel="Character fields"
+			panelIdPrefix="character-panel"
+		/>
+
+		<div
+			id="character-panel-profile"
+			role="tabpanel"
+			aria-labelledby="character-panel-profile-tab"
+			hidden={activeFormTab !== "profile"}
+			class="space-y-3"
+		>
+			<section class="panel-card">
+				<h2 class="mb-3 text-sm font-medium">About</h2>
+				<div class="flex flex-col gap-4">
+					<div class="flex flex-col">
+						<label
+							class="text-surface-500 mb-1.5 text-xs"
+							for="charSummary"
+						>
+							Summary
+						</label>
+						<textarea
+							id="charSummary"
+							rows="2"
+							bind:value={editCharacterData.summary}
+							class={FIELD_CLASS}
+							placeholder="One or two sentences describing who this character is…"
+							maxlength="200"
+						></textarea>
+						<p class="text-surface-500 mt-1 text-right text-xs">
+							{editCharacterData.summary.length} / 200
+						</p>
+						<p class="text-surface-500 text-xs">
+							Used as a concise graph node description. Not
+							injected into session context.
+						</p>
+					</div>
+					<div class="flex flex-col">
+						<label
+							class="text-surface-500 mb-1.5 flex items-center gap-1 text-xs"
+							for="charDescription"
+						>
+							Description*
+							{@render promptBadge(
+								"This field will be visible in prompts"
+							)}
+						</label>
+						<textarea
+							id="charDescription"
+							rows="8"
+							bind:value={editCharacterData.description}
+							class="{FIELD_CLASS} {validationErrors.description
+								? 'border-error-500 focus:border-error-500'
+								: ''}"
+							placeholder="Description..."
+							aria-required="true"
+							aria-invalid={validationErrors.description
+								? "true"
+								: "false"}
+							aria-describedby={validationErrors.description
+								? "description-error"
+								: undefined}
+							oninput={() => {
+								// Clear validation error when user starts typing
+								if (validationErrors.description) {
+									const { description, ...rest } =
+										validationErrors
+									validationErrors = rest
+								}
+							}}
+						></textarea>
+						{#if validationErrors.description}
+							<p
+								class="text-error-500 mt-1 text-sm"
+								id="description-error"
+								role="alert"
+							>
+								{validationErrors.description}
+							</p>
+						{/if}
+					</div>
+					<div class="flex flex-col">
+						<span
+							class="text-surface-500 mb-1.5 flex items-center gap-1 text-xs"
+						>
+							Aliases
+							{@render promptBadge(
+								"This field will be visible in prompts"
+							)}
 						</span>
-					</span>
-					<span class="ml-1" aria-hidden="true">
-						{expanded.exampleDialogues ? "▼" : "►"}
-					</span>
-				</button>
-				{#if expanded.exampleDialogues}
-					<div
-						id="example-dialogues-content"
-						role="region"
-						aria-labelledby="example-dialogues-toggle"
-					>
+						<div class="flex flex-col gap-2">
+							{#each editCharacterData.aliases as _alias, idx (idx)}
+								<div class="flex items-start gap-2">
+									<input
+										type="text"
+										bind:value={
+											editCharacterData.aliases[idx]
+										}
+										class="{FIELD_CLASS} flex-1"
+										placeholder="Alias..."
+										aria-label={`Alias ${idx + 1}`}
+									/>
+									{@render removeRowButton(
+										`Delete alias ${idx + 1}`,
+										() =>
+											removeFromArray(
+												editCharacterData.aliases,
+												idx
+											)
+									)}
+								</div>
+							{/each}
+							{@render addRowButton("Add alias", () =>
+								addToArray(editCharacterData.aliases)
+							)}
+						</div>
+					</div>
+				</div>
+			</section>
+			{#if !hideTags || !hideFavorite}
+				<section class="panel-card">
+					<h2 class="mb-3 text-sm font-medium">Organize</h2>
+					<div class="flex flex-col gap-4">
+						{#if !hideTags}
+							<div class="flex flex-col">
+								<label
+									class="text-surface-500 mb-1.5 text-xs"
+									for="charTags"
+								>
+									Tags
+								</label>
+								<!-- Portalled, so the suggestions are not clipped by the
+					     pane this form scrolls inside. The input keeps the
+					     open/close decision: the popover neither steals focus
+					     from the box being typed in nor closes itself from
+					     under the click that picks a suggestion. -->
+								<Popover
+									open={showTagDropdown}
+									onOpenChange={(e) =>
+										(showTagDropdown = e.open)}
+									autoFocus={false}
+									restoreFocus={false}
+									closeOnInteractOutside={false}
+									closeOnEscape={false}
+									positioning={{
+										placement: "bottom-start",
+										sameWidth: true
+									}}
+								>
+									<Popover.Anchor>
+										<input
+											id="charTags"
+											type="text"
+											bind:value={tagSearchQuery}
+											bind:this={tagInputRef}
+											class={FIELD_CLASS}
+											placeholder="Search or add tags..."
+											onfocus={() =>
+												(showTagDropdown = true)}
+											onblur={(e) => {
+												// Delay hiding dropdown to allow clicking on dropdown items
+												setTimeout(() => {
+													if (
+														!(
+															e.relatedTarget instanceof
+																Element &&
+															e.relatedTarget.closest(
+																".tag-dropdown"
+															)
+														)
+													) {
+														showTagDropdown = false
+													}
+												}, 150)
+											}}
+											onkeydown={handleTagInputKeydown}
+										/>
+									</Popover.Anchor>
+									{#if filteredTags.length > 0 || tagSearchQuery.trim()}
+										<Portal>
+											<Popover.Positioner
+												class="z-[1000]!"
+											>
+												<Popover.Content
+													class="tag-dropdown bg-surface-100-900 border-surface-300-700 max-h-48 w-full overflow-y-auto rounded-lg border shadow-lg"
+												>
+													{#if tagSearchQuery.trim() && !filteredTags.some((tag) => tag.name.toLowerCase() === tagSearchQuery.toLowerCase())}
+														<button
+															type="button"
+															class="hover:bg-surface-200-800 border-surface-300-700 w-full border-b px-3 py-2 text-left text-sm"
+															onclick={() =>
+																addTag(
+																	tagSearchQuery
+																)}
+														>
+															<Icons.Plus
+																size={16}
+																class="mr-2 inline"
+															/>
+															Create "{tagSearchQuery}"
+														</button>
+													{/if}
+													{#each filteredTags as tag}
+														{#if !editCharacterData.tags.includes(tag.name)}
+															<button
+																type="button"
+																class="hover:bg-surface-200-800 w-full px-3 py-2 text-left text-sm"
+																onclick={() =>
+																	addTag(
+																		tag.name
+																	)}
+															>
+																{tag.name}
+															</button>
+														{/if}
+													{/each}
+												</Popover.Content>
+											</Popover.Positioner>
+										</Portal>
+									{/if}
+								</Popover>
+
+								<!-- Selected tags display -->
+								{#if editCharacterData.tags.length > 0}
+									<div class="mt-2 flex flex-wrap gap-1">
+										{#each editCharacterData.tags as tag}
+											<span
+												class="inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs {getTagColorPreset(
+													tag
+												)}"
+											>
+												{tag}
+												<button
+													type="button"
+													class="rounded-full p-0.5 hover:opacity-70"
+													onclick={() =>
+														removeTag(tag)}
+													aria-label="Remove tag {tag}"
+												>
+													<Icons.X size={12} />
+												</button>
+											</span>
+										{/each}
+									</div>
+								{/if}
+							</div>
+						{/if}
+						{#if !hideFavorite}
+							<div class="flex items-center gap-2">
+								<Switch
+									name="favorite"
+									checked={editCharacterData.isFavorite}
+									onCheckedChange={(e) =>
+										(editCharacterData.isFavorite =
+											e.checked)}
+									aria-describedby="favorite-description"
+								>
+									<Switch.Control
+										class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+									>
+										<Switch.Thumb />
+									</Switch.Control>
+									<Switch.HiddenInput />
+									<Switch.Label class="text-sm">
+										Favorite
+									</Switch.Label>
+								</Switch>
+								<span id="favorite-description" class="sr-only">
+									Mark this character as a favorite for easier
+									access
+								</span>
+							</div>
+							<!-- Persona and Default persona sit beside Favorite
+							     because all three are the same kind of fact: how
+							     THIS library treats the character, not anything
+							     the model is told. Default implies Persona, and
+							     the pair enforces it in both directions — the
+							     switch is disabled while Persona is off, and
+							     turning it on turns Persona on — so the state
+							     "a default you cannot play" is unreachable
+							     here, exactly as the server makes it
+							     unreachable there. -->
+							<div class="flex items-center gap-2">
+								<Switch
+									name="persona"
+									checked={editCharacterData.isPersona}
+									onCheckedChange={(e) => {
+										editCharacterData.isPersona = e.checked
+										// Clearing Persona clears Default with
+										// it rather than leaving a default
+										// nobody can play.
+										if (!e.checked)
+											editCharacterData.isDefaultPersona = false
+									}}
+									aria-describedby="persona-description"
+								>
+									<Switch.Control
+										class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+									>
+										<Switch.Thumb />
+									</Switch.Control>
+									<Switch.HiddenInput />
+									<Switch.Label class="text-sm">
+										Persona
+									</Switch.Label>
+								</Switch>
+								<span id="persona-description" class="sr-only">
+									A character you play
+								</span>
+								<span class="text-surface-500 text-xs">
+									A character you play
+								</span>
+							</div>
+							<div class="flex items-center gap-2">
+								<Switch
+									name="default-persona"
+									checked={editCharacterData.isDefaultPersona}
+									disabled={!editCharacterData.isPersona}
+									onCheckedChange={(e) => {
+										editCharacterData.isDefaultPersona =
+											e.checked
+										if (e.checked)
+											editCharacterData.isPersona = true
+									}}
+									aria-describedby="default-persona-description"
+								>
+									<Switch.Control
+										class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
+									>
+										<Switch.Thumb />
+									</Switch.Control>
+									<Switch.HiddenInput />
+									<Switch.Label class="text-sm">
+										Default persona
+									</Switch.Label>
+								</Switch>
+								<span
+									id="default-persona-description"
+									class="sr-only"
+								>
+									The persona a new session starts with
+								</span>
+								<span class="text-surface-500 text-xs">
+									New sessions start with this one
+								</span>
+							</div>
+						{/if}
+					</div>
+				</section>
+			{/if}
+			{#if userSettingsCtx.settings?.showAllCharacterFields}
+				<section class="panel-card">
+					<h2 class="mb-3 text-sm font-medium">Card metadata</h2>
+					<div class="grid grid-cols-1 gap-3 @lg/view:grid-cols-3">
+						<div class="flex flex-col">
+							<label
+								class="text-surface-500 mb-1.5 text-xs"
+								for="charVersion"
+							>
+								Version
+							</label>
+							<input
+								id="charVersion"
+								type="text"
+								bind:value={editCharacterData.characterVersion}
+								class={FIELD_CLASS}
+								placeholder="1.0"
+							/>
+						</div>
+						<div class="flex flex-col">
+							<label
+								class="text-surface-500 mb-1.5 text-xs"
+								for="charCreator"
+							>
+								Creator
+							</label>
+							<input
+								id="charCreator"
+								type="text"
+								bind:value={editCharacterData.creator}
+								class={FIELD_CLASS}
+								placeholder="Who made this character?"
+							/>
+						</div>
+						<div class="flex flex-col">
+							<label
+								class="text-surface-500 mb-1.5 text-xs"
+								for="charCategory"
+							>
+								Category
+							</label>
+							<input
+								id="charCategory"
+								type="text"
+								bind:value={editCharacterData.category}
+								class={FIELD_CLASS}
+								placeholder="e.g. Fantasy, Sci-Fi, Slice of Life"
+							/>
+						</div>
+					</div>
+				</section>
+			{/if}
+		</div>
+
+		<div
+			id="character-panel-voice"
+			role="tabpanel"
+			aria-labelledby="character-panel-voice-tab"
+			hidden={activeFormTab !== "voice"}
+			class="space-y-3"
+		>
+			<section class="panel-card">
+				<h2 class="mb-3 text-sm font-medium">Voice</h2>
+				<div class="flex flex-col gap-4">
+					<div class="flex flex-col">
+						<label
+							class="text-surface-500 mb-1.5 flex items-center gap-1 text-xs"
+							for="charPersonality"
+						>
+							Personality
+							{@render promptBadge(
+								"This field will be visible in prompts"
+							)}
+						</label>
+						<textarea
+							id="charPersonality"
+							rows="8"
+							bind:value={editCharacterData.personality}
+							class={FIELD_CLASS}
+							placeholder="Personality..."
+						></textarea>
+					</div>
+					{#if userSettingsCtx.settings?.showAllCharacterFields}
+						<div class="flex flex-col">
+							<label
+								class="text-surface-500 mb-1.5 flex items-center gap-1 text-xs"
+								for="charScenario"
+							>
+								Scenario
+								{@render promptBadge(
+									"This field will be visible in prompts (excluded from group sessions)"
+								)}
+							</label>
+							<textarea
+								id="charScenario"
+								rows="8"
+								bind:value={editCharacterData.scenario}
+								class={FIELD_CLASS}
+								placeholder="Scenario..."
+							></textarea>
+						</div>
+					{/if}
+				</div>
+			</section>
+			<section class="panel-card">
+				<h2 class="mb-3 text-sm font-medium">Greetings</h2>
+				<div class="flex flex-col gap-4">
+					<div class="flex flex-col">
+						<label
+							class="text-surface-500 mb-1.5 text-xs"
+							for="charFirstMessage"
+						>
+							First message
+						</label>
+						<textarea
+							id="charFirstMessage"
+							rows="8"
+							bind:value={editCharacterData.firstMessage}
+							class={FIELD_CLASS}
+							placeholder="First message..."
+						></textarea>
+					</div>
+					{#if userSettingsCtx.settings?.showAllCharacterFields}
+						<div class="flex flex-col">
+							<span class="text-surface-500 mb-1.5 text-xs">
+								Alternate greetings
+							</span>
+							<div class="flex flex-col gap-2">
+								{#each editCharacterData.alternateGreetings as _greeting, idx (idx)}
+									<div class="flex items-start gap-2">
+										<textarea
+											rows="2"
+											bind:value={
+												editCharacterData
+													.alternateGreetings[idx]
+											}
+											class="{FIELD_CLASS} flex-1 resize-y"
+											placeholder="Greeting..."
+											aria-label={`Alternate greeting ${idx + 1}`}
+										></textarea>
+										{@render removeRowButton(
+											`Delete alternate greeting ${idx + 1}`,
+											() =>
+												removeFromArray(
+													editCharacterData.alternateGreetings,
+													idx
+												)
+										)}
+									</div>
+								{/each}
+								{@render addRowButton("Add greeting", () =>
+									addToArray(
+										editCharacterData.alternateGreetings
+									)
+								)}
+							</div>
+						</div>
+						<div class="flex flex-col">
+							<span class="text-surface-500 mb-1.5 text-xs">
+								Group-only greetings
+							</span>
+							<div class="flex flex-col gap-2">
+								{#each editCharacterData.groupOnlyGreetings as _greeting, idx (idx)}
+									<div class="flex items-start gap-2">
+										<textarea
+											rows="2"
+											bind:value={
+												editCharacterData
+													.groupOnlyGreetings[idx]
+											}
+											class="{FIELD_CLASS} flex-1 resize-y"
+											placeholder="Group greeting..."
+											aria-label={`Group-only greeting ${idx + 1}`}
+										></textarea>
+										{@render removeRowButton(
+											`Delete group-only greeting ${idx + 1}`,
+											() =>
+												removeFromArray(
+													editCharacterData.groupOnlyGreetings,
+													idx
+												)
+										)}
+									</div>
+								{/each}
+								{@render addRowButton(
+									"Add group greeting",
+									() =>
+										addToArray(
+											editCharacterData.groupOnlyGreetings
+										)
+								)}
+							</div>
+						</div>
+					{/if}
+				</div>
+			</section>
+			{#if userSettingsCtx.settings?.showAllCharacterFields}
+				<section class="panel-card">
+					<h2 class="mb-3 text-sm font-medium">Examples</h2>
+					<div class="flex flex-col">
+						<span
+							class="text-surface-500 mb-1.5 flex items-center gap-1 text-xs"
+						>
+							Example dialogues
+							{@render promptBadge(
+								"This field will be visible in prompts"
+							)}
+						</span>
 						<div
-							class="flex flex-col gap-1"
+							class="flex flex-col gap-2"
 							role="list"
 							aria-label="Example dialogues"
 						>
-							{#each editCharacterData.exampleDialogues as dialogue, idx (idx)}
+							{#each editCharacterData.exampleDialogues as _dialogue, idx (idx)}
 								<div
-									class="flex flex-col items-center gap-2"
+									class="flex items-start gap-2"
 									role="listitem"
 								>
-									<div class="w-full">
-										<textarea
-											rows="4"
-											bind:value={
-												editCharacterData
-													.exampleDialogues[idx]
-											}
-											class="input resize-y"
-											placeholder="Example dialogue..."
-											aria-label={`Example dialogue ${idx + 1}`}
-										></textarea>
-									</div>
-									<button
-										class="btn btn-sm preset-tonal-error w-full"
-										type="button"
-										onclick={() =>
+									<textarea
+										rows="4"
+										bind:value={
+											editCharacterData.exampleDialogues[
+												idx
+											]
+										}
+										class="{FIELD_CLASS} flex-1 resize-y"
+										placeholder="Example dialogue..."
+										aria-label={`Example dialogue ${idx + 1}`}
+									></textarea>
+									{@render removeRowButton(
+										`Delete example dialogue ${idx + 1}`,
+										() =>
 											removeFromArray(
 												editCharacterData.exampleDialogues,
 												idx
-											)}
-										aria-label={`Delete example dialogue ${idx + 1}`}
-									>
-										<Icons.Minus
-											class="h-4 w-4"
-											aria-hidden="true"
-										/> Delete
-									</button>
+											)
+									)}
 								</div>
 							{/each}
-							<button
-								class="btn btn-sm preset-filled-primary-500 mt-1"
-								type="button"
-								onclick={() =>
-									addToArray(
-										editCharacterData.exampleDialogues
-									)}
-								aria-label="Add new example dialogue"
-							>
-								<Icons.Plus
-									class="h-4 w-4"
-									aria-hidden="true"
-								/>
-								Add Example Dialogue
-							</button>
+							{@render addRowButton("Add example dialogue", () =>
+								addToArray(editCharacterData.exampleDialogues)
+							)}
 						</div>
 					</div>
-				{/if}
-			</fieldset>
-		{/if}
-		{#if userSettingsCtx.settings?.showAllCharacterFields}
-			<div class="flex flex-col gap-2">
-				<button
-					type="button"
-					class="flex items-center gap-2 text-sm font-semibold"
-					onclick={() =>
-						(expanded.creatorNotes = !expanded.creatorNotes)}
-				>
-					<span>Creator Notes</span>
-					<span class="ml-1">
-						{expanded.creatorNotes ? "▼" : "►"}
-					</span>
-				</button>
-				{#if expanded.creatorNotes}
-					<textarea
-						rows="4"
-						bind:value={editCharacterData.creatorNotes}
-						class="input"
-						placeholder="Notes from the character creator..."
-					></textarea>
-				{/if}
-			</div>
-		{/if}
-		{#if userSettingsCtx.settings?.showAllCharacterFields}
-			<div class="flex flex-col gap-2">
-				<button
-					type="button"
-					class="flex items-center gap-2 text-sm font-semibold"
-					onclick={() =>
-						(expanded.creatorNotesMultilingual =
-							!expanded.creatorNotesMultilingual)}
-				>
-					<span>Creator Notes (Multilingual)</span>
-					<span class="ml-1">
-						{expanded.creatorNotesMultilingual ? "▼" : "►"}
-					</span>
-				</button>
-				{#if expanded.creatorNotesMultilingual}
-					<div class="flex flex-col gap-1">
-						{#each Object.entries(editCharacterData.creatorNotesMultilingual) as [lang, note], idx (lang)}
-							<div class="flex items-center gap-2">
-								<input
-									type="text"
-									value={lang}
-									class="input input-xs bg-background border-muted w-16 rounded border"
-									readonly
-								/>
-								<input
-									type="text"
-									bind:value={
-										editCharacterData
-											.creatorNotesMultilingual[lang]
-									}
-									class="input input-xs bg-background border-muted flex-1 rounded border"
-									placeholder="Note..."
-								/>
-								<button
-									class="btn btn-sm preset-filled-success-500"
-									type="button"
-									onclick={() =>
-										removeObjectKey(
-											editCharacterData.creatorNotesMultilingual,
-											lang
-										)}
-								>
-									-
-								</button>
-							</div>
-						{/each}
-						<div class="mt-1 flex gap-2">
-							<input
-								type="text"
-								class="input input-xs bg-background border-muted w-16 rounded border"
-								bind:value={newLangKey}
-								placeholder="Lang"
-							/>
-							<input
-								type="text"
-								class="input input-xs bg-background border-muted flex-1 rounded border"
-								bind:value={newLangNote}
-								placeholder="Note..."
-							/>
-							<button
-								class="btn btn-sm preset-filled-success-500"
-								type="button"
-								onclick={() => {
-									if (newLangKey) {
-										setObjectKey(
-											editCharacterData.creatorNotesMultilingual,
-											newLangKey,
-											newLangNote
-										)
-										newLangKey = ""
-										newLangNote = ""
-									}
-								}}
-							>
-								<Icons.Plus class="h-4 w-4" />
-							</button>
-						</div>
-					</div>
-				{/if}
-			</div>
-		{/if}
-		{#if userSettingsCtx.settings?.showAllCharacterFields}
-			<div class="flex flex-col gap-2">
-				<button
-					type="button"
-					class="flex items-center gap-2 text-sm font-semibold"
-					onclick={() =>
-						(expanded.groupOnlyGreetings =
-							!expanded.groupOnlyGreetings)}
-				>
-					<span>Group-Only Greetings</span>
-					<span class="ml-1">
-						{expanded.groupOnlyGreetings ? "▼" : "►"}
-					</span>
-				</button>
-				{#if expanded.groupOnlyGreetings}
-					<div class="flex flex-col gap-1">
-						{#each editCharacterData.groupOnlyGreetings as greeting, idx (idx)}
-							<div class="flex flex-col items-center gap-2">
-								<div class="w-full">
-									<textarea
-										rows="2"
-										bind:value={
-											editCharacterData
-												.groupOnlyGreetings[idx]
-										}
-										class="textarea w-full resize-y rounded border"
-										placeholder="Group greeting..."
-									></textarea>
-								</div>
-								<button
-									class="btn btn-sm preset-tonal-error w-full"
-									type="button"
-									onclick={() =>
-										removeFromArray(
-											editCharacterData.groupOnlyGreetings,
-											idx
-										)}
-								>
-									<Icons.Minus class="h-4 w-4" /> Delete
-								</button>
-							</div>
-						{/each}
-						<button
-							class="btn btn-sm preset-filled-primary-500 mt-1"
-							type="button"
-							onclick={() =>
-								addToArray(
-									editCharacterData.groupOnlyGreetings
-								)}
+				</section>
+				<section class="panel-card">
+					<h2 class="mb-3 text-sm font-medium">Instructions</h2>
+					<div class="flex flex-col">
+						<label
+							class="text-surface-500 mb-1.5 flex items-center gap-1 text-xs"
+							for="charPostHistory"
 						>
-							<Icons.Plus class="h-4 w-4" />
-							Add Group Greeting
-						</button>
+							Post-history instructions
+							{@render promptBadge(
+								"This field will be visible in prompts"
+							)}
+						</label>
+						<textarea
+							id="charPostHistory"
+							rows="4"
+							bind:value={
+								editCharacterData.postHistoryInstructions
+							}
+							class={FIELD_CLASS}
+							placeholder="Instructions for post-history processing..."
+						></textarea>
 					</div>
-				{/if}
-			</div>
-		{/if}
-		{#if userSettingsCtx.settings?.showAllCharacterFields}
-			<div class="flex flex-col gap-2">
-				<button
-					type="button"
-					class="flex items-center gap-2 text-sm font-semibold"
-					onclick={() =>
-						(expanded.postHistoryInstructions =
-							!expanded.postHistoryInstructions)}
-				>
-					<span class="flex gap-1">
-						Post-History Instructions <span
-							class="flex items-center opacity-50 transition-opacity duration-200 hover:opacity-100"
-							title="This field will be visible in prompts"
-						>
-							<Icons.ScanEye
-								size={16}
-								class="relative top-[1px] inline"
-							/>
-						</span>
-					</span>
-					<span class="ml-1">
-						{expanded.postHistoryInstructions ? "▼" : "►"}
-					</span>
-				</button>
-				{#if expanded.postHistoryInstructions}
-					<textarea
-						rows="4"
-						bind:value={editCharacterData.postHistoryInstructions}
-						class="input"
-						placeholder="Instructions for post-history processing..."
-					></textarea>
-				{/if}
-			</div>
-		{/if}
-		{#if userSettingsCtx.settings?.showAllCharacterFields}
-			<div class="flex flex-col gap-1">
-				<label class="font-semibold" for="charVersion">
-					Character Version
-				</label>
-				<input
-					id="charVersion"
-					type="text"
-					bind:value={editCharacterData.characterVersion}
-					class="input"
-					placeholder="1.0"
-				/>
-			</div>
-			<div class="flex flex-col gap-1">
-				<label class="font-semibold" for="charCreator">Creator</label>
-				<input
-					id="charCreator"
-					type="text"
-					bind:value={editCharacterData.creator}
-					class="input"
-					placeholder="Who made this character?"
-				/>
-			</div>
-			<div class="flex flex-col gap-1">
-				<label class="font-semibold" for="charCategory">Category</label>
-				<input
-					id="charCategory"
-					type="text"
-					bind:value={editCharacterData.category}
-					class="input"
-					placeholder="e.g. Fantasy, Sci-Fi, Slice of Life"
-				/>
-			</div>
-		{/if}
-		<!-- <div class="flex flex-col gap-2">
-			<label class="font-semibold" for="lorebookSelect">Lorebook</label>
-			<select
-				id="lorebookSelect"
-				class="select"
-				bind:value={editCharacterData.lorebookId}
-			>
-				<option value={null}>None</option>
-				{#each lorebookList as lb}
-					<option value={lb.id}>{`#${lb.id} - ${lb.name}`}</option>
-				{/each}
-			</select>
-		</div> -->
-		{#if !hideTags}
-			<fieldset class="mb-4 flex flex-col gap-1">
-				<label class="font-semibold" for="charTags">Tags</label>
-				<div class="relative">
-					<input
-						id="charTags"
-						type="text"
-						bind:value={tagSearchQuery}
-						bind:this={tagInputRef}
-						class="input"
-						placeholder="Search or add tags..."
-						onfocus={() => (showTagDropdown = true)}
-						onblur={(e) => {
-							// Delay hiding dropdown to allow clicking on dropdown items
-							setTimeout(() => {
-								if (
-									!(
-										e.relatedTarget instanceof Element &&
-										e.relatedTarget.closest(".tag-dropdown")
-									)
-								) {
-									showTagDropdown = false
-								}
-							}, 150)
-						}}
-						onkeydown={handleTagInputKeydown}
-					/>
+				</section>
+			{/if}
+		</div>
 
-					{#if showTagDropdown && (filteredTags.length > 0 || tagSearchQuery.trim())}
-						<div
-							class="tag-dropdown bg-surface-100-900 border-surface-300-700 absolute top-full right-0 left-0 z-10 max-h-48 overflow-y-auto rounded-lg border shadow-lg"
+		<div
+			id="character-panel-notes"
+			role="tabpanel"
+			aria-labelledby="character-panel-notes-tab"
+			hidden={activeFormTab !== "notes"}
+			class="space-y-3"
+		>
+			<section class="panel-card">
+				<h2 class="mb-3 text-sm font-medium">Creator notes</h2>
+				<div class="flex flex-col gap-4">
+					<div class="flex flex-col">
+						<label
+							class="text-surface-500 mb-1.5 text-xs"
+							for="charCreatorNotes"
 						>
-							{#if tagSearchQuery.trim() && !filteredTags.some((tag) => tag.name.toLowerCase() === tagSearchQuery.toLowerCase())}
-								<button
-									type="button"
-									class="hover:bg-surface-200-800 border-surface-300-700 w-full border-b px-3 py-2 text-left"
-									onclick={() => addTag(tagSearchQuery)}
-								>
-									<Icons.Plus size={16} class="mr-2 inline" />
-									Create "{tagSearchQuery}"
-								</button>
-							{/if}
-							{#each filteredTags as tag}
-								{#if !editCharacterData.tags.includes(tag.name)}
+							Creator notes
+						</label>
+						<textarea
+							id="charCreatorNotes"
+							rows="4"
+							bind:value={editCharacterData.creatorNotes}
+							class={FIELD_CLASS}
+							placeholder="Notes from the character creator..."
+						></textarea>
+					</div>
+					{#if userSettingsCtx.settings?.showAllCharacterFields}
+						<div class="flex flex-col">
+							<span class="text-surface-500 mb-1.5 text-xs">
+								Creator notes (multilingual)
+							</span>
+							<div class="flex flex-col gap-2">
+								{#each Object.entries(editCharacterData.creatorNotesMultilingual) as [lang, _note], idx (lang)}
+									<div class="flex items-start gap-2">
+										<input
+											type="text"
+											value={lang}
+											class="{FIELD_CLASS} w-16 shrink-0"
+											aria-label={`Language ${idx + 1}`}
+											readonly
+										/>
+										<input
+											type="text"
+											bind:value={
+												editCharacterData
+													.creatorNotesMultilingual[
+													lang
+												]
+											}
+											class="{FIELD_CLASS} flex-1"
+											placeholder="Note..."
+											aria-label={`Note in ${lang}`}
+										/>
+										{@render removeRowButton(
+											`Delete the ${lang} note`,
+											() =>
+												removeObjectKey(
+													editCharacterData.creatorNotesMultilingual,
+													lang
+												)
+										)}
+									</div>
+								{/each}
+								<div class="flex items-start gap-2">
+									<input
+										type="text"
+										class="{FIELD_CLASS} w-16 shrink-0"
+										bind:value={newLangKey}
+										placeholder="Lang"
+										aria-label="New note language"
+									/>
+									<input
+										type="text"
+										class="{FIELD_CLASS} flex-1"
+										bind:value={newLangNote}
+										placeholder="Note..."
+										aria-label="New note text"
+									/>
 									<button
 										type="button"
-										class="hover:bg-surface-200-800 w-full px-3 py-2 text-left"
-										onclick={() => addTag(tag.name)}
+										class="text-surface-400 hover:bg-surface-800 hover:text-foreground grid size-8 shrink-0 place-items-center rounded-lg"
+										onclick={() => {
+											if (newLangKey) {
+												setObjectKey(
+													editCharacterData.creatorNotesMultilingual,
+													newLangKey,
+													newLangNote
+												)
+												newLangKey = ""
+												newLangNote = ""
+											}
+										}}
+										aria-label="Add multilingual note"
+										title="Add multilingual note"
 									>
-										{tag.name}
+										<Icons.Plus
+											size={14}
+											aria-hidden="true"
+										/>
 									</button>
-								{/if}
-							{/each}
+								</div>
+							</div>
 						</div>
 					{/if}
 				</div>
+			</section>
+		</div>
 
-				<!-- Selected tags display -->
-				{#if editCharacterData.tags.length > 0}
-					<div class="mt-2 flex flex-wrap gap-1">
-						{#each editCharacterData.tags as tag}
-							<span
-								class="inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs {getTagColorPreset(
-									tag
-								)}"
-							>
-								{tag}
-								<button
-									type="button"
-									class="rounded-full p-0.5 hover:opacity-70"
-									onclick={() => removeTag(tag)}
-									aria-label="Remove tag {tag}"
-								>
-									<Icons.X size={12} />
-								</button>
-							</span>
-						{/each}
-					</div>
-				{/if}
-			</fieldset>
-		{/if}
-		{#if !hideFavorite}
-			<fieldset class="mt-2 flex items-center gap-2">
-				<Switch
-					name="favorite"
-					checked={editCharacterData.isFavorite}
-					onCheckedChange={(e) =>
-						(editCharacterData.isFavorite = e.checked)}
-					aria-describedby="favorite-description"
-				>
-					<Switch.Control
-						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
-					>
-						<Switch.Thumb />
-					</Switch.Control>
-					<Switch.HiddenInput />
-					<Switch.Label class="font-semibold">Favorite</Switch.Label>
-				</Switch>
-				<span id="favorite-description" class="sr-only">
-					Mark this character as a favorite for easier access
-				</span>
-			</fieldset>
-		{/if}
-		<fieldset class="mt-2 flex items-center gap-2">
+		<!-- Its own quiet row, outside the cards: this switch changes what the
+		     cards contain, so it is not one of the things they hold. -->
+		<div class="flex flex-col gap-1 pt-2">
 			<Switch
 				name="show-all-character-fields"
 				checked={userSettingsCtx.settings?.showAllCharacterFields ??
@@ -1635,16 +1909,71 @@
 					<Switch.Thumb />
 				</Switch.Control>
 				<Switch.HiddenInput />
-				<Switch.Label class="font-semibold">
-					Show All Fields
-				</Switch.Label>
+				<Switch.Label class="text-sm">Show all fields</Switch.Label>
 			</Switch>
-			<span id="show-all-fields-description" class="sr-only">
-				Show all character fields including advanced options
-			</span>
-		</fieldset>
+			<p
+				id="show-all-fields-description"
+				class="text-surface-500 text-xs"
+			>
+				Adds every field a character card can carry — scenario, extra
+				greetings, example dialogues and the creator's own metadata.
+			</p>
+		</div>
 	</div>
 </div>
+
+{#snippet nameField()}
+	<div class="flex flex-col">
+		<label
+			class="text-surface-500 mb-1.5 flex items-center gap-1 text-xs"
+			for="charName"
+		>
+			Name*
+			{@render promptBadge("This field will be visible in prompts")}
+		</label>
+		<input
+			id="charName"
+			type="text"
+			bind:value={editCharacterData.name}
+			class="{FIELD_CLASS} text-base {validationErrors.name
+				? 'border-error-500 focus:border-error-500'
+				: ''}"
+			oninput={() => {
+				// Clear validation error when user starts typing
+				if (validationErrors.name) {
+					const { name, ...rest } = validationErrors
+					validationErrors = rest
+				}
+			}}
+			aria-required="true"
+			aria-invalid={validationErrors.name ? "true" : "false"}
+			aria-describedby={validationErrors.name ? "name-error" : undefined}
+		/>
+		{#if validationErrors.name}
+			<p class="text-error-500 mt-1 text-sm" id="name-error" role="alert">
+				{validationErrors.name}
+			</p>
+		{/if}
+	</div>
+{/snippet}
+
+{#snippet nicknameField()}
+	<div class="flex flex-col">
+		<label
+			class="text-surface-500 mb-1.5 flex items-center gap-1 text-xs"
+			for="charNickname"
+		>
+			Nickname
+			{@render promptBadge("This field will be visible in prompts")}
+		</label>
+		<input
+			id="charNickname"
+			type="text"
+			bind:value={editCharacterData.nickname}
+			class={FIELD_CLASS}
+		/>
+	</div>
+{/snippet}
 
 <CharacterUnsavedChangesModal
 	open={showCancelModal}

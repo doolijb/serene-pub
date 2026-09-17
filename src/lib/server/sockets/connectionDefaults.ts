@@ -5,14 +5,14 @@
  * This screen is now the DEFINITION of "does this instance have this capability
  * at all". Nothing picks a connection because it exists, because it is the only
  * one, or because it happens to be capable — the resolution chain is
- * `capability default → pipeline config → session override`, and a run whose
+ * `capability default → pipeline config`, with no third tier, and a run whose
  * capability has no default fails with a sentence pointing here. So the list
  * this serves has to be the honest union of what could ever be asked for, not
  * whatever somebody remembered to type into an array.
  *
  * ## What is served, and why both halves
  *
- * `combos` is `aggregateCombos` over `pipeline_type_registry` — the union of
+ * `combos` is `aggregateCombos` over `pipeline_definition_registry` — the union of
  * what the adapter manifest can express and what core's node types demand.
  * Neither source alone is right, and today's data proves both directions
  * (see `combos.ts`).
@@ -36,11 +36,11 @@ import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { asc } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
-import { systemSettingsGet } from "./systemSettings"
+import { buildSystemSettingsGet } from "./systemSettings"
 import { S, type CapabilityId } from "@serene-pub/sdk"
 import {
 	aggregateCombos,
-	type RegistryTypeRow
+	type RegistryDefinitionRow
 } from "$lib/shared/capabilities/combos"
 import { samplingShapeForCapability } from "$lib/shared/capabilities/samplingShape"
 import {
@@ -57,7 +57,6 @@ import {
 } from "$lib/server/connections/capabilityDefaults"
 import {
 	connectionModelById,
-	defaultConnectionModel,
 	mergeEndpointModel
 } from "$lib/server/connections/models"
 
@@ -87,12 +86,150 @@ function requireAdmin(
 async function combosFor(database: typeof db) {
 	const rows = (await database
 		.select({
-			typeId: schema.pipelineTypeRegistry.typeId,
-			version: schema.pipelineTypeRegistry.version,
-			slots: schema.pipelineTypeRegistry.slots
+			definitionId: schema.pipelineDefinitionRegistry.definitionId,
+			version: schema.pipelineDefinitionRegistry.version,
+			slots: schema.pipelineDefinitionRegistry.slots
 		})
-		.from(schema.pipelineTypeRegistry)) as RegistryTypeRow[]
+		.from(schema.pipelineDefinitionRegistry)) as RegistryDefinitionRow[]
 	return aggregateCombos(rows)
+}
+
+/**
+ * The whole Admin → Defaults matrix, as one function.
+ *
+ * One pure builder, shared by the own handler (which emits eagerly through it)
+ * and by any cascade that re-sends the screen after a write. It is five reads
+ * plus a judgement per capability per connection, so behind the gate none of it
+ * is paid unless a socket is actually showing the screen — skipping the emit
+ * alone would save nothing, the queries are the cost.
+ *
+ * Takes no socket: the matrix is the same for every admin, and only admins are
+ * answered (`requireAdmin` stays on the handler, where the caller it refuses
+ * is).
+ */
+export async function buildConnectionDefaultsList(): Promise<Sockets.ConnectionDefaults.List.Response> {
+	const combos = await combosFor(db)
+	const defaults = await capabilityDefaults(db)
+
+	const connectionRows = await db
+		.select()
+		.from(schema.connections)
+		.orderBy(asc(schema.connections.name))
+	// Read through `storedCapabilities`, never raw `capabilities.resolved`:
+	// it intersects the cached set with what the manifest still declares, so
+	// a connection whose adapter has since stopped declaring a transform is
+	// offered DISABLED rather than offered and then refused at bind. Built
+	// once here rather than per capability — nine capabilities would
+	// otherwise re-derive the same set nine times per row.
+	const judged: ChoiceList = (connectionRows as any[]).map((c) => ({
+		id: c.id,
+		label: c.name,
+		capabilities: storedCapabilities(c)
+	})) as ChoiceList
+	// The user's own note per connection, kept beside the judged list rather
+	// than inside it: `ChoiceList` is the vocabulary `judgeAgainst` reasons
+	// in — id, label, capabilities, and the verdict it writes — and a note
+	// is not something anything reasons about. Carried, not consulted.
+	const notesById = new Map<number, string | null>(
+		(connectionRows as any[]).map((c) => [c.id, c.notes ?? null])
+	)
+
+	const samplingRows = await db
+		.select()
+		.from(schema.samplingConfigs)
+		.orderBy(asc(schema.samplingConfigs.name))
+
+	/**
+	 * The MODELS on each endpoint (0114), so the screen can offer a PAIR.
+	 *
+	 * One query for the instance, grouped here — the same "whole matrix in
+	 * one response" argument this file's header makes about the connections
+	 * themselves. A fetch per endpoint as each card opens would mean the
+	 * page cannot say which model is registered until it has asked once per
+	 * connection, and the summary strip is the point of the screen.
+	 *
+	 * DISABLED models are included and marked, never filtered out: a
+	 * registration made before somebody switched a model off must still be
+	 * shown as what it is, or the card renders empty and "why is mine not in
+	 * the list" has no answer anywhere.
+	 */
+	const modelRows = await db
+		.select()
+		.from(schema.connectionModels)
+		.orderBy(
+			asc(schema.connectionModels.sortOrder),
+			asc(schema.connectionModels.name),
+			asc(schema.connectionModels.id)
+		)
+	const modelsByConnection = new Map<
+		number,
+		Sockets.ConnectionDefaults.List.ModelOption[]
+	>()
+	for (const m of modelRows) {
+		const list = modelsByConnection.get(m.connectionId) ?? []
+		list.push({
+			id: m.id,
+			name: m.name,
+			model: m.model,
+			enabled: m.enabled,
+			missingSince: m.missingSince?.toISOString() ?? null
+		})
+		modelsByConnection.set(m.connectionId, list)
+	}
+
+	const connectionOptions: Record<
+		string,
+		Sockets.ConnectionDefaults.List.ConnectionOption[]
+	> = {}
+	const samplingOptions: Record<
+		string,
+		Sockets.ConnectionDefaults.List.SamplingOption[]
+	> = {}
+
+	for (const combo of combos) {
+		// `eligible` is the inverse of `disabled`, not of "has a reason": an
+		// untested connection carries a reason AND stays selectable, which
+		// is the one case a boolean built from `reason` would get wrong.
+		connectionOptions[combo.id] = judgeAgainst(judged, [combo.id]).map(
+			(entry) => ({
+				id: entry.id,
+				name: entry.label,
+				eligible: !entry.disabled,
+				...(entry.reason ? { reason: entry.reason } : {}),
+				...(notesById.get(entry.id)
+					? { notes: notesById.get(entry.id)! }
+					: {}),
+				// The second half of the pair. Absent where the endpoint has
+				// no models — a picker showing "Default model" over an empty
+				// list is the honest rendering of an endpoint nobody has
+				// finished setting up.
+				...(modelsByConnection.get(entry.id)
+					? { models: modelsByConnection.get(entry.id)! }
+					: {})
+			})
+		)
+
+		// A capability with no sampling vocabulary — `text->embedding` —
+		// gets an EMPTY list, and the page renders no picker for it rather
+		// than an empty one. See `samplingShapeForCapability`.
+		const shape = samplingShapeForCapability(combo.id)
+		samplingOptions[combo.id] = shape
+			? (samplingRows as any[])
+					// A row written before the column existed reads as
+					// untyped and is kept, the same rule `ofShape` follows:
+					// vanishing from every picker is a worse failure than
+					// appearing in one where it does not belong.
+					.filter((s) => (s.shape ?? S.textGen) === shape)
+					.map((s) => ({ id: s.id, name: s.name }))
+			: []
+	}
+
+	return {
+		combos,
+		defaults,
+		connectionOptions,
+		samplingOptions
+	}
 }
 
 export const connectionDefaultsList: Handler<
@@ -102,129 +239,7 @@ export const connectionDefaultsList: Handler<
 	event: "connectionDefaults:list",
 	handler: async (socket, params, emitToUser) => {
 		requireAdmin(socket, emitToUser)
-
-		const combos = await combosFor(db)
-		const defaults = await capabilityDefaults(db)
-
-		const connectionRows = await db
-			.select()
-			.from(schema.connections)
-			.orderBy(asc(schema.connections.name))
-		// Read through `storedCapabilities`, never raw `capabilities.resolved`:
-		// it intersects the cached set with what the manifest still declares, so
-		// a connection whose adapter has since stopped declaring a transform is
-		// offered DISABLED rather than offered and then refused at bind. Built
-		// once here rather than per capability — nine capabilities would
-		// otherwise re-derive the same set nine times per row.
-		const judged: ChoiceList = (connectionRows as any[]).map((c) => ({
-			id: c.id,
-			label: c.name,
-			capabilities: storedCapabilities(c)
-		})) as ChoiceList
-		// The user's own note per connection, kept beside the judged list rather
-		// than inside it: `ChoiceList` is the vocabulary `judgeAgainst` reasons
-		// in — id, label, capabilities, and the verdict it writes — and a note
-		// is not something anything reasons about. Carried, not consulted.
-		const notesById = new Map<number, string | null>(
-			(connectionRows as any[]).map((c) => [c.id, c.notes ?? null])
-		)
-
-		const samplingRows = await db
-			.select()
-			.from(schema.samplingConfigs)
-			.orderBy(asc(schema.samplingConfigs.name))
-
-		/**
-		 * The MODELS on each endpoint (0114), so the screen can offer a PAIR.
-		 *
-		 * One query for the instance, grouped here — the same "whole matrix in
-		 * one response" argument this file's header makes about the connections
-		 * themselves. A fetch per endpoint as each card opens would mean the
-		 * page cannot say which model is registered until it has asked once per
-		 * connection, and the summary strip is the point of the screen.
-		 *
-		 * DISABLED models are included and marked, never filtered out: a
-		 * registration made before somebody switched a model off must still be
-		 * shown as what it is, or the card renders empty and "why is mine not in
-		 * the list" has no answer anywhere.
-		 */
-		const modelRows = await db
-			.select()
-			.from(schema.connectionModels)
-			.orderBy(
-				asc(schema.connectionModels.sortOrder),
-				asc(schema.connectionModels.name),
-				asc(schema.connectionModels.id)
-			)
-		const modelsByConnection = new Map<
-			number,
-			Sockets.ConnectionDefaults.List.ModelOption[]
-		>()
-		for (const m of modelRows) {
-			const list = modelsByConnection.get(m.connectionId) ?? []
-			list.push({
-				id: m.id,
-				name: m.name,
-				model: m.model,
-				enabled: m.enabled,
-				isDefault: m.isDefault
-			})
-			modelsByConnection.set(m.connectionId, list)
-		}
-
-		const connectionOptions: Record<
-			string,
-			Sockets.ConnectionDefaults.List.ConnectionOption[]
-		> = {}
-		const samplingOptions: Record<
-			string,
-			Sockets.ConnectionDefaults.List.SamplingOption[]
-		> = {}
-
-		for (const combo of combos) {
-			// `eligible` is the inverse of `disabled`, not of "has a reason": an
-			// untested connection carries a reason AND stays selectable, which
-			// is the one case a boolean built from `reason` would get wrong.
-			connectionOptions[combo.id] = judgeAgainst(judged, [combo.id]).map(
-				(entry) => ({
-					id: entry.id,
-					name: entry.label,
-					eligible: !entry.disabled,
-					...(entry.reason ? { reason: entry.reason } : {}),
-					...(notesById.get(entry.id)
-						? { notes: notesById.get(entry.id)! }
-						: {}),
-					// The second half of the pair. Absent where the endpoint has
-					// no models — a picker showing "Default model" over an empty
-					// list is the honest rendering of an endpoint nobody has
-					// finished setting up.
-					...(modelsByConnection.get(entry.id)
-						? { models: modelsByConnection.get(entry.id)! }
-						: {})
-				})
-			)
-
-			// A capability with no sampling vocabulary — `text->embedding` —
-			// gets an EMPTY list, and the page renders no picker for it rather
-			// than an empty one. See `samplingShapeForCapability`.
-			const shape = samplingShapeForCapability(combo.id)
-			samplingOptions[combo.id] = shape
-				? (samplingRows as any[])
-						// A row written before the column existed reads as
-						// untyped and is kept, the same rule `ofShape` follows:
-						// vanishing from every picker is a worse failure than
-						// appearing in one where it does not belong.
-						.filter((s) => (s.shape ?? S.textGen) === shape)
-						.map((s) => ({ id: s.id, name: s.name }))
-				: []
-		}
-
-		const res: Sockets.ConnectionDefaults.List.Response = {
-			combos,
-			defaults,
-			connectionOptions,
-			samplingOptions
-		}
+		const res = await buildConnectionDefaultsList()
 		emitToUser("connectionDefaults:list", res)
 		return res
 	}
@@ -240,10 +255,10 @@ export const connectionDefaultsSet: Handler<
 
 		// The capability must be one the aggregation actually names. Not
 		// paranoia about a hostile client: the capability IS the primary key of
-		// `connection_defaults` — since 0183 as its two sides, `(input, output)`
-		// — over an open string space, so a typo'd id ("text+imgae->text")
-		// inserts cleanly, shows up on no screen, and is matched by nothing
-		// forever. Refusing it here is the only place that can tell.
+		// `connection_defaults`, as its two sides, `(input, output)` — over an
+		// open string space, so a typo'd id ("text+imgae->text") inserts
+		// cleanly, shows up on no screen, and is matched by nothing forever.
+		// Refusing it here is the only place that can tell.
 		//
 		// A MIS-ORDERED id ("image+text->text", the same words in the wrong
 		// order) is the one case 0183 made survivable on its own: `sidesOf`
@@ -264,8 +279,8 @@ export const connectionDefaultsSet: Handler<
 		// is markup, and this handler is reachable from a stale tab whose option
 		// list predates the connection being re-typed. Registering an image-only
 		// endpoint for chat succeeds, shows a check on screen, and then fails
-		// every Send with a sentence about adapters — which is exactly what the
-		// deleted auto-star used to do.
+		// every Send with a sentence about adapters — exactly the failure an
+		// unguarded auto-star would produce.
 		//
 		// Clearing (`id: null`) is never judged: it names no connection, and
 		// refusing to un-register would be a trap.
@@ -286,19 +301,26 @@ export const connectionDefaultsSet: Handler<
 				throw new Error(error)
 			}
 			/**
-			 * The MODEL half of the pair (0114), validated before it is stored
+			 * The MODEL half of the pair, validated before it is stored
 			 * and judged WITH the endpoint rather than after it.
 			 *
-			 * A registration whose two halves name different connections is a
-			 * pair no picker can display and no run can resolve — the resolver
-			 * refuses it, at dispatch, about a choice this screen accepted. So
-			 * the coherence check lives here, at the write, which is also the
-			 * only place that can answer it: `connection_defaults` has two
-			 * foreign keys and no constraint spanning them, because a check
-			 * cannot span two tables and a trigger would be a fourth place that
-			 * decides what a pair means.
+			 * REQUIRED, not optional: connections have no default model, so a
+			 * registration without one is incomplete. A registration whose two
+			 * halves name different connections is a pair no picker can display
+			 * and no run can resolve — the resolver refuses it, at dispatch,
+			 * about a choice this screen accepted. So the coherence check lives
+			 * here, at the write, which is also the only place that can answer
+			 * it: `connection_defaults` has two foreign keys and no constraint
+			 * spanning them, because a check cannot span two tables and a
+			 * trigger would be a fourth place that decides what a pair means.
 			 */
-			if (params.modelId != null) {
+			if (params.modelId == null) {
+				const error =
+					"Choose a model on this connection — connections have no default model."
+				emitToUser("connectionDefaults:set:error", { error })
+				throw new Error(error)
+			}
+			{
 				const model = await connectionModelById(db, params.modelId)
 				const bad = !model
 					? "That model no longer exists."
@@ -320,13 +342,10 @@ export const connectionDefaultsSet: Handler<
 			 * URL, and judging the bare endpoint would register the text-only one
 			 * for vision and fail at the first image. `mergeEndpointModel` is the
 			 * same merge the resolver performs, so this screen and the run agree
-			 * about what was registered — which is the whole reason
-			 * `capabilityRefusal` is imported here rather than re-derived.
+			 * about what was registered. That agreement is why `capabilityRefusal`
+			 * is imported here rather than re-derived.
 			 */
-			const model =
-				params.modelId != null
-					? await connectionModelById(db, params.modelId)
-					: await defaultConnectionModel(db, params.id)
+			const model = await connectionModelById(db, params.modelId)
 			const refusal = capabilityRefusal(
 				mergeEndpointModel(row as any, model) as any,
 				params.capability as CapabilityId
@@ -344,13 +363,11 @@ export const connectionDefaultsSet: Handler<
 			db,
 			params.capability,
 			params.half === "connection"
-				? // Both halves of the pair, together. Writing the endpoint
-					// always writes the model — `setCapabilityDefault` treats an
-					// omitted `connectionModelId` beside a stated `connectionId`
-					// as NULL for exactly this reason: "the endpoint I picked,
-					// its default model" is what a control that offers no model
-					// means, and leaving the previous endpoint's model in place
-					// would be an incoherent pair.
+				? // Both halves of the pair, together, both required.
+					// `setCapabilityDefault` treats an omitted
+					// `connectionModelId` beside a stated `connectionId` as
+					// NULL, but this handler refuses that shape above — by the
+					// time anything is written, both halves are named.
 					{
 						connectionId: params.id,
 						connectionModelId:
@@ -371,7 +388,7 @@ export const connectionDefaultsSet: Handler<
 		// wizard's "have you set up a connection yet". Writing here and not
 		// pushing there leaves two client copies of one table disagreeing until
 		// a reload, which is the same two-spellings failure one level up.
-		await systemSettingsGet.handler(socket, {}, emitToUser)
+		await emitToUser("systemSettings:get", () => buildSystemSettingsGet())
 
 		return res
 	}

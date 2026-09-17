@@ -141,8 +141,8 @@ export async function functionCandidates(
 			const entry = nodes.sort((a, b) => a.position - b.position)[0]
 			if (
 				entry &&
-				entry.typeId === bareType &&
-				String(entry.typeVersion) === versionStr
+				entry.definitionId === bareType &&
+				String(entry.definitionVersion) === versionStr
 			)
 				out.push(s.slug)
 		}
@@ -161,7 +161,7 @@ export async function functionCandidates(
 /* --- node rebinds (19 §5) ----------------------------------------------- */
 
 /**
- * Set or clear (`typeId: null`) a node-type rebind at a scope.
+ * Set or clear (`definitionId: null`) a node-type rebind at a scope.
  *
  * The write-side guard mirrors the load-side one: the substitute must be a
  * live registry row publishing the same `main` shape as the node's pinned
@@ -174,11 +174,11 @@ export async function setNodeRebind(
 		scope: ScopeAddress
 		specSlug: string
 		nodeKey: string
-		typeId: string | null
+		definitionId: string | null
 		userId: number
 	}
 ): Promise<{ error?: string }> {
-	const { scope, specSlug, nodeKey, typeId, userId } = opts
+	const { scope, specSlug, nodeKey, definitionId, userId } = opts
 
 	const [spec] = await db
 		.select()
@@ -194,7 +194,7 @@ export async function setNodeRebind(
 		eq(schema.pipelineNodeRebinds.nodeKey, nodeKey)
 	)
 
-	if (typeId == null) {
+	if (definitionId == null) {
 		await db.delete(schema.pipelineNodeRebinds).where(where)
 		return {}
 	}
@@ -209,11 +209,11 @@ export async function setNodeRebind(
 	const node = nodes.find((n) => n.nodeKey === nodeKey)
 	if (!node) return { error: `'${specSlug}' has no node named '${nodeKey}'.` }
 
-	const pinnedId = `${node.typeId}@${node.typeVersion}`
-	const compatible = await shapeCompatible(db, pinnedId, typeId)
+	const pinnedId = `${node.definitionId}@${node.definitionVersion}`
+	const compatible = await shapeCompatible(db, pinnedId, definitionId)
 	if (!compatible)
 		return {
-			error: `'${typeId}' does not publish the same shape as '${pinnedId}' — the swap would mis-wire everything downstream.`
+			error: `'${definitionId}' does not publish the same shape as '${pinnedId}' — the swap would mis-wire everything downstream.`
 		}
 
 	const existing = await db
@@ -224,7 +224,7 @@ export async function setNodeRebind(
 	if (existing.length) {
 		await db
 			.update(schema.pipelineNodeRebinds)
-			.set({ typeId, updatedBy: userId, updatedAt: new Date() })
+			.set({ definitionId, updatedBy: userId, updatedAt: new Date() })
 			.where(eq(schema.pipelineNodeRebinds.id, existing[0].id))
 	} else {
 		await db.insert(schema.pipelineNodeRebinds).values({
@@ -232,7 +232,7 @@ export async function setNodeRebind(
 			scopeKind: scope.kind,
 			scopeId: scope.id,
 			nodeKey,
-			typeId,
+			definitionId,
 			updatedBy: userId
 		})
 	}
@@ -249,8 +249,8 @@ async function shapeCompatible(
 		const [bare, version] = pin.split("@")
 		const rows = await db
 			.select()
-			.from(schema.pipelineTypeRegistry)
-			.where(eq(schema.pipelineTypeRegistry.typeId, bare!))
+			.from(schema.pipelineDefinitionRegistry)
+			.where(eq(schema.pipelineDefinitionRegistry.definitionId, bare!))
 		return rows.find(
 			(r) => String(r.version) === version && r.status === "live"
 		)
@@ -311,15 +311,15 @@ export async function applyNodeRebinds(
 			}
 			if (!winner) continue
 
-			const pinnedId = `${node.typeId}@${node.typeVersion}`
-			if (winner.typeId === pinnedId) continue
+			const pinnedId = `${node.definitionId}@${node.definitionVersion}`
+			if (winner.definitionId === pinnedId) continue
 			// The load-side guard: a rebind that went stale (type retired,
 			// re-projected away, never this shape) degrades to the pin.
-			if (!(await shapeCompatible(db, pinnedId, winner.typeId))) continue
+			if (!(await shapeCompatible(db, pinnedId, winner.definitionId))) continue
 
-			const [bare, version] = String(winner.typeId).split("@")
-			node.typeId = bare
-			node.typeVersion = Number(version)
+			const [bare, version] = String(winner.definitionId).split("@")
+			node.definitionId = bare
+			node.definitionVersion = Number(version)
 		}
 		return doc
 	} catch {
@@ -341,7 +341,7 @@ export async function setSessionSpeakerStrategy(
 		sessionId: number
 		userId: number
 		/** A strategy type pin from `listSpeakerStrategies`, or null to inherit. */
-		typeId: string | null
+		definitionId: string | null
 	}
 ): Promise<{ error?: string }> {
 	// Which spec serves respond for this session — the strategy lives in it.
@@ -366,11 +366,11 @@ export async function setSessionSpeakerStrategy(
 			error: `'${specSlug}' has no next-speaker node — nothing to swap.`
 		}
 
-	if (opts.typeId != null) {
+	if (opts.definitionId != null) {
 		const strategies = await listSpeakerStrategies(db)
-		if (!strategies.some((s) => s.typeId === opts.typeId))
+		if (!strategies.some((s) => s.definitionId === opts.definitionId))
 			return {
-				error: `'${opts.typeId}' is not a next-speaker strategy this build registers.`
+				error: `'${opts.definitionId}' is not a next-speaker strategy this build registers.`
 			}
 	}
 
@@ -378,7 +378,7 @@ export async function setSessionSpeakerStrategy(
 		scope: { kind: "session", id: opts.sessionId },
 		specSlug,
 		nodeKey,
-		typeId: opts.typeId,
+		definitionId: opts.definitionId,
 		userId: opts.userId
 	})
 }
@@ -421,7 +421,7 @@ export async function getSessionSpeakerStrategy(
 				)
 			)
 			.limit(1)
-		return row?.typeId ?? null
+		return row?.definitionId ?? null
 	} catch {
 		return null
 	}
@@ -445,10 +445,10 @@ async function speakerNodeKey(
 	for (const n of nodes) {
 		const rows = await db
 			.select()
-			.from(schema.pipelineTypeRegistry)
-			.where(eq(schema.pipelineTypeRegistry.typeId, n.typeId))
+			.from(schema.pipelineDefinitionRegistry)
+			.where(eq(schema.pipelineDefinitionRegistry.definitionId, n.definitionId))
 		const row = rows.find(
-			(r) => String(r.version) === String(n.typeVersion)
+			(r) => String(r.version) === String(n.definitionVersion)
 		)
 		if (row?.ports?.out?.main === "core:shape/speaker-selection@1")
 			return n.nodeKey

@@ -46,14 +46,9 @@ function pickOverrideFields(data: Record<string, any>) {
 
 // ── World Summarize Configs ───────────────────────────────────────────────────
 
-export const worldSummarizeConfigsListHandler: Handler<
-	Sockets.WorldSummarizeConfigs.List.Params,
-	Sockets.WorldSummarizeConfigs.List.Response
-> = {
-	event: "worldSummarizeConfigs:list",
-	handler: async (socket, _params, emitToUser) => {
-		adminGuard(socket, emitToUser)
-		const worldSummarizeConfigsList =
+async function buildWorldSummarizeConfigsList(): Promise<Sockets.WorldSummarizeConfigs.List.Response> {
+	return {
+		worldSummarizeConfigsList:
 			await db.query.worldSummarizeConfigs.findMany({
 				columns: { id: true, name: true, isImmutable: true },
 				orderBy: (c, { asc, desc }) => [
@@ -61,9 +56,17 @@ export const worldSummarizeConfigsListHandler: Handler<
 					asc(c.name)
 				]
 			})
-		const res: Sockets.WorldSummarizeConfigs.List.Response = {
-			worldSummarizeConfigsList
-		}
+	}
+}
+
+export const worldSummarizeConfigsListHandler: Handler<
+	Sockets.WorldSummarizeConfigs.List.Params,
+	Sockets.WorldSummarizeConfigs.List.Response
+> = {
+	event: "worldSummarizeConfigs:list",
+	handler: async (socket, _params, emitToUser) => {
+		adminGuard(socket, emitToUser)
+		const res = await buildWorldSummarizeConfigsList()
 		emitToUser("worldSummarizeConfigs:list", res)
 		return res
 	}
@@ -105,7 +108,11 @@ export const worldSummarizeConfigsCreateHandler: Handler<
 			.insert(schema.worldSummarizeConfigs)
 			.values(params.worldSummarizeConfig)
 			.returning()
-		await worldSummarizeConfigsListHandler.handler(socket, {}, emitToUser)
+		// LAZY (socket-interest plan, ruling 4): a re-list nobody asked
+		// for, so the read is paid only where a config list is open.
+		await emitToUser("worldSummarizeConfigs:list", () =>
+			buildWorldSummarizeConfigsList()
+		)
 		const res: Sockets.WorldSummarizeConfigs.Create.Response = {
 			worldSummarizeConfig
 		}
@@ -144,7 +151,11 @@ export const worldSummarizeConfigsUpdateHandler: Handler<
 						.returning()
 				)[0]
 			: currentConfig!
-		await worldSummarizeConfigsListHandler.handler(socket, {}, emitToUser)
+		// LAZY (socket-interest plan, ruling 4): a re-list nobody asked
+		// for, so the read is paid only where a config list is open.
+		await emitToUser("worldSummarizeConfigs:list", () =>
+			buildWorldSummarizeConfigsList()
+		)
 		const res: Sockets.WorldSummarizeConfigs.Update.Response = {
 			worldSummarizeConfig
 		}
@@ -172,7 +183,11 @@ export const worldSummarizeConfigsDeleteHandler: Handler<
 		await db
 			.delete(schema.worldSummarizeConfigs)
 			.where(eq(schema.worldSummarizeConfigs.id, params.id))
-		await worldSummarizeConfigsListHandler.handler(socket, {}, emitToUser)
+		// LAZY (socket-interest plan, ruling 4): a re-list nobody asked
+		// for, so the read is paid only where a config list is open.
+		await emitToUser("worldSummarizeConfigs:list", () =>
+			buildWorldSummarizeConfigsList()
+		)
 		const res: Sockets.WorldSummarizeConfigs.Delete.Response = {
 			success: "Deleted successfully"
 		}
@@ -223,14 +238,9 @@ export const worldSummarizeConfigsSetUserActiveHandler: Handler<
 
 // ── Character Summarize Configs ───────────────────────────────────────────────
 
-export const characterSummarizeConfigsListHandler: Handler<
-	Sockets.CharacterSummarizeConfigs.List.Params,
-	Sockets.CharacterSummarizeConfigs.List.Response
-> = {
-	event: "characterSummarizeConfigs:list",
-	handler: async (socket, _params, emitToUser) => {
-		adminGuard(socket, emitToUser)
-		const characterSummarizeConfigsList =
+async function buildCharacterSummarizeConfigsList(): Promise<Sockets.CharacterSummarizeConfigs.List.Response> {
+	return {
+		characterSummarizeConfigsList:
 			await db.query.characterSummarizeConfigs.findMany({
 				columns: { id: true, name: true, isImmutable: true },
 				orderBy: (c, { asc, desc }) => [
@@ -238,9 +248,17 @@ export const characterSummarizeConfigsListHandler: Handler<
 					asc(c.name)
 				]
 			})
-		const res: Sockets.CharacterSummarizeConfigs.List.Response = {
-			characterSummarizeConfigsList
-		}
+	}
+}
+
+export const characterSummarizeConfigsListHandler: Handler<
+	Sockets.CharacterSummarizeConfigs.List.Params,
+	Sockets.CharacterSummarizeConfigs.List.Response
+> = {
+	event: "characterSummarizeConfigs:list",
+	handler: async (socket, _params, emitToUser) => {
+		adminGuard(socket, emitToUser)
+		const res = await buildCharacterSummarizeConfigsList()
 		emitToUser("characterSummarizeConfigs:list", res)
 		return res
 	}
@@ -282,10 +300,10 @@ export const characterSummarizeConfigsCreateHandler: Handler<
 			.insert(schema.characterSummarizeConfigs)
 			.values(params.characterSummarizeConfig)
 			.returning()
-		await characterSummarizeConfigsListHandler.handler(
-			socket,
-			{},
-			emitToUser
+		// LAZY (socket-interest plan, ruling 4): a re-list nobody asked
+		// for, so the read is paid only where a config list is open.
+		await emitToUser("characterSummarizeConfigs:list", () =>
+			buildCharacterSummarizeConfigsList()
 		)
 		const res: Sockets.CharacterSummarizeConfigs.Create.Response = {
 			characterSummarizeConfig
@@ -326,10 +344,10 @@ export const characterSummarizeConfigsUpdateHandler: Handler<
 						.returning()
 				)[0]
 			: currentConfig!
-		await characterSummarizeConfigsListHandler.handler(
-			socket,
-			{},
-			emitToUser
+		// LAZY (socket-interest plan, ruling 4): a re-list nobody asked
+		// for, so the read is paid only where a config list is open.
+		await emitToUser("characterSummarizeConfigs:list", () =>
+			buildCharacterSummarizeConfigsList()
 		)
 		const res: Sockets.CharacterSummarizeConfigs.Update.Response = {
 			characterSummarizeConfig
@@ -359,10 +377,10 @@ export const characterSummarizeConfigsDeleteHandler: Handler<
 		await db
 			.delete(schema.characterSummarizeConfigs)
 			.where(eq(schema.characterSummarizeConfigs.id, params.id))
-		await characterSummarizeConfigsListHandler.handler(
-			socket,
-			{},
-			emitToUser
+		// LAZY (socket-interest plan, ruling 4): a re-list nobody asked
+		// for, so the read is paid only where a config list is open.
+		await emitToUser("characterSummarizeConfigs:list", () =>
+			buildCharacterSummarizeConfigsList()
 		)
 		const res: Sockets.CharacterSummarizeConfigs.Delete.Response = {
 			success: "Deleted successfully"
@@ -414,14 +432,9 @@ export const characterSummarizeConfigsSetUserActiveHandler: Handler<
 
 // ── Scene Summarize Configs ───────────────────────────────────────────────────
 
-export const sceneSummarizeConfigsListHandler: Handler<
-	Sockets.SceneSummarizeConfigs.List.Params,
-	Sockets.SceneSummarizeConfigs.List.Response
-> = {
-	event: "sceneSummarizeConfigs:list",
-	handler: async (socket, _params, emitToUser) => {
-		adminGuard(socket, emitToUser)
-		const sceneSummarizeConfigsList =
+async function buildSceneSummarizeConfigsList(): Promise<Sockets.SceneSummarizeConfigs.List.Response> {
+	return {
+		sceneSummarizeConfigsList:
 			await db.query.sceneSummarizeConfigs.findMany({
 				columns: { id: true, name: true, isImmutable: true },
 				orderBy: (c, { asc, desc }) => [
@@ -429,9 +442,17 @@ export const sceneSummarizeConfigsListHandler: Handler<
 					asc(c.name)
 				]
 			})
-		const res: Sockets.SceneSummarizeConfigs.List.Response = {
-			sceneSummarizeConfigsList
-		}
+	}
+}
+
+export const sceneSummarizeConfigsListHandler: Handler<
+	Sockets.SceneSummarizeConfigs.List.Params,
+	Sockets.SceneSummarizeConfigs.List.Response
+> = {
+	event: "sceneSummarizeConfigs:list",
+	handler: async (socket, _params, emitToUser) => {
+		adminGuard(socket, emitToUser)
+		const res = await buildSceneSummarizeConfigsList()
 		emitToUser("sceneSummarizeConfigs:list", res)
 		return res
 	}
@@ -473,7 +494,11 @@ export const sceneSummarizeConfigsCreateHandler: Handler<
 			.insert(schema.sceneSummarizeConfigs)
 			.values(params.sceneSummarizeConfig)
 			.returning()
-		await sceneSummarizeConfigsListHandler.handler(socket, {}, emitToUser)
+		// LAZY (socket-interest plan, ruling 4): a re-list nobody asked
+		// for, so the read is paid only where a config list is open.
+		await emitToUser("sceneSummarizeConfigs:list", () =>
+			buildSceneSummarizeConfigsList()
+		)
 		const res: Sockets.SceneSummarizeConfigs.Create.Response = {
 			sceneSummarizeConfig
 		}
@@ -512,7 +537,11 @@ export const sceneSummarizeConfigsUpdateHandler: Handler<
 						.returning()
 				)[0]
 			: currentConfig!
-		await sceneSummarizeConfigsListHandler.handler(socket, {}, emitToUser)
+		// LAZY (socket-interest plan, ruling 4): a re-list nobody asked
+		// for, so the read is paid only where a config list is open.
+		await emitToUser("sceneSummarizeConfigs:list", () =>
+			buildSceneSummarizeConfigsList()
+		)
 		const res: Sockets.SceneSummarizeConfigs.Update.Response = {
 			sceneSummarizeConfig
 		}
@@ -540,7 +569,11 @@ export const sceneSummarizeConfigsDeleteHandler: Handler<
 		await db
 			.delete(schema.sceneSummarizeConfigs)
 			.where(eq(schema.sceneSummarizeConfigs.id, params.id))
-		await sceneSummarizeConfigsListHandler.handler(socket, {}, emitToUser)
+		// LAZY (socket-interest plan, ruling 4): a re-list nobody asked
+		// for, so the read is paid only where a config list is open.
+		await emitToUser("sceneSummarizeConfigs:list", () =>
+			buildSceneSummarizeConfigsList()
+		)
 		const res: Sockets.SceneSummarizeConfigs.Delete.Response = {
 			success: "Deleted successfully"
 		}

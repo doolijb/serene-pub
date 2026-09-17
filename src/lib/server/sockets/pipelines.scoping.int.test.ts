@@ -392,13 +392,97 @@ describe("run receipts belong to the person whose session they describe", () => 
 			"run-scoping-guest"
 		])
 	}, 60_000)
+
+	/**
+	 * A receipt from before the one-shot rename (2026-09-16) pins a hash the
+	 * slug has moved off — the same document under new words. The inspector
+	 * says *renamed* with the date, not *superseded*: `renamed_at` on the
+	 * version row is what tells the two apart (migration 0134 stamps it on
+	 * every row it rewrote).
+	 */
+	test("a receipt pinned to a renamed document opens as renamed, not superseded", async () => {
+		const { pipelinesRuns, pipelinesRun } = await import("./pipelines")
+		const [spec] = await testDb
+			.select()
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+		// A retired, renamed version row under a hash of its own, the way
+		// 0134 leaves the row a receipt pinned: superseded by the republish
+		// that followed the migration, marked with when it was renamed.
+		const renamedAt = new Date("2026-09-16T00:00:00Z")
+		const [old] = await testDb
+			.insert(schema.pipelineSpecVersions)
+			.values({
+				specId: spec.id,
+				semver: "1.20.0",
+				canonicalHash: "prerename0123",
+				status: "retired",
+				renamedAt
+			})
+			.returning()
+		await testDb.insert(schema.pipelineRuns).values({
+			runId: "run-scoping-renamed",
+			specSlug: RESPOND_SPEC_ID,
+			specVersion: "1.20.0",
+			specVersionId: old.id,
+			specHash: "prerename0123",
+			sessionId: ownersSessionId,
+			userId: owner.id,
+			outcome: "ok",
+			triggerSource: "event",
+			seed: "s",
+			startedAt: new Date(),
+			endedAt: new Date(),
+			elapsedMs: 1,
+			receipt: { nodes: [] }
+		})
+		const list: any = await pipelinesRuns.handler(
+			socketFor(owner.id),
+			{ sessionId: ownersSessionId },
+			noopEmit
+		)
+		const row = list.runs.find((r: any) => r.runId === "run-scoping-renamed")
+		expect(row.specHashIsCurrent).toBe(false)
+		expect(row.specHashRenamedAt).toBe(renamedAt.toISOString())
+		// And a receipt whose slug simply moved on says nothing about a rename.
+		await testDb.insert(schema.pipelineRuns).values({
+			runId: "run-scoping-edited",
+			specSlug: RESPOND_SPEC_ID,
+			specVersion: "1.20.0",
+			specHash: "editedaway0456",
+			sessionId: ownersSessionId,
+			userId: owner.id,
+			outcome: "ok",
+			triggerSource: "event",
+			seed: "s",
+			startedAt: new Date(),
+			endedAt: new Date(),
+			elapsedMs: 1,
+			receipt: { nodes: [] }
+		})
+		const again: any = await pipelinesRuns.handler(
+			socketFor(owner.id),
+			{ sessionId: ownersSessionId },
+			noopEmit
+		)
+		const plain = again.runs.find((r: any) => r.runId === "run-scoping-edited")
+		expect(plain.specHashIsCurrent).toBe(false)
+		expect(plain.specHashRenamedAt).toBeNull()
+		// The single-run door carries the same fact.
+		const one: any = await pipelinesRun.handler(
+			socketFor(owner.id),
+			{ runId: "run-scoping-renamed" },
+			noopEmit
+		)
+		expect(one.run?.specHashRenamedAt).toBe(renamedAt.toISOString())
+	}, 60_000)
 })
 
 describe("prompt CRUD is gated on the option, not on ownership", () => {
 	let specId: number
 	let promptId: number
 	let optionId: string
-	let pool: { nodeTypeId: string; slot: string }
+	let pool: { nodeDefinitionId: string; slot: string }
 
 	beforeAll(async () => {
 		const [spec] = await testDb
@@ -418,7 +502,7 @@ describe("prompt CRUD is gated on the option, not on ownership", () => {
 		const decl = (
 			await declarations(testDb as any, spec.activeVersionId!)
 		).find((d: any) => d.control === "prompts-ref")!
-		pool = { nodeTypeId: decl.nodeTypeId!, slot: decl.slot }
+		pool = { nodeDefinitionId: decl.nodeDefinitionId!, slot: decl.slot }
 		optionId = await promptOptionId()
 
 		const [p] = await testDb
@@ -478,7 +562,7 @@ describe("prompt CRUD is gated on the option, not on ownership", () => {
 			.select()
 			.from(schema.pipelinePrompts)
 			.where(eq(schema.pipelinePrompts.id, cloned.promptId))
-		expect(row.nodeTypeId).toBe(pool.nodeTypeId)
+		expect(row.nodeDefinitionId).toBe(pool.nodeDefinitionId)
 		expect(row.slot).toBe(pool.slot)
 	})
 
@@ -497,7 +581,7 @@ describe("prompt CRUD is gated on the option, not on ownership", () => {
 			.select()
 			.from(schema.pipelinePrompts)
 			.where(eq(schema.pipelinePrompts.id, res.promptId))
-		expect(row.nodeTypeId).toBe(pool.nodeTypeId)
+		expect(row.nodeDefinitionId).toBe(pool.nodeDefinitionId)
 		expect(row.slot).toBe(pool.slot)
 		expect(row.createdForSpecId).toBe(specId)
 	})
@@ -555,7 +639,7 @@ describe("prompt CRUD is gated on the option, not on ownership", () => {
 		const [foreign] = await testDb
 			.insert(schema.pipelinePrompts)
 			.values({
-				nodeTypeId: nDecl.nodeTypeId!,
+				nodeDefinitionId: nDecl.nodeDefinitionId!,
 				slot: nDecl.slot,
 				name: "From another kind of step",
 				fields: Object.fromEntries(
@@ -968,23 +1052,23 @@ describe("the builder's structural payload", () => {
 	})
 
 	test("the reads arrive as one block, one chain each", async () => {
-		// The map draws a frame with columns from exactly this: same blockId,
-		// different blockChain. Were they to arrive with no block, or all on
+		// The map draws a frame with columns from exactly this: same clauseId,
+		// different clauseChain. Were they to arrive with no block, or all on
 		// one chain, the page would draw four sequential cards for something
 		// that runs at once — which is the drawing being wrong about the run.
 		const spec = await detailFor(RESPOND_SPEC_ID)
 		const reads = spec.graph.nodes.filter(
-			(n: any) => n.blockId === "gather"
+			(n: any) => n.clauseId === "gather"
 		)
 		// Five since 1.8.0: world and character lore split into their own
 		// gather branches. Asserted as "one chain each" rather than a fixed count, so
 		// adding a source is a one-line change here instead of a puzzle.
 		expect(reads.length).toBeGreaterThanOrEqual(4)
-		expect(reads.every((n: any) => n.blockKind === "async")).toBe(true)
-		expect(new Set(reads.map((n: any) => n.blockChain)).size).toBe(
+		expect(reads.every((n: any) => n.clauseKind === "gather")).toBe(true)
+		expect(new Set(reads.map((n: any) => n.clauseChain)).size).toBe(
 			reads.length
 		)
-		expect(reads.map((n: any) => n.blockChain).sort()).toEqual([
+		expect(reads.map((n: any) => n.clauseChain).sort()).toEqual([
 			"cast",
 			"characterLore",
 			// Spec 1.18.0: the entity mechanism, a third way of retrieving lore —
@@ -1002,8 +1086,8 @@ describe("the builder's structural payload", () => {
 			"worldLore"
 		])
 
-		const block = spec.graph.blocks.find((b: any) => b.id === "gather")
-		expect(block?.kind).toBe("async")
+		const block = spec.graph.clauses.find((b: any) => b.id === "gather")
+		expect(block?.kind).toBe("gather")
 		expect(block?.mode).toBe("parallel")
 	})
 
@@ -1020,27 +1104,27 @@ describe("the builder's structural payload", () => {
 		// id produces, or the test passes either way.
 		const spec = await detailFor(RESPOND_SPEC_ID)
 		const node = spec.graph.nodes.find((n: any) =>
-			String(n.typeId).startsWith("core:query/relationships-perspectives")
+			String(n.definitionId).startsWith("core:query/relationships-perspectives")
 		)
 		expect(node, "the node is in the graph").toBeTruthy()
 		expect(node!.label).toBe("Relationships: their perspective")
-		expect(node!.label).not.toBe(humanizeTypeId(node!.typeId))
+		expect(node!.label).not.toBe(humanizeTypeId(node!.definitionId))
 	})
 
 	test("a map block arrives with what it iterates over", async () => {
 		// `over` is a data reference the edge table never carried, so deriving
 		// it from edges comes back empty every time — it has to be read from
-		// `pipeline_blocks`.
+		// `pipeline_clauses`.
 		const spec = await detailFor("core:spec/summarize-scene")
-		const block = spec.graph.blocks.find((b: any) => b.kind === "map")
+		const block = spec.graph.clauses.find((b: any) => b.kind === "each")
 		expect(block, "summarize-scene declares a map block").toBeTruthy()
 		expect(block.over).toBe("batches")
 		expect(block.max).toBeGreaterThan(0)
 		const inBlock = spec.graph.nodes.filter(
-			(n: any) => n.blockId === block.id
+			(n: any) => n.clauseId === block.id
 		)
 		expect(inBlock.length).toBeGreaterThan(0)
-		expect(inBlock[0].blockKind).toBe("map")
+		expect(inBlock[0].clauseKind).toBe("each")
 	})
 
 	test("an edge out of a block keeps the block it came from", async () => {

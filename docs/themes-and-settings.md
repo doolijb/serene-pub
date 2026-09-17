@@ -4,7 +4,7 @@ Serene Pub ships with a large set of built-in color themes and a live CSS editor
 
 ## Overview
 
-Click the **Settings** icon (gear icon) in the main navigation to open the Settings panel. It's organized into tabs:
+Click the **Settings** icon (gear icon) on the rail to open the Settings view. It's organized into tabs:
 
 - **User** — theme selection, dark mode, display preferences, background image, and (when accounts are enabled) your profile, passphrase, and logout.
 - **System** — admin-only instance configuration, covered in a separate doc.
@@ -17,11 +17,24 @@ Everything described below lives in the **User** and **Themes** tabs. See [Users
 
 In the **User** tab, the **Theme** dropdown lists every theme available to you, grouped into:
 
-- **Built-in** — Catppuccin, Cerberus, Concord, Crimson, Dracula, Fennec, Hamlindigo (the default), Legacy, Mint, Modern, Mona, Nosh, Nouveau, Pine, Reign, Rocket, Rose, Rosé Pine, Sahara, Seafoam, Terminus, Vintage, Vox, and Wintry.
+- **Built-in** — Catppuccin, Cerberus, Concord, Crimson, Dracula, Fennec, Hamlindigo, Lamplight (the default), Legacy, Mint, Modern, Mona, Nosh, Nouveau, Pine, Reign, Rocket, Rose, Rosé Pine, Sahara, Seafoam, Terminus, Vintage, Vox, and Wintry.
 - **My Themes** — any custom themes you've created (see below).
 - **Instance Themes** — custom themes an admin has made available to everyone, if any exist.
 
 Selecting a theme applies it immediately and saves it as your personal preference. A separate **Dark Mode** switch toggles light/dark mode independently of which theme is selected — every theme, built-in or custom, supports both.
+
+## Lamplight
+
+Lamplight is Serene Pub's own theme and the default for new installs. It keeps the indigo ground
+of Hamlindigo and gives each colour role one job, so the interface reads the same way everywhere:
+lamp gold is anything you can act on, ember means the model is working, moss means healthy or
+connected, and teal marks system and admin surfaces. Text and headings use Funnel Sans and Funnel
+Display, shipped with the app, so nothing is fetched from the web.
+
+Every other theme keeps working, because the interface asks for roles (primary, warning,
+success, tertiary) rather than particular colours. Under Rose or Cerberus the same controls simply
+take that theme's colours. If you already chose a theme, upgrading does not change it; only a fresh
+install, or a user who never picked one, starts on Lamplight.
 
 ## Creating a Custom Theme
 
@@ -56,7 +69,6 @@ The **User** tab includes several toggles that only affect your own session:
 - **Show All Character Fields** — expands character forms to show every available field instead of a simplified set. See [Characters](./characters.md).
 - **Easy Character Creation** — enables a simplified/guided character creation flow.
 - **Easy Persona Creation** — enables a simplified/guided persona creation flow. See [Personas](./personas.md).
-- **Show Home Page Banner** — shows or hides the dismissible Serene Pub logo banner at the top of the home page. The "Serene Pub is in beta!" notice underneath it always shows regardless of this setting.
 
 Each toggle saves instantly and shows a confirmation toast (e.g. "Character fields display expanded" or "simplified").
 
@@ -69,6 +81,11 @@ Further down the **User** tab, expand the **Background** section to set a backgr
 - **My Uploads** — your own uploaded images. Click **Upload** to add an image file; each thumbnail has a small delete button in its corner (always visible on touch devices, shown on hover on desktop) that opens a confirmation dialog before removing it.
 
 Once a background is selected, an **Opacity** slider (10-100%, in 5% steps) controls how strongly the image shows through behind the interface.
+
+In a session, the conversation reacts to a background: the message log and composer sit on one
+translucent panel over the image, so the prose always has a ground while the picture shows around
+and faintly through it. Your own turns and the composer stay opaque inside it. See
+[Session layout](./session-layout.md#what-the-messages-panel-offers).
 
 ## Profile, Passphrase, and Logout
 

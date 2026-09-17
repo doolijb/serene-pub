@@ -28,8 +28,7 @@
 import * as schema from "$lib/server/db/schema"
 import { and, eq, isNotNull, isNull, or, sql } from "drizzle-orm"
 import {
-	resolveCharacterName,
-	resolvePersonaName
+	resolveCharacterName
 } from "$lib/shared/utils/resolveCharacterName"
 import { deriveNextBindingToken } from "$lib/server/utils/lorebookBindingToken"
 
@@ -108,46 +107,13 @@ export async function syncLorebookBindingsForCharacter(
 	})
 }
 
-/**
- * Syncs every lorebookBindings row bound to this persona (across every
- * lorebook it's bound in) with the persona's current name/aliases. Call
- * after any persona update that could have changed name or aliases —
- * cheap no-op if nothing is bound.
- *
- * Round-12 audit fix (MEDIUM): same race and same fix as
- * syncLorebookBindingsForCharacter above, with a different salt so the two
- * lock spaces (character vs persona) can't collide with each other either.
- * Same "must not be called from inside another advisory-locked
- * transaction" constraint applies.
- */
-export async function syncLorebookBindingsForPersona(
-	personaId: number,
-	dbInstance?: Db
-): Promise<void> {
-	const db = dbInstance ?? (await defaultDb())
-	await db.transaction(async (tx) => {
-		await tx.execute(
-			sql`select pg_advisory_xact_lock(hashtext('charBindingSync:persona'), ${personaId})`
-		)
-
-		const persona = await tx.query.personas.findFirst({
-			where: eq(schema.personas.id, personaId),
-			columns: { name: true, aliases: true }
-		})
-		if (!persona) return
-
-		await tx
-			.update(schema.lorebookBindings)
-			.set({
-				name: resolvePersonaName(persona),
-				aliases: persona.aliases ?? []
-			})
-			.where(eq(schema.lorebookBindings.personaId, personaId))
-	})
-}
+// ⚠ There is no persona variant of the sync above, and adding one would be a
+// bug: a persona IS a character, so its bindings are character bindings, and a
+// second advisory-lock salt over the same id space would let one row be synced
+// by two transactions at once instead of keeping two spaces apart.
 
 /**
- * Find an existing lorebook binding for the given character or persona, or
+ * Find an existing lorebook binding for the given character, or
  * create a new one — the binding token is derived from the lorebook's own
  * per-lorebook counter (never reused after a delete), not a recomputed max
  * — see the merge plan's decision 1 (this used to scan existing bindings
@@ -162,7 +128,6 @@ export async function resolveOrCreateBinding(
 	args: {
 		lorebookId: number
 		characterId?: number | null
-		personaId?: number | null
 	},
 	dbInstance?: Db
 ): Promise<number> {
@@ -182,36 +147,28 @@ export async function resolveOrCreateBinding(
 export async function resolveOrCreateBindingRow(
 	{
 		lorebookId,
-		characterId,
-		personaId
+		characterId
 	}: {
 		lorebookId: number
 		characterId?: number | null
-		personaId?: number | null
 	},
 	dbInstance?: Db
 ): Promise<{ id: number; created: boolean }> {
 	const db = dbInstance ?? (await defaultDb())
-	if (!characterId && !personaId)
-		throw new Error("characterId or personaId required")
+	if (!characterId) throw new Error("characterId required")
 
 	// Advisory lock scoped to lorebookId — without it, two concurrent calls
-	// for the same not-yet-bound character/persona can both pass the
-	// existing-row check and both insert a binding. Same fix, same reason,
-	// as the sibling resolveOrCreateBindingByName (availableSceneCast.ts).
+	// for the same not-yet-bound character can both pass the existing-row
+	// check and both insert a binding. Same fix, same reason, as the sibling
+	// resolveOrCreateBindingByName (availableSceneCast.ts).
 	const result = await db.transaction(async (tx) => {
 		await tx.execute(sql`select pg_advisory_xact_lock(${lorebookId})`)
 
 		const existing = await tx.query.lorebookBindings.findFirst({
-			where: characterId
-				? and(
-						eq(schema.lorebookBindings.lorebookId, lorebookId),
-						eq(schema.lorebookBindings.characterId, characterId)
-					)
-				: and(
-						eq(schema.lorebookBindings.lorebookId, lorebookId),
-						eq(schema.lorebookBindings.personaId, personaId!)
-					)
+			where: and(
+				eq(schema.lorebookBindings.lorebookId, lorebookId),
+				eq(schema.lorebookBindings.characterId, characterId)
+			)
 		})
 		if (existing) return { row: existing, created: false }
 
@@ -221,22 +178,16 @@ export async function resolveOrCreateBindingRow(
 			.values({
 				lorebookId,
 				binding: token,
-				characterId: characterId ?? null,
-				personaId: personaId ?? null
+				characterId
 			})
 			.returning()
 		return { row: inserted, created: true }
 	})
 
 	// Sync only on a fresh insert — matches the pre-lock behavior, where an
-	// existing row returned before ever reaching the sync calls below.
-	if (result.created) {
-		if (characterId) {
-			await syncLorebookBindingsForCharacter(characterId, db)
-		} else if (personaId) {
-			await syncLorebookBindingsForPersona(personaId, db)
-		}
-	}
+	// existing row returned before ever reaching the sync call below.
+	if (result.created)
+		await syncLorebookBindingsForCharacter(characterId, db)
 
 	return { id: result.row.id, created: result.created }
 }
@@ -255,27 +206,18 @@ export async function backfillMissingBindingNames(
 	const db = dbInstance ?? (await defaultDb())
 	const staleBoundBindings = await db.query.lorebookBindings.findMany({
 		where: and(
-			or(
-				isNotNull(schema.lorebookBindings.characterId),
-				isNotNull(schema.lorebookBindings.personaId)
-			),
+			isNotNull(schema.lorebookBindings.characterId),
 			or(
 				isNull(schema.lorebookBindings.name),
 				eq(schema.lorebookBindings.name, "")
 			)
 		),
-		columns: { characterId: true, personaId: true }
+		columns: { characterId: true }
 	})
 	const characterIds = new Set<number>()
-	const personaIds = new Set<number>()
-	for (const binding of staleBoundBindings) {
+	for (const binding of staleBoundBindings)
 		if (binding.characterId) characterIds.add(binding.characterId)
-		else if (binding.personaId) personaIds.add(binding.personaId)
-	}
 	for (const characterId of characterIds) {
 		await syncLorebookBindingsForCharacter(characterId, db)
-	}
-	for (const personaId of personaIds) {
-		await syncLorebookBindingsForPersona(personaId, db)
 	}
 }

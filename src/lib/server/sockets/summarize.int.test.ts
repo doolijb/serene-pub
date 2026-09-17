@@ -38,22 +38,22 @@ function receiptWith(
 		nodes: [
 			{
 				nodeKey: "drafting.item.draft",
-				typeId: "core:provider/summarize-batch@1",
+				definitionId: "core:oracle/summarize-batch@1",
 				output: {}
 			},
 			{
 				nodeKey: "synth",
-				typeId: "core:provider/summarize-synth@1",
+				definitionId: "core:oracle/summarize-synth@1",
 				output: { content: over.content ?? "A scene happened." }
 			},
 			{
 				nodeKey: "naming",
-				typeId: "core:provider/name-entry@1",
+				definitionId: "core:oracle/name-entry@1",
 				output: { name: over.name ?? "A Scene" }
 			},
 			{
 				nodeKey: "cast",
-				typeId: "core:provider/extract-cast@1",
+				definitionId: "core:oracle/extract-cast@1",
 				output: {
 					cast: {
 						participants: over.participants ?? [],
@@ -131,13 +131,14 @@ async function makeSceneSession(userId: number) {
 		})
 		.returning()
 	const [persona] = await testDb
-		.insert(schema.personas)
+		.insert(schema.characters)
 		.values({
 			userId,
 			name: "Player",
 			description: "",
 			aliases: [],
-			isDefault: true
+			isPersona: true,
+			isDefaultPersona: true
 		})
 		.returning()
 	const [session] = await testDb
@@ -247,7 +248,7 @@ describe("sessionsSummarizeHandler — scene participant pipeline (PGlite integr
 
 		expect(response.participantCharacters).toContain(binding.id)
 		const personaBinding = await testDb.query.lorebookBindings.findFirst({
-			where: eq(schema.lorebookBindings.personaId, persona.id)
+			where: eq(schema.lorebookBindings.characterId, persona.id)
 		})
 		expect(response.participantCharacters).toContain(personaBinding!.id)
 	})

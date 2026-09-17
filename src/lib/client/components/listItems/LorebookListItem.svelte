@@ -120,7 +120,7 @@
 					<Portal>
 						<Popover.Positioner class="z-[1000]!">
 							<Popover.Content
-								class="card bg-primary-200-800 w-[min(90vw,260px)] space-y-4 p-4 shadow-xl"
+								class="card bg-surface-200-800 w-[min(90vw,260px)] space-y-4 p-4 shadow-xl"
 							>
 								<header class="popover-menu-title">
 									<Icons.BookOpen
@@ -226,7 +226,7 @@
 								</article>
 								<Popover.Arrow>
 									<Popover.ArrowTip
-										class="!bg-primary-200 dark:!bg-primary-800"
+										class="!bg-surface-200 dark:!bg-surface-800"
 									/>
 								</Popover.Arrow>
 							</Popover.Content>

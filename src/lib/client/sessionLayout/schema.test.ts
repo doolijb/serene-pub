@@ -8,7 +8,6 @@ import { describe, expect, it } from "vitest"
 import {
 	defaultZoneLayout,
 	normalizeZoneLayout,
-	resolveMessageCap,
 	resolveZone,
 	withWidget,
 	withoutWidget,
@@ -90,15 +89,6 @@ describe("rule resolution", () => {
 			width: 344,
 			columns: 2
 		})
-	})
-})
-
-describe("message cap", () => {
-	it("caps only where a rule says so", () => {
-		const layout = defaultZoneLayout()
-		expect(resolveMessageCap(layout, 1000)).toBeUndefined()
-		expect(resolveMessageCap(layout, 2000)).toBe(54)
-		expect(resolveMessageCap(layout, 3000)).toBe(58)
 	})
 })
 

@@ -50,9 +50,10 @@
 	 * changes nothing about this file: the response is still the whole truth this
 	 * component renders, and this component still computes none of it.
 	 */
-	import { onDestroy, onMount } from "svelte"
+	import { onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { joinWithAnd } from "$lib/shared/utils/joinWithAnd"
 	import {
 		buildCapabilityRows,
@@ -156,28 +157,34 @@
 		socket.emit("connections:capabilities", { id: connectionId })
 	}
 
+	// Standing interest, declared ABOVE the mount that asks: effects run in
+	// creation order, so a declaration made after the emit would miss the
+	// interest sync the request flushes and the first reply would arrive
+	// unwanted. Every key is bare — none of these events is in SCOPED_EVENTS,
+	// and the handlers' own `connectionId` guards are what narrow them.
+	useInterest<"connections:capabilities">(
+		"connections:capabilities",
+		applyCapabilities
+	)
+	useInterest<"connections:setCapability">(
+		"connections:setCapability",
+		applyCapabilities
+	)
+	useInterest<"connections:capabilities:error">(
+		"connections:capabilities:error",
+		handleCapabilitiesError
+	)
+	useInterest<"connections:setCapability:error">(
+		"connections:setCapability:error",
+		handleCapabilitiesError
+	)
+	useInterest<"connections:test">("connections:test", handleTest)
+
 	onMount(() => {
-		// Named references, off'd by name below. A bare
-		// socket.off("connections:test") removes the FIRST-registered listener —
-		// usually one of the five connection forms' own — which has caused two
-		// real bugs in this codebase already.
-		socket.on("connections:capabilities", applyCapabilities)
-		socket.on("connections:setCapability", applyCapabilities)
-		socket.on("connections:capabilities:error", handleCapabilitiesError)
-		socket.on("connections:setCapability:error", handleCapabilitiesError)
-		socket.on("connections:test", handleTest)
 		// Mount is the right moment because the sidebar keys this whole block on
 		// connection.id, so a different selection is a different instance and
 		// there is no stale-id window to guard.
 		socket.emit("connections:capabilities", { id: connectionId })
-	})
-
-	onDestroy(() => {
-		socket.off("connections:capabilities", applyCapabilities)
-		socket.off("connections:setCapability", applyCapabilities)
-		socket.off("connections:capabilities:error", handleCapabilitiesError)
-		socket.off("connections:setCapability:error", handleCapabilitiesError)
-		socket.off("connections:test", handleTest)
 	})
 </script>
 

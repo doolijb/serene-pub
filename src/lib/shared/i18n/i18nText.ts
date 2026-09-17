@@ -5,11 +5,11 @@
  *
  * The SDK has carried locale-capable display text since before this lane:
  * `I18n = string | ({ en: string } & Record<string, string>)`, on `Descriptor`,
- * `EntryTypeDecl`, `ScriptTypeDecl`, `VariableDecl` and a dozen flat fields
+ * `EntryTypeDecl`, `ScriptKindDecl`, `VariableDecl` and a dozen flat fields
  * besides. A plugin author can ship `{ en: "…", fr: "…" }` today; the boot
  * registry hashes it with `stripI18n` (so copyediting a label never bumps a
  * type version) and persists the whole map verbatim into
- * `pipeline_type_registry.i18n`.
+ * `pipeline_definition_registry.i18n`.
  *
  * **The whole map survives to the database and is then thrown away at read
  * time**, because every reader was hardcoded to `.en`. That is the seam this

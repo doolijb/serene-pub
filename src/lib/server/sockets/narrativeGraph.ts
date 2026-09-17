@@ -47,8 +47,7 @@ import {
 import { activityError, activityStore } from "$lib/server/utils/activityStore"
 import { deriveNextBindingToken } from "$lib/server/utils/lorebookBindingToken"
 import {
-	syncLorebookBindingsForCharacter,
-	syncLorebookBindingsForPersona
+	syncLorebookBindingsForCharacter
 } from "$lib/server/utils/characterBindingSync"
 import {
 	buildSceneCastList,
@@ -98,6 +97,25 @@ const endpointColumns = (
 	endpoint.kind === "cast"
 		? { nodeId: endpoint.bindingId, entryId: null }
 		: { nodeId: null, entryId: endpoint.entryId }
+
+/**
+ * The likely-duplicate pairs in one book.
+ *
+ * Split out so the three write cascades that re-send them — after an applied
+ * proposal, after a merge, after an undo — can hand this to `emitToUser` as a
+ * thunk (socket-interest plan, ruling 4): ONE source of truth for the payload,
+ * and the pairwise scan behind it is paid only when some socket declared the
+ * key. A merge made from a surface that shows no duplicate review pays for no
+ * re-scan. Skipping the emit alone would save nothing; the scan is the cost.
+ */
+async function buildDuplicateCandidates(
+	lorebookId: number
+): Promise<Sockets.NarrativeGraph.DuplicateCandidates.Response> {
+	return {
+		lorebookId,
+		candidates: await findDuplicateCandidates(lorebookId)
+	}
+}
 
 /**
  * An endpoint a client named, checked against the book it claims to be in.
@@ -514,17 +532,12 @@ export const narrativeGraphBuildHandler: Handler<
 			.select({
 				binding: schema.lorebookBindings.binding,
 				characterName: schema.characters.name,
-				characterNickname: schema.characters.nickname,
-				personaName: schema.personas.name
+				characterNickname: schema.characters.nickname
 			})
 			.from(schema.lorebookBindings)
 			.leftJoin(
 				schema.characters,
 				eq(schema.lorebookBindings.characterId, schema.characters.id)
-			)
-			.leftJoin(
-				schema.personas,
-				eq(schema.lorebookBindings.personaId, schema.personas.id)
 			)
 			.where(eq(schema.lorebookBindings.lorebookId, params.lorebookId))
 
@@ -534,7 +547,7 @@ export const narrativeGraphBuildHandler: Handler<
 			if (!b.binding) continue
 			const label = b.characterName
 				? b.characterNickname || b.characterName
-				: (b.personaName ?? b.binding)
+				: b.binding
 			bindingMap[b.binding] = label
 		}
 
@@ -812,12 +825,9 @@ export const narrativeGraphBuildHandler: Handler<
 			const characterIds = allBindings
 				.map((b) => b.characterId)
 				.filter((id): id is number => id != null)
-			const personaIds = allBindings
-				.map((b) => b.personaId)
-				.filter((id): id is number => id != null)
-			const [characters, personas] = await Promise.all([
+			const characters =
 				characterIds.length > 0
-					? db
+					? await db
 							.select({
 								id: schema.characters.id,
 								name: schema.characters.name,
@@ -827,34 +837,14 @@ export const narrativeGraphBuildHandler: Handler<
 							})
 							.from(schema.characters)
 							.where(inArray(schema.characters.id, characterIds))
-					: Promise.resolve([]),
-				personaIds.length > 0
-					? db
-							.select({
-								id: schema.personas.id,
-								description: schema.personas.description,
-								summary: schema.personas.summary
-							})
-							.from(schema.personas)
-							.where(inArray(schema.personas.id, personaIds))
-					: Promise.resolve([])
-			])
+					: []
 			const charMap = new Map(characters.map((c) => [c.id, c]))
-			const personaMap = new Map(personas.map((p) => [p.id, p]))
 
 			function fallbackSummary(b: (typeof allBindings)[number]): string {
 				if (b.characterId) {
 					const char = charMap.get(b.characterId)
 					return (
 						char?.summary?.trim() || char?.description.trim() || ""
-					)
-				}
-				if (b.personaId) {
-					const persona = personaMap.get(b.personaId)
-					return (
-						persona?.summary?.trim() ||
-						persona?.description.trim() ||
-						""
 					)
 				}
 				return ""
@@ -989,7 +979,14 @@ export const narrativeGraphBuildHandler: Handler<
 				},
 				onLlmCall: (entry) => {
 					llmCallCount++
-					emitToUser("narrativeGraph:buildLog", entry)
+					emitToUser("narrativeGraph:buildLog", {
+						...entry,
+						// Present so the interest scope can be derived. The
+						// builder's entry names only the call it made — it
+						// has no idea which book started it — so the book is
+						// added here, where the build was asked for.
+						lorebookId: params.lorebookId
+					} satisfies Sockets.NarrativeGraph.BuildLogEntry)
 				},
 				fetchSceneMessages: async (sessionId, messageIds) => {
 					if (messageIds.length === 0) return []
@@ -1038,12 +1035,15 @@ export const narrativeGraphBuildHandler: Handler<
 						personaIds.length > 0
 							? db
 									.select({
-										id: schema.personas.id,
-										name: schema.personas.name
+										id: schema.characters.id,
+										name: schema.characters.name
 									})
-									.from(schema.personas)
+									.from(schema.characters)
 									.where(
-										inArray(schema.personas.id, personaIds)
+										inArray(
+											schema.characters.id,
+											personaIds
+										)
 									)
 							: Promise.resolve([])
 					])
@@ -1484,7 +1484,6 @@ export const narrativeGraphApplyProposalHandler: Handler<
 					.values({
 						lorebookId,
 						characterId: null,
-						personaId: null,
 						binding: token,
 						name: capText(nodeProposal.name, MAX_NODE_NAME_LENGTH),
 						nodeState: sanitizeNodeState(nodeProposal.nodeState),
@@ -1883,16 +1882,9 @@ export const narrativeGraphApplyProposalHandler: Handler<
 				)
 		})
 
-		// Return updated list with fresh ungraphed count
-		const [
-			nodes,
-			relationships,
-			ungraphedScenes,
-			ungraphedUnsummarized,
-			allSummarized,
-			ungraphedDirectEntries,
-			allDirectEntries
-		] = await Promise.all([
+		// The two reads this handler's OWN reply is made of. They stay eager:
+		// the caller asked for the applied graph and is waiting on it.
+		const [nodes, relationships] = await Promise.all([
 			db.query.lorebookBindings.findMany({
 				where: eq(schema.lorebookBindings.lorebookId, lorebookId),
 				orderBy: asc(schema.lorebookBindings.id)
@@ -1900,119 +1892,133 @@ export const narrativeGraphApplyProposalHandler: Handler<
 			db.query.narrativeRelationships.findMany({
 				where: eq(schema.narrativeRelationships.lorebookId, lorebookId),
 				orderBy: asc(schema.narrativeRelationships.id)
-			}),
-			db.query.scenes.findMany({
-				where: and(
-					eq(schema.scenes.lorebookId, lorebookId),
-					eq(schema.scenes.graphed, false),
-					isNotNull(schema.scenes.summary)
-				),
-				columns: { id: true }
-			}),
-			db.query.scenes.findMany({
-				where: and(
-					eq(schema.scenes.lorebookId, lorebookId),
-					eq(schema.scenes.graphed, false),
-					isNull(schema.scenes.summary)
-				),
-				columns: { id: true }
-			}),
-			db.query.scenes.findMany({
-				where: and(
-					eq(schema.scenes.lorebookId, lorebookId),
-					isNotNull(schema.scenes.summary)
-				),
-				columns: { id: true }
-			}),
-			db
-				.select({ id: schema.lorebookEntries.id })
-				.from(schema.lorebookEntries)
-				.where(
-					and(
-						inBookOfType(lorebookId, HISTORY_TYPE_ID),
-						eq(fieldIsTrue("graphed"), false),
-						gt(
-							sql`length(trim(${schema.lorebookEntries.content}))`,
-							0
-						),
-						notExists(
-							db
-								.select({ _: sql`1` })
-								.from(schema.scenes)
-								.where(
-									eq(
-										schema.scenes.historyEntryId,
-										schema.lorebookEntries.id
-									)
-								)
-						)
-					)
-				),
-			db
-				.select({ id: schema.lorebookEntries.id })
-				.from(schema.lorebookEntries)
-				.where(
-					and(
-						inBookOfType(lorebookId, HISTORY_TYPE_ID),
-						gt(
-							sql`length(trim(${schema.lorebookEntries.content}))`,
-							0
-						),
-						notExists(
-							db
-								.select({ _: sql`1` })
-								.from(schema.scenes)
-								.where(
-									eq(
-										schema.scenes.historyEntryId,
-										schema.lorebookEntries.id
-									)
-								)
-						)
-					)
-				)
+			})
 		])
-
-		// The apply we just committed wrote castResolvedAt back onto every
-		// scene it resolved, so this count is re-derived here rather than
-		// carried over — it should normally have dropped to 0.
-		const unresolvedAfterApply = await db.query.scenes.findMany({
-			where: and(
-				eq(schema.scenes.lorebookId, lorebookId),
-				isNotNull(schema.scenes.summary),
-				isNull(schema.scenes.castResolvedAt)
-			),
-			columns: { id: true }
-		})
 		const wiredRelationships = await wireRelationships(relationships)
-		const listPayload: Sockets.NarrativeGraph.List.Response = {
-			nodes,
-			relationships: wiredRelationships,
-			ungraphedSceneCount: ungraphedScenes.length,
-			unresolvedCastSceneCount: unresolvedAfterApply.length,
-			namelessBindingCount: nodes.filter(
-				(n) => !n.name.trim() && n.parentNodeId === null
-			).length,
-			ungraphedUnsummarizedCount: ungraphedUnsummarized.length,
-			totalSummarizedCount: allSummarized.length,
-			ungraphedHistoryEntryCount: ungraphedDirectEntries.length,
-			totalDirectHistoryEntryCount: allDirectEntries.length
-		}
 		const res: Sockets.NarrativeGraph.ApplyProposal.Response = {
 			nodes,
 			relationships: wiredRelationships
 		}
-		emitToUser("narrativeGraph:list", listPayload)
+
+		// The six COUNT reads the refreshed graph list is made of, and nothing
+		// else — LAZY (socket-interest plan, ruling 4). A proposal applied from
+		// a surface with no graph list open pays for none of them; the reply
+		// above is unaffected either way. Skipping the emit alone would save
+		// nothing; these six scans are the cost.
+		await emitToUser("narrativeGraph:list", async () => {
+			const [
+				ungraphedScenes,
+				ungraphedUnsummarized,
+				allSummarized,
+				ungraphedDirectEntries,
+				allDirectEntries
+			] = await Promise.all([
+				db.query.scenes.findMany({
+					where: and(
+						eq(schema.scenes.lorebookId, lorebookId),
+						eq(schema.scenes.graphed, false),
+						isNotNull(schema.scenes.summary)
+					),
+					columns: { id: true }
+				}),
+				db.query.scenes.findMany({
+					where: and(
+						eq(schema.scenes.lorebookId, lorebookId),
+						eq(schema.scenes.graphed, false),
+						isNull(schema.scenes.summary)
+					),
+					columns: { id: true }
+				}),
+				db.query.scenes.findMany({
+					where: and(
+						eq(schema.scenes.lorebookId, lorebookId),
+						isNotNull(schema.scenes.summary)
+					),
+					columns: { id: true }
+				}),
+				db
+					.select({ id: schema.lorebookEntries.id })
+					.from(schema.lorebookEntries)
+					.where(
+						and(
+							inBookOfType(lorebookId, HISTORY_TYPE_ID),
+							eq(fieldIsTrue("graphed"), false),
+							gt(
+								sql`length(trim(${schema.lorebookEntries.content}))`,
+								0
+							),
+							notExists(
+								db
+									.select({ _: sql`1` })
+									.from(schema.scenes)
+									.where(
+										eq(
+											schema.scenes.historyEntryId,
+											schema.lorebookEntries.id
+										)
+									)
+							)
+						)
+					),
+				db
+					.select({ id: schema.lorebookEntries.id })
+					.from(schema.lorebookEntries)
+					.where(
+						and(
+							inBookOfType(lorebookId, HISTORY_TYPE_ID),
+							gt(
+								sql`length(trim(${schema.lorebookEntries.content}))`,
+								0
+							),
+							notExists(
+								db
+									.select({ _: sql`1` })
+									.from(schema.scenes)
+									.where(
+										eq(
+											schema.scenes.historyEntryId,
+											schema.lorebookEntries.id
+										)
+									)
+							)
+						)
+					)
+			])
+
+			// The apply we just committed wrote castResolvedAt back onto every
+			// scene it resolved, so this count is re-derived here rather than
+			// carried over — it should normally have dropped to 0.
+			const unresolvedAfterApply = await db.query.scenes.findMany({
+				where: and(
+					eq(schema.scenes.lorebookId, lorebookId),
+					isNotNull(schema.scenes.summary),
+					isNull(schema.scenes.castResolvedAt)
+				),
+				columns: { id: true }
+			})
+			return {
+				nodes,
+				relationships: wiredRelationships,
+				ungraphedSceneCount: ungraphedScenes.length,
+				unresolvedCastSceneCount: unresolvedAfterApply.length,
+				namelessBindingCount: nodes.filter(
+					(n) => !n.name.trim() && n.parentNodeId === null
+				).length,
+				ungraphedUnsummarizedCount: ungraphedUnsummarized.length,
+				totalSummarizedCount: allSummarized.length,
+				ungraphedHistoryEntryCount: ungraphedDirectEntries.length,
+				totalDirectHistoryEntryCount: allDirectEntries.length
+			} satisfies Sockets.NarrativeGraph.List.Response
+		})
 		emitToUser("narrativeGraph:applyProposal", res)
 
 		// Proactive duplicate review — surface likely-duplicate pairs right
 		// after a build/extend completes, not just on the next time someone
-		// happens to open the Bindings tab.
-		const candidates = await findDuplicateCandidates(lorebookId)
-		emitToUser("narrativeGraph:duplicateCandidates", {
-			lorebookId,
-			candidates
-		} satisfies Sockets.NarrativeGraph.DuplicateCandidates.Response)
+		// happens to open the Bindings tab. LAZY: see
+		// `buildDuplicateCandidates`.
+		await emitToUser("narrativeGraph:duplicateCandidates", () =>
+			buildDuplicateCandidates(lorebookId)
+		)
 
 		return res
 	}
@@ -2515,7 +2521,6 @@ export const narrativeGraphCreateNodeHandler: Handler<
 				.values({
 					lorebookId,
 					characterId: null,
-					personaId: null,
 					binding: token,
 					name,
 					nodeState: (nodeState ?? "active") as NodeState,
@@ -2558,15 +2563,12 @@ export const narrativeGraphQueryContextHandler: Handler<
 			const binding = await db.query.lorebookBindings.findFirst({
 				where: and(
 					eq(schema.lorebookBindings.lorebookId, lorebookId),
-					speakerCharacterId
-						? eq(
-								schema.lorebookBindings.characterId,
-								speakerCharacterId
-							)
-						: eq(
-								schema.lorebookBindings.personaId,
-								speakerPersonaId!
-							)
+					// One column — the speaker is a character whether the
+					// model or a user is voicing them.
+					eq(
+						schema.lorebookBindings.characterId,
+						(speakerCharacterId ?? speakerPersonaId)!
+					)
 				),
 				columns: { id: true }
 			})
@@ -2712,7 +2714,7 @@ export const narrativeGraphQueryContextHandler: Handler<
 						OR
 						${
 							sessionPersonaIds.length > 0
-								? sql`${schema.lorebookBindings.personaId} IN (${sql.join(
+								? sql`${schema.lorebookBindings.characterId} IN (${sql.join(
 										sessionPersonaIds.map(
 											(id) => sql`${id}`
 										),
@@ -2843,7 +2845,7 @@ export const narrativeGraphLinkOrphanBindingHandler: Handler<
 	event: "narrativeGraph:linkOrphanBinding",
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
-		const { bindingId, characterId, personaId, skip } = params
+		const { bindingId, characterId, skip } = params
 
 		const binding = await db.query.lorebookBindings.findFirst({
 			where: eq(schema.lorebookBindings.id, bindingId)
@@ -2857,40 +2859,28 @@ export const narrativeGraphLinkOrphanBindingHandler: Handler<
 		})
 		if (!lorebookForOrphan) throw new Error("Access denied.")
 
-		if (!skip && (characterId || personaId)) {
+		if (!skip && characterId) {
 			// Without this, an attacker could link an orphaned/self-created
-			// binding to a guessed characterId/personaId belonging to a user
-			// who never shared it with them at all — syncLorebookBindingsFor*
+			// binding to a guessed characterId belonging to a user
+			// who never shared it with them at all — syncLorebookBindings*
 			// below would then immediately copy that victim's private
 			// name/nickname/aliases onto the attacker's own binding. Mirrors
 			// the exact check lorebooks.ts's createLorebookBindingHandler/
 			// updateLorebookBindingHandler already require before accepting
-			// either field.
-			if (
-				!(await verifyBindingTargetAccess(
-					{ characterId, personaId },
-					userId
-				))
-			) {
+			// the field.
+			if (!(await verifyBindingTargetAccess({ characterId }, userId))) {
 				throw new Error("Access denied.")
 			}
 
 			await db
 				.update(schema.lorebookBindings)
-				.set({
-					characterId: characterId ?? null,
-					personaId: personaId ?? null
-				})
+				.set({ characterId })
 				.where(eq(schema.lorebookBindings.id, bindingId))
 
 			// Attach-time sync (decision 2) — pull in the newly-attached
 			// entity's name/aliases immediately rather than waiting for an
 			// unrelated future edit to it.
-			if (characterId) {
-				await syncLorebookBindingsForCharacter(characterId)
-			} else if (personaId) {
-				await syncLorebookBindingsForPersona(personaId)
-			}
+			await syncLorebookBindingsForCharacter(characterId)
 		}
 
 		const res: Sockets.NarrativeGraph.LinkOrphanBinding.Response = {
@@ -2950,17 +2940,15 @@ export const narrativeGraphMergeNodeHandler: Handler<
 		// would mean reassigning one character's identity onto a different
 		// row — that's data corruption, not a merge. Unconditional,
 		// non-negotiable guard, no exception.
-		const childIsBound =
-			child.characterId != null || child.personaId != null
-		const parentIsBound =
-			parent.characterId != null || parent.personaId != null
+		const childIsBound = child.characterId != null
+		const parentIsBound = parent.characterId != null
 		if (childIsBound && parentIsBound) {
 			throw new Error(
 				"Cannot absorb two nodes that are both linked to character bindings — they represent distinct individuals."
 			)
 		}
 
-		// Auto-swap: the bound row always survives, so characterId/personaId
+		// Auto-swap: the bound row always survives, so characterId
 		// is never copied between rows (no risk of losing sync) and the
 		// bound row's identity/id stays stable.
 		const survivorId = childIsBound ? nodeId : parentNodeId
@@ -3294,12 +3282,11 @@ export const narrativeGraphMergeNodeHandler: Handler<
 		emitToUser("narrativeGraph:mergeNode", res)
 
 		// Refresh duplicate candidates — any other candidate pair involving
-		// the now-deleted absorbed id would otherwise dangle in the UI.
-		const candidates = await findDuplicateCandidates(lorebook.id)
-		emitToUser("narrativeGraph:duplicateCandidates", {
-			lorebookId: lorebook.id,
-			candidates
-		} satisfies Sockets.NarrativeGraph.DuplicateCandidates.Response)
+		// the now-deleted absorbed id would otherwise dangle in the UI. LAZY:
+		// see `buildDuplicateCandidates`.
+		await emitToUser("narrativeGraph:duplicateCandidates", () =>
+			buildDuplicateCandidates(lorebook.id)
+		)
 
 		return res
 	}
@@ -3520,11 +3507,10 @@ export const narrativeGraphUndoMergeHandler: Handler<
 		}
 		emitToUser("narrativeGraph:undoMerge", res)
 
-		const candidates = await findDuplicateCandidates(log.lorebookId)
-		emitToUser("narrativeGraph:duplicateCandidates", {
-			lorebookId: log.lorebookId,
-			candidates
-		} satisfies Sockets.NarrativeGraph.DuplicateCandidates.Response)
+		// LAZY: see `buildDuplicateCandidates`.
+		await emitToUser("narrativeGraph:duplicateCandidates", () =>
+			buildDuplicateCandidates(log.lorebookId)
+		)
 
 		return res
 	}
@@ -3589,11 +3575,7 @@ export const narrativeGraphDuplicateCandidatesHandler: Handler<
 		})
 		if (!lorebook) throw new Error("Lorebook not found or access denied.")
 
-		const candidates = await findDuplicateCandidates(lorebookId)
-		const res: Sockets.NarrativeGraph.DuplicateCandidates.Response = {
-			lorebookId,
-			candidates
-		}
+		const res = await buildDuplicateCandidates(lorebookId)
 		emitToUser("narrativeGraph:duplicateCandidates", res)
 		return res
 	}
@@ -3626,11 +3608,15 @@ export const narrativeGraphDismissDuplicateHandler: Handler<
 			.values({ lorebookId, bindingIdA: a, bindingIdB: b })
 			.onConflictDoNothing()
 
-		const candidates = await findDuplicateCandidates(lorebookId)
-		const res: Sockets.NarrativeGraph.DismissDuplicate.Response = {
-			lorebookId,
-			candidates
-		}
+		// EAGER, deliberately, unlike the three cascades that go through
+		// `buildDuplicateCandidates` lazily: the refreshed list IS this
+		// handler's own declared reply — it just travels under the
+		// `duplicateCandidates` name — so a thunk here could only skip an
+		// emit, never the scan, and skipping an emit alone saves nothing.
+		// Built once and used twice, which is what keeps the two answers
+		// from disagreeing.
+		const res: Sockets.NarrativeGraph.DismissDuplicate.Response =
+			await buildDuplicateCandidates(lorebookId)
 		emitToUser("narrativeGraph:duplicateCandidates", res)
 		return res
 	}

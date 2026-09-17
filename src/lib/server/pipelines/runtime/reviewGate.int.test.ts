@@ -119,11 +119,19 @@ beforeAll(async () => {
 	// the summarize steps have no connection of their own, and under the
 	// no-implicit-pickup rule an unregistered capability means every step
 	// refuses before the gate is ever reached.
+	// The MODEL half of the pair. A registration names both halves — an
+	// endpoint on its own is incomplete and every step refuses — and the merge
+	// is what puts the identifier on the row the adapter is handed.
+	const { ensureConnectionModel } = await import(
+		"$lib/server/connections/models"
+	)
+	const model = await ensureConnectionModel(db, connection.id, "fake-7b")
 	const { setCapabilityDefault } = await import(
 		"$lib/server/connections/capabilityDefaults"
 	)
 	await setCapabilityDefault(db, "text->text", {
 		connectionId: connection.id,
+		connectionModelId: model!.id,
 		samplingConfigId: sampling.id
 	})
 

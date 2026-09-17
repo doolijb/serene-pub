@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { avatarSrc } from "$lib/client/utils/media"
 	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
-	import { Avatar } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import SidebarListItem from "../SidebarListItem.svelte"
 	import EmbeddingStatusIcon from "../EmbeddingStatusIcon.svelte"
@@ -16,9 +15,20 @@
 		onExport?: (
 			character: Sockets.Characters.List.Response["characterList"][0]
 		) => void
+		/** Flip `isPersona`. Absent where the menu should not offer it. */
+		onTogglePersona?: (
+			character: Sockets.Characters.List.Response["characterList"][0]
+		) => void
+		/** Make this the persona a new session starts with. */
+		onSetDefaultPersona?: (id: number) => void
+		/** Open the move-to-folder dialog for this row. */
+		onMoveToFolder?: (
+			character: Sockets.Characters.List.Response["characterList"][0]
+		) => void
 		showControls?: boolean
 		contentTitle?: string
 		classes?: string
+		active?: boolean
 	}
 
 	let {
@@ -27,15 +37,38 @@
 		onEdit,
 		onDelete,
 		onExport,
+		onTogglePersona,
+		onSetDefaultPersona,
+		onMoveToFolder,
 		showControls = true,
 		contentTitle = "Go to character",
-		classes = ""
+		classes = "",
+		active = false
 	}: Props = $props()
 
 	let menuOpen = $state(false)
 
 	function handleClick() {
 		onclick?.(character)
+	}
+
+	/**
+	 * The row's tags, in the order the server joined them. `characters:list`
+	 * carries the whole tag record — `colorPreset` included — so a row's chip
+	 * is coloured from the payload it already has rather than a second lookup.
+	 */
+	const tags = $derived(
+		((character as any).characterTags ?? [])
+			.map((ct: any) => ct?.tag)
+			.filter(Boolean) as Array<{ name: string; colorPreset?: string }>
+	)
+
+	/** The chip preset a tag carries, or the neutral one an uncoloured tag gets. */
+	function tagColorPreset(tag: { colorPreset?: string }): string {
+		return (
+			tag.colorPreset ||
+			"bg-primary-500/20 text-primary-600 dark:text-primary-400"
+		)
 	}
 </script>
 
@@ -44,47 +77,109 @@
 	onclick={handleClick}
 	{contentTitle}
 	itemType="Character"
-	classes={character.isFavorite
-		? "border border-primary-500 " + classes
-		: classes}
+	{classes}
+	showIndex={false}
+	{active}
 >
 	{#snippet content()}
-		<Avatar class="h-[4em] min-h-[4em] w-[4em] min-w-[4em]">
-			<Avatar.Image
-				src={avatarSrc(character) || ""}
-				alt={character.nickname || character.name!}
-				class="object-cover"
+		{#if avatarSrc(character)}
+			<img
+				src={avatarSrc(character)}
+				alt=""
+				loading="lazy"
+				class="h-10 w-10 shrink-0 rounded-[9px] object-cover object-top"
 			/>
-			<Avatar.Fallback>
-				<Icons.User size={36} aria-hidden="true" />
-			</Avatar.Fallback>
-		</Avatar>
-		<div class="relative flex min-w-0 flex-1 gap-2">
-			<div class="relative min-w-0 flex-1">
+		{:else}
+			<span
+				class="bg-surface-800 grid h-10 w-10 shrink-0 place-items-center rounded-[9px]"
+			>
+				<Icons.UsersRound
+					size={20}
+					class="text-surface-400"
+					aria-hidden="true"
+				/>
+			</span>
+		{/if}
+		<div class="flex min-w-0 flex-1 items-center gap-2">
+			<div class="min-w-0 flex-1">
 				<div
-					class="flex items-center gap-1 text-left font-semibold"
+					class="flex items-center gap-1 text-left text-[15px] font-medium"
 					id="character-name-{character.id}"
 				>
 					<span class="truncate">
 						{character.nickname || character.name}
 					</span>
+					{#if character.isFavorite}
+						<!-- The favourite marker is a glyph on the name, not a
+						     border on the row: the row's border is the selected
+						     state's, and one edge cannot say two things. -->
+						<Icons.Star
+							size={14}
+							class="text-primary-500 shrink-0 fill-current"
+							aria-hidden="true"
+						/>
+						<span class="sr-only">Favorite</span>
+					{/if}
+					{#if character.isPersona}
+						<!-- A badge on the name, exactly like the favourite
+						     star: "a character you play" is a fact about this
+						     row, not a category of row. The DEFAULT persona is
+						     the same glyph filled and titled, never a second
+						     chip — the row's one chip slot belongs to its tags
+						     (§6.4), and a chip here would evict one. -->
+						<span
+							class="inline-flex shrink-0"
+							title={character.isDefaultPersona
+								? "Default persona"
+								: "Persona"}
+						>
+							<Icons.UserRound
+								size={14}
+								class="text-primary-500 {character.isDefaultPersona
+									? 'fill-current'
+									: ''}"
+								aria-hidden="true"
+							/>
+						</span>
+						<span class="sr-only">
+							{character.isDefaultPersona
+								? "Default persona"
+								: "Persona"}
+						</span>
+					{/if}
 					<EmbeddingStatusIcon
 						embeddingModel={character.embeddingModel}
 					/>
 				</div>
 				{#if character.description}
 					<div
-						class="text-muted-foreground line-clamp-2 text-left text-xs"
+						class="text-surface-400 truncate text-left text-xs"
 						id="character-desc-{character.id}"
 					>
 						{character.description}
 					</div>
 				{/if}
 			</div>
+			{#if tags.length > 0}
+				<span class="flex shrink-0 items-center gap-1">
+					<span
+						class="max-w-24 truncate rounded px-1.5 py-0.5 text-[11px] {tagColorPreset(
+							tags[0]
+						)}"
+					>
+						{tags[0].name}
+					</span>
+					{#if tags.length > 1}
+						<span class="text-surface-500 text-[11px]">
+							+{tags.length - 1}
+						</span>
+					{/if}
+				</span>
+			{/if}
 		</div>
 	{/snippet}
 	{#snippet controls()}
-		{#if showControls && (onclick || onEdit || onExport || onDelete)}
+		{#if showControls && (onclick || onEdit || onExport || onDelete || onTogglePersona || onSetDefaultPersona || onMoveToFolder)}
 			<div role="none" onclick={(e) => e.stopPropagation()}>
 				<Popover
 					open={menuOpen}
@@ -102,7 +197,7 @@
 					<Portal>
 						<Popover.Positioner class="z-[1000]!">
 							<Popover.Content
-								class="card bg-primary-200-800 w-[min(90vw,240px)] space-y-4 p-4 shadow-xl"
+								class="card bg-surface-200-800 w-[min(90vw,240px)] space-y-4 p-4 shadow-xl"
 							>
 								<header class="popover-menu-title">
 									<Icons.User size={18} aria-hidden="true" />
@@ -141,6 +236,65 @@
 											<span>Edit</span>
 										</button>
 									{/if}
+									{#if onTogglePersona}
+										<button
+											class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
+											onclick={() => {
+												menuOpen = false
+												onTogglePersona?.(character)
+											}}
+											type="button"
+										>
+											<Icons.UserRound
+												size={16}
+												aria-hidden="true"
+											/>
+											<span>
+												{character.isPersona
+													? "Not a persona"
+													: "Use as persona"}
+											</span>
+										</button>
+									{/if}
+									{#if onSetDefaultPersona}
+										<button
+											class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
+											onclick={() => {
+												menuOpen = false
+												onSetDefaultPersona?.(
+													character.id!
+												)
+											}}
+											type="button"
+											disabled={character.isDefaultPersona}
+										>
+											<Icons.UserRoundCheck
+												size={16}
+												aria-hidden="true"
+											/>
+											<span>
+												{character.isDefaultPersona
+													? "Default persona"
+													: "Set as default persona"}
+											</span>
+										</button>
+									{/if}
+									{#if onMoveToFolder}
+										<button
+											class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
+											onclick={() => {
+												menuOpen = false
+												onMoveToFolder?.(character)
+											}}
+											type="button"
+										>
+											<Icons.FolderInput
+												size={16}
+												aria-hidden="true"
+											/>
+											<span>Move to folder…</span>
+										</button>
+									{/if}
 									{#if onExport}
 										<button
 											class="btn btn-sm popover-menu-btn hover:preset-filled-success-500"
@@ -176,7 +330,7 @@
 								</article>
 								<Popover.Arrow>
 									<Popover.ArrowTip
-										class="!bg-primary-200 dark:!bg-primary-800"
+										class="!bg-surface-200 dark:!bg-surface-800"
 									/>
 								</Popover.Arrow>
 							</Popover.Content>

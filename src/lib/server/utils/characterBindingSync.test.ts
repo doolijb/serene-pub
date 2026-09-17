@@ -9,8 +9,7 @@ import {
 import {
 	backfillMissingBindingNames,
 	resolveOrCreateBinding,
-	syncLorebookBindingsForCharacter,
-	syncLorebookBindingsForPersona
+	syncLorebookBindingsForCharacter
 } from "./characterBindingSync"
 
 let testDb: TestDb
@@ -72,7 +71,6 @@ describe("syncLorebookBindingsForCharacter", () => {
 			.values({
 				lorebookId: lorebookA.id,
 				characterId: null,
-				personaId: null,
 				binding: "{{char:3}}",
 				name: "Unrelated NPC",
 				aliases: ["NPC Alias"]
@@ -117,21 +115,24 @@ describe("syncLorebookBindingsForCharacter", () => {
 	})
 })
 
-describe("syncLorebookBindingsForPersona", () => {
-	test("propagates a persona's current name/aliases to every bound row, leaving character-bound rows untouched", async () => {
+describe("syncLorebookBindingsForCharacter — persona-flavored character", () => {
+	// `syncLorebookBindingsForPersona` is gone (0133): a persona is a
+	// character with `isPersona: true`, so its binding is a character
+	// binding synced through the one function above.
+	test("propagates a persona's current name/aliases to its bound row, leaving another character's bound row untouched", async () => {
 		const user = await createTestUser(testDb, "sync-persona-user")
 		const [lorebook] = await testDb
 			.insert(schema.lorebooks)
 			.values({ name: "Persona Book", userId: user.id })
 			.returning()
 		const [persona] = await testDb
-			.insert(schema.personas)
+			.insert(schema.characters)
 			.values({
 				userId: user.id,
+				isPersona: true,
 				name: "Old Persona Name",
 				description: "",
-				aliases: [],
-				isDefault: false
+				aliases: []
 			})
 			.returning()
 		const [character] = await testDb
@@ -146,7 +147,7 @@ describe("syncLorebookBindingsForPersona", () => {
 			.insert(schema.lorebookBindings)
 			.values({
 				lorebookId: lorebook.id,
-				personaId: persona.id,
+				characterId: persona.id,
 				binding: "{{char:1}}",
 				name: "Old Persona Name"
 			})
@@ -162,11 +163,11 @@ describe("syncLorebookBindingsForPersona", () => {
 			.returning()
 
 		await testDb
-			.update(schema.personas)
+			.update(schema.characters)
 			.set({ name: "New Persona Name", aliases: ["Traveler"] })
-			.where(eq(schema.personas.id, persona.id))
+			.where(eq(schema.characters.id, persona.id))
 
-		await syncLorebookBindingsForPersona(persona.id, testDb)
+		await syncLorebookBindingsForCharacter(persona.id, testDb)
 
 		const afterPersona = await getBinding(personaBinding.id)
 		const afterCharacter = await getBinding(characterBinding.id)
@@ -235,36 +236,38 @@ describe("resolveOrCreateBinding", () => {
 		expect(created?.binding).toBe("{{char:1}}")
 	})
 
-	test("creates a new binding for a persona the same way", async () => {
+	test("creates a new binding for a persona-flavored character the same way", async () => {
+		// `resolveOrCreateBinding({ ..., personaId })` is gone (0133): a
+		// persona is a character, so it resolves through `characterId` too.
 		const user = await createTestUser(testDb, "resolve-new-persona-user")
 		const [lorebook] = await testDb
 			.insert(schema.lorebooks)
 			.values({ name: "Book", userId: user.id })
 			.returning()
 		const [persona] = await testDb
-			.insert(schema.personas)
+			.insert(schema.characters)
 			.values({
 				userId: user.id,
+				isPersona: true,
 				name: "Traveler",
 				description: "",
-				aliases: [],
-				isDefault: false
+				aliases: []
 			})
 			.returning()
 
 		const id = await resolveOrCreateBinding(
-			{ lorebookId: lorebook.id, personaId: persona.id },
+			{ lorebookId: lorebook.id, characterId: persona.id },
 			testDb
 		)
 
 		const created = await testDb.query.lorebookBindings.findFirst({
 			where: eq(schema.lorebookBindings.id, id)
 		})
-		expect(created?.personaId).toBe(persona.id)
+		expect(created?.characterId).toBe(persona.id)
 		expect(created?.name).toBe("Traveler")
 	})
 
-	test("throws when neither characterId nor personaId is given", async () => {
+	test("throws when characterId is not given", async () => {
 		const user = await createTestUser(testDb, "resolve-neither-user")
 		const [lorebook] = await testDb
 			.insert(schema.lorebooks)
@@ -273,7 +276,7 @@ describe("resolveOrCreateBinding", () => {
 
 		await expect(
 			resolveOrCreateBinding({ lorebookId: lorebook.id }, testDb)
-		).rejects.toThrow(/characterId or personaId required/)
+		).rejects.toThrow(/characterId required/)
 	})
 
 	test("two concurrent calls for the same not-yet-bound character create only one binding, not two", async () => {
@@ -342,26 +345,28 @@ describe("backfillMissingBindingNames", () => {
 	})
 
 	test("also backfills a persona-bound row left with an empty-string name", async () => {
+		// A persona-bound row is a character-bound row now (0133) — the
+		// persona is just a character with `isPersona: true`.
 		const user = await createTestUser(testDb, "backfill-empty-persona-user")
 		const [lorebook] = await testDb
 			.insert(schema.lorebooks)
 			.values({ name: "Book", userId: user.id })
 			.returning()
 		const [persona] = await testDb
-			.insert(schema.personas)
+			.insert(schema.characters)
 			.values({
 				userId: user.id,
+				isPersona: true,
 				name: "Backfilled Persona",
 				description: "",
-				aliases: [],
-				isDefault: false
+				aliases: []
 			})
 			.returning()
 		const [binding] = await testDb
 			.insert(schema.lorebookBindings)
 			.values({
 				lorebookId: lorebook.id,
-				personaId: persona.id,
+				characterId: persona.id,
 				binding: "{{char:1}}",
 				name: ""
 			})
@@ -401,14 +406,13 @@ describe("backfillMissingBindingNames", () => {
 			.values({
 				lorebookId: lorebook.id,
 				characterId: null,
-				personaId: null,
 				binding: "{{char:2}}",
 				name: ""
 			})
 			.returning()
 
 		// Should not throw or touch the unbound row despite its blank name —
-		// only characterId/personaId-bound rows are ever in scope.
+		// only characterId-bound rows are ever in scope.
 		await expect(
 			backfillMissingBindingNames(testDb)
 		).resolves.toBeUndefined()

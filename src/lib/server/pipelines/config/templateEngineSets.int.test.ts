@@ -65,7 +65,7 @@ const templateOption = () => optionId(SECRET, "prompt", "template", "")
 describe("assertSelectable against a set", () => {
 	it("accepts a Liquid template for a slot that declares both engines", async () => {
 		const row = await createContextTemplate(db, {
-			nodeTypeId: NODE_TYPE,
+			nodeDefinitionId: NODE_TYPE,
 			name: unique("Liquid story string"),
 			source: "{% if scenario %}{{ scenario }}{% endif %}",
 			engine: CORE_LIQUID_ENGINE
@@ -76,7 +76,7 @@ describe("assertSelectable against a set", () => {
 
 	it("still accepts the single-engine spelling", async () => {
 		const row = await createContextTemplate(db, {
-			nodeTypeId: NODE_TYPE,
+			nodeDefinitionId: NODE_TYPE,
 			name: unique("Handlebars story string"),
 			source: "{{#if scenario}}{{scenario}}{{/if}}",
 			engine: CORE_TEMPLATE_ENGINE
@@ -94,7 +94,7 @@ describe("assertSelectable against a set", () => {
 		const [row] = await db
 			.insert(schema.pipelineContextTemplates)
 			.values({
-				nodeTypeId: NODE_TYPE,
+				nodeDefinitionId: NODE_TYPE,
 				name: unique("Jinja story string"),
 				source: "{{ scenario }}",
 				engine: FOREIGN_ENGINE
@@ -162,7 +162,7 @@ describe("the panel's template setting", () => {
 			templateOption()
 		)
 		const created = await createContextTemplate(db, {
-			nodeTypeId: gate.nodeTypeId,
+			nodeDefinitionId: gate.nodeDefinitionId,
 			name: unique("From the panel"),
 			source: "{% if scenario %}{{ scenario }}{% endif %}",
 			engine: assertEngineAccepted(gate.engines, CORE_LIQUID_ENGINE),
@@ -170,7 +170,7 @@ describe("the panel's template setting", () => {
 		})
 		expect(created.engine).toBe(CORE_LIQUID_ENGINE)
 		await expect(
-			assertSelectable(db, gate.nodeTypeId, created.id, gate.engines)
+			assertSelectable(db, gate.nodeDefinitionId, created.id, gate.engines)
 		).resolves.toMatchObject({ engine: CORE_LIQUID_ENGINE })
 	})
 })
@@ -194,7 +194,7 @@ describe("the picker the panel renders", () => {
 
 	it("offers rows from every accepted engine, each naming its language", async () => {
 		const liquid = await createContextTemplate(db, {
-			nodeTypeId: NODE_TYPE,
+			nodeDefinitionId: NODE_TYPE,
 			name: unique("Liquid in the picker"),
 			source: "{% if scenario %}{{ scenario }}{% endif %}",
 			engine: CORE_LIQUID_ENGINE

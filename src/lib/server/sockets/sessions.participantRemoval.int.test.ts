@@ -45,6 +45,13 @@ beforeAll(async () => {
 
 	const dbModule = await import("$lib/server/db")
 	testDb = dbModule.db as unknown as TestDb
+	// The verb is a built-in now (R-15, 2026-09-16): the handler runs
+	// `core:spec/builtin-branch` through the executor, and the spec has to be
+	// published for that — boot publishes it, as on an install.
+	const { bootstrapPipelines } = await import(
+		"$lib/server/pipelines/boot/bootstrap"
+	)
+	await bootstrapPipelines(testDb)
 }, 60_000)
 
 afterAll(async () => {
@@ -382,12 +389,12 @@ describe("sessions:getResponseOrder — removed participant choke-point filter (
 		const owner = await makeUser("choke-point-owner")
 		const session = await makeSession(owner.id)
 		const persona = await testDb
-			.insert(schema.personas)
+			.insert(schema.characters)
 			.values({
 				userId: owner.id,
 				name: "P1",
 				description: "",
-				isDefault: false
+				isPersona: true
 			})
 			.returning()
 		await testDb.insert(schema.sessionPersonas).values({
@@ -418,12 +425,12 @@ describe("sessions:getResponseOrder — removed participant choke-point filter (
 		const owner = await makeUser("choke-point-owner-2")
 		const session = await makeSession(owner.id)
 		const persona = await testDb
-			.insert(schema.personas)
+			.insert(schema.characters)
 			.values({
 				userId: owner.id,
 				name: "P2",
 				description: "",
-				isDefault: false
+				isPersona: true
 			})
 			.returning()
 		await testDb.insert(schema.sessionPersonas).values({

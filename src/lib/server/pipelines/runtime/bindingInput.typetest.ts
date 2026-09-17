@@ -26,6 +26,7 @@
  */
 
 import type * as C from "@serene-pub/contracts"
+import { ok, reads } from "@serene-pub/sdk"
 import type { NodeInput, SharedInput, Unsupplied } from "./bindingTypes"
 
 // ── The two reads that shipped ──────────────────────────────────────────────
@@ -82,10 +83,14 @@ userMessage.template
 declare const lore: SharedInput<
 	[typeof C.worldLore, typeof C.characterLore, typeof C.historyEntries]
 >
-const _text: unknown = lore.text
+const _loreScope: unknown = lore.scope
 const _scanDepth: number | undefined = lore.params?.scanDepth
 // @ts-expect-error — not a port on any of the three
 lore.limit
+// @ts-expect-error — `text` WAS a port on all three, filled by nothing and
+// read by nothing, and was culled (R-12, 2026-09-16). A read must not compile
+// it back.
+lore.text
 
 // A handler bound to the four turn strategies may read only what all four
 // declare. They come from one `turnStrategy()` helper, so that is all of it —
@@ -103,5 +108,65 @@ const _characterId: unknown = speaker.characterId
 // @ts-expect-error — none of the four declares a `strategy` IN-port; it is an
 // out-port, and the binding takes the strategy as a closure argument
 speaker.strategy
+
+// ── Handlers declare what they read, and the declaration is checked ────────
+//
+// R-12 (2026-09-16). `reads<C>()` is the runtime shadow of `InputOf<C>`: the
+// arrays a handler declares are typed against the same contract its `input`
+// is, so the two lists cannot name different things. A misspelt parameter in
+// EITHER place fails to compile — and this is the half that lets the guard
+// (`boot/declaredReads.ts`) trust what a handler says it reads.
+
+declare const search2: NodeInput<typeof C.vectorSearch>
+// @ts-expect-error — a typo in the READ: `simliarityFalloff` is nobody's param
+search2.params?.simliarityFalloff
+
+const searchHook = async (_input: NodeInput<typeof C.vectorSearch>) =>
+	ok({ main: [] })
+
+// ✅ the declaration names the node's own ports and params
+reads<typeof C.vectorSearch>(searchHook, {
+	ports: ["scope", "vectors"],
+	params: ["maxEntries", "topK", "similarityFalloff"]
+})
+reads<typeof C.vectorSearch>(searchHook, {
+	ports: [],
+	// @ts-expect-error — the same typo in the DECLARATION fails the same way
+	params: ["simliarityFalloff"]
+})
+reads<typeof C.vectorSearch>(searchHook, {
+	// @ts-expect-error — `topK` is a parameter, not a port; the exact confusion
+	// that shipped, refused at the declaration as well as at the read
+	ports: ["topK"]
+})
+
+// A shared handler declares against the intersection, in the tuple spelling.
+const loreHook = async (
+	_input: SharedInput<
+		[typeof C.worldLore, typeof C.characterLore, typeof C.historyEntries]
+	>
+) => ok({ main: [] })
+reads<[typeof C.worldLore, typeof C.characterLore, typeof C.historyEntries]>(
+	loreHook,
+	{ ports: ["scope"], params: ["scanDepth", "titleWeight"] }
+)
+reads<[typeof C.worldLore, typeof C.characterLore, typeof C.historyEntries]>(
+	loreHook,
+	{
+		// @ts-expect-error — culled from all three (R-12); a declaration must
+		// not resurrect it either
+		ports: ["text"]
+	}
+)
+
+// And a definition with no parameters admits no parameter name at all.
+reads<typeof C.userMessage>(
+	async (input: NodeInput<typeof C.userMessage>) => ok(input),
+	{
+		ports: [],
+		// @ts-expect-error — nothing to declare: the schema is empty
+		params: ["anything"]
+	}
+)
 
 export {}

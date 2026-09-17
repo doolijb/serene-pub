@@ -38,7 +38,6 @@ import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { capabilityDefault } from "$lib/server/connections/capabilityDefaults"
 import {
 	connectionModelById,
-	defaultConnectionModel,
 	mergeEndpointModel
 } from "$lib/server/connections/models"
 import { decryptApiKeyField } from "$lib/server/utils/tokenCrypto"
@@ -147,21 +146,19 @@ export async function resolveEmbeddingTarget(
 		.limit(1)
 	if (!endpoint) return null
 
-	// The model rides with the connection (0114): the star names a pair, and
-	// naming only the endpoint means "its default model".
+	// The star names a pair, and both halves are required: a registration
+	// naming only the endpoint is incomplete, and the lane treats it as off
+	// rather than guessing a model.
 	const modelRow = registered.connectionModelId
 		? await connectionModelById(db, registered.connectionModelId)
-		: await defaultConnectionModel(db, registered.connectionId)
+		: undefined
 	// A model row belongs to exactly one endpoint; one that names another is a
 	// pair no backend could serve.
 	const model =
 		modelRow && modelRow.connectionId === registered.connectionId
 			? modelRow
 			: undefined
-	const connection = mergeEndpointModel(
-		endpoint,
-		model
-	) as unknown as SelectConnection
+	const connection = mergeEndpointModel(endpoint, model)
 
 	const modelName = (connection.model ?? "").trim()
 	if (!modelName) return null

@@ -3,7 +3,7 @@
  *
  * The one place that turns a tool NAME into something that runs. Both nodes
  * read it — `core:query/available-tools@1` for the advertisement and
- * `core:provider/run-tool@1` for the call — so the list a model is shown and
+ * `core:oracle/run-tool@1` for the call — so the list a model is shown and
  * the list it is answered from are the same list by construction. Two
  * resolutions would eventually differ, and the failure would read as a model
  * hallucinating a tool it was genuinely offered.
@@ -11,7 +11,7 @@
  * ## The extension convention
  *
  * `manifest.tools: { '<toolName>': { hook, description, parameters } }` — the
- * sibling of `hookTypes` (a script link's hook) and `nodeTypes` (a node's),
+ * sibling of `hookKinds` (a script link's hook) and `nodeDefinitions` (a node's),
  * read the same way: the STORED manifest is the one source of truth (F6),
  * never a naming convention guessed from the id. A tool is a hook like any
  * other, so it runs through the same sandbox, under the same permissions, with
@@ -55,7 +55,7 @@ export type ToolProvider =
  * Read `tools` off a stored manifest, tolerant of its json being anything.
  *
  * A malformed entry is skipped rather than raising: a third party's packaging
- * mistake must not be able to stop a turn, the same judgement `nodeTypesOf`
+ * mistake must not be able to stop a turn, the same judgement `nodeDefinitionsOf`
  * makes one module over. An entry with no `hook` names nothing to call, and
  * one with no `description` is a tool no model can decide to use — both are
  * incomplete declarations rather than declarations of something incomplete.

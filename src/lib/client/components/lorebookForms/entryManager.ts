@@ -19,12 +19,14 @@
  */
 
 import type { TypedSocket } from "$lib/client/sockets/typedSocket"
+import { declareInterest } from "$lib/client/sockets/interest.svelte"
+import { interestKey } from "$lib/shared/sockets/interest"
 import type { EntryTypeId, LorebookEntry } from "$lib/shared/entries/types"
 
-/** A binding with the character/persona it names, as the lists send it. */
+/** A binding with the character it names, as the lists send it. A persona is
+ *  a character, so `character` is the only bound arc. */
 export type BindingWithRelations = SelectLorebookBinding & {
 	character?: { nickname?: string | null; name: string } | null
-	persona?: { name: string } | null
 }
 
 type SortableEntry = {
@@ -124,11 +126,6 @@ export function substituteBindings(
 					binding.character?.name ||
 					binding.binding
 			)
-		else if (binding.personaId)
-			out = out.replaceAll(
-				binding.binding,
-				binding.persona?.name || binding.binding
-			)
 	}
 	return out
 }
@@ -212,28 +209,75 @@ export function entryChannel<T extends EntryTypeId>(
 
 	const list = () => socket.emit("entries:list", { lorebookId, typeId })
 
+	/**
+	 * The **interest** this channel holds while it is open — one release per
+	 * key, dropped in `close()`.
+	 *
+	 * A plain module, not a component, so this keeps the releases by hand
+	 * rather than through `useInterest`: there is no initialisation scope here
+	 * for an `$effect` to live in.
+	 *
+	 * ⚠ Which keys carry a scope is not a choice made here — `SCOPED_EVENTS`
+	 * in the shared contract is the one table, and a `#<id>` key for an event
+	 * that table does not scope matches NO payload at all. The five that ARE
+	 * scoped key on this tab's book; the two that are not stay bare and keep
+	 * their handler's own filter as the whole of the narrowing.
+	 *
+	 * ⚠ `entries:list`/`create`/`update` narrow to the BOOK, never to this
+	 * tab's `typeId` — one namespace serves every entry type, so a History tab
+	 * and a World Lore tab on the same book still hear each other and each
+	 * handler's `msg.typeId !== typeId` check stays the filter that separates
+	 * them.
+	 */
+	const releases: Array<() => void> = []
+
 	return {
-		/** Subscribe, then ask for both lists. Call from `onMount`. */
+		/** Declare this tab's interest, then ask for both lists. Call from `onMount`. */
 		open() {
-			socket.on("entries:list", onList)
-			socket.on("entries:create", onCreated)
-			socket.on("entries:update", onUpdated)
-			socket.on("entries:delete", onDeleted)
-			socket.on("entries:updatePositions", onReordered)
-			socket.on("lorebooks:bindingList", onBindings)
-			socket.on("vectorization:itemUpdated", onVectorized)
+			releases.push(
+				declareInterest<"entries:list">(
+					interestKey("entries:list", lorebookId),
+					onList
+				),
+				declareInterest<"entries:create">(
+					interestKey("entries:create", lorebookId),
+					onCreated
+				),
+				declareInterest<"entries:update">(
+					interestKey("entries:update", lorebookId),
+					onUpdated
+				),
+				declareInterest<"entries:delete">(
+					interestKey("entries:delete", lorebookId),
+					onDeleted
+				),
+				// BARE: `entries:updatePositions` answers with `{ success }`
+				// and nothing to scope on, so it has no entry in the table.
+				declareInterest<"entries:updatePositions">(
+					"entries:updatePositions",
+					onReordered
+				),
+				declareInterest<"lorebooks:bindingList">(
+					interestKey("lorebooks:bindingList", lorebookId),
+					onBindings
+				),
+				// BARE: the vectorizer's family is a later slice and
+				// `vectorization:itemUpdated` is not in `SCOPED_EVENTS` yet —
+				// a scoped key would match nothing today. `onVectorized`'s own
+				// `msg.lorebookId !== lorebookId` check is the filter either
+				// way, so this is a one-line change when that slice lands.
+				declareInterest<"vectorization:itemUpdated">(
+					"vectorization:itemUpdated",
+					onVectorized
+				)
+			)
 			list()
 			socket.emit("lorebooks:bindingList", { lorebookId })
 		},
-		/** Call from `onDestroy`. Every `on` above has its `off` here. */
+		/** Call from `onDestroy`. Every key declared above is released here. */
 		close() {
-			socket.off("entries:list", onList)
-			socket.off("entries:create", onCreated)
-			socket.off("entries:update", onUpdated)
-			socket.off("entries:delete", onDeleted)
-			socket.off("entries:updatePositions", onReordered)
-			socket.off("lorebooks:bindingList", onBindings)
-			socket.off("vectorization:itemUpdated", onVectorized)
+			for (const release of releases) release()
+			releases.length = 0
 		},
 		list,
 		create(entry: Record<string, unknown>) {

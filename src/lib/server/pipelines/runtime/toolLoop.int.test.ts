@@ -87,6 +87,35 @@ vi.mock("$lib/server/utils/resolveTaskConfig", () => ({
 		sampling: { id: 1 }
 	})
 }))
+// The reply dispatch consumes the run's own resolution now (R-8) and asks the
+// resolver only to load the pair — so the stand-in connection is supplied
+// where dispatch actually reads it. The real resolver answers first: a test
+// that registers a capability default of its own gets that connection (and
+// its stop guards), and only an instance with nothing registered falls back
+// to the stand-in.
+vi.mock("$lib/server/connections/capabilityTarget", async (importOriginal) => {
+	const real = await importOriginal<
+		typeof import("$lib/server/connections/capabilityTarget")
+	>()
+	return {
+		...real,
+		resolveCapabilityTarget: async (
+			db: Db,
+			req: Parameters<typeof real.resolveCapabilityTarget>[1]
+		) => {
+			const target = await real.resolveCapabilityTarget(db, req)
+			if (target.ok) return target
+			return {
+				ok: true,
+				capability: req.capability,
+				connection: { id: 1, type: "koboldcpp", promptFormat: "vicuna" },
+				sampling: { id: 1 },
+				connectionVia: "pipelineConfig",
+				samplingVia: "pipelineConfig"
+			}
+		}
+	}
+})
 vi.mock("$lib/server/utils/getUserConfigurations", () => ({
 	getUserConfigurations: async () => ({
 		sampling: { id: 1 },
@@ -108,7 +137,7 @@ let userId: number
 const callFor = (tool: string, args: Record<string, unknown>) =>
 	"```tool_call\n" + JSON.stringify({ tool, args }) + "\n```"
 
-/** The pool's shipped row — the prose `agent.item.prompt` renders. */
+/** The pool's shipped row — the prose `tools.item.prompt` renders. */
 const TOOL_LOOP_PROMPT = CORE_PROMPTS.find(
 	(p) =>
 		p.seedKey ===
@@ -181,28 +210,28 @@ const execute = async () => {
 	 */
 	world.overrides.push(
 		{
-			nodeKey: "agent.item.prompt",
+			nodeKey: "tools.item.prompt",
 			slot: "template",
 			path: "source",
 			value: TOOL_LOOP_TEMPLATE,
 			scopeKind: "defaults"
 		} as any,
 		{
-			nodeKey: "agent.item.prompt",
+			nodeKey: "tools.item.prompt",
 			slot: "template",
 			path: "engine",
 			value: CORE_TEMPLATE_ENGINE,
 			scopeKind: "defaults"
 		} as any,
 		{
-			nodeKey: "agent.item.prompt",
+			nodeKey: "tools.item.prompt",
 			slot: "prompts",
 			path: "system",
 			value: TOOL_LOOP_PROMPT.system,
 			scopeKind: "defaults"
 		} as any,
 		{
-			nodeKey: "agent.item.prompt",
+			nodeKey: "tools.item.prompt",
 			slot: "prompts",
 			path: "postHistory",
 			value: TOOL_LOOP_PROMPT.postHistory,
@@ -258,14 +287,14 @@ describe("a tool-calling turn", () => {
 
 		// Do-while: two tool rounds, then the answer.
 		const generates = receipt.nodes.filter(
-			(n: any) => n.nodeKey === "agent.item.generate"
+			(n: any) => n.nodeKey === "tools.item.generate"
 		)
 		expect(generates.map((g: any) => g.iteration)).toEqual([0, 1, 2])
 
 		// The loop stopped because the model stopped asking, not because it ran
 		// out of turns — the two are indistinguishable without this.
 		expect((receipt as any).loops).toEqual([
-			{ blockId: "agent", iterations: 3, stopped: "predicate" }
+			{ clauseId: "tools", iterations: 3, stopped: "predicate" }
 		])
 
 		const rows = await db
@@ -319,10 +348,10 @@ describe("a tool-calling turn", () => {
 		const receipt = await execute()
 
 		expect((receipt as any).loops).toEqual([
-			{ blockId: "agent", iterations: 1, stopped: "predicate" }
+			{ clauseId: "tools", iterations: 1, stopped: "predicate" }
 		])
 		const tool = receipt.nodes.find(
-			(n: any) => n.nodeKey === "agent.item.tool"
+			(n: any) => n.nodeKey === "tools.item.tool"
 		)
 		expect((tool as any)?.output?.main ?? null).toBeNull()
 	}, 60_000)
@@ -336,7 +365,7 @@ describe("a tool-calling turn", () => {
 
 		expect(receipt.outcome).toBe("ok")
 		const tool = receipt.nodes.find(
-			(n: any) => n.nodeKey === "agent.item.tool"
+			(n: any) => n.nodeKey === "tools.item.tool"
 		)
 		expect((tool as any)?.result).toBe("ok")
 		expect(promptText(1)).toContain("there is no entry 999999")
@@ -357,7 +386,7 @@ describe("a tool-calling turn", () => {
 
 			expect(receipt.outcome).toBe("ok")
 			expect((receipt as any).loops).toEqual([
-				{ blockId: "agent", iterations: 2, stopped: "predicate" }
+				{ clauseId: "tools", iterations: 2, stopped: "predicate" }
 			])
 			expect(promptText(1)).toContain("tool_result")
 		} finally {
@@ -374,7 +403,7 @@ describe("a tool-calling turn", () => {
 
 		expect(receipt.outcome).toBe("ok")
 		expect((receipt as any).loops).toEqual([
-			{ blockId: "agent", iterations: 6, stopped: "ceiling" }
+			{ clauseId: "tools", iterations: 6, stopped: "ceiling" }
 		])
 		expect(prompts).toHaveLength(6)
 	}, 60_000)

@@ -12,6 +12,8 @@
  * trips behind every click in the list.
  */
 
+import { declareInterest } from "$lib/client/sockets/interest.svelte"
+import { interestKey } from "$lib/shared/sockets/interest"
 import type { TypedSocket } from "$lib/client/sockets/typedSocket"
 import { readInFacts, type RunFacts } from "./readIn"
 
@@ -30,9 +32,20 @@ class RetrievalReadout {
 	#sessionId: number | null = null
 	#runId: string | null = null
 	#explanation = $state<Explanation | null>(null)
+	/**
+	 * The interest releases held while any editor is mounted — one per declared
+	 * key, dropped together by the last `close`.
+	 *
+	 * A plain array, not `$state`: nothing renders from it.
+	 */
+	#releases: Array<() => void> = []
+	/**
+	 * The `entries:recentDecisions` release, held apart from the others
+	 * because its key MOVES: the key names the book being read, and a reader
+	 * opening another one has to release the old key as it takes the new.
+	 */
+	#decisionsRelease: (() => void) | null = null
 
-	// Named so `off` can name them too: a bare off() would take every other
-	// listener for the event with it, the workspace's own included.
 	#onDecisions = (msg: Sockets.Entries.RecentDecisions.Response) => {
 		if (
 			msg.lorebookId !== this.#lorebookId ||
@@ -60,22 +73,59 @@ class RetrievalReadout {
 		this.#explanation = null
 	}
 
-	/** Call from `onMount`, with the socket the workspace already holds. */
+	/**
+	 * Declares (or re-declares) interest in the decisions of the book named by
+	 * `#lorebookId`, releasing whatever key was held before.
+	 *
+	 * SCOPED, because `entries:recentDecisions` carries `lorebookId` and two
+	 * workspaces can be open on two books; `#onDecisions` still checks the
+	 * pair itself, since the session half of it is not part of the key.
+	 * Nothing is held while no editor is mounted, or before a book is named.
+	 */
+	#declareDecisions(): void {
+		this.#decisionsRelease?.()
+		this.#decisionsRelease = null
+		if (this.#users === 0 || this.#lorebookId === null) return
+		this.#decisionsRelease = declareInterest<"entries:recentDecisions">(
+			interestKey("entries:recentDecisions", this.#lorebookId),
+			this.#onDecisions
+		)
+	}
+
+	/**
+	 * Call from `onMount`, with the socket the workspace already holds.
+	 *
+	 * The run's account is declared on the interest registry — BARE, since
+	 * `pipelines:runExplain` has no entry in `SCOPED_EVENTS` and `#onExplain`
+	 * filters on the run id it asked about. The refcount is what decides the
+	 * declare: one editor's worth of interest, however many are mounted on it.
+	 */
 	open(socket: TypedSocket): void {
 		this.#socket = socket
 		if (this.#users++ > 0) return
-		socket.on("entries:recentDecisions", this.#onDecisions)
-		socket.on("pipelines:runExplain", this.#onExplain)
-		socket.on("pipelines:runExplain:error", this.#onExplainError)
+		this.#declareDecisions()
+		this.#releases = [
+			declareInterest<"pipelines:runExplain">(
+				"pipelines:runExplain",
+				this.#onExplain
+			),
+			// Never gated (plan ruling 2 — an error is not an output to skip),
+			// but the registry is the only listener path.
+			declareInterest<"pipelines:runExplain:error">(
+				"pipelines:runExplain:error",
+				this.#onExplainError
+			)
+		]
 	}
 
 	/** Call from `onDestroy`. */
-	close(socket: TypedSocket): void {
+	close(_socket: TypedSocket): void {
 		if (--this.#users > 0) return
 		this.#users = 0
-		socket.off("entries:recentDecisions", this.#onDecisions)
-		socket.off("pipelines:runExplain", this.#onExplain)
-		socket.off("pipelines:runExplain:error", this.#onExplainError)
+		this.#decisionsRelease?.()
+		this.#decisionsRelease = null
+		for (const release of this.#releases) release()
+		this.#releases = []
 		this.#socket = null
 		this.#lorebookId = null
 		this.#sessionId = null
@@ -91,6 +141,9 @@ class RetrievalReadout {
 		this.#sessionId = sessionId
 		this.#runId = null
 		this.#explanation = null
+		// Before the emit, never after: the request flushes the interest sync
+		// that declares the key its own reply needs.
+		this.#declareDecisions()
 		if (lorebookId === null || sessionId === null) return
 		this.#socket?.emit("entries:recentDecisions", {
 			lorebookId,

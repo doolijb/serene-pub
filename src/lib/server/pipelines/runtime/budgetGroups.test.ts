@@ -37,22 +37,19 @@ const reasonFor = (r: any, id: string) =>
 
 describe("index sources that are a budget group under another name", () => {
 	it("selects a message, a history entry and a relationship", async () => {
-		const r = await rank(
-			[
-				candidate("m", "message"),
-				candidate("h", "historyEntry"),
-				candidate("rel", "narrativeRelationship")
-			],
-			// Relationships ship with a share and a cap of zero — off by
-			// default, not absent — so the group is opened here. Without it the
-			// mapping would be provable only for two of the three, and the
-			// receipt reason (`excluded_group_disabled`) is asserted below as
-			// the other half of the same claim.
-			{
-				share: { relationships: 0.2 },
-				maxEntries: { relationships: 5 }
-			}
-		)
+		const r = await rank([
+			// Relationships ship with a share of zero — off by default, not
+			// absent — so the band is opened here the way its source opens it
+			// (R-7 P5): a band intent at the head of the list, as
+			// `relationship-search` publishes. Without it the mapping would be
+			// provable only for two of the three, and the receipt reason
+			// (`excluded_group_disabled`) is asserted below as the other half
+			// of the same claim.
+			{ band: "relationships", intent: { share: 0.2, maxEntries: 5 } },
+			candidate("m", "message"),
+			candidate("h", "historyEntry"),
+			candidate("rel", "narrativeRelationship")
+		])
 		expect(r.value.candidates.map((c: any) => c.id).sort()).toEqual([
 			"h",
 			"m",

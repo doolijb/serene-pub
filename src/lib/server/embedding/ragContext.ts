@@ -727,44 +727,62 @@ export async function fetchScopedCandidates(
 		}
 	}
 
-	// Personas linked to this session
+	// The characters this session's users VOICE. One table with the cast above,
+	// but a separate source because it is a separate scope: the cast is who the
+	// model plays, this is who the user plays, and an install can want one in
+	// its RAG context without the other.
+	//
+	// ⚠ A character can be in BOTH (the user voices someone who is also cast),
+	// and the same row admitted twice under two source names is the same text
+	// twice in one prompt. The ids already fetched above are skipped, so the
+	// overlap lands once, as `character`.
 	if (include("persona") && context.personaIds.length > 0) {
-		const where = and(
-			inArray(schema.personas.id, context.personaIds),
-			isNotNull(schema.personas.embedding),
-			eq(schema.personas.embeddingModel, modelId)
+		const alreadyFetched = new Set(
+			candidates
+				.filter((c) => c.source === "character")
+				.map((c) => c.id)
 		)
-		const ps = await db
-			.select({
-				id: schema.personas.id,
-				name: schema.personas.name,
-				description: schema.personas.description,
-				embedding: schema.personas.embedding,
-				embeddingModel: schema.personas.embeddingModel
-			})
-			.from(schema.personas)
-			.where(where)
-			.orderBy(desc(schema.personas.id))
-			.limit(RAG_CANDIDATE_FETCH_CAP)
-
-		await noteTruncation(
-			truncated,
-			"persona",
-			ps.length,
-			schema.personas,
-			where
+		const personaIds = context.personaIds.filter(
+			(id) => !alreadyFetched.has(id)
 		)
+		if (personaIds.length > 0) {
+			const where = and(
+				inArray(schema.characters.id, personaIds),
+				isNotNull(schema.characters.embedding),
+				eq(schema.characters.embeddingModel, modelId)
+			)
+			const ps = await db
+				.select({
+					id: schema.characters.id,
+					name: schema.characters.name,
+					description: schema.characters.description,
+					embedding: schema.characters.embedding,
+					embeddingModel: schema.characters.embeddingModel
+				})
+				.from(schema.characters)
+				.where(where)
+				.orderBy(desc(schema.characters.id))
+				.limit(RAG_CANDIDATE_FETCH_CAP)
 
-		for (const p of ps) {
-			if (!p.embedding) continue
-			candidates.push({
-				source: "persona",
-				id: p.id,
-				name: p.name,
-				description: p.description,
-				embedding: p.embedding,
-				embeddingModel: p.embeddingModel
-			})
+			await noteTruncation(
+				truncated,
+				"persona",
+				ps.length,
+				schema.characters,
+				where
+			)
+
+			for (const p of ps) {
+				if (!p.embedding) continue
+				candidates.push({
+					source: "persona",
+					id: p.id,
+					name: p.name,
+					description: p.description,
+					embedding: p.embedding,
+					embeddingModel: p.embeddingModel
+				})
+			}
 		}
 	}
 

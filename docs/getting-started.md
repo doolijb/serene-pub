@@ -111,12 +111,21 @@ If you haven't created a character yet, this step shows a reminder to go back an
 
 ## The Home Dashboard After Setup
 
-Once every required step is complete, this same screen stops showing the wizard and instead displays:
+Once every required step is complete, this same screen stops showing the wizard and answers one
+question instead: what were you doing?
 
-- A **Characters** grid of everything you've created or imported — clicking a character jumps to that character's sessions. A list/card view toggle lets you switch how this grid displays; your choice is remembered locally in your browser. The Recent Sessions grid below has no equivalent toggle.
-- A **Recent Sessions** grid (your most recent, up to six) if you have any sessions yet — clicking one opens it directly.
+- A **greeting** for the time of day, with how many sessions are waiting on your reply, and a
+  **Start a session** button.
+- **Pick up where you left off**: up to four sessions with messages, newest first. Each card shows
+  the genre, who is in the scene, when it was last active, the last line that was said, and whose
+  turn it is. **Continue** opens the session.
+- A **Characters** shelf of what you have created or imported, with an **All** link that opens the
+  Characters view, and a **New or import** tile.
+- A **Personas** row. Clicking one opens it in the Personas view.
+- At the foot, quiet links to the **Documentation** and to **Document View**.
 
-You'll also usually see a dismissible welcome banner (with a small × button to hide it) and a small alpha-status notice reminding you the app is under active development, regardless of whether the wizard or dashboard is showing — though the banner itself is hidden on narrow/mobile screens. A **Documentation** link, pointing at the in-app `/docs` page, is always shown above the wizard or dashboard content as well, alongside a **Document View** button that switches to a simplified, high-contrast, keyboard- and screen-reader-friendly layout (also reachable via Ctrl+Shift+Y) — see [Document View](./document-view.md) for what that mode changes.
+A quiet one-line notice at the top of the home reminds you the app is in beta and under active
+development.
 
 ## Returning to This Screen Later
 

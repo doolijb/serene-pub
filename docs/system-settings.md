@@ -4,7 +4,7 @@ System Settings hold the instance-wide configuration for a Serene Pub deployment
 
 ## Overview
 
-Open the **Settings** panel (gear icon in the main navigation) and select the **System** tab. This tab only appears for users whose account has admin privileges — everyone else sees only the **User**, **Themes**, and **About** tabs.
+Open the **Settings** view (gear icon on the rail) and select the **System** tab. This tab only appears for users whose account has admin privileges — everyone else sees only the **User**, **Themes**, and **About** tabs.
 
 Everything on this tab is separate from your own personal preferences — easy-creation toggles and so on live on the **User** tab, while theme, dark mode, and background image live on the separate **Themes** tab — all covered in [Custom Themes & User Settings](./themes-and-settings.md). System Settings changes apply globally: turning a manager or feature on or off here changes what every user on the instance sees and can do.
 

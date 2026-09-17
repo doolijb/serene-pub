@@ -21,7 +21,7 @@ import {
 	createTestUser,
 	type TestDb
 } from "$lib/server/utils/testDb"
-import { syncTypeRegistry } from "$lib/server/pipelines/boot/registrySync"
+import { syncDefinitionRegistry } from "$lib/server/pipelines/boot/registrySync"
 import {
 	auditEntryConstraints,
 	entryCheckExpression,
@@ -73,7 +73,7 @@ beforeAll(async () => {
 	lorebookId = book.id
 
 	// The boot chain's own order: the registry first, the projection after it.
-	await syncTypeRegistry(db, allEntryTypes(), { release: "0.6.0" })
+	await syncDefinitionRegistry(db, allEntryTypes(), { release: "0.6.0" })
 
 	// A history entry with no year, written *before* the constraint exists —
 	// which is exactly the situation NOT VALID is for: a real install may
@@ -250,7 +250,7 @@ describe("projecting core's three types", () => {
 
 	it("validates the type reference once the registry is in step", async () => {
 		// The migration left it NOT VALID because migrations run *before*
-		// `syncTypeRegistry`; this is the other end of that cycle.
+		// `syncDefinitionRegistry`; this is the other end of that cycle.
 		const res = await db.execute(sql`
 			SELECT "convalidated" FROM "pg_constraint"
 			WHERE "conrelid" = 'lorebook_entries'::regclass
@@ -360,13 +360,13 @@ describe("repairing what the audit found", () => {
 
 describe("a version bump", () => {
 	// A synthetic type, so the bump can be exercised without republishing one
-	// of core's — `syncTypeRegistry` freezes those by design, and this is about
+	// of core's — `syncDefinitionRegistry` freezes those by design, and this is about
 	// the projection rather than about the freeze rule.
 	const SYNTH = "core:entry/synthetic-probe"
 
 	it("adds the new version's constraint and leaves the others untouched", async () => {
-		await db.insert(schema.pipelineTypeRegistry).values({
-			typeId: SYNTH,
+		await db.insert(schema.pipelineDefinitionRegistry).values({
+			definitionId: SYNTH,
 			version: 1,
 			kind: "entry",
 			configSchema: {
@@ -384,8 +384,8 @@ describe("a version bump", () => {
 		// Core's stay exactly as they were.
 		expect((await constraints()).get(HISTORY_CHECK)).toBe(true)
 
-		await db.insert(schema.pipelineTypeRegistry).values({
-			typeId: SYNTH,
+		await db.insert(schema.pipelineDefinitionRegistry).values({
+			definitionId: SYNTH,
 			version: 2,
 			kind: "entry",
 			configSchema: {
@@ -435,11 +435,11 @@ describe("a version bump", () => {
 
 	it("drops a constraint whose type version is gone, and only that one", async () => {
 		await db
-			.delete(schema.pipelineTypeRegistry)
+			.delete(schema.pipelineDefinitionRegistry)
 			.where(
 				and(
-					eq(schema.pipelineTypeRegistry.typeId, SYNTH),
-					eq(schema.pipelineTypeRegistry.version, 1)
+					eq(schema.pipelineDefinitionRegistry.definitionId, SYNTH),
+					eq(schema.pipelineDefinitionRegistry.version, 1)
 				)
 			)
 		const report = await projectEntryConstraints(db)
@@ -462,8 +462,8 @@ describe("a version bump", () => {
 		// mode this whole design keeps naming. The id below cannot come out of
 		// `describeEntryType` — it is what a hand-edited row looks like — and
 		// the point is that it is *said*, not that it is handled.
-		await db.insert(schema.pipelineTypeRegistry).values({
-			typeId: "core:entry/has a space",
+		await db.insert(schema.pipelineDefinitionRegistry).values({
+			definitionId: "core:entry/has a space",
 			version: 1,
 			kind: "entry",
 			configSchema: { alpha: { type: "integer", required: true } }
@@ -476,9 +476,9 @@ describe("a version bump", () => {
 		// name another type could fold onto.
 		expect(report.constraints.added).toEqual([])
 		await db
-			.delete(schema.pipelineTypeRegistry)
+			.delete(schema.pipelineDefinitionRegistry)
 			.where(
-				eq(schema.pipelineTypeRegistry.typeId, "core:entry/has a space")
+				eq(schema.pipelineDefinitionRegistry.definitionId, "core:entry/has a space")
 			)
 	})
 
@@ -494,8 +494,8 @@ describe("a version bump", () => {
 
 		// Clean up, so nothing after this file reads a doctored registry.
 		await db
-			.delete(schema.pipelineTypeRegistry)
-			.where(eq(schema.pipelineTypeRegistry.typeId, SYNTH))
+			.delete(schema.pipelineDefinitionRegistry)
+			.where(eq(schema.pipelineDefinitionRegistry.definitionId, SYNTH))
 		await projectEntryConstraints(db)
 	})
 })

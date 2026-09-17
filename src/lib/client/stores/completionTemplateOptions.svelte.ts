@@ -1,5 +1,6 @@
 import { PromptFormats } from "$lib/shared/constants/PromptFormats"
 import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+import { requestWithInterest } from "$lib/client/sockets/interest.svelte"
 
 /**
  * The connection format picker's options — **from the table**, not from a
@@ -37,17 +38,31 @@ const FALLBACK = PromptFormats.options
 let options = $state<{ value: string; label: string }[]>(FALLBACK)
 let started = false
 
+/** What `stopCompletionTemplateOptions` releases — the one declared key. */
+let release: (() => void) | null = null
+
+function onOptions(res: Sockets.CompletionTemplates.Options.Response) {
+	// An empty table would be a database with no seeds in it, which is not a
+	// state to render as "no formats exist": keep the built-ins.
+	if (res?.options?.length) options = res.options
+}
+
+/**
+ * Declare the interest, then ask — `requestWithInterest` in that order, which
+ * is what puts the interest sync on the wire ahead of the request (plan ruling
+ * 3) and makes a gated reply reachable at all.
+ *
+ * BARE: `completionTemplates:options` is not in `SCOPED_EVENTS` — it is the
+ * instance's whole selectable set, with nothing to narrow to. STANDING, and
+ * that is the point of the store: `refreshCompletionTemplateOptions()` re-asks
+ * on the same key after an admin write, and every form on the page reads the
+ * one answer.
+ *
+ * A module store cannot call `getContext`, so this is the plain import of the
+ * registry (plan ruling 7) rather than the interest context.
+ */
 function subscribe() {
-	const socket = useTypedSocket()
-	socket.on(
-		"completionTemplates:options",
-		(res: Sockets.CompletionTemplates.Options.Response) => {
-			// An empty table would be a database with no seeds in it, which is
-			// not a state to render as "no formats exist": keep the built-ins.
-			if (res?.options?.length) options = res.options
-		}
-	)
-	socket.emit("completionTemplates:options", {})
+	release = requestWithInterest("completionTemplates:options", {}, onOptions)
 }
 
 /**
@@ -81,4 +96,18 @@ export function completionTemplateOptions() {
 export function refreshCompletionTemplateOptions() {
 	if (!started) return
 	useTypedSocket().emit("completionTemplates:options", {})
+}
+
+/**
+ * Drop the interest. Nothing in the app calls this today — the cache is
+ * module-scoped and lives as long as the tab, which is the point, and it is
+ * why the old code had no `off` at all — but the release is kept so a teardown
+ * is possible, and so it removes THIS store's subscriber rather than every
+ * listener for the event. Mirrors `stopWidgetStyles` next door.
+ */
+export function stopCompletionTemplateOptions() {
+	if (!started) return
+	release?.()
+	release = null
+	started = false
 }

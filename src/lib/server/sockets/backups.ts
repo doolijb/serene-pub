@@ -91,8 +91,12 @@ export const backupsCreate: Handler<
 			}
 		}
 		emitToUser("backups:create", res)
-		// The list this client is showing is now one row short of the truth.
-		emitToUser("backups:list", await listResponse())
+		// The list this client is showing is now one row short of the truth —
+		// for whoever is showing one. `backups:list` is gated, and this is the
+		// lazy form: with Settings → Data closed everywhere, the backups
+		// directory is never walked at all. Awaited so the refreshed list still
+		// lands before this handler returns, exactly as it did eagerly.
+		await emitToUser("backups:list", () => listResponse())
 		return res
 	}
 }
@@ -125,7 +129,8 @@ export const backupsDelete: Handler<
 			success: true
 		}
 		emitToUser("backups:delete", res)
-		emitToUser("backups:list", await listResponse())
+		// Lazy, for the reason given in `backupsCreate` above.
+		await emitToUser("backups:list", () => listResponse())
 		return res
 	}
 }

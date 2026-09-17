@@ -589,7 +589,7 @@ function castRefusal(
 	ref: EntityRef | undefined
 ): boolean {
 	const kind = ref?.kind ?? gazetteer.byName.get(key)?.kind
-	return kind === "character" || kind === "persona"
+	return kind === "character"
 }
 
 interface Candidate {

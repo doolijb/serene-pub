@@ -663,14 +663,20 @@ async function runInitialisation(): Promise<void> {
 		// `sync` above. Plugin widgets seed their own on install/update.
 		const { syncWidgetStyles } = await import("./widgetStyles")
 		const { CORE_WIDGETS } = await import("@serene-pub/core-catalog")
-		// `withCorePresets` attaches the app's own message + composer style
-		// packs to core's two primary widgets. They are app-side because every
-		// selector in them is a class the app's SessionMessage / SessionComposer
-		// authors — markup the SDK has no view of (shared/widgets/corePresets.ts).
+		// `withCorePresets` attaches the app's own message style packs to core's
+		// primary widget. They are app-side because every selector in them is a
+		// class the app's SessionMessage authors — markup the SDK has no view of
+		// (shared/widgets/corePresets.ts).
+		//
+		// `pruneUndeclared` is core's claim that this IS the whole set of
+		// widgets with shipped styles, so a widget core has stopped declaring
+		// takes its system rows with it. Only core boot may say that; a plugin
+		// sync speaks for its own ids alone.
 		const { withCorePresets } = await import("$lib/shared/widgets/corePresets")
 		await syncWidgetStyles(
 			withCorePresets(CORE_WIDGETS),
-			meta.version || "0.0.0"
+			meta.version || "0.0.0",
+			{ pruneUndeclared: true }
 		)
 
 		// Prune per-instance widget settings against the current declarations,

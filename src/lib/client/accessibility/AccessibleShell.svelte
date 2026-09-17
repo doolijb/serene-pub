@@ -15,6 +15,12 @@
 	import { goto } from "$app/navigation"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import {
+		INTEREST_CONTEXT,
+		interestContextValue,
+		setInterestUser,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
+	import {
 		registerLanguageSocket,
 		setLanguage
 	} from "$lib/client/i18n/state.svelte"
@@ -55,6 +61,11 @@
 	let userSettingsCtx: UserSettingsCtx = $state({ settings: undefined })
 
 	setContext("userCtx", userCtx)
+	// The interest registry is a module (one socket, one registry), so this
+	// context is a thin wrapper over it — components take it as ambient state
+	// instead of importing it, and stores in `.svelte.ts` modules, which
+	// cannot `getContext`, keep calling the module directly.
+	setContext(INTEREST_CONTEXT, interestContextValue())
 	setContext("systemSettingsCtx", systemSettingsCtx)
 	setContext("ollamaSettingsCtx", ollamaSettingsCtx)
 	setContext("koboldCppSettingsCtx", koboldCppSettingsCtx)
@@ -99,6 +110,10 @@
 	}
 	function handleUsersCurrent(message: any) {
 		userCtx.user = message.user
+		// The registry gates restricted interest on this flag (plan ruling
+		// 6a). It is the first of three checks, never the boundary — the
+		// server's sync handler and each handler's own admin check are.
+		setInterestUser(message.user ?? null)
 	}
 	function handleUserSettingsGet(message: any) {
 		userSettingsCtx.settings = message.userSettings
@@ -108,17 +123,29 @@
 		setLanguage(message.userSettings.effectiveLanguage)
 	}
 
+	/**
+	 * Standing interest in the three pushes that populate this shell's
+	 * contexts. They are bare keys — singletons, not scoped — and Layout.svelte
+	 * holds the same three for the main shell. That is not a duplicate
+	 * listener: the registry counts subscribers per key and owns exactly one
+	 * raw socket listener per event, so both shells can hold them.
+	 *
+	 * Standing rather than released-on-reply because all three are cascade
+	 * targets: the server re-emits them after writes elsewhere (a settings
+	 * save, a profile change), and this shell has to follow those.
+	 */
+	useInterest<"systemSettings:get">(
+		"systemSettings:get",
+		handleSystemSettingsGet
+	)
+	useInterest<"users:current">("users:current", handleUsersCurrent)
+	useInterest<"userSettings:get">("userSettings:get", handleUserSettingsGet)
+
 	onMount(() => {
-		socket.on("systemSettings:get", handleSystemSettingsGet)
-		socket.on("users:current", handleUsersCurrent)
-		socket.on("userSettings:get", handleUserSettingsGet)
 		const offLanguageCatalog = registerLanguageSocket()
 		socket.emit("systemSettings:get", {})
 
 		return () => {
-			socket.off("systemSettings:get", handleSystemSettingsGet)
-			socket.off("users:current", handleUsersCurrent)
-			socket.off("userSettings:get", handleUserSettingsGet)
 			offLanguageCatalog()
 		}
 	})
@@ -198,7 +225,6 @@
 				label: "Characters",
 				show: true
 			},
-			{ href: "/document-view/personas", label: "Personas", show: true },
 			{ href: "/document-view/docs", label: "Documentation", show: true },
 			{
 				href: "/document-view/connections",
@@ -346,7 +372,19 @@
 		tabindex="-1"
 		bind:this={mainEl}
 	>
-		{@render children?.()}
+		<!-- Pages mount only once the user is known, as in the main Layout
+		     (`shouldShowApp`). The interest registry HOLDS restricted keys
+		     (`ollama:`, `koboldcpp:`, `backups:`, …) out of the sync until
+		     `setInterestUser` runs, so an admin page that asked for its data
+		     from `onMount` on a cold load would have its reply dropped by the
+		     server's gate — the key it needs is not on the wire yet. The
+		     socket only connects for an authenticated user, so this resolves
+		     for everyone who reaches the shell. -->
+		{#if hasUser}
+			{@render children?.()}
+		{:else}
+			<p aria-busy="true">Loading your account…</p>
+		{/if}
 	</main>
 
 	<footer class="a11y-footer">

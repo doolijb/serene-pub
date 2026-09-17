@@ -2,7 +2,7 @@
 	/**
 	 * The whole pipeline on a real graph canvas — Svelte Flow rendering, ELK
 	 * layered layout (see flow/layout.ts). Every node, every construct —
-	 * fan-outs, maps, loops, routes, nested blocks — with pan/zoom, fit-view,
+	 * gathers, for-eaches, loops, junctions, nested clauses — with pan/zoom, fit-view,
 	 * and a minimap, in either direction. The previous hand-built flex/grid
 	 * map lives on as PipelineMapLegacy.svelte, unused.
 	 *
@@ -38,8 +38,8 @@
 		MAP_CONTEXT_KEY,
 		KIND_MEANING,
 		KIND_STRIPE,
-		BLOCK_LABEL,
-		BLOCK_MEANING,
+		CLAUSE_LABEL,
+		CLAUSE_MEANING,
 		type PipelineMapContext
 	} from "./flow/context"
 
@@ -117,16 +117,16 @@
 				key: s.key,
 				label: s.label,
 				kind: s.kind || "task",
-				typeId: "",
-				blockId: null,
-				blockKind: null,
-				blockChain: null,
+				definitionId: "",
+				clauseId: null,
+				clauseKind: null,
+				clauseChain: null,
 				position: i,
 				toggleable: false,
 				enabledDefault: true,
 				stepKey: s.key
 			})),
-			blocks: [],
+			clauses: [],
 			edges: []
 		}
 	})
@@ -195,34 +195,36 @@
 
 	const counts = $derived.by(() => {
 		const g = effectiveGraph
-		const blocks = g?.blocks ?? []
-		const c = (kind: string) => blocks.filter((b) => b.kind === kind).length
+		const clauses = g?.clauses ?? []
+		const c = (kind: string) => clauses.filter((b) => b.kind === kind).length
 		const branches = new Set(
 			(g?.nodes ?? [])
-				.filter((n) => n.blockId)
-				.map((n) => `${n.blockId}/${n.blockChain}`)
+				.filter((n) => n.clauseId)
+				.map((n) => `${n.clauseId}/${n.clauseChain}`)
 		)
 		return {
 			steps: g?.nodes.length ?? 0,
-			fanOuts: c("async"),
-			maps: c("map"),
+			gathers: c("gather"),
+			eaches: c("each"),
 			loops: c("loop"),
-			routes: c("route"),
+			junctions: c("junction"),
 			branches: branches.size
 		}
 	})
 	const countLine = $derived(
 		[
 			`${counts.steps} steps`,
-			counts.fanOuts
-				? `${counts.fanOuts} fan-out${counts.fanOuts === 1 ? "" : "s"}`
+			counts.gathers
+				? `${counts.gathers} gather${counts.gathers === 1 ? "" : "s"}`
 				: null,
-			counts.maps ? `${counts.maps} map${counts.maps === 1 ? "" : "s"}` : null,
+			counts.eaches
+				? `${counts.eaches} for-each${counts.eaches === 1 ? "" : "es"}`
+				: null,
 			counts.loops
 				? `${counts.loops} loop${counts.loops === 1 ? "" : "s"}`
 				: null,
-			counts.routes
-				? `${counts.routes} route${counts.routes === 1 ? "" : "s"}`
+			counts.junctions
+				? `${counts.junctions} junction${counts.junctions === 1 ? "" : "s"}`
 				: null,
 			counts.branches
 				? `${counts.branches} branch${counts.branches === 1 ? "" : "es"}`
@@ -238,8 +240,8 @@
 		)
 	)
 	const legendBlocks = $derived(
-		[...new Set((effectiveGraph?.blocks ?? []).map((b) => b.kind))].filter(
-			(k) => k in BLOCK_MEANING
+		[...new Set((effectiveGraph?.clauses ?? []).map((b) => b.kind))].filter(
+			(k) => k in CLAUSE_MEANING
 		)
 	)
 	const humanize = (v: string) =>
@@ -249,11 +251,11 @@
 
 	/** Minimap swatches follow the kind stripes (theme token → color). */
 	const MINIMAP_COLOR: Record<string, string> = {
-		input: "var(--color-surface-400)",
+		inlet: "var(--color-surface-400)",
 		query: "var(--color-success-500)",
 		task: "var(--color-primary-500)",
-		provider: "var(--color-warning-500)",
-		consumer: "var(--color-error-500)"
+		oracle: "var(--color-warning-500)",
+		outlet: "var(--color-error-500)"
 	}
 	const minimapColor = (n: Node) => {
 		const data = n.data as any
@@ -360,8 +362,8 @@
 						aria-hidden="true"
 						class="border-surface-400-600 h-3 w-3 shrink-0 rounded border border-dashed"
 					></span>
-					<span class="font-medium">{BLOCK_LABEL[k] ?? k}</span>
-					<span class="text-surface-600-400">{BLOCK_MEANING[k]}</span>
+					<span class="font-medium">{CLAUSE_LABEL[k] ?? k}</span>
+					<span class="text-surface-600-400">{CLAUSE_MEANING[k]}</span>
 				</span>
 			{/each}
 		</div>

@@ -24,6 +24,34 @@ function requireAdmin(
 	}
 }
 
+/**
+ * The config list plus the system default, as one function, so the four write
+ * cascades below can be handed the BUILDER rather than the handler.
+ *
+ * Two reads — the configs and the system settings row — and
+ * `graphBuildConfigs:list` is gated, so a write made from anywhere but the list
+ * pays for neither. Skipping the emit alone would save nothing; the queries are
+ * the cost.
+ *
+ * No admin check here: that belongs to the handler, which is the surface a
+ * client can reach, and every cascade below has already made it.
+ */
+async function buildGraphBuildConfigsList(): Promise<Sockets.GraphBuildConfigs.List.Response> {
+	// Built-ins first, matching samplingConfigs:list.
+	const graphBuildConfigsList = await db.query.graphBuildConfigs.findMany({
+		columns: { id: true, name: true, isImmutable: true },
+		orderBy: (c, { asc, desc }) => [desc(c.isImmutable), asc(c.name)]
+	})
+	const systemSettingsRow = await db.query.systemSettings.findFirst({
+		where: (s, { eq }) => eq(s.id, 1)
+	})
+	return {
+		graphBuildConfigsList,
+		defaultGraphBuildConfigId:
+			systemSettingsRow?.defaultGraphBuildConfigId ?? null
+	}
+}
+
 export const graphBuildConfigsListHandler: Handler<
 	Sockets.GraphBuildConfigs.List.Params,
 	Sockets.GraphBuildConfigs.List.Response
@@ -32,24 +60,7 @@ export const graphBuildConfigsListHandler: Handler<
 	handler: async (socket, params, emitToUser) => {
 		requireAdmin(socket, emitToUser)
 
-		// Built-ins first, matching samplingConfigs:list.
-		const graphBuildConfigsList = await db.query.graphBuildConfigs.findMany(
-			{
-				columns: { id: true, name: true, isImmutable: true },
-				orderBy: (c, { asc, desc }) => [
-					desc(c.isImmutable),
-					asc(c.name)
-				]
-			}
-		)
-		const systemSettingsRow = await db.query.systemSettings.findFirst({
-			where: (s, { eq }) => eq(s.id, 1)
-		})
-		const res: Sockets.GraphBuildConfigs.List.Response = {
-			graphBuildConfigsList,
-			defaultGraphBuildConfigId:
-				systemSettingsRow?.defaultGraphBuildConfigId ?? null
-		}
+		const res = await buildGraphBuildConfigsList()
 		emitToUser("graphBuildConfigs:list", res)
 		return res
 	}
@@ -95,7 +106,11 @@ export const graphBuildConfigsCreate: Handler<
 			.insert(schema.graphBuildConfigs)
 			.values({ ...rest, isImmutable: false, seedKey: null })
 			.returning()
-		await graphBuildConfigsListHandler.handler(socket, {}, emitToUser)
+		// Lazy: the admin list this write came from wants the refreshed rows,
+		// and nothing else does. See `buildGraphBuildConfigsList`.
+		await emitToUser("graphBuildConfigs:list", () =>
+			buildGraphBuildConfigsList()
+		)
 		const res: Sockets.GraphBuildConfigs.Create.Response = {
 			graphBuildConfig
 		}
@@ -170,7 +185,10 @@ export const graphBuildConfigsUpdate: Handler<
 						.returning()
 				)[0]
 			: currentConfig
-		await graphBuildConfigsListHandler.handler(socket, {}, emitToUser)
+		// Lazy — see `buildGraphBuildConfigsList`.
+		await emitToUser("graphBuildConfigs:list", () =>
+			buildGraphBuildConfigsList()
+		)
 		const res: Sockets.GraphBuildConfigs.Update.Response = {
 			graphBuildConfig
 		}
@@ -221,7 +239,10 @@ export const graphBuildConfigsDelete: Handler<
 			}
 		}
 
-		await graphBuildConfigsListHandler.handler(socket, {}, emitToUser)
+		// Lazy — see `buildGraphBuildConfigsList`.
+		await emitToUser("graphBuildConfigs:list", () =>
+			buildGraphBuildConfigsList()
+		)
 		const res: Sockets.GraphBuildConfigs.Delete.Response = {
 			success: "Graph build config deleted successfully"
 		}
@@ -253,7 +274,10 @@ export const graphBuildConfigsSetDefault: Handler<
 			.set({ defaultGraphBuildConfigId: target.id })
 			.where(eq(schema.systemSettings.id, 1))
 
-		await graphBuildConfigsListHandler.handler(socket, {}, emitToUser)
+		// Lazy — see `buildGraphBuildConfigsList`.
+		await emitToUser("graphBuildConfigs:list", () =>
+			buildGraphBuildConfigsList()
+		)
 		const res: Sockets.GraphBuildConfigs.SetDefault.Response = {
 			defaultGraphBuildConfigId: target.id
 		}

@@ -13,8 +13,11 @@
  *
  * Input is an untrusted preset `layout` blob (`{ zoneLayout?, widgetGrid?,
  * arrangedGrid? }`, stored verbatim, forward-compatible). Anything malformed
- * degrades to the built-in default picture rather than throwing.
+ * degrades to the built-in default picture rather than throwing, and a widget
+ * id this build has retired draws no block — the picture has to show what the
+ * preset will actually produce.
  */
+import { isRetiredWidget } from "./widgetGrid"
 
 export interface PreviewCell {
 	id: string
@@ -51,7 +54,7 @@ function num(v: unknown, fallback: number): number {
 	return typeof v === "number" && Number.isFinite(v) ? v : fallback
 }
 
-/** The chat middle as it renders with nothing saved: messages over composer. */
+/** The chat middle as it renders with nothing saved: the conversation, filling it. */
 function defaultMiddle(label: (id: string) => string): PreviewZone {
 	return {
 		cols: 1,
@@ -63,15 +66,7 @@ function defaultMiddle(label: (id: string) => string): PreviewZone {
 				x: 0,
 				y: 0,
 				w: 1,
-				h: ROWS - 1
-			},
-			{
-				id: "composer",
-				label: label("composer"),
-				x: 0,
-				y: ROWS - 1,
-				w: 1,
-				h: 1
+				h: ROWS
 			}
 		]
 	}
@@ -88,6 +83,7 @@ function fromArranged(
 	const cells: PreviewCell[] = []
 	for (const it of items) {
 		if (!isPlainObject(it) || typeof it.id !== "string") continue
+		if (isRetiredWidget(it.id)) continue
 		cells.push({
 			id: it.id,
 			label: label(it.id),
@@ -111,7 +107,10 @@ function fromZoneList(
 	label: (id: string) => string
 ): PreviewZone {
 	const ids = Array.isArray(widgets)
-		? widgets.filter((w): w is string => typeof w === "string")
+		? widgets.filter(
+				(w): w is string =>
+					typeof w === "string" && !isRetiredWidget(w)
+			)
 		: []
 	return {
 		cols: SIDE_COLS,

@@ -66,11 +66,11 @@ async function scenario(installPlugin: boolean) {
 	}
 
 	// A mode row (kind input, live) whose shape declares the panels.
-	const typeId = `core:input/mapmode-${k}`
-	await testDb.insert(schema.pipelineTypeRegistry).values({
-		typeId,
+	const typeId = `core:inlet/mapmode-${k}`
+	await testDb.insert(schema.pipelineDefinitionRegistry).values({
+		definitionId: typeId,
 		version: 1,
-		kind: "input",
+		kind: "inlet",
 		status: "live",
 		sessionShape: {
 			panels: [

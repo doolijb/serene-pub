@@ -56,12 +56,12 @@
 
 	async function linkEntity(bindingId: number, entity: UnboundEntity) {
 		isBusy = true
+		// One bound arc: a persona IS a character, so `entity.type` only
+		// labels the row in the list — it never picks a column.
 		socket.emit("lorebooks:updateBinding", {
 			lorebookBinding: {
 				id: bindingId,
-				...(entity.type === "character"
-					? { characterId: entity.id }
-					: { personaId: entity.id })
+				characterId: entity.id
 			}
 		})
 		statuses[bindingId] = "done"
@@ -157,10 +157,10 @@
 												entity
 											)}
 									>
-										{#if entity.type === "character"}
-											<Icons.User size={16} />
+										{#if entity.type === "persona"}
+											<Icons.UserRound size={16} />
 										{:else}
-											<Icons.UserSquare size={16} />
+											<Icons.User size={16} />
 										{/if}
 										<span>{entity.name}</span>
 										<span

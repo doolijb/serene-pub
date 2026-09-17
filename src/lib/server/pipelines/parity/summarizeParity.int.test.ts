@@ -48,7 +48,7 @@ const LORE_TYPES = ["world", "character", "scene", "history"] as const
 describe("phase 1 — the batch prompt", () => {
 	for (const loreType of LORE_TYPES) {
 		it(`matches the legacy builder for ${loreType}`, async () => {
-			const binding = coreBindings()["core:provider/summarize-batch@1"]!
+			const binding = coreBindings()["core:oracle/summarize-batch@1"]!
 			const { ctx, calls } = recordingCtx("<content>• A thing.</content>")
 
 			await binding({ batch: MESSAGES, loreType }, ctx)
@@ -66,7 +66,7 @@ describe("phase 1 — the batch prompt", () => {
 	it("uses the configured system prompt when there is one", async () => {
 		// The prompts slot, resolved through the scope chain — a user's own
 		// wording has to reach the model or the whole config layer is decorative.
-		const binding = coreBindings()["core:provider/summarize-batch@1"]!
+		const binding = coreBindings()["core:oracle/summarize-batch@1"]!
 		const { ctx, calls } = recordingCtx("<content>• A thing.</content>")
 
 		await binding(
@@ -84,7 +84,7 @@ describe("phase 1 — the batch prompt", () => {
 		// The legacy columns default to `""`, so an unconfigured step must fall
 		// back rather than send an empty system prompt — which is the difference
 		// between "archivist voice" and no instructions at all.
-		const binding = coreBindings()["core:provider/summarize-batch@1"]!
+		const binding = coreBindings()["core:oracle/summarize-batch@1"]!
 		const { ctx, calls } = recordingCtx("<content>• A thing.</content>")
 
 		await binding(
@@ -100,7 +100,7 @@ describe("phase 1 — the batch prompt", () => {
 	})
 
 	it("unwraps the content tag, so the tags never reach synthesis", async () => {
-		const binding = coreBindings()["core:provider/summarize-batch@1"]!
+		const binding = coreBindings()["core:oracle/summarize-batch@1"]!
 		const { ctx } = recordingCtx(
 			"<content>\n• The gate was sealed\n</content>"
 		)
@@ -119,7 +119,7 @@ describe("phase 1 — the batch prompt", () => {
 describe("phase 2 — the synthesis prompt", () => {
 	for (const loreType of LORE_TYPES) {
 		it(`matches the legacy builder for ${loreType}`, async () => {
-			const binding = coreBindings()["core:provider/summarize-synth@1"]!
+			const binding = coreBindings()["core:oracle/summarize-synth@1"]!
 			const { ctx, calls } = recordingCtx("<content>• Merged.</content>")
 
 			const drafts = ["• first draft", "• second draft"]
@@ -143,7 +143,7 @@ describe("phase 2 — the synthesis prompt", () => {
 		// The drafts are chronological slices and the synthesis prompt asks the
 		// model to keep that order. Renumbering or reordering them here would
 		// turn a narrative into a pile of events.
-		const binding = coreBindings()["core:provider/summarize-synth@1"]!
+		const binding = coreBindings()["core:oracle/summarize-synth@1"]!
 		const { ctx, calls } = recordingCtx("<content>• Merged.</content>")
 
 		await binding(
@@ -165,7 +165,7 @@ describe("phase 2 — the synthesis prompt", () => {
 describe("the title step", () => {
 	for (const loreType of LORE_TYPES) {
 		it(`matches the legacy builder for ${loreType}`, async () => {
-			const binding = coreBindings()["core:provider/name-entry@1"]!
+			const binding = coreBindings()["core:oracle/name-entry@1"]!
 			const { ctx, calls } = recordingCtx("The Sealed Gate")
 
 			await binding({ content: "Some finished prose.", loreType }, ctx)
@@ -183,7 +183,7 @@ describe("the title step", () => {
 	it("returns an entry even when the model gives it no title", async () => {
 		// The content is the valuable part. Halting here would throw away a
 		// finished summary over its name.
-		const binding = coreBindings()["core:provider/name-entry@1"]!
+		const binding = coreBindings()["core:oracle/name-entry@1"]!
 		const { ctx } = recordingCtx("   ")
 		const result: any = await binding(
 			{ content: "prose", loreType: "world" },
@@ -199,7 +199,7 @@ describe("the cast extraction step", () => {
 		// The contract is a raw JSON object; models wrap it in prose often
 		// enough that an unparseable answer has to mean "no cast" rather than a
 		// crash mid-run.
-		const binding = coreBindings()["core:provider/extract-cast@1"]!
+		const binding = coreBindings()["core:oracle/extract-cast@1"]!
 		const { ctx, calls } = recordingCtx("I could not find any characters.")
 
 		const result: any = await binding({ content: "A quiet room." }, ctx)

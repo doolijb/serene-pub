@@ -8,15 +8,11 @@ import { previewOf } from "./presetPreview"
 describe("previewOf — the shipped default", () => {
 	it("draws the built-in chat arrangement for an empty preset", () => {
 		const p = previewOf({})
-		expect(p.middle.cells.map((c) => c.id)).toEqual([
-			"messages",
-			"composer"
-		])
-		// Composer is the bottom strip; messages fills the rest.
-		const [messages, composer] = p.middle.cells
+		expect(p.middle.cells.map((c) => c.id)).toEqual(["messages"])
+		// The conversation is the whole middle.
+		const [messages] = p.middle.cells
 		expect(messages.y).toBe(0)
-		expect(composer.y).toBe(messages.h)
-		expect(composer.h).toBe(1)
+		expect(messages.h).toBe(p.middle.rows)
 		expect(p.left.cells).toEqual([])
 		expect(p.right.cells).toEqual([])
 	})
@@ -24,10 +20,7 @@ describe("previewOf — the shipped default", () => {
 	it("degrades a malformed blob to the same default rather than throwing", () => {
 		for (const bad of [undefined, null, "x", 7, [1, 2]]) {
 			const p = previewOf(bad)
-			expect(p.middle.cells.map((c) => c.id)).toEqual([
-				"messages",
-				"composer"
-			])
+			expect(p.middle.cells.map((c) => c.id)).toEqual(["messages"])
 		}
 	})
 })
@@ -93,8 +86,8 @@ describe("previewOf — arrangedGrid wins", () => {
 				cols: 4,
 				rows: 8,
 				items: [
-					{ id: "messages", x: 0, y: 0, w: 4, h: 6 },
-					{ id: "composer", x: 0, y: 6, w: 4, h: 2 }
+					{ id: "world-state", x: 0, y: 0, w: 4, h: 2 },
+					{ id: "messages", x: 0, y: 2, w: 4, h: 6 }
 				]
 			}
 		}
@@ -105,10 +98,39 @@ describe("previewOf — arrangedGrid wins", () => {
 		expect(p.middle.cols).toBe(4)
 		expect(p.middle.rows).toBe(8)
 		expect(p.middle.cells[1]).toMatchObject({
-			id: "composer",
-			y: 6,
-			h: 2
+			id: "messages",
+			y: 2,
+			h: 6
 		})
+	})
+
+	it("draws no block for a retired widget id a saved preset still names", () => {
+		// A preset arranged when the composer was its own widget. The picture
+		// has to show what applying it will actually produce.
+		const p = previewOf({
+			arrangedGrid: {
+				middle: {
+					cols: 4,
+					rows: 8,
+					items: [
+						{ id: "messages", x: 0, y: 0, w: 4, h: 6 },
+						{ id: "composer", x: 0, y: 6, w: 4, h: 2 }
+					]
+				}
+			},
+			zoneLayout: {
+				version: 1,
+				zones: {
+					right: {
+						kind: "side",
+						side: "right",
+						widgets: ["composer", "notes"]
+					}
+				}
+			}
+		})
+		expect(p.middle.cells.map((c) => c.id)).toEqual(["messages"])
+		expect(p.right.cells.map((c) => c.id)).toEqual(["notes"])
 	})
 
 	it("grows the frame so nothing is clipped by the schematic's defaults", () => {
@@ -143,10 +165,7 @@ describe("previewOf — arrangedGrid wins", () => {
 		const p = previewOf({
 			arrangedGrid: { middle: { cols: 4, rows: 8, items: [{ x: 1 }] } }
 		})
-		expect(p.middle.cells.map((c) => c.id)).toEqual([
-			"messages",
-			"composer"
-		])
+		expect(p.middle.cells.map((c) => c.id)).toEqual(["messages"])
 	})
 })
 

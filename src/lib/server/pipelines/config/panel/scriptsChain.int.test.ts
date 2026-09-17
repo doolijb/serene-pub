@@ -186,11 +186,19 @@ describe("the hook in the panel", () => {
 		// defaultConnectionId })` and the cast is why svelte-check did not
 		// enumerate it with the other 69 sites — it would have compiled cleanly
 		// and failed at runtime on a column that no longer exists.
+		const { ensureConnectionModel } = await import(
+			"$lib/server/connections/models"
+		)
+		// The MODEL half: a registration names a pair, and an endpoint on its
+		// own resolves as unconfigured — so the panel would show no guards at
+		// all rather than the connection's.
+		const model = await ensureConnectionModel(db, conn.id, "panel-7b")
 		const { setCapabilityDefault } = await import(
 			"$lib/server/connections/capabilityDefaults"
 		)
 		await setCapabilityDefault(db, "text->text", {
-			connectionId: conn.id
+			connectionId: conn.id,
+			connectionModelId: model!.id
 		})
 		const guard = await createScript(db, {
 			typeId: "core:script:text/stop@1",

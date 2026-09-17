@@ -7,6 +7,7 @@ export class Theme {
 	static DRACULA = "dracula"
 	static FENNEC = "fennec"
 	static HAMLINDIGO = "hamlindigo"
+	static LAMPLIGHT = "lamplight"
 	static LEGACY = "legacy"
 	static MINT = "mint"
 	static MODERN = "modern"
@@ -26,13 +27,14 @@ export class Theme {
 	static WINTRY = "wintry"
 
 	static options: [string, string][] = [
+		[Theme.LAMPLIGHT, "Lamplight (Default)"],
 		[Theme.CATPPUCCIN, "Catppuccin"],
 		[Theme.CERBERUS, "Cerberus"],
 		[Theme.CONCORD, "Concord"],
 		[Theme.CRIMSON, "Crimson"],
 		[Theme.DRACULA, "Dracula"],
 		[Theme.FENNEC, "Fennec"],
-		[Theme.HAMLINDIGO, "Hamlindigo (Default)"],
+		[Theme.HAMLINDIGO, "Hamlindigo"],
 		[Theme.LEGACY, "Legacy"],
 		[Theme.MINT, "Mint"],
 		[Theme.MODERN, "Modern"],

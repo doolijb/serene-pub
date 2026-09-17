@@ -80,7 +80,7 @@ describe("sessions:triggers", () => {
 		expect(res.triggers).toContainEqual(
 			expect.objectContaining({
 				function: "narrate",
-				kind: "button",
+				venue: "composer",
 				name: "Narrate",
 				specSlug: "core:spec/narrate"
 			})
@@ -94,7 +94,7 @@ describe("sessions:triggers", () => {
 		expect(res.triggers).toContainEqual(
 			expect.objectContaining({
 				function: "narrate-character",
-				kind: "button",
+				venue: "composer",
 				specSlug: "core:spec/narrate-character"
 			})
 		)
@@ -158,8 +158,8 @@ describe("sessions:triggerFunction", () => {
 		 * The refusal above proves this route declines it; this proves the
 		 * function is nevertheless *served* — the two together are what make
 		 * "it has its own event" a redirection rather than a dead button.
-		 * `generateResponse` resolves the same way for a turn whose row
-		 * carries a speaker.
+		 * `runReply` resolves the same way for a turn that carries a
+		 * speaker.
 		 */
 		const { resolveFunctionSpec, STANDARD_GENRE_ID } = await import(
 			"$lib/server/pipelines/entities/sessionGenres"

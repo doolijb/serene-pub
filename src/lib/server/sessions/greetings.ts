@@ -5,7 +5,7 @@
  * Moved out of `sessions.ts`'s create handler so the same logic serves the
  * pipeline path: `collectSessionGreetings` is what the
  * `core:query/session-greetings@1` node reads through the host, and
- * `writeSessionGreetings` is what `core:consumer/seed-greetings@1` commits.
+ * `writeSessionGreetings` is what `core:outlet/seed-greetings@1` commits.
  * One implementation behind two declared nodes — parity by construction, and
  * the byte-parity test (createChat.parity.int.test.ts) guards the seam
  * against drift.
@@ -30,7 +30,7 @@ export function buildCharacterFirstSessionMessage({
 	isGroup
 }: {
 	character: SelectCharacter
-	persona: SelectPersona | undefined | null
+	persona: SelectCharacter | undefined | null
 	isGroup: boolean
 }): string[] {
 	const history: string[] = []

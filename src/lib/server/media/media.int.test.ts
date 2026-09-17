@@ -108,9 +108,11 @@ async function character(userId: number, name: string) {
 }
 
 async function persona(userId: number, name: string) {
+	// Personas are characters with `isPersona: true` (0133) — `schema.personas`
+	// no longer exists.
 	const [row] = await db
-		.insert(schema.personas)
-		.values({ userId, name, description: "", isDefault: false })
+		.insert(schema.characters)
+		.values({ userId, name, description: "", isPersona: true })
 		.returning()
 	return row
 }
@@ -233,8 +235,11 @@ describe("mediaRelPath — deepest known parent wins", () => {
 		expect(mediaRelPath({ ...base, characterId: 1 }, "h", "png")).toBe(
 			path.join("data/users/7/characters/1", "h.png")
 		)
-		expect(mediaRelPath({ ...base, personaId: 2 }, "h", "png")).toBe(
-			path.join("data/users/7/personas/2", "h.png")
+		// A persona is a character (0133) — `MediaProvenance` has no
+		// `personaId` of its own, and a persona's files land under
+		// `characters/<id>` exactly like any other character's.
+		expect(mediaRelPath({ ...base, characterId: 2 }, "h", "png")).toBe(
+			path.join("data/users/7/characters/2", "h.png")
 		)
 		expect(mediaRelPath(base, "h", "png")).toBe(
 			path.join("data/users/7/uploads", "h.png")
@@ -435,6 +440,10 @@ describe("mediaFor — grouping and ordering", () => {
 	})
 
 	test("a persona's media does not leak into a character's", async () => {
+		// A persona is a character with `isPersona: true` (0133) — there is no
+		// separate `personaId` provenance any more, so `p`'s media is scoped
+		// by `characterId: p.id` exactly like `c`'s. The invariant under test
+		// survives unchanged: two distinct characters' media stay apart.
 		const { createMedia, mediaFor } = await import("./index")
 		const user = await createTestUser(db, "media-scope-user")
 		const c = await character(user.id, "C2")
@@ -446,11 +455,11 @@ describe("mediaFor — grouping and ordering", () => {
 		})
 		await createMedia(db, {
 			userId: user.id,
-			personaId: p.id,
+			characterId: p.id,
 			bytes: png(32)
 		})
 		expect(await mediaFor(db, { characterId: c.id })).toHaveLength(1)
-		expect(await mediaFor(db, { personaId: p.id })).toHaveLength(1)
+		expect(await mediaFor(db, { characterId: p.id })).toHaveLength(1)
 	})
 })
 

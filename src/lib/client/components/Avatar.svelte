@@ -6,9 +6,9 @@
 	interface Props {
 		// Optional: the template below already treats a falsy `char` as the
 		// "unknown" case (fallback icon + "Unknown" alt text), so callers that
-		// haven't resolved a character/persona yet (eg. a deleted reference)
+		// haven't resolved a character yet (eg. a deleted reference)
 		// can legitimately pass undefined.
-		char: Partial<SelectCharacter> | Partial<SelectPersona> | undefined
+		char: Partial<SelectCharacter> | undefined
 		src?: string
 		/**
 		 * Sizing classes. REPLACES the default rather than merging, so pass a
@@ -31,8 +31,8 @@
 
 	// Applied regardless of `size` so callers can't lose them by overriding.
 	// shrink-0 stops the avatar being squashed when it's a direct flex child;
-	// the min-w/min-h mirror whatever `size` asks for, which is what every
-	// correct call site was previously repeating by hand.
+	// the min-w/min-h mirror whatever `size` asks for, so no call site has to
+	// repeat them by hand.
 	const sizeGuards = $derived(
 		size
 			.split(/\s+/)
@@ -49,15 +49,13 @@
 	// preview, a URL that is not ours — is cropped the same way as one the
 	// server already cut.
 
-	// Determine if this is a character or persona
-	// Characters have specific fields that personas don't have like 'personality', 'scenario', 'firstMessage'
-	// Personas have 'isDefault' field that characters don't have
-	let isCharacter = $derived(
-		char &&
-			("personality" in char ||
-				"scenario" in char ||
-				"firstMessage" in char)
-	)
+	// The glyph reads the flag the row carries, never the row's shape (sniffing
+	// `personality` / `scenario` / `firstMessage` misreads a lightweight view
+	// object): `UserRound` for a
+	// character the user plays, `UsersRound` for everyone else — the two glyphs
+	// NOMENCLATURE fixes to those two ideas. A payload that did not join the
+	// flag falls through to the character glyph, which is what it is.
+	let isPersona = $derived(!!char && (char as any).isPersona === true)
 </script>
 
 <Avatar class="{size} {sizeGuards} shrink-0">
@@ -73,10 +71,10 @@
 	<!-- Fallback glyph scales with the avatar. It was a fixed size={36},
 	     which overflowed any avatar smaller than ~40px. -->
 	<Avatar.Fallback>
-		{#if isCharacter}
-			<Icons.UsersRound class="h-[55%] w-[55%]" />
-		{:else}
+		{#if isPersona}
 			<Icons.UserRound class="h-[55%] w-[55%]" />
+		{:else}
+			<Icons.UsersRound class="h-[55%] w-[55%]" />
 		{/if}
 	</Avatar.Fallback>
 </Avatar>

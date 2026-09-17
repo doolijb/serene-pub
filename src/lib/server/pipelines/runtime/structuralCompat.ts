@@ -38,7 +38,7 @@
  * ## What supplies an answer
  *
  * Three sources, one shape: a pinned contract (`typeof C.vectorSearch`), a bare
- * descriptor, or a **`pipeline_type_registry` row**. The row matters more than
+ * descriptor, or a **`pipeline_definition_registry` row**. The row matters more than
  * it looks — F6 says core reads a plugin's declaration from its stored row and
  * never loads the plugin to ask, and a `transport: 'process'` type has no
  * in-process descriptor to load in the first place. A check that only worked on
@@ -60,9 +60,9 @@ export interface Supplies {
 	paramTypes: Record<string, FieldType>
 }
 
-/** A `pipeline_type_registry` row, as far as this file needs one. */
+/** A `pipeline_definition_registry` row, as far as this file needs one. */
 export interface RegistryRowLike {
-	typeId: string
+	definitionId: string
 	version?: number
 	ports?: {
 		in?: Record<string, unknown>
@@ -83,7 +83,7 @@ export interface StructuralMismatch {
 	/** What was being bound — the handler's name or its binding key. */
 	handler: string
 	/** What it was being bound to. */
-	typeId: string
+	definitionId: string
 	/** Names read off `input` that the type declares nowhere. */
 	missingPorts: string[]
 	/** Names read off `input.params` that the type's schema does not carry. */
@@ -110,7 +110,7 @@ export type StructuralVerdict = StructuralOk | StructuralMismatch
  */
 export function normaliseSupplies(supplies: unknown): Supplies {
 	const row = supplies as RegistryRowLike | null | undefined
-	if (row && typeof row === "object" && typeof row.typeId === "string") {
+	if (row && typeof row === "object" && typeof row.definitionId === "string") {
 		const ports = [
 			...Object.keys(row.ports?.in ?? {}),
 			...Object.keys(row.slots ?? {})
@@ -123,7 +123,7 @@ export function normaliseSupplies(supplies: unknown): Supplies {
 				if (field?.type) paramTypes[name] = field.type as FieldType
 			}
 		return {
-			id: row.version ? `${row.typeId}@${row.version}` : row.typeId,
+			id: row.version ? `${row.definitionId}@${row.version}` : row.definitionId,
 			ports: [...new Set(ports)],
 			params,
 			paramTypes
@@ -176,7 +176,7 @@ export function structuralCompat(
 	return {
 		ok: false,
 		handler,
-		typeId: s.id,
+		definitionId: s.id,
 		missingPorts,
 		missingParams,
 		typeMismatches,

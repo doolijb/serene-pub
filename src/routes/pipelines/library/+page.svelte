@@ -41,10 +41,14 @@
 	 * Admin-only, checked here and again in every handler. The check here is for
 	 * the person; the check in the handler is the one that matters.
 	 */
-	import { getContext, onDestroy, onMount } from "svelte"
+	import { getContext, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { goto } from "$app/navigation"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import {
+		declareInterest,
+		requestWithInterest
+	} from "$lib/client/sockets/interest.svelte"
 	import EmptyState from "$lib/client/components/EmptyState.svelte"
 	import TemplateEditor from "$lib/client/components/templates/TemplateEditor.svelte"
 	import { getVariable } from "@serene-pub/sdk"
@@ -495,25 +499,53 @@
 			goto("/")
 			return
 		}
-		socket.on("pipelines:library", onView)
-		socket.on("pipelines:previewTemplate", onPreview)
-		socket.on("pipelines:previewTemplate:error", onRefusal)
-		socket.on("pipelines:library:error", onRefusal)
-		for (const w of WRITES) {
-			socket.on(`pipelines:${w}` as any, onWrite as any)
-			socket.on(`pipelines:${w}:error` as any, onRefusal as any)
-		}
-		socket.emit("pipelines:library", {})
 	})
 
-	onDestroy(() => {
-		socket.off("pipelines:library", onView)
-		socket.off("pipelines:previewTemplate", onPreview)
-		socket.off("pipelines:previewTemplate:error", onRefusal)
-		socket.off("pipelines:library:error", onRefusal)
+	/**
+	 * The view, asked for and listened for in one; every write's answer, every
+	 * refusal and the preview stand, because each arrives when the person
+	 * presses a button rather than in reply to anything asked here. All BARE:
+	 * the library is the instance's, not one session's.
+	 *
+	 * The loop declares two keys per write — the answer and its refusal — and
+	 * every release goes in the same array, so the whole set is dropped when
+	 * the page is.
+	 *
+	 * The app-wide registry, not `adminInterest`: `pipelines:` is a MIXED
+	 * family — most of its handlers answer every user — so these are ordinary
+	 * keys, and the admin check here is the same one the redirect above makes.
+	 */
+	$effect(() => {
+		if (!userCtx.user?.isAdmin) return
+		const releases = [
+			declareInterest<"pipelines:previewTemplate">(
+				"pipelines:previewTemplate",
+				onPreview
+			),
+			declareInterest<"pipelines:previewTemplate:error">(
+				"pipelines:previewTemplate:error",
+				onRefusal
+			),
+			declareInterest<"pipelines:library:error">(
+				"pipelines:library:error",
+				onRefusal
+			)
+		]
 		for (const w of WRITES) {
-			socket.off(`pipelines:${w}` as any, onWrite as any)
-			socket.off(`pipelines:${w}:error` as any, onRefusal as any)
+			releases.push(
+				declareInterest<"pipelines:libraryUpdateTemplate">(
+					`pipelines:${w}`,
+					onWrite
+				),
+				declareInterest<"pipelines:libraryUpdateTemplate:error">(
+					`pipelines:${w}:error`,
+					onRefusal
+				)
+			)
+		}
+		releases.push(requestWithInterest("pipelines:library", {}, onView))
+		return () => {
+			for (const release of releases) release()
 		}
 	})
 

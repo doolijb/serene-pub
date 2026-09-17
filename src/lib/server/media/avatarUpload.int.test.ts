@@ -231,27 +231,30 @@ describe("avatar upload via media (28)", () => {
 	})
 
 	test("persona avatars follow the same path", async () => {
-		const { handlePersonaAvatarUpload } = await import("$lib/server/utils")
+		// `handlePersonaAvatarUpload` is gone (0133) — a persona is a
+		// character with `isPersona: true`, so it now takes the same
+		// `handleCharacterAvatarUpload` path as any other character.
+		const { handleCharacterAvatarUpload } = await import("$lib/server/utils")
 		const user = await makeUser("avatar-persona-user")
 		const [persona] = await testDb
-			.insert(schema.personas)
+			.insert(schema.characters)
 			.values({
 				userId: user.id,
+				isPersona: true,
 				name: "P",
-				description: "",
-				isDefault: false
+				description: ""
 			})
 			.returning()
 
-		const row = await handlePersonaAvatarUpload({
-			persona,
+		const row = await handleCharacterAvatarUpload({
+			character: persona,
 			avatarFile: makeTestPngBuffer()
 		})
-		const after = await testDb.query.personas.findFirst({
-			where: (p, { eq }) => eq(p.id, persona.id)
+		const after = await testDb.query.characters.findFirst({
+			where: (c, { eq }) => eq(c.id, persona.id)
 		})
 		expect(after?.avatarMediaId).toBe(row.file.id)
-		expect(row.file.personaId).toBe(persona.id)
+		expect(row.file.characterId).toBe(persona.id)
 		// Provenance is on the file and the bytes we just wrote are its
 		// original — the two halves `CreatedMedia` exists to keep apart.
 		expect(row.original.isOriginal).toBe(true)

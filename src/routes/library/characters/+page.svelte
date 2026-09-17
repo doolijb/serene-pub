@@ -6,6 +6,10 @@
 	import { getContext, onMount } from "svelte"
 	import { v4 as uuid } from "uuid"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import {
+		requestWithInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import LibraryPortraitCard from "$lib/client/components/library/LibraryPortraitCard.svelte"
 	import type {
@@ -71,6 +75,15 @@
 
 	let capabilities: Sockets.CardSources.Capabilities.Response | null =
 		$state(null)
+	/**
+	 * Which of a source's CATALOGUES is being browsed.
+	 *
+	 * The word describes the REMOTE library, not our table — a card source
+	 * publishes characters and personas as separate catalogues, and a
+	 * persona-catalogue card lands here flagged `isPersona`. There is one page
+	 * for both because there is one kind of row to import into.
+	 */
+	let catalog = $state<"characters" | "personas">("characters")
 	let activeSource = $state<CardSourceId>("github-serenepub")
 	// Only CharaVault's /api/cards supports ?sort= — this is what "browse
 	// with nothing searched" defaults to instead of whatever CharaVault's
@@ -78,11 +91,24 @@
 	let activeSort = $state<CardSourceSort>("top_rated")
 	let hasBookOnly = $state(false)
 	let creatorFilter = $state("")
-	let sourcesForCharacters = $derived.by(
-		() => capabilities?.sources.filter((s) => s.supportsCharacters) ?? []
+	/**
+	 * The sources that publish the catalogue on show. Only the Serene Pub
+	 * community repository has a persona catalogue (CharaVault's public API has
+	 * none), so switching to Personas narrows the strip to one source — and
+	 * with it every CharaVault-only control below.
+	 */
+	let sourcesForCatalog = $derived.by(() =>
+		catalog === "personas"
+			? (capabilities?.sources.filter((s) => s.supportsPersonas) ?? [])
+			: (capabilities?.sources.filter((s) => s.supportsCharacters) ?? [])
 	)
 	let activeSourceInfo = $derived.by(
 		() => capabilities?.sources.find((s) => s.id === activeSource) ?? null
+	)
+	/** The word this page uses for what it is showing, in every label. */
+	let itemLabel = $derived(catalog === "personas" ? "persona" : "character")
+	let itemLabelPlural = $derived(
+		catalog === "personas" ? "personas" : "characters"
 	)
 
 	// New searches are always sent immediately — never blocked or queued
@@ -131,6 +157,7 @@
 		socket.emit("characters:searchLibrary", {
 			searchTerm: searchString,
 			source: activeSource,
+			catalog,
 			sort: activeSource === "charavault" ? activeSort : undefined,
 			hasBook:
 				activeSource === "charavault" && hasBookOnly ? true : undefined,
@@ -183,6 +210,26 @@
 		fetchLibrary(true)
 	}
 
+	/**
+	 * Switching catalogue re-points the source too when the current one has no
+	 * such catalogue — otherwise picking Personas while CharaVault is selected
+	 * would ask a source with no persona catalogue for one. The creator filter
+	 * goes with it: it is a CharaVault query, and CharaVault is not here.
+	 */
+	function handleCatalogChange(e: ValueChangeDetails) {
+		const next = e.value as "characters" | "personas"
+		if (next === catalog) return
+		catalog = next
+		const allowed =
+			capabilities?.sources.filter((s) =>
+				next === "personas" ? s.supportsPersonas : s.supportsCharacters
+			) ?? []
+		if (!allowed.some((s) => s.id === activeSource))
+			activeSource = allowed[0]?.id ?? "github-serenepub"
+		creatorFilter = ""
+		fetchLibrary(true)
+	}
+
 	function openDetails(item: LibraryCatalogItem) {
 		selectedCharacter = item
 		showDetails = true
@@ -210,7 +257,8 @@
 		downloading = true
 		socket.emit("characters:importFromLibrary", {
 			source: selectedCharacter.source,
-			ref: selectedCharacter.sourceRef
+			ref: selectedCharacter.sourceRef,
+			catalog
 		})
 	}
 
@@ -233,9 +281,10 @@
 		)
 	})
 
-	// Named so `off` can name them too. A bare `socket.off("characters:searchLibrary")`
-	// removes EVERY listener for that event — including any other open
-	// page's, which then stops updating for the rest of the session.
+	// Named because the interest registry releases by handler reference — and
+	// because it is the ONE listener path now, a bare
+	// `socket.off("characters:searchLibrary")` that would tear down every
+	// other open page's listener has no reach from here at all.
 	function handleCharactersSearchLibrary(
 		msg: Sockets.Characters.SearchLibrary.Response
 	) {
@@ -311,7 +360,7 @@
 				loadMoreAutoContinueAttempts = 0
 				stillFiltering = false
 				toaster.error({
-					title: msg.error || "Failed to load more characters"
+					title: msg.error || `Failed to load more ${itemLabelPlural}`
 				})
 			}
 			return
@@ -330,7 +379,7 @@
 		}
 		if (!unreachable && !isRateLimited) {
 			toaster.error({
-				title: msg.error || "Failed to search the character library"
+				title: msg.error || `Failed to search the ${itemLabel} library`
 			})
 		}
 	}
@@ -347,7 +396,7 @@
 		msg: Sockets.ErrorResponse
 	) {
 		toaster.error({
-			title: msg.error || "Failed to download character"
+			title: msg.error || `Failed to download ${itemLabel}`
 		})
 		downloading = false
 	}
@@ -373,58 +422,61 @@
 		loadingDetail = false
 	}
 
-	onMount(() => {
-		socket.on("characters:searchLibrary", handleCharactersSearchLibrary)
-		socket.on(
-			"characters:searchLibrary:error",
-			handleCharactersSearchLibraryError
+	/**
+	 * All BARE, and all STANDING for as long as this page is open.
+	 *
+	 * `characters:searchLibrary` and `cardSources:cardDetail` echo the
+	 * client-generated `requestId` this page sent, but that is NOT an interest
+	 * scope: `SCOPED_EVENTS` is the one table both sides read and it has no
+	 * entry for these events, so a `#<requestId>` key would match no payload at
+	 * all. The `msg.requestId !== latest…` guards in the handlers stay the
+	 * staleness filter — a different job from deciding who is sent the reply.
+	 *
+	 * Declared ahead of the two requests below so every key is held before
+	 * either flushes the interest sync (effects run in declaration order).
+	 */
+	useInterest<"characters:searchLibrary">(
+		"characters:searchLibrary",
+		handleCharactersSearchLibrary
+	)
+	useInterest<"characters:searchLibrary:error">(
+		"characters:searchLibrary:error",
+		handleCharactersSearchLibraryError
+	)
+	useInterest<"characters:importFromLibrary">(
+		"characters:importFromLibrary",
+		handleCharactersImportFromLibrary
+	)
+	useInterest<"characters:importFromLibrary:error">(
+		"characters:importFromLibrary:error",
+		handleCharactersImportFromLibraryError
+	)
+	useInterest<"cardSources:cardDetail">(
+		"cardSources:cardDetail",
+		handleCardSourcesCardDetail
+	)
+	useInterest<"cardSources:cardDetail:error">(
+		"cardSources:cardDetail:error",
+		handleCardSourcesCardDetailError
+	)
+	$effect(() =>
+		requestWithInterest(
+			"cardSources:capabilities",
+			{},
+			handleCardSourcesCapabilities
 		)
-		socket.on(
-			"characters:importFromLibrary",
-			handleCharactersImportFromLibrary
-		)
-		socket.on(
-			"characters:importFromLibrary:error",
-			handleCharactersImportFromLibraryError
-		)
-		socket.on("cardSources:capabilities", handleCardSourcesCapabilities)
-		socket.on("cardSources:cardDetail", handleCardSourcesCardDetail)
-		socket.on(
-			"cardSources:cardDetail:error",
-			handleCardSourcesCardDetailError
-		)
+	)
 
-		socket.emit("cardSources:capabilities", {})
+	onMount(() => {
+		// Every listener above is an interest, released by the registry when
+		// this page's effects are destroyed. The first search is the one
+		// request left to send, and the typed `emit` inside it flushes the
+		// interest sync ahead of itself (plan ruling 3).
 		fetchLibrary(true)
 
 		return () => {
 			clearTimeout(retryTimer)
 			clearTimeout(searchDebounceTimeoutId)
-			socket.off(
-				"characters:searchLibrary",
-				handleCharactersSearchLibrary
-			)
-			socket.off(
-				"characters:searchLibrary:error",
-				handleCharactersSearchLibraryError
-			)
-			socket.off(
-				"characters:importFromLibrary",
-				handleCharactersImportFromLibrary
-			)
-			socket.off(
-				"characters:importFromLibrary:error",
-				handleCharactersImportFromLibraryError
-			)
-			socket.off(
-				"cardSources:capabilities",
-				handleCardSourcesCapabilities
-			)
-			socket.off("cardSources:cardDetail", handleCardSourcesCardDetail)
-			socket.off(
-				"cardSources:cardDetail:error",
-				handleCardSourcesCardDetailError
-			)
 		}
 	})
 </script>
@@ -443,21 +495,37 @@
 			<div>
 				<h1 class="h2 flex items-center gap-2">
 					<Icons.Library class="text-primary-500" size={26} />
-					Character Library
+					Library
 				</h1>
 				<p class="text-surface-700-300 mt-1 text-sm">
-					Browse and download ready-made characters from the Serene
+					Browse and download ready-made {itemLabelPlural} from the Serene
 					Pub community library.
 				</p>
 			</div>
 		</div>
 	</div>
 
-	{#if sourcesForCharacters.length > 1}
+	<!-- Which catalogue, above which source: a source is a place to look, the
+	     catalogue is what you are looking for, and the second question only
+	     makes sense after the first. Same tab idiom as the source strip below
+	     rather than a segmented control, which the style guide does not use. -->
+	<div class="mb-4">
+		<Tabs value={catalog} onValueChange={handleCatalogChange}>
+			<Tabs.List class="flex flex-wrap gap-1">
+				<Tabs.Trigger value="characters">Characters</Tabs.Trigger>
+				<Tabs.Trigger value="personas">Personas</Tabs.Trigger>
+				<Tabs.Indicator
+					class="preset-filled-primary-500 rounded-full"
+				/>
+			</Tabs.List>
+		</Tabs>
+	</div>
+
+	{#if sourcesForCatalog.length > 1}
 		<div class="mb-4">
 			<Tabs value={activeSource} onValueChange={handleTabChange}>
 				<Tabs.List class="flex flex-wrap gap-1">
-					{#each sourcesForCharacters as source}
+					{#each sourcesForCatalog as source}
 						<Tabs.Trigger value={source.id}>
 							{source.label}
 						</Tabs.Trigger>
@@ -491,9 +559,9 @@
 		<input
 			type="text"
 			bind:value={searchString}
-			placeholder="Search characters, descriptions, tags…"
+			placeholder="Search {itemLabelPlural}, descriptions, tags…"
 			class="input w-full"
-			aria-label="Search the character library"
+			aria-label="Search the {itemLabel} library"
 			oninput={debouncedFetchLibrary}
 			onkeydown={(e) => {
 				if (e.key !== "Enter") return
@@ -643,7 +711,7 @@
 			class="text-surface-700-300 flex flex-col items-center gap-2 py-16 text-center"
 		>
 			<Icons.Search size={40} class="opacity-40" />
-			<p>No characters found</p>
+			<p>No {itemLabelPlural} found</p>
 		</div>
 	{:else if activeSource === "charavault"}
 		<!-- CharaVault's "category" (folder) grouping doesn't map to a
@@ -714,5 +782,5 @@
 	{loadingDetail}
 	onDownload={handleDownload}
 	onFilterByCreator={filterByCreator}
-	itemTypeLabel="Character"
+	itemTypeLabel={catalog === "personas" ? "Persona" : "Character"}
 />

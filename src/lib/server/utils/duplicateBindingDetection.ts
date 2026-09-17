@@ -82,14 +82,14 @@ export async function findDuplicateCandidates(
 			const a = bindings[i]
 			const b = bindings[j]
 
-			// Two real characters/personas are always distinct individuals —
+			// Two real characters are always distinct individuals —
 			// the same eligibility rule the absorb handler's guard enforces.
 			// A bound + unbound pair IS eligible: an unbound ghost duplicating
 			// a bound character is the single most common real case (the
 			// plan's own motivating example), so restricting candidates to
 			// unbound-vs-unbound would miss it entirely.
-			const aIsBound = a.characterId != null || a.personaId != null
-			const bIsBound = b.characterId != null || b.personaId != null
+			const aIsBound = a.characterId != null
+			const bIsBound = b.characterId != null
 			if (aIsBound && bIsBound) continue
 
 			const key = pairKey(a.id, b.id)

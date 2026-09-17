@@ -78,7 +78,7 @@ describe("bootstrapping the pipeline tables", () => {
 		// a single spec. So a descriptor edit disabled pipelines on every
 		// install that had booted the previous build.
 		await db
-			.update(schema.pipelineTypeRegistry)
+			.update(schema.pipelineDefinitionRegistry)
 			.set({ contentHash: "tampered" })
 
 		const report = await bootstrapPipelines(db)

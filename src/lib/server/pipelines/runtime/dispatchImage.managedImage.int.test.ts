@@ -130,6 +130,13 @@ vi.mock("$lib/server/koboldcpp/managedPreflight", () => ({
  */
 vi.mock("$lib/server/db", () => ({ db: { query: {} } }))
 
+/**
+ * The checkpoint, on a MODEL row rather than on the endpoint (0128).
+ * `mergeEndpointModel` writes it back onto `connection.model`, which is the
+ * field the loader spec's `file` is built from.
+ */
+const CHECKPOINT = "sdxl-turbo-q8.gguf"
+
 const imageConnection = {
 	id: 5,
 	type: "koboldcpp_managed_image",
@@ -138,9 +145,10 @@ const imageConnection = {
 	// Stale on purpose: the port was changed in the Manager after this row was
 	// created, which is the case resolveBaseUrl exists for.
 	baseUrl: "http://localhost:5001",
-	model: "sdxl-turbo-q8.gguf",
-	extraJson: {},
-	capabilities: { resolved: { "text->image": 1 } }
+	extraJson: {}
+	// No `capabilities`: this type declares `text->image` natively and by
+	// default, so the guard passes on the manifest alone. A hand-written
+	// `resolved` would be recomputed away by the merge in any case.
 }
 
 const imageSampling = {
@@ -152,8 +160,29 @@ const imageSampling = {
 }
 
 let connectionsById: Record<number, any> = {}
+/** The `connection_models` rows, by id — the MODEL half of every pair (0128). */
+let modelsById: Record<number, any> = {}
 let capabilityDefaults: Record<string, any> = {}
 let koboldCppSettings: any = {}
+
+/**
+ * Give an endpoint a model row, and answer the PAIR that names both halves.
+ *
+ * Connections have no default model, so a selection naming only the endpoint
+ * resolves as unconfigured — every dispatch below therefore spreads this.
+ */
+function withModel(connectionId: number, model: string = CHECKPOINT) {
+	const id = 900 + connectionId
+	modelsById[id] = {
+		id,
+		connectionId,
+		model,
+		name: model,
+		enabled: true,
+		missingSince: null
+	}
+	return { connectionId, connectionModelId: id }
+}
 
 let lastWhereId: any
 /** The last two, as a sliding window — see the `connection_defaults` branch. */
@@ -185,6 +214,10 @@ const fakeDb = {
 					if (name === "connections")
 						return Object.values(connectionsById).filter(
 							(c) => c.id === lastWhereId
+						)
+					if (name === "connection_models")
+						return Object.values(modelsById).filter(
+							(m) => m.id === lastWhereId
 						)
 					if (name === "sampling_configs")
 						return [imageSampling].filter(
@@ -233,10 +266,11 @@ beforeEach(() => {
 		koboldCppImageModelsDir: "/models/image"
 	}
 	connectionsById = { 5: imageConnection }
+	modelsById = {}
 	capabilityDefaults = {
 		"text->image": {
 			capability: "text->image",
-			connectionId: 5,
+			...withModel(5),
 			samplingConfigId: 10
 		}
 	}
@@ -247,7 +281,7 @@ describe("loading a managed KoboldCPP's image model before the render", () => {
 		// The spec is a discriminated union on `kind`, so "load this text model"
 		// and "load this image model" cannot be confused for one another and
 		// neither can carry the other's knobs.
-		await dispatch({ connectionId: 5 })
+		await dispatch(withModel(5))
 		expect(request).toMatchObject({
 			kind: "image",
 			file: "sdxl-turbo-q8.gguf"
@@ -259,7 +293,7 @@ describe("loading a managed KoboldCPP's image model before the render", () => {
 		// install that predates the second — one question, answered once, in
 		// managedPreflight. A caller that resolved its own path would be a second
 		// answer, and the two would drift the first time the fallback mattered.
-		await dispatch({ connectionId: 5 })
+		await dispatch(withModel(5))
 		expect(request).not.toHaveProperty("path")
 	})
 
@@ -279,7 +313,7 @@ describe("loading a managed KoboldCPP's image model before the render", () => {
 				}
 			}
 		}
-		await dispatch({ connectionId: 5 })
+		await dispatch(withModel(5))
 		expect(request.file).toBe("sdxl-turbo-q8.gguf")
 		expect(request).not.toHaveProperty("sdModelFile")
 		expect(request).not.toHaveProperty("modelFile")
@@ -295,7 +329,7 @@ describe("loading a managed KoboldCPP's image model before the render", () => {
 			...imageConnection,
 			extraJson: { profile: { sdThreads: "7", sdQuant: "q8" } }
 		}
-		await dispatch({ connectionId: 5 })
+		await dispatch(withModel(5))
 		expect(request.threads).toBe(7)
 		expect(request.quant).toBe(1)
 	})
@@ -307,7 +341,7 @@ describe("loading a managed KoboldCPP's image model before the render", () => {
 			...imageConnection,
 			extraJson: { profile: { sdThreads: "", sdQuant: "q6" } }
 		}
-		await dispatch({ connectionId: 5 })
+		await dispatch(withModel(5))
 		expect(request).not.toHaveProperty("threads")
 		expect(request).not.toHaveProperty("quant")
 	})
@@ -318,7 +352,7 @@ describe("loading a managed KoboldCPP's image model before the render", () => {
 		// already convinced the app had hung.
 		const stages: string[] = []
 		await dispatch({
-			connectionId: 5,
+			...withModel(5),
 			onProgress: (p: any) => stages.push(p.stage)
 		})
 		expect(stages[0]).toBe("loading")
@@ -332,7 +366,7 @@ describe("loading a managed KoboldCPP's image model before the render", () => {
 		// every egress decides who is told.
 		const events: any[] = []
 		await dispatch({
-			connectionId: 5,
+			...withModel(5),
 			onProgress: (p: any) => p.message && events.push(p)
 		})
 
@@ -357,7 +391,7 @@ describe("loading a managed KoboldCPP's image model before the render", () => {
 		// The ORDER is the assertion. A load outside the queue would still be
 		// "called"; what matters is that it completes before the render and that
 		// both sit in one critical section.
-		await dispatch({ connectionId: 5 })
+		await dispatch(withModel(5))
 		expect(log).toEqual(["preflight:start", "preflight:done", "render"])
 	})
 
@@ -377,7 +411,7 @@ describe("loading a managed KoboldCPP's image model before the render", () => {
 		}
 		const mod = await import("$lib/server/utils/getImageAdapter")
 		vi.spyOn(mod, "getImageAdapter").mockResolvedValue(spy as any)
-		await dispatch({ connectionId: 5 })
+		await dispatch(withModel(5))
 		expect(sawBaseUrl).toBe(MANAGER_URL)
 	})
 
@@ -387,25 +421,38 @@ describe("loading a managed KoboldCPP's image model before the render", () => {
 		// is that the sentence reaches the caller intact instead of being
 		// swallowed into a render that draws with whatever happens to be loaded.
 		onDisk = []
-		await expect(dispatch({ connectionId: 5 })).rejects.toThrow(
+		await expect(dispatch(withModel(5))).rejects.toThrow(
 			/sdxl-turbo-q8\.gguf/
 		)
 		expect(log).not.toContain("render")
 	})
 
-	it("refuses when the connection names no model at all", async () => {
+	it("refuses when the pair names no model at all", async () => {
 		// Reachable, capable, and pointing at nothing. The empty request would
 		// otherwise mean "load an empty config", which koboldcpp accepts.
-		connectionsById[5] = { ...imageConnection, model: "" }
+		//
+		// Since 0128 the refusal arrives one layer earlier: a registration
+		// naming only the endpoint is incomplete, so resolution never merges a
+		// model and the loader is never asked for one. What matters either way
+		// is that nothing reaches the Manager.
+		capabilityDefaults = {
+			"text->image": {
+				capability: "text->image",
+				connectionId: 5,
+				samplingConfigId: 10
+			}
+		}
+		// The endpoint alone, at BOTH tiers — a pipeline option naming a pair
+		// would simply win and resolve.
 		await expect(dispatch({ connectionId: 5 })).rejects.toThrow(
-			/no image model selected/i
+			/No model is chosen for Image generation/i
 		)
-		expect(log).not.toContain("render")
+		expect(log).toEqual([])
 	})
 
 	it("reports a failed load instead of a render that cannot work", async () => {
 		preflightFails = true
-		await expect(dispatch({ connectionId: 5 })).rejects.toThrow(
+		await expect(dispatch(withModel(5))).rejects.toThrow(
 			/Manager is disabled/
 		)
 		expect(log).not.toContain("render")
@@ -414,15 +461,19 @@ describe("loading a managed KoboldCPP's image model before the render", () => {
 	it("does not load anything for a backend nobody asked this app to start", async () => {
 		// An external KoboldCPP started with --sdmodel is a genuine
 		// one-process-does-both case whose models this app does not manage.
+		// Its `text->image` is stated as the PROBE answer, because that is where
+		// "we asked this instance and it draws" lives: resolving a pair rebuilds
+		// the cache from the durable layers, so a hand-written `resolved` would
+		// be recomputed away.
 		connectionsById[6] = {
 			...imageConnection,
 			id: 6,
 			type: "koboldcpp",
 			name: "Someone else's Kobold",
-			capabilities: { resolved: { "text->image": 1 } }
+			capabilities: { probe: { found: { "text->image": 1 } } }
 		}
-		capabilityDefaults["text->image"].connectionId = 6
-		await dispatch({ connectionId: 6 })
+		Object.assign(capabilityDefaults["text->image"], withModel(6))
+		await dispatch(withModel(6))
 		expect(log).toEqual(["render"])
 	})
 
@@ -449,11 +500,11 @@ describe("loading a managed KoboldCPP's image model before the render", () => {
 			id: 7,
 			type: "koboldcpp_managed",
 			name: "Managed Kobold (text)",
-			model: "MN-12B-Lyra-v4.gguf",
 			capabilities: { resolved: { "text->image": 1 } }
 		}
-		capabilityDefaults["text->image"].connectionId = 7
-		await expect(dispatch({ connectionId: 7 })).rejects.toThrow(
+		const textPair = withModel(7, "MN-12B-Lyra-v4.gguf")
+		Object.assign(capabilityDefaults["text->image"], textPair)
+		await expect(dispatch(textPair)).rejects.toThrow(
 			/cannot do Image generation/i
 		)
 		expect(request).toBeNull()

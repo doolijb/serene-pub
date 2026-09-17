@@ -17,7 +17,7 @@
  * starts where a person's edit starts, at a row, and ends at what came back.
  *
  * **The registry refusal.** Five published types changed content hash.
- * `syncTypeRegistry` refuses to republish a changed version, `bootstrapPipelines`
+ * `syncDefinitionRegistry` refuses to republish a changed version, `bootstrapPipelines`
  * catches that refusal, records it in `report.conflict` and **returns early** —
  * no specs seeded, no configs reconciled, pipelines dead on every upgraded
  * install while the diagnostics screen holds the only evidence. 0199's
@@ -301,11 +301,11 @@ describe("the declared defaults are the numbers the scan would have used", () =>
 		for (const typeId of LORE_TYPES) {
 			const [row] = await db
 				.select()
-				.from(schema.pipelineTypeRegistry)
+				.from(schema.pipelineDefinitionRegistry)
 				.where(
 					and(
-						eq(schema.pipelineTypeRegistry.typeId, typeId),
-						eq(schema.pipelineTypeRegistry.version, 1)
+						eq(schema.pipelineDefinitionRegistry.definitionId, typeId),
+						eq(schema.pipelineDefinitionRegistry.version, 1)
 					)
 				)
 				.limit(1)
@@ -326,11 +326,11 @@ describe("the declared defaults are the numbers the scan would have used", () =>
 	it("the ranker declares a proximity weight of zero in every band", async () => {
 		const [row] = await db
 			.select()
-			.from(schema.pipelineTypeRegistry)
+			.from(schema.pipelineDefinitionRegistry)
 			.where(
 				and(
-					eq(schema.pipelineTypeRegistry.typeId, RANKER),
-					eq(schema.pipelineTypeRegistry.version, 1)
+					eq(schema.pipelineDefinitionRegistry.definitionId, RANKER),
+					eq(schema.pipelineDefinitionRegistry.version, 1)
 				)
 			)
 			.limit(1)

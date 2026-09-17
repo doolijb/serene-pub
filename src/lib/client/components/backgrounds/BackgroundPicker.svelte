@@ -1,7 +1,8 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import { onMount, onDestroy } from "svelte"
+	import { onMount } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import type { SocketEventMap } from "$lib/client/sockets/typedSocket"
@@ -105,10 +106,12 @@
 			.replace(/\b\w/g, (c) => c.toUpperCase())
 	}
 
-	// Named so `off` can name them too. A bare
-	// `socket.off("userSettings:listBackgrounds")` removes EVERY listener for
-	// that event — including other components listening for the same event —
-	// which then stops updating for the rest of the session.
+	// Declared through the interest registry below, which counts subscribers
+	// per key and owns one raw listener per event — so another view wanting
+	// `userSettings:listBackgrounds` at the same time is fine, and neither
+	// teardown can silence the other. The hazard that replaces is a bare
+	// `socket.off("userSettings:listBackgrounds")`, which removes EVERY
+	// listener for that event across the whole app.
 	function handleUserSettingsListBackgrounds(
 		msg: Sockets.UserSettings.ListBackgrounds.Response
 	) {
@@ -136,38 +139,27 @@
 		toaster.error({ title: "Upload failed" })
 	}
 
+	/**
+	 * All three BARE — none is in `SCOPED_EVENTS`, and this picker wants the
+	 * whole of its own user's backgrounds. The list is STANDING because the
+	 * server pushes a fresh one after every upload and delete, which is how a
+	 * new tile appears without this component asking again.
+	 */
+	useInterest<"userSettings:listBackgrounds">(
+		"userSettings:listBackgrounds",
+		handleUserSettingsListBackgrounds
+	)
+	useInterest<"userSettings:uploadBackground">(
+		"userSettings:uploadBackground",
+		handleUserSettingsUploadBackground
+	)
+	useInterest<"userSettings:uploadBackground:error">(
+		"userSettings:uploadBackground:error",
+		handleUserSettingsUploadBackgroundError
+	)
+
 	onMount(() => {
-		socket.on(
-			"userSettings:listBackgrounds",
-			handleUserSettingsListBackgrounds
-		)
-
-		socket.on(
-			"userSettings:uploadBackground",
-			handleUserSettingsUploadBackground
-		)
-
-		socket.on(
-			"userSettings:uploadBackground:error",
-			handleUserSettingsUploadBackgroundError
-		)
-
 		socket.emit("userSettings:listBackgrounds", {})
-	})
-
-	onDestroy(() => {
-		socket.off(
-			"userSettings:listBackgrounds",
-			handleUserSettingsListBackgrounds
-		)
-		socket.off(
-			"userSettings:uploadBackground",
-			handleUserSettingsUploadBackground
-		)
-		socket.off(
-			"userSettings:uploadBackground:error",
-			handleUserSettingsUploadBackgroundError
-		)
 	})
 
 	// Visible tiles per section (filter out broken ones)
@@ -244,7 +236,9 @@
 				>
 					Defaults
 				</h4>
-				<div class="grid grid-cols-3 gap-2">
+				<div
+					class="grid grid-cols-[repeat(auto-fill,minmax(112px,1fr))] gap-2"
+				>
 					{#each visibleDefaults as path}
 						<button
 							type="button"
@@ -321,7 +315,9 @@
 					</button>
 				</div>
 			{:else}
-				<div class="grid grid-cols-3 gap-2">
+				<div
+					class="grid grid-cols-[repeat(auto-fill,minmax(112px,1fr))] gap-2"
+				>
 					{#each visibleUploads as path}
 						<div
 							class="group relative h-16 overflow-hidden rounded-lg border-2 transition-all
@@ -345,7 +341,7 @@
 							<!-- Delete button -->
 							<button
 								type="button"
-								class="bg-error-500 absolute top-1 right-1 rounded-full p-0.5 max-lg:opacity-100 lg:opacity-0 lg:transition-opacity lg:group-hover:opacity-100"
+								class="bg-error-500 absolute top-1 right-1 rounded-full p-0.5 transition-opacity focus-visible:opacity-100 pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100"
 								onclick={(e) => {
 									e.stopPropagation()
 									deleteUpload(path)

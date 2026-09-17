@@ -11,8 +11,8 @@
 	import { Handle } from "@xyflow/svelte"
 	import {
 		MAP_CONTEXT_KEY,
-		BLOCK_LABEL,
-		BLOCK_ACCENT,
+		CLAUSE_LABEL,
+		CLAUSE_ACCENT,
 		countsFor,
 		type PipelineMapContext
 	} from "./context"
@@ -23,7 +23,7 @@
 
 	type WireBlock = NonNullable<
 		NonNullable<Sockets.Pipelines.Detail.Response["spec"]>["graph"]
-	>["blocks"][number]
+	>["clauses"][number]
 
 	const block = $derived(data.block as WireBlock)
 	const step = $derived(ctx.stepFor(block.stepKey))
@@ -39,7 +39,7 @@
 
 	/** The counts line: what this construct does, said in its own terms. */
 	const meta = $derived.by(() => {
-		if (block.kind === "map")
+		if (block.kind === "each")
 			return [
 				block.over ? `over ${block.over}` : null,
 				block.max ? `up to ${block.max}×` : null,
@@ -55,7 +55,7 @@
 			]
 				.filter(Boolean)
 				.join(" · ")
-		if (block.kind === "route")
+		if (block.kind === "junction")
 			return [
 				block.on ? `on ${block.on}` : null,
 				"any subset may fire"
@@ -67,7 +67,7 @@
 </script>
 
 <div
-	class="bg-surface-200-800/40 h-full w-full rounded-lg border-2 border-dashed {BLOCK_ACCENT[
+	class="bg-surface-200-800/40 h-full w-full rounded-lg border-2 border-dashed {CLAUSE_ACCENT[
 		block.kind
 	] ?? 'border-surface-400-600'}"
 >
@@ -86,14 +86,14 @@
 		>
 			{#if block.kind === "loop"}
 				<Icons.Repeat size={11} aria-hidden="true" />
-			{:else if block.kind === "map"}
+			{:else if block.kind === "each"}
 				<Icons.Layers size={11} aria-hidden="true" />
-			{:else if block.kind === "route"}
+			{:else if block.kind === "junction"}
 				<Icons.GitBranch size={11} aria-hidden="true" />
 			{:else}
 				<Icons.GitFork size={11} aria-hidden="true" />
 			{/if}
-			{BLOCK_LABEL[block.kind] ?? block.kind}
+			{CLAUSE_LABEL[block.kind] ?? block.kind}
 		</span>
 		<span class="truncate text-xs font-semibold">
 			{humanizeBlockName(block.id)}

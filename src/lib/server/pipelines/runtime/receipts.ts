@@ -22,11 +22,10 @@
  * day — gets the priority exactly backwards.
  */
 
-import type { Outcome, Receipt } from "@serene-pub/sdk"
+import type { Receipt } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
-import { WIRE_RAW_LIMIT } from "$lib/server/connectionAdapters/BaseConnectionAdapter"
-import { REPLY_SENT_BY_ADAPTER } from "$lib/shared/constants/replyReceipt"
 import { eq, and, asc, desc, inArray, sql } from "drizzle-orm"
+import { WIRE_RAW_LIMIT } from "$lib/server/connectionAdapters/BaseConnectionAdapter"
 
 /**
  * One row a run left behind.
@@ -43,11 +42,12 @@ export interface RunArtifact {
 	/**
 	 * Which table the id belongs to.
 	 *
-	 * Four, because four producers exist today. A fifth is added when a fifth
-	 * producer is — a vocabulary entry nothing writes is a control with no
-	 * effect wearing a contract.
+	 * Five, because five producers exist today — `session` arrived with the
+	 * branch built-in (2026-09-16). A sixth is added when a sixth producer
+	 * is — a vocabulary entry nothing writes is a control with no effect
+	 * wearing a contract.
 	 */
-	kind: "message" | "file" | "variant" | "lore_entry"
+	kind: "message" | "file" | "variant" | "lore_entry" | "session"
 	/**
 	 * The row's id in that table.
 	 *
@@ -55,7 +55,20 @@ export interface RunArtifact {
 	 * on `pipeline_run_artifacts` in the schema. Evidence outlives its subject.
 	 */
 	entityId: number
-	action: "created" | "updated" | "attached"
+	/**
+	 * What the run did to the row. `created` and `updated` are a pipeline
+	 * writing content; the four verbs are the built-ins (R-15, 2026-09-16),
+	 * and a reader asking "which run wrote this reply" filters them out —
+	 * an edit's run has no prompt to explain.
+	 */
+	action:
+		| "created"
+		| "updated"
+		| "attached"
+		| "deleted"
+		| "hidden"
+		| "edited"
+		| "swiped"
 	/** Which node produced it. Absent for a producer that is not a node. */
 	nodeKey?: string | null
 }
@@ -141,6 +154,107 @@ async function resolveSpecVersion(
 	}
 }
 
+/** The generate nodes, whose `text` is the reply itself. */
+// Matches the pre-rename spelling too: a receipt written before 2026-09-16
+// carries `core:provider/…` and is capped on the same terms when re-saved.
+const GENERATE_TYPE = /^core:(?:oracle|provider)\/generate-(text|with-tools|json)@/
+
+/** The save node, whose `input.text`/`input.thinking` are the reply again. */
+const UPDATE_MESSAGE_TYPE = /^core:(?:outlet|consumer)\/update-message/
+
+/** A byte count as UTF-8, which is what the column stores. */
+const bytesOf = (text: string) => Buffer.byteLength(text, "utf8")
+
+/**
+ * Cap one field on a node's `input` or `output` at `WIRE_RAW_LIMIT`, in place
+ * on a draft copy — `field` on `bag` is replaced and `${field}Truncated` and a
+ * note are added, or `bag` is returned untouched when there is nothing to cap.
+ */
+function boundedField(
+	bag: Record<string, unknown>,
+	field: string,
+	notes: string[]
+): Record<string, unknown> {
+	const text = bag[field]
+	if (typeof text !== "string" || bytesOf(text) <= WIRE_RAW_LIMIT) return bag
+	const bytes = bytesOf(text)
+	// Sliced by characters from a byte budget: `slice` on a UTF-16 index
+	// can only land at or under the byte cap, never over it.
+	const kept = text.slice(0, WIRE_RAW_LIMIT)
+	const marker = `truncated, ${bytes} bytes`
+	notes.push(
+		`${field} on this receipt is ${marker}; the message row holds all of it`
+	)
+	return {
+		...bag,
+		[field]: kept,
+		...(bag.main === text ? { main: kept } : {}),
+		[`${field}Truncated`]: { bytes, kept: bytesOf(kept), marker }
+	}
+}
+
+/**
+ * The receipt as STORED: the reply text (and reasoning) on a generate node's
+ * output, and on the save node's input, bounded.
+ *
+ * Since the one road, the generate node's output — `text`, and `main` which is
+ * the same string — is the whole reply, and it lands in `pipeline_runs.receipt`
+ * as the node recorded it. The adapter road capped the reply it wrote onto the
+ * receipt at `WIRE_RAW_LIMIT` (the same cap a recorded wire response is held
+ * to); that patch is gone, so the cap is applied here, where the receipt meets
+ * the column. Nothing about the RUN changes — the node's published value is
+ * the port the save read, untouched — only what is kept of it afterwards.
+ *
+ * `update-message`'s `input.text`/`input.thinking` carry the same reply a
+ * generate node already published, recorded a second time as this node's own
+ * input — so the same bound applies there, and to a generate node's own
+ * `output.thinking` beside `text`.
+ *
+ * The truncation is said on the node: a `<field>Truncated` marker beside the
+ * field with the original size, and a note, so a reader who finds a reply cut
+ * short on the receipt is told it was the receipt and not the reply.
+ *
+ * A new object rather than a mutation, because the receipt in hand is also the
+ * one the trigger returns to its caller and the run-end hook was handed.
+ */
+export function boundedForStorage(receipt: Receipt): Receipt {
+	let changed = false
+	const nodes = receipt.nodes.map((n) => {
+		const isGenerate = GENERATE_TYPE.test(n.definitionId)
+		const isUpdateMessage = UPDATE_MESSAGE_TYPE.test(n.definitionId)
+		if (!isGenerate && !isUpdateMessage) return n
+
+		const notes: string[] = []
+		let output = n.output as Record<string, unknown> | null | undefined
+		if (isGenerate && output && typeof output === "object") {
+			const boundedOutput = boundedField(
+				boundedField(output, "text", notes),
+				"thinking",
+				notes
+			)
+			if (boundedOutput !== output) output = boundedOutput
+		}
+		let input = n.input as Record<string, unknown> | null | undefined
+		if (isUpdateMessage && input && typeof input === "object") {
+			const boundedInput = boundedField(
+				boundedField(input, "text", notes),
+				"thinking",
+				notes
+			)
+			if (boundedInput !== input) input = boundedInput
+		}
+		if (!notes.length) return n
+		changed = true
+		return {
+			...n,
+			...(output !== n.output ? { output } : {}),
+			...(input !== n.input ? { input } : {}),
+			notes: [...(n.notes ?? []), ...notes]
+		}
+	})
+	return changed ? { ...receipt, nodes } : receipt
+}
+
 /**
  * Store a receipt and its node trail.
  *
@@ -182,32 +296,29 @@ export async function saveReceipt(
 				/**
 				 * ⚠ **"Nothing was produced" — not "the executor halted early".**
 				 *
-				 * These read as the same question and are not. A reply whose spec
-				 * has ONE Provider on the spine runs
-				 * `runTurn({ preview: true })` because the ADAPTER makes the
-				 * provider call, so the pipeline deliberately stops at the
-				 * pre-call substrate and hands its payload over — and then a
-				 * real message is written. `Boolean(receipt.preview)` alone
-				 * therefore recorded **every reply in the product** as a
-				 * preview, which silently emptied all three consumers of the
-				 * column: `pipelines:sessionEntryUsage` (`is_preview = false`),
-				 * `lastRunFor` (the query for "did this reply come from the
-				 * pipeline"), and by extension every panel reading them.
-				 *
-				 * A multi-stage spec takes the other road (`runReplyToCompletion`)
-				 * and commits through its own Consumer, so it is not a preview
-				 * by either half of this test.
-				 *
-				 * Leaving something behind is what makes a run not a preview,
-				 * whichever artifact it was and however the writer learned of
-				 * it. What `preview` means to the executor is untouched.
+				 * Since 09-B B4 the two agree by construction: a preview is a
+				 * dry run, its outlets commit nothing, and every reply runs to
+				 * the end and writes through its own outlet. The rule stays
+				 * stated in both halves because the column's three consumers —
+				 * `pipelines:sessionEntryUsage` (`is_preview = false`),
+				 * `lastRunFor` and every panel reading them — ask "did this run
+				 * leave something behind", and leaving something behind is what
+				 * makes a run not a preview, whichever artifact it was.
 				 */
 				isPreview: artifacts.length === 0 && Boolean(receipt.preview),
+				// Lineage (01 §8; U5d): what the executor stamped from
+				// `RunOptions.lineage`, or a root's nothing at depth 0.
+				parentRunId: receipt.parentRunId ?? null,
+				rootRunId: receipt.rootRunId ?? null,
+				depth: receipt.depth ?? 0,
 				startedAt: new Date(receipt.startedAt),
 				endedAt: new Date(receipt.endedAt),
 				elapsedMs: Math.max(0, receipt.endedAt - receipt.startedAt),
 				tokensSpent: receipt.consumption?.tokens ?? 0,
-				receipt: receipt as unknown as Record<string, unknown>
+				receipt: boundedForStorage(receipt) as unknown as Record<
+					string,
+					unknown
+				>
 			})
 			.returning()
 
@@ -218,7 +329,7 @@ export async function saveReceipt(
 					seq: n.seq,
 					nodeKey: n.nodeKey,
 					kind: n.kind,
-					typeId: n.typeId,
+					definitionId: n.definitionId,
 					result: n.result,
 					reason: n.reason ?? null,
 					elapsedMs: n.elapsedMs ?? 0,
@@ -247,433 +358,6 @@ export async function saveReceipt(
 			err
 		)
 		return null
-	}
-}
-
-/**
- * The generate node on a stored receipt, or nothing.
- *
- * Every patch below edits this one node, and all four ask for it the same way:
- * a spec with no generate node, or a run that halted before reaching one, has
- * nothing to annotate. Silence rather than an invented node — the receipt is
- * evidence, and evidence does not grow entries.
- */
-function generateNodeOf<T extends { typeId?: string }>(
-	receipt: { nodes?: T[] } | null
-): T | undefined {
-	return receipt?.nodes?.find((n) =>
-		String(n?.typeId ?? "").startsWith("core:provider/generate-text")
-	)
-}
-
-/**
- * Write the composed stop sequences onto an already-stored receipt's generate
- * node.
- *
- * ## Why a patch, and why only one caller
- *
- * On every path whose Provider node actually fires, the stop list rides the
- * binding's own output and lands here with the rest of the receipt — no patch
- * involved. The single-Provider REPLY path is the exception, and it is the one
- * users spend their day on: it runs `runTurn({ preview: true })` so the pipeline
- * stops at the pre-call substrate and hands its payload to the adapter, which
- * means the receipt is stored *before* anything has composed a stop list at all.
- * Without this, the panel would show a Stops row for summarize and lore runs and
- * nothing for a single reply. A multi-stage reply needs no patch: its Providers
- * fire.
- *
- * ⚠ **It records what was SENT, not that the node ran.** `result` stays `halt`
- * and `reason` stays "preview: stopped before …", both true: the node did halt,
- * and the adapter beside it did the sending. Rewriting either would turn an
- * honest receipt into a fictional one.
- *
- * Never throws, for the same reason `saveReceipt` never throws — a turn that
- * produced a good reply and then could not annotate its own audit trail has
- * still produced a good reply. A run id nothing matches is a no-op.
- */
-export async function recordGenerateStops(
-	db: Db,
-	runId: string,
-	stops: unknown
-): Promise<void> {
-	try {
-		const [row] = await db
-			.select()
-			.from(schema.pipelineRuns)
-			.where(eq(schema.pipelineRuns.runId, runId))
-			.limit(1)
-		if (!row) return
-		const receipt = row.receipt as {
-			nodes?: { typeId?: string; output?: unknown }[]
-		} | null
-		const node = generateNodeOf(receipt)
-		if (!node) return
-		node.output = {
-			...((node.output as Record<string, unknown> | null) ?? {}),
-			stops
-		}
-		await db
-			.update(schema.pipelineRuns)
-			.set({ receipt: receipt as unknown as Record<string, unknown> })
-			.where(eq(schema.pipelineRuns.id, row.id))
-	} catch (err) {
-		console.warn(
-			"[pipelines] could not record this run's stop sequences — the turn " +
-				"itself was unaffected:",
-			err
-		)
-	}
-}
-
-/**
- * Write the exchange an adapter recorded onto an already-stored receipt's
- * generate node — the same patch `recordGenerateStops` makes, for the same
- * reason.
- *
- * ## Under `output`, beside the stop record
- *
- * Where a Provider node fires, the exchange rides the binding's own output and
- * lands here with the rest of the receipt. The single-Provider REPLY path is
- * the exception the patch exists for: the pipeline stops at the pre-call
- * substrate and the adapter beside it does the sending, so the receipt is
- * stored before there is a request to record.
- *
- * ⚠ **Administrator-only, by the key it is stored under.** The exchange names
- * the base URL, the model and the body, and `withoutConnectionIdentity`
- * removes `wire` at every egress. Nothing else on the node moves.
- *
- * Never throws, for the reason `saveReceipt` never throws. A run id nothing
- * matches is a no-op, and so is an adapter that recorded nothing.
- */
-export async function recordGenerateWire(
-	db: Db,
-	runId: string,
-	wire: unknown
-): Promise<void> {
-	if (!wire) return
-	try {
-		const [row] = await db
-			.select()
-			.from(schema.pipelineRuns)
-			.where(eq(schema.pipelineRuns.runId, runId))
-			.limit(1)
-		if (!row) return
-		const receipt = row.receipt as {
-			nodes?: { typeId?: string; output?: unknown }[]
-		} | null
-		const node = generateNodeOf(receipt)
-		if (!node) return
-		node.output = {
-			...((node.output as Record<string, unknown> | null) ?? {}),
-			wire
-		}
-		await db
-			.update(schema.pipelineRuns)
-			.set({ receipt: receipt as unknown as Record<string, unknown> })
-			.where(eq(schema.pipelineRuns.id, row.id))
-	} catch (err) {
-		console.warn(
-			"[pipelines] could not record this run's exchange — the turn " +
-				"itself was unaffected:",
-			err
-		)
-	}
-}
-
-/**
- * Write prompt-cache usage onto an already-stored receipt's generate node —
- * the same patch `recordGenerateStops` makes, for the same reason.
- *
- * ## Off the node, not off `output`
- *
- * The SDK executor's `ctx.reportCacheUsage?.()` writes these three fields
- * directly on the node receipt (`nr.tokensPrompt = …`), and
- * `sockets/pipelines.ts`'s `promptCacheFromReceipt` reads them from the same
- * place. Nesting them under `output` here — the way `recordGenerateStops`
- * nests `stops` — would put a real reply's usage somewhere that reader never
- * looks, the same silent gap this patch exists to close.
- *
- * ⚠ **Absent stays absent.** Only a key the adapter actually reported is
- * written; a service that never says is not the same finding as a service
- * that reused nothing, and writing 0 over the first would report the second.
- *
- * Never throws, for the same reason `recordGenerateStops` never does — a turn
- * that produced a good reply and then could not annotate its own audit trail
- * has still produced a good reply. A run id nothing matches is a no-op.
- */
-export async function recordGenerateCacheUsage(
-	db: Db,
-	runId: string,
-	usage: {
-		tokensPrompt?: number
-		tokensCached?: number
-		tokensCacheWrite?: number
-	}
-): Promise<void> {
-	try {
-		const [row] = await db
-			.select()
-			.from(schema.pipelineRuns)
-			.where(eq(schema.pipelineRuns.runId, runId))
-			.limit(1)
-		if (!row) return
-		const receipt = row.receipt as {
-			nodes?: {
-				typeId?: string
-				tokensPrompt?: number
-				tokensCached?: number
-				tokensCacheWrite?: number
-			}[]
-		} | null
-		const node = generateNodeOf(receipt)
-		if (!node) return
-		if (typeof usage.tokensPrompt === "number")
-			node.tokensPrompt = usage.tokensPrompt
-		if (typeof usage.tokensCached === "number")
-			node.tokensCached = usage.tokensCached
-		if (typeof usage.tokensCacheWrite === "number")
-			node.tokensCacheWrite = usage.tokensCacheWrite
-		await db
-			.update(schema.pipelineRuns)
-			.set({ receipt: receipt as unknown as Record<string, unknown> })
-			.where(eq(schema.pipelineRuns.id, row.id))
-	} catch (err) {
-		console.warn(
-			"[pipelines] could not record this run's prompt-cache usage — the " +
-				"turn itself was unaffected:",
-			err
-		)
-	}
-}
-
-/** What the reply adapter did with the payload the run handed it. */
-export interface ReplyOutcome {
-	/**
-	 * The receipt's own vocabulary, minus the one word this can never be: the
-	 * pipeline's halt is the thing that already happened, and what is being
-	 * recorded here is what happened AFTER it.
-	 */
-	result: Exclude<Outcome, "halt">
-	/** Why — for anything that is not the ordinary success. */
-	reason?: string
-	/** The reply as the message row holds it. */
-	text?: string
-	/** What the service said ended it: `done_reason`, `finish_reason`. */
-	finishReason?: string
-	tokensPrompt?: number
-	tokensCompletion?: number
-	/**
-	 * The reasoning half of `tokensCompletion`, where the service breaks it
-	 * out. A BREAKDOWN and never an addition, so the totals below count it once
-	 * through `tokensCompletion` and never again through this.
-	 */
-	tokensReasoning?: number
-	/**
-	 * The send's own duration, off the adapter's exchange — the span both the
-	 * generate node and the run itself are extended by.
-	 */
-	elapsedMs?: number
-}
-
-/** The reply, at the same cap a recorded response is held to. */
-function cappedReply(text: string): { text: string; truncated?: true } {
-	return text.length > WIRE_RAW_LIMIT
-		? { text: text.slice(0, WIRE_RAW_LIMIT), truncated: true }
-		: { text }
-}
-
-/** Said on a node whose service named no counts, so the 0 beside it is read right. */
-const NO_TOKEN_COUNTS = "the service reported no token counts for this reply"
-
-/**
- * Write what the reply adapter did onto an already-stored receipt — the run's
- * last word, and the same kind of patch `recordGenerateStops` makes.
- *
- * ## Why the stored receipt is wrong until this runs
- *
- * A spec with ONE Provider on the spine compiles under `runTurn({ preview: true })`
- * and hands its payload to the connection adapter, which sends it and fills in
- * the message. The receipt is written at that halt — before the send — so
- * without this every reply in the product reads `halt`, "preview: stopped
- * before generate, nothing sent" and 0 tokens, beside a message that was
- * written and a service that reported what the call cost. The halt is true when
- * it is stored and false by the time anybody reads it.
- *
- * ⚠ **`preview` stays.** It is the record of the substrate the adapter was
- * handed, and what makes the send explicable at all. `is_preview` is a
- * different question — "was anything produced" — and is not touched here.
- *
- * ⚠ **Absent stays absent.** A service that reported no counts leaves the total
- * at 0 and says so in a note; a 0 presented as a measurement would report a free
- * reply.
- *
- * ⚠ **The run's span covers the send.** Written at the pre-call halt, `endedAt`
- * and `elapsedMs` measure the compile alone — a header reading tens of
- * milliseconds beside a generate node that spent the whole exchange. The
- * adapter's own duration is the rest of the same run; `startedAt` never moves.
- *
- * Never throws, for the reason `saveReceipt` never throws — a turn that produced
- * a good reply and then could not annotate its own audit trail has still
- * produced a good reply. A run id nothing matches is a no-op.
- */
-export async function recordReplyOutcome(
-	db: Db,
-	runId: string,
-	outcome: ReplyOutcome
-): Promise<void> {
-	try {
-		const [row] = await db
-			.select()
-			.from(schema.pipelineRuns)
-			.where(eq(schema.pipelineRuns.runId, runId))
-			.limit(1)
-		if (!row) return
-		const receipt = row.receipt as {
-			outcome?: string
-			haltNodeKey?: string | null
-			haltReason?: string | null
-			startedAt?: number
-			endedAt?: number
-			consumption?: { tokens?: number; nodeExecutions?: number }
-			nodes?: {
-				nodeKey?: string
-				typeId?: string
-				result?: string
-				reason?: string
-				output?: unknown
-				notes?: string[]
-				tokens?: number
-				tokensPrompt?: number
-				startedAt?: number
-				endedAt?: number
-				elapsedMs?: number
-			}[]
-		} | null
-		if (!receipt) return
-
-		const node = generateNodeOf(receipt)
-		const reason =
-			outcome.result === "ok" ? REPLY_SENT_BY_ADAPTER : outcome.reason
-
-		// The service's own numbers, prompt and completion together — the
-		// prompt half may already be on the node from `recordGenerateCacheUsage`.
-		const tokensPrompt = outcome.tokensPrompt ?? node?.tokensPrompt
-		const { tokensCompletion, tokensReasoning } = outcome
-		const counted = [tokensPrompt, tokensCompletion].filter(
-			(n): n is number => typeof n === "number" && Number.isFinite(n)
-		)
-		const tokens = counted.reduce((sum, n) => sum + n, 0)
-
-		// The send's own span, or nothing where the adapter timed nothing.
-		const sendMs =
-			typeof outcome.elapsedMs === "number" &&
-			Number.isFinite(outcome.elapsedMs)
-				? Math.max(0, Math.round(outcome.elapsedMs))
-				: null
-
-		if (node) {
-			node.result = outcome.result
-			if (reason) node.reason = reason
-			else delete node.reason
-			if (typeof tokensCompletion === "number")
-				node.tokens = tokensCompletion
-			// The node's own span covers the substrate only. Added to rather
-			// than replaced: both halves are this node's time.
-			if (sendMs !== null) {
-				node.elapsedMs = (node.elapsedMs ?? 0) + sendMs
-				if (typeof node.startedAt === "number")
-					node.endedAt = node.startedAt + node.elapsedMs
-			}
-			node.output = {
-				...((node.output as Record<string, unknown> | null) ?? {}),
-				reply: {
-					...(typeof outcome.text === "string"
-						? cappedReply(outcome.text)
-						: {}),
-					...(outcome.finishReason
-						? { finishReason: outcome.finishReason }
-						: {}),
-					...(typeof tokensPrompt === "number"
-						? { tokensPrompt }
-						: {}),
-					...(typeof tokensCompletion === "number"
-						? { tokensCompletion }
-						: {}),
-					...(typeof tokensReasoning === "number"
-						? { tokensReasoning }
-						: {})
-				}
-			}
-			if (!counted.length)
-				node.notes = [
-					...(node.notes ?? []).filter((n) => n !== NO_TOKEN_COUNTS),
-					NO_TOKEN_COUNTS
-				]
-		}
-
-		receipt.outcome = outcome.result
-		if (outcome.result === "ok") {
-			delete receipt.haltNodeKey
-			delete receipt.haltReason
-		} else {
-			receipt.haltNodeKey = node?.nodeKey ?? receipt.haltNodeKey ?? null
-			receipt.haltReason = reason ?? null
-		}
-		receipt.consumption = {
-			nodeExecutions: receipt.consumption?.nodeExecutions ?? 0,
-			tokens: counted.length ? tokens : (receipt.consumption?.tokens ?? 0)
-		}
-
-		// The run ends where the send did: the stored end plus the exchange.
-		// Read off the row, so the blob and the columns cannot disagree; the
-		// start is the run's own and stays as the executor recorded it.
-		const startedAt = row.startedAt.getTime()
-		const endedAt = row.endedAt.getTime() + (sendMs ?? 0)
-		receipt.endedAt = endedAt
-
-		await db
-			.update(schema.pipelineRuns)
-			.set({
-				endedAt: new Date(endedAt),
-				elapsedMs: Math.max(0, endedAt - startedAt),
-				outcome: outcome.result,
-				haltNodeKey:
-					outcome.result === "ok"
-						? null
-						: (node?.nodeKey ?? row.haltNodeKey),
-				haltReason: outcome.result === "ok" ? null : (reason ?? null),
-				tokensSpent: counted.length ? tokens : row.tokensSpent,
-				receipt: receipt as unknown as Record<string, unknown>
-			})
-			.where(eq(schema.pipelineRuns.id, row.id))
-
-		// The queryable half of the same fact: a panel that filters on a node's
-		// result reads the row, not the blob.
-		if (node?.nodeKey)
-			await db
-				.update(schema.pipelineRunNodes)
-				.set({
-					result: outcome.result,
-					reason: reason ?? null,
-					...(typeof tokensCompletion === "number"
-						? { tokens: tokensCompletion }
-						: {}),
-					...(typeof node.elapsedMs === "number"
-						? { elapsedMs: node.elapsedMs }
-						: {})
-				})
-				.where(
-					and(
-						eq(schema.pipelineRunNodes.runId, row.id),
-						eq(schema.pipelineRunNodes.nodeKey, node.nodeKey)
-					)
-				)
-	} catch (err) {
-		console.warn(
-			"[pipelines] could not record what this reply's adapter did — the " +
-				"turn itself was unaffected:",
-			err
-		)
 	}
 }
 
@@ -725,9 +409,19 @@ export async function runsForArtifact(
 	kind: RunArtifact["kind"],
 	entityId: number,
 	limit = 50
-) {
+): Promise<
+	Array<
+		typeof schema.pipelineRuns.$inferSelect & {
+			/** What this run did to the row — every action it recorded. */
+			actions: RunArtifact["action"][]
+		}
+	>
+> {
 	const hits = await db
-		.select({ runId: schema.pipelineRunArtifacts.runId })
+		.select({
+			runId: schema.pipelineRunArtifacts.runId,
+			action: schema.pipelineRunArtifacts.action
+		})
 		.from(schema.pipelineRunArtifacts)
 		.where(
 			and(
@@ -738,18 +432,28 @@ export async function runsForArtifact(
 		.orderBy(desc(schema.pipelineRunArtifacts.runId))
 		.limit(limit)
 	if (!hits.length) return []
+	const actionsByRun = new Map<number, RunArtifact["action"][]>()
+	for (const h of hits) {
+		const list = actionsByRun.get(h.runId) ?? []
+		list.push(h.action as RunArtifact["action"])
+		actionsByRun.set(h.runId, list)
+	}
 
-	return await db
+	const runs = await db
 		.select()
 		.from(schema.pipelineRuns)
-		.where(
-			inArray(
-				schema.pipelineRuns.id,
-				hits.map((h) => h.runId)
-			)
-		)
+		.where(inArray(schema.pipelineRuns.id, [...actionsByRun.keys()]))
 		.orderBy(desc(schema.pipelineRuns.id))
+	return runs.map((r) => ({ ...r, actions: actionsByRun.get(r.id) ?? [] }))
 }
+
+/**
+ * Did this run WRITE the row's content — as opposed to hiding, editing,
+ * swiping or deleting it (a built-in, R-15)? The question "which run
+ * produced this reply" filters on it: a built-in's receipt has no prompt.
+ */
+export const wroteContent = (actions: RunArtifact["action"][]): boolean =>
+	actions.some((a) => a === "created" || a === "updated")
 
 /**
  * The run that produced a given message, with its node trail.

@@ -112,7 +112,7 @@ const stubbed = () => {
 	const parsed = JSON.parse(ANSWER) as Record<string, unknown>
 	return {
 		...coreBindings(),
-		"core:provider/generate-text@1": async () =>
+		"core:oracle/generate-text@1": async () =>
 			ok({ main: ANSWER, text: ANSWER, connection: { type: "stub" } }),
 		/**
 		 * The structured door, stubbed at the BINDING.
@@ -127,7 +127,7 @@ const stubbed = () => {
 		 * keeper's two arms reaching one resolver as one list is exactly the
 		 * wiring this file exists to assert.
 		 */
-		"core:provider/generate-json@1": async (input: any) => {
+		"core:oracle/generate-json@1": async (input: any) => {
 			const path =
 				typeof input?.params?.path === "string" ? input.params.path : ""
 			const items = path
@@ -459,7 +459,7 @@ describe("a turn", () => {
 		// A — both JSON stages ask for a SHAPE rather than describing one.
 		for (const key of ["planWrite", "keeperWrite"]) {
 			const node = nodeOf(receipt, key)
-			expect(node?.typeId, key).toBe("core:provider/generate-json@1")
+			expect(node?.definitionId, key).toBe("core:oracle/generate-json@1")
 			expect(node?.input?.schema, `${key} sent no schema`).toEqual(
 				expect.objectContaining({ type: "object" })
 			)
@@ -668,8 +668,8 @@ describe("core:query/resolve-state-changes@1", () => {
 			read: (table: any, q: unknown) =>
 				createHost(db, { sessionId, userId }).read!(table, q, {
 					key: "resolve",
-					typeId: "core:query/resolve-state-changes",
-					typeVersion: 1,
+					definitionId: "core:query/resolve-state-changes",
+					definitionVersion: 1,
 					kind: "query"
 				}),
 			signal: new AbortController().signal,

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
-	import { getContext, onDestroy, onMount } from "svelte"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
+	import { getContext, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import PanelToolbar from "$lib/client/components/panels/PanelToolbar.svelte"
 	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
@@ -14,6 +15,8 @@
 	import { z } from "zod"
 	import { S, SAMPLING_SCHEMAS, samplingSchemaFor } from "@serene-pub/sdk"
 	import { capabilityForSamplingShape } from "$lib/shared/capabilities/samplingShape"
+	import { ViewModeTracker } from "$lib/client/shell/viewMode.svelte"
+	import PanelSplit from "$lib/client/components/panels/PanelSplit.svelte"
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
@@ -53,6 +56,12 @@
 	let view = $state<"index" | "list" | "enabled">(
 		initialSelectedId != null || startNew || initialShape ? "list" : "index"
 	)
+	/**
+	 * Desk turns those three screens into two panes: the categories stand on
+	 * the left whatever `view` says, and `view` decides only what — if
+	 * anything — is open to their right.
+	 */
+	const viewMode = new ViewModeTracker()
 
 	const CATEGORIES = [
 		{
@@ -418,58 +427,81 @@
 		toaster.success({ title: "Default sampling config updated" })
 	}
 
+	/**
+	 * All eight BARE — no `samplingConfigs:` event is in `SCOPED_EVENTS`, so
+	 * `:get` is matched on its event name and the handler takes whatever row
+	 * came back, as before. All STANDING: the list is a cascade target (every
+	 * create, update and delete re-sends it), and a sidebar that writes has to
+	 * hold the keys its own writes answer on.
+	 *
+	 * The two `:error` keys are what the old code called out as registered and
+	 * torn down BY NAMED REFERENCE — a bare
+	 * `socket.off("samplingConfigs:create:error")` removed Layout's listener
+	 * along with this one, twice, for real. The registry now owns the single
+	 * raw listener per event and releases only this sidebar's subscriber.
+	 */
+	useInterest<"samplingConfigs:list">(
+		"samplingConfigs:list",
+		handleSamplingConfigsList
+	)
+	useInterest<"samplingConfigs:delete">(
+		"samplingConfigs:delete",
+		handleSamplingConfigsDelete
+	)
+	useInterest<"samplingConfigs:update">(
+		"samplingConfigs:update",
+		handleSamplingConfigsUpdate
+	)
+	useInterest<"samplingConfigs:create">(
+		"samplingConfigs:create",
+		handleSamplingConfigsCreate
+	)
+	useInterest<"samplingConfigs:create:error">(
+		"samplingConfigs:create:error",
+		handleSamplingConfigsCreateError
+	)
+	useInterest<"samplingConfigs:update:error">(
+		"samplingConfigs:update:error",
+		handleSamplingConfigsUpdateError
+	)
+	useInterest<"samplingConfigs:get">(
+		"samplingConfigs:get",
+		handleSamplingConfigsGet
+	)
+	useInterest<"samplingConfigs:setUserActive">(
+		"samplingConfigs:setUserActive",
+		handleSamplingConfigsSetUserActive
+	)
+
 	onMount(() => {
 		onclose = handleOnClose
-		socket.on("samplingConfigs:list", handleSamplingConfigsList)
-		socket.on("samplingConfigs:delete", handleSamplingConfigsDelete)
-		socket.on("samplingConfigs:update", handleSamplingConfigsUpdate)
-		socket.on("samplingConfigs:create", handleSamplingConfigsCreate)
-		// Registered and torn down BY NAMED REFERENCE. A bare
-		// `socket.off("samplingConfigs:create:error")` removes the
-		// FIRST-registered listener for the event, which is Layout's — two real
-		// bugs in this codebase already.
-		socket.on(
-			"samplingConfigs:create:error",
-			handleSamplingConfigsCreateError
-		)
-		socket.on(
-			"samplingConfigs:update:error",
-			handleSamplingConfigsUpdateError
-		)
-		socket.on("samplingConfigs:get", handleSamplingConfigsGet)
-		socket.on(
-			"samplingConfigs:setUserActive",
-			handleSamplingConfigsSetUserActive
-		)
-
 		socket.emit("samplingConfigs:list", {})
 		// Admin create page deep-link: open the new-config flow immediately.
 		if (startNew) handleNew()
 	})
-
-	onDestroy(() => {
-		socket.off("samplingConfigs:list", handleSamplingConfigsList)
-		socket.off("samplingConfigs:delete", handleSamplingConfigsDelete)
-		socket.off("samplingConfigs:update", handleSamplingConfigsUpdate)
-		socket.off("samplingConfigs:create", handleSamplingConfigsCreate)
-		socket.off(
-			"samplingConfigs:create:error",
-			handleSamplingConfigsCreateError
-		)
-		socket.off(
-			"samplingConfigs:update:error",
-			handleSamplingConfigsUpdateError
-		)
-		socket.off("samplingConfigs:get", handleSamplingConfigsGet)
-		socket.off(
-			"samplingConfigs:setUserActive",
-			handleSamplingConfigsSetUserActive
-		)
-	})
 </script>
 
-{#if view === "index"}
-	<div class="text-foreground flex h-full flex-col gap-3 p-4">
+<div class="flex min-h-0 flex-1 flex-col" use:viewMode.observe>
+	<PanelSplit
+		mode={viewMode.mode}
+		hasDetail={view !== "index"}
+		listWidth="300px"
+		emptyMessage="Pick a category to see the configs in it."
+		list={categoryPane}
+		detail={configPane}
+	/>
+</div>
+
+{#snippet configPane()}
+	{#if view === "enabled"}
+		{@render enabledPane()}
+	{:else}
+		{@render listPane()}
+	{/if}
+{/snippet}
+
+{#snippet categoryPane()}
+	<div class="text-foreground flex h-full flex-col gap-3">
 		<p class="text-muted-foreground text-sm">
 			Select a category to view and edit its sampling configurations.
 		</p>
@@ -481,8 +513,17 @@
 			{@const defaultName = samplingConfigsList.find(
 				(c) => c.id === defaultIdFor(cat.shape)
 			)?.name}
+			{@const isOpen =
+				viewMode.mode === "desk" &&
+				view !== "index" &&
+				shape === cat.shape}
+			<!-- Standing list, so it has to say which row the right pane belongs
+		     to. Tonal + the inset bar, never a filled primary. -->
 			<button
-				class="card preset-filled-surface-100-900 hover:preset-tonal-primary group w-full cursor-pointer rounded-xl p-4 text-left transition-all"
+				class="card group w-full cursor-pointer rounded-xl p-4 text-left transition-all {isOpen
+					? 'sidebar-row-active'
+					: 'preset-filled-surface-100-900 hover:preset-tonal-primary'}"
+				aria-current={isOpen ? "true" : undefined}
 				onclick={() => openCategory(cat.shape)}
 			>
 				<div class="flex items-start gap-3">
@@ -523,12 +564,14 @@
 			</button>
 		{/each}
 	</div>
-{:else if view === "enabled"}
+{/snippet}
+
+{#snippet enabledPane()}
 	<!-- ── ENABLE / DISABLE ────────────────────────────────────────────────
-	     Back neither saves nor discards: a switch flipped here is pending in
-	     exactly the way a slider drag is, and the same `unsavedChanges` compare,
-	     Reset and close-guard already cover `enabled` for free. -->
-	<div class="text-foreground min-h-100 p-4">
+     Back neither saves nor discards: a switch flipped here is pending in
+     exactly the way a slider drag is, and the same `unsavedChanges` compare,
+     Reset and close-guard already cover `enabled` for free. -->
+	<div class="text-foreground min-h-100">
 		<div class="mb-3">
 			<PanelNavHeader
 				title="Enabled Parameters"
@@ -545,7 +588,7 @@
 			</p>
 			{#if sampling.isImmutable}
 				<!-- Repeated from the list screen: without it the switches read
-				     as broken rather than as read-only. -->
+			     as broken rather than as read-only. -->
 				<div
 					class="preset-tonal-warning mb-4 flex items-center gap-2 rounded-xl p-2 text-sm"
 				>
@@ -561,8 +604,10 @@
 			/>
 		{/if}
 	</div>
-{:else}
-	<div class="text-foreground min-h-100 p-4">
+{/snippet}
+
+{#snippet listPane()}
+	<div class="text-foreground min-h-100">
 		<div class="mb-3">
 			<PanelNavHeader
 				title={categoryTitle}
@@ -576,7 +621,7 @@
 				No sampling configurations in this category yet.
 			</p>
 		{:else if !!sampling}
-			<div class="panel-actions mt-2 mb-2 sm:mt-0">
+			<div class="panel-actions mt-2 mb-2 @sm/view:mt-0">
 				<button
 					type="button"
 					class="btn btn-sm preset-filled-primary-500"
@@ -694,9 +739,9 @@
 				</div>
 
 				<!-- The count is the only thing the inline checkboxes carried
-				     that this screen no longer shows: it now draws just the
-				     parameters that are on, so "N of M" is how you learn there
-				     are others. -->
+			     that this screen no longer shows: it now draws just the
+			     parameters that are on, so "N of M" is how you learn there
+			     are others. -->
 				<button
 					type="button"
 					class="card preset-filled-surface-100-900 hover:preset-tonal-primary group flex w-full cursor-pointer items-center justify-between gap-2 rounded-xl p-3 text-left transition-all"
@@ -724,8 +769,8 @@
 				</button>
 
 				<!-- Every ENABLED parameter the shape declares. The switches are
-				     next door; the old form listed nine hand-picked samplers and
-				     the rest of the table was unreachable from anywhere. -->
+			     next door; the old form listed nine hand-picked samplers and
+			     the rest of the table was unreachable from anywhere. -->
 				<SamplingValuesForm
 					schema={activeSchema}
 					bind:values={sampling.values}
@@ -735,7 +780,7 @@
 			</form>
 		{/if}
 	</div>
-{/if}
+{/snippet}
 
 <SamplingConfigUnsavedChangesModal
 	open={showUnsavedChangesModal}

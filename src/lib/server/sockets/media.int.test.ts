@@ -47,11 +47,28 @@ function fakeSocket(userId: number) {
 	return { user: { id: userId } } as any
 }
 
+/**
+ * A stand-in for `emitToUser` that understands the LAZY form.
+ *
+ * `media:changed` and the `media:list` cascades hand a THUNK rather than a
+ * payload (socket-interest plan, ruling 4), and what these tests read is the
+ * payload it builds. The real helper in `sockets/index.ts` does the same thing
+ * for an ungated event — evaluate, then emit — and returns the promise, which
+ * is what keeps a handler's `await emitToUser(...)` ordering its pushes.
+ */
 function captureEmits() {
 	const emitted: { event: string; data: any }[] = []
 	return {
 		emitted,
-		emit: (event: string, data: any) => emitted.push({ event, data })
+		emit: (event: string, data: any) => {
+			if (typeof data !== "function") {
+				emitted.push({ event, data })
+				return
+			}
+			return Promise.resolve(data()).then((value) => {
+				emitted.push({ event, data: value })
+			})
+		}
 	}
 }
 

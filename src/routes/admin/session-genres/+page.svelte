@@ -6,16 +6,21 @@
 	 * workspace. Both toggles here are discrete admin actions (like plugin
 	 * enable), not form fields — the explicit-save rule governs forms.
 	 */
-	import { getContext, onDestroy, onMount } from "svelte"
+	import { getContext, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { goto } from "$app/navigation"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { getAdminInterestContext } from "$lib/client/sockets/interest.svelte"
 	import AdminList, {
 		type AdminColumn
 	} from "$lib/client/components/admin/AdminList.svelte"
 
 	const userCtx: { user: SelectUser } = getContext("userCtx")
 	const socket = useTypedSocket()
+	// The admin-only half of the registry (plan ruling 6b): `sessionGenres:`
+	// is a RESTRICTED interest family, and this context exists only inside the
+	// admin tree, which already turns non-admins away.
+	const interest = getAdminInterestContext()
 
 	type Row = Sockets.SessionAdmin.GenreRow
 	let rows: Row[] = $state([])
@@ -31,18 +36,24 @@
 	}
 
 	onMount(() => {
-		if (!userCtx.user?.isAdmin) {
-			goto("/")
-			return
-		}
-		socket.on("sessionGenres:list", onTypes)
-		socket.on("sessionPresets:list", onPresets)
-		socket.emit("sessionGenres:list", {})
-		socket.emit("sessionPresets:list", {})
+		if (!userCtx.user?.isAdmin) goto("/")
 	})
-	onDestroy(() => {
-		socket.off("sessionGenres:list", onTypes)
-		socket.off("sessionPresets:list", onPresets)
+
+	/**
+	 * The genres and the presets counted against them, each asked for and
+	 * listened for in one. Both BARE — a genre is the instance's — and both
+	 * STANDING: the availability and default-preset toggles below answer ONLY
+	 * through the cascaded lists, so this page has to hold both keys.
+	 */
+	$effect(() => {
+		if (!userCtx.user?.isAdmin) return
+		const releases = [
+			interest.requestWithInterest("sessionGenres:list", {}, onTypes),
+			interest.requestWithInterest("sessionPresets:list", {}, onPresets)
+		]
+		return () => {
+			for (const release of releases) release()
+		}
 	})
 
 	const columns: AdminColumn<Row>[] = [

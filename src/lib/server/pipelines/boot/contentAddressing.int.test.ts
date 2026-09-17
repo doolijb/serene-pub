@@ -26,8 +26,8 @@ import { describe, it, expect, beforeAll } from "vitest"
 import { and, asc, desc, eq } from "drizzle-orm"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import {
-	syncTypeRegistry,
-	typeContentHash
+	syncDefinitionRegistry,
+	definitionContentHash
 } from "$lib/server/pipelines/boot/registrySync"
 import { saveDocument } from "$lib/server/pipelines/boot/store"
 import {
@@ -37,8 +37,8 @@ import {
 	compile,
 	canonicalHash,
 	snapshotRegistry,
-	allTypes,
-	allScriptTypes,
+	allDefinitions,
+	allScriptKinds,
 	type Descriptor
 } from "@serene-pub/sdk"
 import * as C from "@serene-pub/contracts"
@@ -51,7 +51,7 @@ beforeAll(async () => {
 }, 60_000)
 
 /**
- * A plain object rather than `describeTaskType`, for the reason
+ * A plain object rather than `describeTaskDefinition`, for the reason
  * `registrySync.int.test.ts` gives: a type id may only be registered once per
  * process (F5), and what these tests simulate is core's *next build*, not a
  * second declaration in this one.
@@ -64,29 +64,29 @@ const chunkText = (outPorts: Record<string, unknown>): Descriptor =>
 		ports: { in: { text: S.text }, out: outPorts }
 	}) as unknown as Descriptor
 
-const registryRows = async (typeId: string) =>
+const registryRows = async (definitionId: string) =>
 	await db
 		.select()
-		.from(schema.pipelineTypeRegistry)
-		.where(eq(schema.pipelineTypeRegistry.typeId, typeId))
+		.from(schema.pipelineDefinitionRegistry)
+		.where(eq(schema.pipelineDefinitionRegistry.definitionId, definitionId))
 
-const declarationRows = async (typeId: string) =>
+const declarationRows = async (definitionId: string) =>
 	await db
 		.select()
-		.from(schema.pipelineTypeDeclarations)
-		.where(eq(schema.pipelineTypeDeclarations.typeId, typeId))
-		.orderBy(asc(schema.pipelineTypeDeclarations.id))
+		.from(schema.pipelineDefinitionDeclarations)
+		.where(eq(schema.pipelineDefinitionDeclarations.definitionId, definitionId))
+		.orderBy(asc(schema.pipelineDefinitionDeclarations.id))
 
 describe("types: the slug points, the archive keeps", () => {
 	it("publishes a changed declaration instead of refusing it", async () => {
-		await syncTypeRegistry(db, [chunkText({ main: S.json })], {
+		await syncDefinitionRegistry(db, [chunkText({ main: S.json })], {
 			release: "test"
 		})
 		const [before] = await registryRows("chariot.demo:chunk-text")
 		expect(before.contentHash).toBeTruthy()
 
 		// The edit that used to stop the boot: a new out-port under the same pin.
-		const result = await syncTypeRegistry(
+		const result = await syncDefinitionRegistry(
 			db,
 			[chunkText({ main: S.json, chunks: S.json })],
 			{ release: "test" }
@@ -130,7 +130,7 @@ describe("types: the slug points, the archive keeps", () => {
 
 	it("re-declaring the same content writes nothing", async () => {
 		const before = await declarationRows("chariot.demo:chunk-text")
-		const again = await syncTypeRegistry(
+		const again = await syncDefinitionRegistry(
 			db,
 			[chunkText({ main: S.json, chunks: S.json })],
 			{ release: "test" }
@@ -147,16 +147,16 @@ describe("types: the slug points, the archive keeps", () => {
 		// first boot after 0119 adopts each existing row from the row itself —
 		// which is possible because the registry round trip is lossless.
 		await db
-			.delete(schema.pipelineTypeDeclarations)
+			.delete(schema.pipelineDefinitionDeclarations)
 			.where(
 				eq(
-					schema.pipelineTypeDeclarations.typeId,
+					schema.pipelineDefinitionDeclarations.definitionId,
 					"chariot.demo:chunk-text"
 				)
 			)
 		const [row] = await registryRows("chariot.demo:chunk-text")
 
-		await syncTypeRegistry(
+		await syncDefinitionRegistry(
 			db,
 			[chunkText({ main: S.json, chunks: S.json })],
 			{ release: "test" }
@@ -177,12 +177,12 @@ describe("types: the slug points, the archive keeps", () => {
 const demoSpec = (nodes: "one" | "two") =>
 	compile(
 		(nodes === "one"
-			? spec("chariot.demo:reply", { version: "1.0.0" }).input(
+			? spec("chariot.demo:reply", { version: "1.0.0" }).inlet(
 					"input",
 					C.userMessage.v1()
 				)
 			: spec("chariot.demo:reply", { version: "1.0.0" })
-					.input("input", C.userMessage.v1())
+					.inlet("input", C.userMessage.v1())
 					.query("history", ($) =>
 						C.sessionHistory.v1({ scope: $.input.sessionScope })
 					)
@@ -279,25 +279,25 @@ describe("a boot brings every shipped slug onto this build's declaration", () =>
 		// Every row, as an install seeded by the previous build would look
 		// after any declaration in it moved.
 		await fresh
-			.update(schema.pipelineTypeRegistry)
+			.update(schema.pipelineDefinitionRegistry)
 			.set({ contentHash: "from-the-previous-build" })
 
 		const report = await bootstrapPipelines(fresh)
 		expect(report.types.republished.length).toBeGreaterThan(20)
 
 		const declared = new Map(
-			snapshotRegistry([...allTypes(), ...allScriptTypes()], {
+			snapshotRegistry([...allDefinitions(), ...allScriptKinds()], {
 				release: "test"
-			}).map((e) => [`${e.id}@${e.version}`, typeContentHash(e)])
+			}).map((e) => [`${e.id}@${e.version}`, definitionContentHash(e)])
 		)
-		const rows = await fresh.select().from(schema.pipelineTypeRegistry)
+		const rows = await fresh.select().from(schema.pipelineDefinitionRegistry)
 		const wrong = (rows as any[])
-			.filter((r) => declared.has(`${r.typeId}@${r.version}`))
+			.filter((r) => declared.has(`${r.definitionId}@${r.version}`))
 			.filter(
 				(r) =>
-					r.contentHash !== declared.get(`${r.typeId}@${r.version}`)
+					r.contentHash !== declared.get(`${r.definitionId}@${r.version}`)
 			)
-			.map((r) => `${r.typeId}@${r.version}`)
+			.map((r) => `${r.definitionId}@${r.version}`)
 		expect(
 			wrong,
 			"a slug this build declares must resolve to this build's declaration"
@@ -307,10 +307,10 @@ describe("a boot brings every shipped slug onto this build's declaration", () =>
 		// unattended.
 		const archived = await fresh
 			.select()
-			.from(schema.pipelineTypeDeclarations)
+			.from(schema.pipelineDefinitionDeclarations)
 			.where(
 				eq(
-					schema.pipelineTypeDeclarations.contentHash,
+					schema.pipelineDefinitionDeclarations.contentHash,
 					"from-the-previous-build"
 				)
 			)

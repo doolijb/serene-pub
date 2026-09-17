@@ -18,7 +18,10 @@ import {
 	isModelReady,
 	isModelCached,
 	getLoadError,
-	loadConfiguredEmbeddingModel
+	getEmbeddingLastUsedAt,
+	getEmbeddingTtlMinutes,
+	loadConfiguredEmbeddingModel,
+	unloadEmbeddingModel
 } from "$lib/server/embedding/index"
 import { resolveEmbeddingTarget } from "$lib/server/embedding/target"
 import { embeddingReindexCost } from "$lib/server/embedding/reindex"
@@ -77,6 +80,26 @@ function needsEmbedding(
  * embeddings configured" from "configured and not loaded" without a second round
  * trip.
  */
+async function buildEmbeddingModelState(): Promise<Sockets.Vectorization.ListModels.Response> {
+	const target = await resolveEmbeddingTarget(db)
+	const activeModelName = target?.modelId ?? null
+	// `isModelCached` only means anything for a local HF model — a host has
+	// nothing cached on disk, and readiness there comes entirely from
+	// `isModelReady`.
+	const cached =
+		target?.mode === "local" && target.localModelName
+			? await isModelCached(target.localModelName)
+			: false
+
+	return {
+		activeConnectionId: target?.connectionId ?? null,
+		activeModelName,
+		modelReady: isModelReady(),
+		modelCached: cached,
+		loadError: getLoadError()
+	}
+}
+
 export const vectorizationListModels: Handler<
 	Sockets.Vectorization.ListModels.Params,
 	Sockets.Vectorization.ListModels.Response
@@ -84,23 +107,7 @@ export const vectorizationListModels: Handler<
 	event: "vectorization:listModels",
 	handler: async (socket, _params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
-		const target = await resolveEmbeddingTarget(db)
-		const activeModelName = target?.modelId ?? null
-		// `isModelCached` only means anything for a local HF model — a host has
-		// nothing cached on disk, and readiness there comes entirely from
-		// `isModelReady`.
-		const cached =
-			target?.mode === "local" && target.localModelName
-				? await isModelCached(target.localModelName)
-				: false
-
-		const res: Sockets.Vectorization.ListModels.Response = {
-			activeConnectionId: target?.connectionId ?? null,
-			activeModelName,
-			modelReady: isModelReady(),
-			modelCached: cached,
-			loadError: getLoadError()
-		}
+		const res = await buildEmbeddingModelState()
 		emitToUser("vectorization:listModels", res)
 		return res
 	}
@@ -145,7 +152,12 @@ export const vectorizationLoadModel: Handler<
 		}
 		const res: Sockets.Vectorization.LoadModel.Response = { success: true }
 		emitToUser("vectorization:loadModel", res)
-		await vectorizationListModels.handler(socket, {}, emitToUser)
+		// LAZY (socket-interest plan, ruling 4): the refreshed model state is
+		// a push nobody asked for, so the star read and the on-disk cache
+		// check behind it are paid only where an embedding panel is open.
+		await emitToUser("vectorization:listModels", () =>
+			buildEmbeddingModelState()
+		)
 		return res
 	}
 }
@@ -498,22 +510,24 @@ export const vectorizationCheckRagStatus: Handler<
 			}
 		}
 
-		// Personas
+		// The characters this session's users voice — the same table as the
+		// cast, counted apart because the panel reports the two scopes
+		// separately and a voiced character is not cast.
 		let personas: Sockets.Vectorization.RagTypeCounts = empty
 		if (personaIds.length > 0) {
-			const personaWhere = inArray(schema.personas.id, personaIds)
+			const personaWhere = inArray(schema.characters.id, personaIds)
 			const [pTotal, pNull, pStale] = await Promise.all([
-				db.$count(schema.personas, personaWhere),
+				db.$count(schema.characters, personaWhere),
 				db.$count(
-					schema.personas,
-					and(personaWhere, isNull(schema.personas.embedding))
+					schema.characters,
+					and(personaWhere, isNull(schema.characters.embedding))
 				),
 				db.$count(
-					schema.personas,
+					schema.characters,
 					and(
 						personaWhere,
-						sql`${schema.personas.embedding} IS NOT NULL`,
-						ne(schema.personas.embeddingModel, activeModelName)
+						sql`${schema.characters.embedding} IS NOT NULL`,
+						ne(schema.characters.embeddingModel, activeModelName)
 					)
 				)
 			])
@@ -698,6 +712,84 @@ export const vectorizationSetSessionRagIgnored: Handler<
 }
 
 // ---------------------------------------------------------------------------
+// Residency
+// ---------------------------------------------------------------------------
+
+/**
+ * The embedding lane's residency, for the endpoint header and the model view.
+ *
+ * Separate from `listModels` because the questions differ: that one answers
+ * "what is configured and is it validated", this one answers "is the model in
+ * memory right now, when was it last used, and how long until it idles out" —
+ * the three facts an Unload button needs beside it.
+ *
+ * ⚠ `loaded` is BARE residency, not "the star is up". A model left resident
+ * from a previous star is still occupying memory and is still what Unload would
+ * free, so reporting it as not loaded would leave a button that does something
+ * beside a line saying there is nothing to do. `listModels.modelReady` is the
+ * star-compared question and is unchanged.
+ */
+async function buildVectorizationStatus(): Promise<Sockets.Vectorization.Status.Response> {
+	const target = await resolveEmbeddingTarget(db)
+	return {
+		starred: target !== null,
+		modelId: target?.modelId ?? null,
+		loaded: isModelReady(),
+		loadError: getLoadError(),
+		lastUsedAt: getEmbeddingLastUsedAt(),
+		// The starred connection's own window when there is one, and the value
+		// the lane is actually armed with otherwise — the same order
+		// `loadConfiguredEmbeddingModel` applies them in.
+		ttlMinutes: target?.ttlMinutes ?? getEmbeddingTtlMinutes(),
+		// What the queue still has to do under the identity now in force. A
+		// row embedded by some other model counts as pending, which is what
+		// makes this the number that falls to zero when the queue is done.
+		pending: await countUnembedded(target?.modelId ?? undefined)
+	}
+}
+
+export const vectorizationStatus: Handler<
+	Sockets.Vectorization.Status.Params,
+	Sockets.Vectorization.Status.Response
+> = {
+	event: "vectorization:status",
+	handler: async (socket, _params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+		const res = await buildVectorizationStatus()
+		emitToUser("vectorization:status", res)
+		return res
+	}
+}
+
+/**
+ * Free the embedding model now.
+ *
+ * ⚠ It does NOT stop the queue, and that is the architecture rather than an
+ * oversight: a queue never owns model lifecycle, and nothing may assume a model
+ * is resident. The queue's next item loads on demand exactly as it does after an
+ * idle timeout — which is what makes this safe to press at any moment, and what
+ * would be broken by "helpfully" stopping the lane as well.
+ */
+export const vectorizationUnloadModel: Handler<
+	Sockets.Vectorization.UnloadModel.Params,
+	Sockets.Vectorization.UnloadModel.Response
+> = {
+	event: "vectorization:unloadModel",
+	handler: async (socket, _params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+		unloadEmbeddingModel("by request")
+		const res = await buildVectorizationStatus()
+		emitToUser("vectorization:unloadModel", res)
+		// The header and the model view both read `listModels`; an unload
+		// changes `modelReady` there too.
+		await emitToUser("vectorization:listModels", () =>
+			buildEmbeddingModelState()
+		)
+		return res
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
 
@@ -713,6 +805,8 @@ export function registerVectorizationHandlers(
 	register(socket, vectorizationListModels, emitToUser)
 	register(socket, vectorizationLoadModel, emitToUser)
 	register(socket, vectorizationReindexCost, emitToUser)
+	register(socket, vectorizationStatus, emitToUser)
+	register(socket, vectorizationUnloadModel, emitToUser)
 	register(socket, vectorizationStartQueue, emitToUser)
 	register(socket, vectorizationStopQueue, emitToUser)
 	register(socket, vectorizationGetQueue, emitToUser)

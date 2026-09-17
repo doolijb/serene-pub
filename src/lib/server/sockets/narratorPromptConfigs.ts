@@ -2,8 +2,43 @@ import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
 import { user as loadUser } from "./users"
-import { userSettingsGet } from "./userSettings"
+import { buildUserSettingsGet } from "./userSettings"
 import type { Handler } from "$lib/shared/events"
+
+/**
+ * The config list and one config, as functions, so the four write cascades below
+ * can be handed the BUILDER rather than the handler. Both events are gated, so a
+ * write made from anywhere but the admin list pays for no re-read. Skipping the
+ * emit alone would save nothing; the query is the cost.
+ *
+ * No admin check here — that belongs to the handlers, which are the surface a
+ * client can reach, and every cascade below has already made it.
+ */
+async function buildNarratorPromptConfigsList(): Promise<Sockets.NarratorPromptConfigs.List.Response> {
+	const narratorPromptConfigsList =
+		await db.query.narratorPromptConfigs.findMany({
+			columns: {
+				id: true,
+				name: true,
+				isImmutable: true
+			},
+			orderBy: (c, { asc, desc }) => [desc(c.isImmutable), asc(c.name)]
+		})
+	return { narratorPromptConfigsList }
+}
+
+/** One config. See `buildNarratorPromptConfigsList`. */
+async function buildNarratorPromptConfigsGet(
+	id: number
+): Promise<Sockets.NarratorPromptConfigs.Get.Response> {
+	const narratorPromptConfig =
+		await db.query.narratorPromptConfigs.findFirst({
+			where: (c, { eq }) => eq(c.id, id)
+		})
+	if (!narratorPromptConfig)
+		throw new Error("Narrator prompt config not found")
+	return { narratorPromptConfig }
+}
 
 export const narratorPromptConfigsListHandler: Handler<
 	Sockets.NarratorPromptConfigs.List.Params,
@@ -21,21 +56,7 @@ export const narratorPromptConfigsListHandler: Handler<
 			)
 		}
 
-		const narratorPromptConfigsList =
-			await db.query.narratorPromptConfigs.findMany({
-				columns: {
-					id: true,
-					name: true,
-					isImmutable: true
-				},
-				orderBy: (c, { asc, desc }) => [
-					desc(c.isImmutable),
-					asc(c.name)
-				]
-			})
-		const res: Sockets.NarratorPromptConfigs.List.Response = {
-			narratorPromptConfigsList
-		}
+		const res = await buildNarratorPromptConfigsList()
 		emitToUser("narratorPromptConfigs:list", res)
 		return res
 	}
@@ -57,18 +78,14 @@ export const narratorPromptConfigsGet: Handler<
 			)
 		}
 
-		const narratorPromptConfig =
-			await db.query.narratorPromptConfigs.findFirst({
-				where: (c, { eq }) => eq(c.id, params.id)
-			})
-		if (!narratorPromptConfig) {
+		let res: Sockets.NarratorPromptConfigs.Get.Response
+		try {
+			res = await buildNarratorPromptConfigsGet(params.id)
+		} catch (error) {
 			emitToUser("narratorPromptConfigs:get:error", {
 				error: "Narrator prompt config not found"
 			})
-			throw new Error("Narrator prompt config not found")
-		}
-		const res: Sockets.NarratorPromptConfigs.Get.Response = {
-			narratorPromptConfig
+			throw error
 		}
 		emitToUser("narratorPromptConfigs:get", res)
 		return res
@@ -110,7 +127,10 @@ export const narratorPromptConfigsCreate: Handler<
 			.insert(schema.narratorPromptConfigs)
 			.values(narratorPromptConfigValues)
 			.returning()
-		await narratorPromptConfigsListHandler.handler(socket, {}, emitToUser)
+		// Lazy — see `buildNarratorPromptConfigsList`.
+		await emitToUser("narratorPromptConfigs:list", () =>
+			buildNarratorPromptConfigsList()
+		)
 		const res: Sockets.NarratorPromptConfigs.Create.Response = {
 			narratorPromptConfig
 		}
@@ -167,7 +187,10 @@ export const narratorPromptConfigsUpdate: Handler<
 						.returning()
 				)[0]
 			: currentConfig!
-		await narratorPromptConfigsListHandler.handler(socket, {}, emitToUser)
+		// Lazy — see `buildNarratorPromptConfigsList`.
+		await emitToUser("narratorPromptConfigs:list", () =>
+			buildNarratorPromptConfigsList()
+		)
 		const res: Sockets.NarratorPromptConfigs.Update.Response = {
 			narratorPromptConfig
 		}
@@ -205,7 +228,10 @@ export const narratorPromptConfigsDelete: Handler<
 		await db
 			.delete(schema.narratorPromptConfigs)
 			.where(eq(schema.narratorPromptConfigs.id, params.id))
-		await narratorPromptConfigsListHandler.handler(socket, {}, emitToUser)
+		// Lazy — see `buildNarratorPromptConfigsList`.
+		await emitToUser("narratorPromptConfigs:list", () =>
+			buildNarratorPromptConfigsList()
+		)
 		const res: Sockets.NarratorPromptConfigs.Delete.Response = {
 			success: "Narrator prompt config deleted successfully"
 		}
@@ -262,13 +288,16 @@ export const narratorPromptConfigsSetUserActive: Handler<
 			})
 			.where(eq(schema.userSettings.userId, currentUser.id))
 
+		// Three cross-family refreshes, all lazy: the user row, this user's
+		// settings, and — when one was chosen — the config itself. All three
+		// go through `emitToUser`, so all three answer to the gate.
 		await loadUser(socket, {}, emitToUser) // Emit updated user info
-		await userSettingsGet.handler(socket, {}, emitToUser)
+		await emitToUser("userSettings:get", () =>
+			buildUserSettingsGet(currentUser.id)
+		)
 		if (params.id) {
-			await narratorPromptConfigsGet.handler(
-				socket,
-				{ id: params.id },
-				emitToUser
+			await emitToUser("narratorPromptConfigs:get", () =>
+				buildNarratorPromptConfigsGet(params.id!)
 			)
 		}
 

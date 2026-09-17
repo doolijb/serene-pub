@@ -7,8 +7,9 @@
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
 	import Select from "$lib/client/components/inputs/Select.svelte"
-	import { onMount, onDestroy } from "svelte"
+	import { onMount } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { z } from "zod"
 
 	const KEEP_ALIVE_UNITS = [
@@ -37,9 +38,10 @@
 		keepAlive?: string
 	}
 
-	// Zod validation schema
+	// Zod validation schema. No model field: connections have no default
+	// model, so the endpoint form never names one — models are synced from
+	// the host and browsed from the connections index.
 	const ollamaConnectionSchema = z.object({
-		model: z.string().min(1, "Model is required"),
 		baseUrl: z
 			.string()
 			.url("Invalid URL format")
@@ -80,25 +82,15 @@
 	const defaultExtraJson =
 		CONNECTION_DEFAULTS[CONNECTION_TYPE.OLLAMA].extraJson
 
-	let availableOllamaModels: any[] = $state([])
-	// The picker takes { value, label }; Ollama reports the id under `model`
-	// and the display name under `name`.
-	let modelOptions = $derived(
-		availableOllamaModels.map((m) => ({ value: m.model, label: m.name }))
-	)
+	let testResult: { ok: boolean; error?: string; models?: any[] } | null =
+		$state(null)
 	let ollamaFields: ExtraFieldData | undefined = $state()
 	let validationErrors: ValidationErrors = $state({})
 
-	const onConnectionsRefreshModels = (
-		msg: Sockets.Connections.RefreshModels.Response
-	) => {
-		if (msg.models) availableOllamaModels = msg.models
-	}
-	socket.on("connections:refreshModels", onConnectionsRefreshModels)
-
-	// Named so `off` can name it too. A bare `socket.off("connections:test")`
-	// removes EVERY listener for that event — including the parent sidebar's,
-	// which then stops updating for the rest of the session.
+	// Standing interest in the test result, held by the registry for as long as
+	// this form is mounted and released with it. The registry keeps ONE raw
+	// listener for the event and fans it out, so the parent sidebar's own
+	// interest is untouched by this form coming and going.
 	const onConnectionsTest = (msg: Sockets.Connections.Test.Response) => {
 		testResult = {
 			ok: msg.ok,
@@ -106,16 +98,7 @@
 			models: msg.models
 		}
 	}
-	socket.on("connections:test", onConnectionsTest)
-
-	function handleRefreshModels() {
-		socket.emit("connections:refreshModels", {
-			connection
-		})
-	}
-
-	let testResult: { ok: boolean; error?: string; models?: any[] } | null =
-		$state(null)
+	useInterest<"connections:test">("connections:test", onConnectionsTest)
 
 	function handleTestConnection() {
 		if (!validateConnection()) return
@@ -127,7 +110,6 @@
 
 	function validateConnection(): boolean {
 		const data = {
-			model: connection.model || "",
 			baseUrl: connection.baseUrl || ""
 		}
 
@@ -148,14 +130,8 @@
 		}
 	}
 
-	// let isValid = $derived.by(() => {
-	// 	return (
-	// 		connection &&
-	// 		connection.type === "ollama" &&
-	// 		connection.baseUrl &&
-	// 		connection.model
-	// 	)
-	// })
+	// (removed: the old validity check read `connection.model`, and
+	// connections have no default model to be valid against.)
 
 	function extraJsonToExtraFields(extraJson: ExtraJson): ExtraFieldData {
 		return {
@@ -214,34 +190,14 @@
 		} else {
 			ollamaFields = extraJsonToExtraFields(defaultExtraJson)
 		}
-		handleRefreshModels()
-	})
-
-	onDestroy(() => {
-		socket.off("connections:refreshModels", onConnectionsRefreshModels)
-		socket.off("connections:test", onConnectionsTest)
 	})
 </script>
 
 {#if connection}
-	<Select
-		class="mt-2"
-		label="Model"
-		options={modelOptions}
-		bind:value={connection.model}
-		placeholder="-- Select Model --"
-		emptyMessage="No models — try Refresh Models."
-		clearable
-		required
-	/>
+	<!-- No model picker and no Refresh here: models are synced from the
+	     host on their own and browsed from the connections index. Test
+	     checks the host (and persists what it lists). -->
 	<div class="mt-4 flex gap-2">
-		<button
-			type="button"
-			class="btn btn-sm preset-tonal-primary w-full"
-			onclick={handleRefreshModels}
-		>
-			Refresh Models
-		</button>
 		<button
 			type="button"
 			class="btn preset-tonal-success btn-sm w-full"

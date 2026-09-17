@@ -19,8 +19,9 @@
 	 * somebody another connection's work under this one's heading.
 	 */
 	import * as Icons from "@lucide/svelte"
-	import { getContext, onDestroy, onMount } from "svelte"
+	import { getContext, onMount } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 
 	interface Props {
 		/** Whether the connection this is mounted under is the one starred. */
@@ -84,33 +85,47 @@
 		vectorizationCtx.priorityQueue = msg.queue
 	}
 
+	// Standing interest in the queue's eight replies, declared ABOVE the mount
+	// that asks for the first two: effects run in creation order, so a
+	// declaration made after the emit would miss the interest sync the request
+	// flushes. `vectorization:` is not a restricted prefix — two of its handlers
+	// serve every user — so these keys are declared unconditionally.
+	useInterest<"vectorization:listModels">(
+		"vectorization:listModels",
+		handleListModels
+	)
+	useInterest<"vectorization:loadModel">(
+		"vectorization:loadModel",
+		handleLoadModel
+	)
+	useInterest<"vectorization:modelDownloadProgress">(
+		"vectorization:modelDownloadProgress",
+		handleDownloadProgress
+	)
+	useInterest<"vectorization:startQueue">(
+		"vectorization:startQueue",
+		handleStartQueue
+	)
+	useInterest<"vectorization:stopQueue">(
+		"vectorization:stopQueue",
+		handleStopQueue
+	)
+	useInterest<"vectorization:getQueue">(
+		"vectorization:getQueue",
+		handleGetQueue
+	)
+	useInterest<"vectorization:removeFromQueue">(
+		"vectorization:removeFromQueue",
+		handleRemoveFromQueue
+	)
+	useInterest<"vectorization:moveQueueGroup">(
+		"vectorization:moveQueueGroup",
+		handleMoveQueueGroup
+	)
+
 	onMount(() => {
-		// ⚠ Every `off` below names its handler. A bare `socket.off(event)`
-		// removes EVERY listener for that event, app-wide.
-		socket.on("vectorization:listModels", handleListModels)
-		socket.on("vectorization:loadModel", handleLoadModel)
-		socket.on("vectorization:modelDownloadProgress", handleDownloadProgress)
-		socket.on("vectorization:startQueue", handleStartQueue)
-		socket.on("vectorization:stopQueue", handleStopQueue)
-		socket.on("vectorization:getQueue", handleGetQueue)
-		socket.on("vectorization:removeFromQueue", handleRemoveFromQueue)
-		socket.on("vectorization:moveQueueGroup", handleMoveQueueGroup)
 		socket.emit("vectorization:listModels", {})
 		socket.emit("vectorization:getQueue", {})
-	})
-
-	onDestroy(() => {
-		socket.off("vectorization:listModels", handleListModels)
-		socket.off("vectorization:loadModel", handleLoadModel)
-		socket.off(
-			"vectorization:modelDownloadProgress",
-			handleDownloadProgress
-		)
-		socket.off("vectorization:startQueue", handleStartQueue)
-		socket.off("vectorization:stopQueue", handleStopQueue)
-		socket.off("vectorization:getQueue", handleGetQueue)
-		socket.off("vectorization:removeFromQueue", handleRemoveFromQueue)
-		socket.off("vectorization:moveQueueGroup", handleMoveQueueGroup)
 	})
 
 	function startQueue() {
@@ -340,7 +355,7 @@
 			{/if}
 
 			<div
-				class="text-surface-700-300 mt-2 grid grid-cols-2 gap-2 text-xs"
+				class="text-surface-700-300 mt-2 grid grid-cols-1 gap-2 text-xs @lg/view:grid-cols-2"
 			>
 				<div>
 					<span class="text-surface-400">Completed</span>

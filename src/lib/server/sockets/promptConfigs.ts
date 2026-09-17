@@ -2,8 +2,40 @@ import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
 import { user as loadUser } from "./users"
-import { userSettingsGet } from "./userSettings"
+import { buildUserSettingsGet } from "./userSettings"
 import type { Handler } from "$lib/shared/events"
+
+/**
+ * The config list, as one function, so the three write cascades below can be
+ * handed the BUILDER rather than the handler. `promptConfigs:list` is gated, so
+ * a write made from anywhere but the admin list pays for no re-read. Skipping
+ * the emit alone would save nothing; the query is the cost.
+ *
+ * No admin check here — that belongs to the handlers, which are the surface a
+ * client can reach, and every cascade below has already made it.
+ */
+async function buildPromptConfigsList(): Promise<Sockets.PromptConfigs.List.Response> {
+	const promptConfigsList = await db.query.promptConfigs.findMany({
+		columns: {
+			id: true,
+			name: true,
+			isImmutable: true
+		},
+		orderBy: (c, { asc, desc }) => [desc(c.isImmutable), asc(c.name)]
+	})
+	return { promptConfigsList }
+}
+
+/** One config. See `buildPromptConfigsList` for why these are split out. */
+async function buildPromptConfigsGet(
+	id: number
+): Promise<Sockets.PromptConfigs.Get.Response> {
+	const promptConfig = await db.query.promptConfigs.findFirst({
+		where: (c, { eq }) => eq(c.id, id)
+	})
+	if (!promptConfig) throw new Error("Prompt config not found")
+	return { promptConfig }
+}
 
 export const promptConfigsListHandler: Handler<
 	Sockets.PromptConfigs.List.Params,
@@ -21,15 +53,7 @@ export const promptConfigsListHandler: Handler<
 			)
 		}
 
-		const promptConfigsList = await db.query.promptConfigs.findMany({
-			columns: {
-				id: true,
-				name: true,
-				isImmutable: true
-			},
-			orderBy: (c, { asc, desc }) => [desc(c.isImmutable), asc(c.name)]
-		})
-		const res: Sockets.PromptConfigs.List.Response = { promptConfigsList }
+		const res = await buildPromptConfigsList()
 		emitToUser("promptConfigs:list", res)
 		return res
 	}
@@ -51,16 +75,15 @@ export const promptConfigsGet: Handler<
 			)
 		}
 
-		const promptConfig = await db.query.promptConfigs.findFirst({
-			where: (c, { eq }) => eq(c.id, params.id)
-		})
-		if (!promptConfig) {
+		let res: Sockets.PromptConfigs.Get.Response
+		try {
+			res = await buildPromptConfigsGet(params.id)
+		} catch (error) {
 			emitToUser("promptConfigs:get:error", {
 				error: "Prompt config not found"
 			})
-			throw new Error("Prompt config not found")
+			throw error
 		}
-		const res: Sockets.PromptConfigs.Get.Response = { promptConfig }
 		emitToUser("promptConfigs:get", res)
 		return res
 	}
@@ -101,7 +124,8 @@ export const promptConfigsCreate: Handler<
 			.insert(schema.promptConfigs)
 			.values(promptConfigValues)
 			.returning()
-		await promptConfigsListHandler.handler(socket, {}, emitToUser)
+		// Lazy — see `buildPromptConfigsList`.
+		await emitToUser("promptConfigs:list", () => buildPromptConfigsList())
 		const res: Sockets.PromptConfigs.Create.Response = { promptConfig }
 		emitToUser("promptConfigs:create", res)
 		return res
@@ -156,7 +180,8 @@ export const promptConfigsUpdate: Handler<
 						.returning()
 				)[0]
 			: currentConfig!
-		await promptConfigsListHandler.handler(socket, {}, emitToUser)
+		// Lazy — see `buildPromptConfigsList`.
+		await emitToUser("promptConfigs:list", () => buildPromptConfigsList())
 		const res: Sockets.PromptConfigs.Update.Response = { promptConfig }
 		emitToUser("promptConfigs:update", res)
 		return res
@@ -192,7 +217,8 @@ export const promptConfigsDelete: Handler<
 		await db
 			.delete(schema.promptConfigs)
 			.where(eq(schema.promptConfigs.id, params.id))
-		await promptConfigsListHandler.handler(socket, {}, emitToUser)
+		// Lazy — see `buildPromptConfigsList`.
+		await emitToUser("promptConfigs:list", () => buildPromptConfigsList())
 		const res: Sockets.PromptConfigs.Delete.Response = {
 			success: "Prompt config deleted successfully"
 		}
@@ -249,13 +275,16 @@ export const promptConfigsSetUserActive: Handler<
 			})
 			.where(eq(schema.userSettings.userId, currentUser.id))
 
+		// Three cross-family refreshes, all lazy: the user row, this user's
+		// settings, and — when one was chosen — the config itself. All three
+		// go through `emitToUser`, so all three answer to the gate.
 		await loadUser(socket, {}, emitToUser) // Emit updated user info
-		await userSettingsGet.handler(socket, {}, emitToUser)
+		await emitToUser("userSettings:get", () =>
+			buildUserSettingsGet(currentUser.id)
+		)
 		if (params.id) {
-			await promptConfigsGet.handler(
-				socket,
-				{ id: params.id },
-				emitToUser
+			await emitToUser("promptConfigs:get", () =>
+				buildPromptConfigsGet(params.id!)
 			)
 		}
 

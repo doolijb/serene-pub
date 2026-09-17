@@ -5,12 +5,15 @@ import {
 	createWidgetEventBus,
 	deriveChrome,
 	eventInScope,
+	findAction,
 	projectLayout,
 	projectWidgetData,
 	scopeMessages,
 	WidgetMessageFeed,
+	type ActionsV1,
 	type PlacementInput,
 	type ProjectInput,
+	type WidgetAction,
 	type WidgetEvent,
 	type WidgetVerbs
 } from "./context"
@@ -411,5 +414,160 @@ describe("eventInScope", () => {
 
 	it("an event with no channel at all is in scope (it is not channel news)", () => {
 		expect(eventInScope({ kind: "generation:start" }, ["phone"])).toBe(true)
+	})
+})
+
+/* ── the action venues and `invoke` (plans/29 R-15; U5c) ─────────────────── */
+
+describe("actions.v1 and invoke", () => {
+	const roll: WidgetAction = {
+		key: "roll",
+		function: "acme-roll",
+		specSlug: "acme:spec/roll",
+		name: "Roll",
+		slash: "acme.roll",
+		quick: false,
+		audience: { see: ["participant"], act: ["owner"] },
+		venue: "widget",
+		origin: "attachment",
+		floor: false,
+		canAct: true,
+		itemGated: false,
+		isNew: true
+	}
+	const edit: WidgetAction = {
+		...roll,
+		key: "edit",
+		function: "edit",
+		specSlug: "core",
+		name: "Edit",
+		slash: "edit",
+		quick: true,
+		venue: "message",
+		origin: "core",
+		floor: true,
+		itemGated: true,
+		isNew: false
+	}
+	const venues: ActionsV1 = {
+		widget: { primary: [], overflow: [roll] },
+		message: { primary: [edit], overflow: [] }
+	}
+	const verbs = (calls: unknown[][]): Omit<WidgetVerbs, "invoke"> => ({
+		action: (...a) => calls.push(a),
+		request: async () => {
+			throw new Error("no")
+		},
+		menu: async () => null,
+		on: () => () => {}
+	})
+
+	it("is a base section — present and empty when the host has no list", () => {
+		expect(projectWidgetData(base()).actions).toEqual({ v1: {} })
+	})
+
+	it("projects a detached copy of every venue, primary and overflow", () => {
+		const data = projectWidgetData(base({ actions: venues }))
+		expect(data.actions.v1).toEqual(venues)
+		expect(data.actions.v1.widget!.overflow[0]).not.toBe(roll)
+		expect(findAction(data.actions.v1, "roll")?.function).toBe("acme-roll")
+		expect(findAction(data.actions.v1, "nope")).toBeUndefined()
+	})
+
+	it("invoke resolves a key to its function and routes it through action, identity in hand (W1)", () => {
+		const calls: unknown[][] = []
+		const ctx = buildNativeContext(
+			base({ actions: venues }),
+			{ id: "dice", instanceId: "dice", title: "Dice" },
+			verbs(calls)
+		)
+		ctx.invoke("roll")
+		ctx.invoke("acme:spec/roll#roll", { messageId: 7, payload: { text: "x" } })
+		expect(calls).toEqual([
+			["acme-roll", undefined, undefined, "acme:spec/roll#roll"],
+			["acme-roll", 7, { text: "x" }, "acme:spec/roll#roll"]
+		])
+	})
+
+	it("invoke('continue') routes to the host's continue handler, never to the function fire (W4)", () => {
+		const cont: WidgetAction = {
+			...edit,
+			key: "continue",
+			function: "continue",
+			name: "Continue",
+			slash: "continue",
+			venue: "extra"
+		}
+		const calls: unknown[][] = []
+		const continued: unknown[] = []
+		const ctx = buildNativeContext(
+			base({
+				actions: { ...venues, extra: { primary: [], overflow: [cont] } }
+			}),
+			{ id: "dice", instanceId: "dice", title: "Dice" },
+			{
+				...verbs(calls),
+				coreVerbs: { continue: (args) => continued.push(args) }
+			}
+		)
+		ctx.invoke("continue", { messageId: 9 })
+		ctx.invoke("core#continue")
+		expect(continued).toEqual([{ messageId: 9 }, undefined])
+		// `sessions:triggerFunction` refuses `continue` by name; nothing
+		// reached `action`.
+		expect(calls).toEqual([])
+	})
+
+	it("a core verb the host wired no handler for is refused by name, not fired as a function", () => {
+		const calls: unknown[][] = []
+		const ctx = buildNativeContext(
+			base({ actions: venues }),
+			{ id: "dice", instanceId: "dice", title: "Dice" },
+			verbs(calls)
+		)
+		expect(() => ctx.invoke("edit", { messageId: 7 })).toThrow(
+			/'core#edit' is one of core's verbs and this host wired no handler for it/
+		)
+		expect(calls).toEqual([])
+	})
+
+	it("findAction takes an identity, and a bare key only while one action carries it (S7)", () => {
+		const twin: WidgetAction = { ...roll, specSlug: "chariot:spec/roll", slash: "chariot.roll" }
+		const shared: ActionsV1 = {
+			widget: { primary: [twin], overflow: [roll] },
+			// The same declaration listed at a second venue is one action.
+			composer: { primary: [], overflow: [roll] }
+		}
+		expect(findAction(shared, "acme:spec/roll#roll")?.specSlug).toBe("acme:spec/roll")
+		expect(findAction(shared, "chariot:spec/roll#roll")?.specSlug).toBe("chariot:spec/roll")
+		expect(findAction(shared, "acme:spec/roll#nope")).toBeUndefined()
+		expect(() => findAction(shared, "roll")).toThrow(
+			/action key "roll" is carried by 2 actions here — name one: chariot:spec\/roll#roll, acme:spec\/roll#roll/
+		)
+		expect(findAction(venues, "roll")?.specSlug).toBe("acme:spec/roll")
+	})
+
+	it("invoke refuses a key no venue lists — a widget cannot fire what the session does not offer", () => {
+		const calls: unknown[][] = []
+		const ctx = buildNativeContext(
+			base({ actions: venues }),
+			{ id: "dice", instanceId: "dice", title: "Dice" },
+			verbs(calls)
+		)
+		expect(() => ctx.invoke("summon-dragon")).toThrow(
+			/widget "dice" invoked action "summon-dragon", which no venue of this session lists/
+		)
+		expect(calls).toEqual([])
+	})
+
+	it("a host may supply its own invoke, and it wins", () => {
+		const own: unknown[][] = []
+		const ctx = buildNativeContext(
+			base({ actions: venues }),
+			{ id: "dice", instanceId: "dice", title: "Dice" },
+			{ ...verbs([]), invoke: (...a) => own.push(a) }
+		)
+		ctx.invoke("anything")
+		expect(own).toEqual([["anything"]])
 	})
 })

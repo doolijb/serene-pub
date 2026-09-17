@@ -130,54 +130,60 @@ describe("characters gallery handlers thread characterId (PGlite integration)", 
 	})
 })
 
-describe("personas gallery handlers thread personaId (PGlite integration)", () => {
-	test("listGallery success response includes personaId", async () => {
-		const { personasListGallery } = await import("./personas")
+describe("characters gallery handlers thread characterId for a persona character (PGlite integration)", () => {
+	// The personas:* socket family (and its own listGallery/uploadGalleryImage/
+	// deleteGalleryImage handlers) is gone — a persona is a `characters` row
+	// with `isPersona: true`, and gallery access for it now goes through the
+	// same characters:* gallery handlers used for every other character.
+	test("listGallery success response includes characterId", async () => {
+		const { charactersListGallery } = await import("./characters")
 		const user = await makeUser("gallery-persona-list-user")
 		const [persona] = await testDb
-			.insert(schema.personas)
+			.insert(schema.characters)
 			.values({
 				userId: user.id,
 				name: "P",
 				description: "",
-				isDefault: false,
+				isPersona: true,
 				aliases: []
 			})
 			.returning()
 
 		const { emitted, emit } = captureEmits()
-		const res = await personasListGallery.handler(
+		const res = await charactersListGallery.handler(
 			fakeSocket(user.id),
-			{ personaId: persona.id },
+			{ characterId: persona.id },
 			emit
 		)
 
-		expect(res.personaId).toBe(persona.id)
-		const success = emitted.find((e) => e.event === "personas:listGallery")
-		expect(success?.data.personaId).toBe(persona.id)
+		expect(res.characterId).toBe(persona.id)
+		const success = emitted.find(
+			(e) => e.event === "characters:listGallery"
+		)
+		expect(success?.data.characterId).toBe(persona.id)
 	})
 
-	test("uploadGalleryImage error response includes personaId", async () => {
-		const { personasUploadGalleryImage } = await import("./personas")
+	test("uploadGalleryImage error response includes characterId", async () => {
+		const { charactersUploadGalleryImage } = await import("./characters")
 		const attacker = await makeUser("gallery-persona-upload-attacker")
 		const victim = await makeUser("gallery-persona-upload-victim")
 		const [victimPersona] = await testDb
-			.insert(schema.personas)
+			.insert(schema.characters)
 			.values({
 				userId: victim.id,
 				name: "VP",
 				description: "",
-				isDefault: false,
+				isPersona: true,
 				aliases: []
 			})
 			.returning()
 
 		const { emitted, emit } = captureEmits()
 		await expect(
-			personasUploadGalleryImage.handler(
+			charactersUploadGalleryImage.handler(
 				fakeSocket(attacker.id),
 				{
-					personaId: victimPersona.id,
+					characterId: victimPersona.id,
 					imageFile: new Uint8Array(),
 					mimeType: "image/png"
 				} as any,
@@ -186,38 +192,38 @@ describe("personas gallery handlers thread personaId (PGlite integration)", () =
 		).rejects.toThrow()
 
 		const err = emitted.find(
-			(e) => e.event === "personas:uploadGalleryImage:error"
+			(e) => e.event === "characters:uploadGalleryImage:error"
 		)
-		expect(err?.data.personaId).toBe(victimPersona.id)
+		expect(err?.data.characterId).toBe(victimPersona.id)
 	})
 
-	test("deleteGalleryImage error response includes personaId", async () => {
-		const { personasDeleteGalleryImage } = await import("./personas")
+	test("deleteGalleryImage error response includes characterId", async () => {
+		const { charactersDeleteGalleryImage } = await import("./characters")
 		const attacker = await makeUser("gallery-persona-delete-attacker")
 		const victim = await makeUser("gallery-persona-delete-victim")
 		const [victimPersona] = await testDb
-			.insert(schema.personas)
+			.insert(schema.characters)
 			.values({
 				userId: victim.id,
 				name: "VP2",
 				description: "",
-				isDefault: false,
+				isPersona: true,
 				aliases: []
 			})
 			.returning()
 
 		const { emitted, emit } = captureEmits()
 		await expect(
-			personasDeleteGalleryImage.handler(
+			charactersDeleteGalleryImage.handler(
 				fakeSocket(attacker.id),
-				{ personaId: victimPersona.id, mediaId: 999999 },
+				{ characterId: victimPersona.id, mediaId: 999999 },
 				emit
 			)
 		).rejects.toThrow()
 
 		const err = emitted.find(
-			(e) => e.event === "personas:deleteGalleryImage:error"
+			(e) => e.event === "characters:deleteGalleryImage:error"
 		)
-		expect(err?.data.personaId).toBe(victimPersona.id)
+		expect(err?.data.characterId).toBe(victimPersona.id)
 	})
 })

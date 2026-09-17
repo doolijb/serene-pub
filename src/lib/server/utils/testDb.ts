@@ -20,9 +20,9 @@ export type TestDb = ReturnType<typeof drizzle<typeof schema, PGlite>>
 /** Call once per test file (eg. in beforeAll) — migrations take real time (PGlite WASM startup). */
 export async function createTestDb(opts?: {
 	/**
-	 * Leave `pipeline_type_registry` empty.
+	 * Leave `pipeline_definition_registry` empty.
 	 *
-	 * Only for the two suites that are *about* `syncTypeRegistry` and assert on
+	 * Only for the two suites that are *about* `syncDefinitionRegistry` and assert on
 	 * what it inserted — a pre-published type would make their counts wrong.
 	 * Every other suite wants the types, because an entry cannot be written
 	 * without them.
@@ -70,7 +70,7 @@ export async function createTestDb(opts?: {
 	 * Publish the declared entry types.
 	 *
 	 * ⚠ **`lorebook_entries` cannot be written without them.** `type_id` +
-	 * `type_version` is a real foreign key into `pipeline_type_registry`, so
+	 * `type_version` is a real foreign key into `pipeline_definition_registry`, so
 	 * the registry rows are a precondition for an entry row the way the
 	 * `lorebooks` row is — not an optional boot nicety. The app gets them from
 	 * `bootstrapPipelines`; a test database that skipped them would fail every
@@ -80,12 +80,12 @@ export async function createTestDb(opts?: {
 	 * fact-about-the-code route the node types take.
 	 */
 	if (!opts?.skipEntryTypes) {
-		const { syncTypeRegistry } = await import(
+		const { syncDefinitionRegistry } = await import(
 			"$lib/server/pipelines/boot/registrySync"
 		)
 		const { allEntryTypes } = await import("@serene-pub/sdk")
 		await import("@serene-pub/core-catalog")
-		await syncTypeRegistry(db, allEntryTypes(), { release: "test" })
+		await syncDefinitionRegistry(db, allEntryTypes(), { release: "test" })
 	}
 
 	return db

@@ -9,7 +9,7 @@
  * function, and a sandboxed plugin cannot hand core one.
  *
  * So the manifest declares, and core forwards — the same posture as hooks
- * (`hookTypes`) and for the same reason: the manifest is the one source of
+ * (`hookKinds`) and for the same reason: the manifest is the one source of
  * truth core can read without executing the plugin (F6, 13 §10c).
  *
  *     "engines": { "acme.x:template/mustache@1": "renderMustache" }

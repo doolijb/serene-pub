@@ -82,7 +82,36 @@ function refusable<P, R>(
 }
 
 /**
- * The list, freshly derived, with the two empty states told apart.
+ * The list, freshly derived.
+ *
+ * Split out of the handler below so the three mutators can hand it to
+ * `emitToUser` as a thunk: ONE source of truth for the payload, and the
+ * derive-reconcile-read pass behind it is paid only when a socket declared
+ * the key (socket-interest plan, ruling 4). The handler's own reply stays
+ * eager — the caller asked for it.
+ *
+ * ⚠ No ownership check here, deliberately: every caller has already made
+ * one — the handler through `findOwnedBook`, the mutators through
+ * `findOwnedSuggestion`, which joins to `lorebooks` and filters on `userId`
+ * in the same statement that fetches the row. A second, weaker check would
+ * be one more thing to keep honest, not one more boundary.
+ */
+async function buildBindingSuggestionsList(
+	lorebookId: number
+): Promise<Sockets.BindingSuggestions.List.Response> {
+	const { suggestions, coverage } = await refreshSuggestions(db, lorebookId)
+	return {
+		lorebookId,
+		suggestions,
+		scanned: !isUnscanned(coverage),
+		outstanding: outstandingSources(coverage),
+		coverage
+	}
+}
+
+/**
+ * The list, answered to whoever asked for it, with the two empty states told
+ * apart.
  *
  * ⚠ `scanned` is what stops a silent lie. Annotation is a background lane, so an
  * empty `suggestions` on a book the lane has not reached means *"not looked
@@ -99,12 +128,7 @@ export const bindingSuggestionsListHandler = refusable<
 	const book = await findOwnedBook(params.lorebookId, userId)
 	if (!book) throw new Error("Lorebook not found.")
 
-	const { suggestions, coverage } = await refreshSuggestions(
-		db,
-		params.lorebookId
-	)
-
-	const outstanding = outstandingSources(coverage)
+	const res = await buildBindingSuggestionsList(params.lorebookId)
 
 	/**
 	 * A query promotes — `annotations/queue.ts`' own doctrine, applied here.
@@ -127,15 +151,9 @@ export const bindingSuggestionsListHandler = refusable<
 	 * Conditional, so an already-covered book does not wake the lane every time
 	 * somebody opens the Bindings tab.
 	 */
-	if (outstanding > 0) enqueueLorebookAnnotation(params.lorebookId, book.name)
+	if (res.outstanding > 0)
+		enqueueLorebookAnnotation(params.lorebookId, book.name)
 
-	const res: Sockets.BindingSuggestions.List.Response = {
-		lorebookId: params.lorebookId,
-		suggestions,
-		scanned: !isUnscanned(coverage),
-		outstanding,
-		coverage
-	}
 	emitToUser("bindingSuggestions:list", res)
 	return res
 })
@@ -151,7 +169,7 @@ export const bindingSuggestionsListHandler = refusable<
  */
 export const bindingSuggestionsIgnoreHandler = refusable<
 	Sockets.BindingSuggestions.Ignore.Params,
-	Sockets.BindingSuggestions.Ignore.Response
+	void
 >("bindingSuggestions:ignore", async (socket, params, emitToUser) => {
 	const userId = socket.user!.id
 	const row = await findOwnedSuggestion(db, params.id, userId)
@@ -164,9 +182,7 @@ export const bindingSuggestionsIgnoreHandler = refusable<
 		.set({ status: "ignored", decidedAt: new Date() })
 		.where(eq(schema.bindingSuggestions.id, row.id))
 
-	return relist(socket, emitToUser, row.lorebookId, {
-		ignoredId: row.id
-	})
+	return relist(emitToUser, row.lorebookId, { ignoredId: row.id })
 })
 
 /**
@@ -180,7 +196,7 @@ export const bindingSuggestionsIgnoreHandler = refusable<
  */
 export const bindingSuggestionsUnignoreHandler = refusable<
 	Sockets.BindingSuggestions.Unignore.Params,
-	Sockets.BindingSuggestions.Unignore.Response
+	void
 >("bindingSuggestions:unignore", async (socket, params, emitToUser) => {
 	const userId = socket.user!.id
 	const row = await findOwnedSuggestion(db, params.id, userId)
@@ -196,9 +212,7 @@ export const bindingSuggestionsUnignoreHandler = refusable<
 			.set({ status: "pending", decidedAt: null })
 			.where(eq(schema.bindingSuggestions.id, row.id))
 
-	return relist(socket, emitToUser, row.lorebookId, {
-		restoredId: row.id
-	})
+	return relist(emitToUser, row.lorebookId, { restoredId: row.id })
 })
 
 /**
@@ -231,7 +245,7 @@ export const bindingSuggestionsUnignoreHandler = refusable<
  */
 export const bindingSuggestionsAddHandler = refusable<
 	Sockets.BindingSuggestions.Add.Params,
-	Sockets.BindingSuggestions.Add.Response
+	void
 >("bindingSuggestions:add", async (socket, params, emitToUser) => {
 	const userId = socket.user!.id
 	const row = await findOwnedSuggestion(db, params.id, userId)
@@ -270,7 +284,6 @@ export const bindingSuggestionsAddHandler = refusable<
 			lorebookBinding: {
 				lorebookId: row.lorebookId,
 				characterId: null,
-				personaId: null,
 				binding: "",
 				name
 			}
@@ -288,7 +301,7 @@ export const bindingSuggestionsAddHandler = refusable<
 		})
 		.where(eq(schema.bindingSuggestions.id, row.id))
 
-	return relist(socket, emitToUser, row.lorebookId, {
+	return relist(emitToUser, row.lorebookId, {
 		addedId: row.id,
 		lorebookBinding: created.lorebookBinding
 	})
@@ -304,23 +317,15 @@ export const bindingSuggestionsAddHandler = refusable<
  * whatever the annotation lane wrote in the meantime, so accepting one
  * suggestion does not leave the rest of the list stale.
  */
-async function relist(
-	socket: any,
+function relist(
 	emitToUser: ((event: string, data: any) => void) | undefined,
 	lorebookId: number,
 	extra: Record<string, unknown>
 ) {
-	const { suggestions, coverage } = await refreshSuggestions(db, lorebookId)
-	const res = {
-		lorebookId,
-		suggestions,
-		scanned: !isUnscanned(coverage),
-		outstanding: outstandingSources(coverage),
-		coverage,
+	return emitToUser?.("bindingSuggestions:list", async () => ({
+		...(await buildBindingSuggestionsList(lorebookId)),
 		...extra
-	}
-	if (emitToUser) emitToUser("bindingSuggestions:list", res)
-	return res as any
+	}))
 }
 
 export function registerBindingSuggestionHandlers(

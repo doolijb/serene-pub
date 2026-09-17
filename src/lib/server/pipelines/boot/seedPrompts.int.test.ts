@@ -88,13 +88,13 @@ const promptDeclsOf = async (slug: string) => {
 }
 
 /** The rows in one pool. */
-const poolRows = async (nodeTypeId: string, slot: string) =>
+const poolRows = async (nodeDefinitionId: string, slot: string) =>
 	await db
 		.select()
 		.from(schema.pipelinePrompts)
 		.where(
 			and(
-				eq(schema.pipelinePrompts.nodeTypeId, nodeTypeId),
+				eq(schema.pipelinePrompts.nodeDefinitionId, nodeDefinitionId),
 				eq(schema.pipelinePrompts.slot, slot)
 			)
 		)
@@ -103,7 +103,7 @@ describe("every pipeline arrives usable", () => {
 	it("ships a prompt in every pool a pipeline's steps read from", async () => {
 		for (const entry of CORE_SPECS) {
 			for (const d of await promptDeclsOf(entry.slug)) {
-				const rows = await poolRows(d.nodeTypeId!, d.slot)
+				const rows = await poolRows(d.nodeDefinitionId!, d.slot)
 				expect(
 					rows.length,
 					`${entry.slug} step ${d.nodeKey}.${d.slot} has an empty pool`
@@ -162,9 +162,9 @@ describe("every pipeline arrives usable", () => {
 					`${entry.slug} ${d.nodeKey}.${d.slot} points at nothing`
 				).toBeTruthy()
 				expect(
-					`${row.nodeTypeId}#${row.slot}`,
+					`${row.nodeDefinitionId}#${row.slot}`,
 					`${entry.slug} ${d.nodeKey}.${d.slot} points into another pool`
-				).toBe(`${d.nodeTypeId}#${d.slot}`)
+				).toBe(`${d.nodeDefinitionId}#${d.slot}`)
 				expect(row.isImmutable).toBe(true)
 
 				// And it fits: every field the step declares is written.
@@ -185,18 +185,18 @@ describe("every pipeline arrives usable", () => {
 		const reply = await promptDeclsOf(RESPOND_SPEC_ID)
 		const world = await promptDeclsOf(SUMMARIZE_WORLD_SPEC_ID)
 		const replyPools = new Set(
-			reply.map((d: any) => `${d.nodeTypeId}#${d.slot}`)
+			reply.map((d: any) => `${d.nodeDefinitionId}#${d.slot}`)
 		)
 		for (const d of world)
-			expect(replyPools.has(`${d.nodeTypeId}#${d.slot}`)).toBe(false)
+			expect(replyPools.has(`${d.nodeDefinitionId}#${d.slot}`)).toBe(false)
 
 		const replyNames = new Set(
-			(await poolRows(reply[0]!.nodeTypeId!, reply[0]!.slot)).map(
+			(await poolRows(reply[0]!.nodeDefinitionId!, reply[0]!.slot)).map(
 				(p: any) => p.name
 			)
 		)
 		for (const d of world)
-			for (const p of await poolRows(d.nodeTypeId!, d.slot))
+			for (const p of await poolRows(d.nodeDefinitionId!, d.slot))
 				expect(replyNames.has(p.name)).toBe(false)
 	})
 
@@ -207,10 +207,10 @@ describe("every pipeline arrives usable", () => {
 		const scene = await promptDeclsOf(SUMMARIZE_SCENE_SPEC_ID)
 		const history = await promptDeclsOf(SUMMARIZE_HISTORY_SPEC_ID)
 		const historyPools = new Set(
-			history.map((d: any) => `${d.nodeTypeId}#${d.slot}`)
+			history.map((d: any) => `${d.nodeDefinitionId}#${d.slot}`)
 		)
 		const shared = scene.filter((d: any) =>
-			historyPools.has(`${d.nodeTypeId}#${d.slot}`)
+			historyPools.has(`${d.nodeDefinitionId}#${d.slot}`)
 		)
 		expect(
 			shared.length,
@@ -279,7 +279,7 @@ describe("the catalog matches the legacy seeds — the drift canary (24 T6b)", (
 		},
 		{
 			// ⚠ `characterExtraction` is deliberately absent from this list.
-			// The scene spec no longer wires `core:provider/extract-cast` (plan
+			// The scene spec no longer wires `core:oracle/extract-cast` (plan
 			// §2 put it on ice, migration `0104_ice_scene_cast_extraction`), so
 			// no step of this pipeline declares that field and the pool lookup
 			// below would have nothing to resolve. The prompt itself still
@@ -309,7 +309,7 @@ describe("the catalog matches the legacy seeds — the drift canary (24 T6b)", (
 			const poolForField = new Map<string, string>()
 			for (const d of decls)
 				for (const field of (d as any).promptFields ?? [])
-					poolForField.set(field, `${d.nodeTypeId}#${d.slot}`)
+					poolForField.set(field, `${d.nodeDefinitionId}#${d.slot}`)
 
 			const rows = await db.select().from(source.table)
 			for (const row of rows as any[]) {
@@ -347,7 +347,7 @@ describe("the catalog matches the legacy seeds — the drift canary (24 T6b)", (
 	})
 
 	it("keeps the iced cast prompt shipped, byte-identical, though no spec reads it", async () => {
-		// The other half of "on ice, not deleted". `core:provider/extract-cast`
+		// The other half of "on ice, not deleted". `core:oracle/extract-cast`
 		// is no longer wired into the scene summarize document, so the canary
 		// above cannot reach its prompt through a spec's declarations — but the
 		// prose still has to be exactly what `db/defaults.ts` ships, or
@@ -363,7 +363,7 @@ describe("the catalog matches the legacy seeds — the drift canary (24 T6b)", (
 			const text = str(row.characterExtractionSystemPrompt)
 			const matches = CORE_PROMPTS.filter(
 				(p) =>
-					p.nodeType === "core:provider/extract-cast" &&
+					p.nodeType === "core:oracle/extract-cast" &&
 					p.slot === "prompts" &&
 					p.fields.characterExtraction === text
 			)
@@ -394,7 +394,7 @@ describe("the catalog matches the legacy seeds — the drift canary (24 T6b)", (
 				.from(schema.pipelinePrompts)
 				.where(eq(schema.pipelinePrompts.seedKey, p.seedKey))
 			expect(row, `${p.seedKey} was not seeded`).toBeTruthy()
-			expect(row.nodeTypeId).toBe(p.nodeType)
+			expect(row.nodeDefinitionId).toBe(p.nodeType)
 			expect(row.slot).toBe(p.slot)
 			expect(row.name).toBe(p.name)
 			expect(row.fields).toEqual(p.fields)
@@ -415,7 +415,7 @@ describe("the wording is the wording", () => {
 
 		const decls = await promptDeclsOf(GRAPH_BUILD_SPEC_ID)
 		const pools = new Set(
-			decls.map((d: any) => `${d.nodeTypeId}#${d.slot}`)
+			decls.map((d: any) => `${d.nodeDefinitionId}#${d.slot}`)
 		)
 		expect(pools.size).toBeGreaterThan(1)
 
@@ -428,7 +428,7 @@ describe("the wording is the wording", () => {
 		}
 
 		for (const d of decls) {
-			const rows = await poolRows(d.nodeTypeId!, d.slot)
+			const rows = await poolRows(d.nodeDefinitionId!, d.slot)
 			const row: any = rows.find((r: any) => r.name === legacy.name)
 			expect(row, `${d.nodeKey} has no '${legacy.name}'`).toBeTruthy()
 			for (const field of (d as any).promptFields ?? [])
@@ -443,7 +443,7 @@ describe("the wording is the wording", () => {
 	it("gives the narrator its display name, which seeds the line it speaks on", async () => {
 		for (const d of await promptDeclsOf(NARRATE_SPEC_ID))
 			if ((d as any).promptFields?.includes("narratorName"))
-				for (const p of await poolRows(d.nodeTypeId!, d.slot))
+				for (const p of await poolRows(d.nodeDefinitionId!, d.slot))
 					expect(p.fields.narratorName).toBeTruthy()
 	})
 
@@ -546,7 +546,7 @@ describe("re-seeding", () => {
 		)
 		const decl = (await promptDeclsOf(RESPOND_SPEC_ID))[0]!
 		const mine = await createPrompt(db, {
-			nodeTypeId: decl.nodeTypeId!,
+			nodeDefinitionId: decl.nodeDefinitionId!,
 			slot: decl.slot,
 			name: "Mine, untouched",
 			fields: { systemPrompt: "my words" }

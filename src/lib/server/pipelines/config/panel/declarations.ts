@@ -4,7 +4,7 @@
  * 12 §2 puts slot declarations in the type descriptor *"so a plugin Provider's
  * prompt fields render next to core's automatically, with no UI work"*, and F6
  * says core reads a plugin without executing it. Both are only true if the form
- * is generated from `pipeline_type_registry.slots` rather than from an
+ * is generated from `pipeline_definition_registry.slots` rather than from an
  * in-process descriptor map — which exists for core types, does not exist for a
  * `transport: 'process'` type, and is the exact thing F6 forbids reaching for.
  *
@@ -19,7 +19,12 @@ import { poolKeyFor } from "$lib/server/pipelines/entities/contextTemplateDefaul
 import {
 	WRITE_MATRIX,
 	getVariable,
-	BLOCK_MODE_DECL,
+	clauseSettingsSlotFor,
+	envoyPromptsSlotFor,
+	ENVOY_CONFIG_PREFIX,
+	isEnvoyConfigKey,
+	fieldLabel,
+	scriptPointsOf,
 	type ParamDecl,
 	type SlotDecl
 } from "@serene-pub/sdk"
@@ -35,13 +40,21 @@ const KIND_TO_MATRIX_SLOT: Record<string, string> = {
 	// admin's decision for the same reason the template is.
 	wire: "template",
 	variables: "variables",
-	scripts: "scripts"
+	scripts: "scripts",
+	// The substrate's own (R-9): an optional node's switch, a gated node's
+	// review position, a gather clause's mode. Read from the row's `slots`
+	// like every other kind — never synthesised here.
+	settings: "settings"
 }
 
 const PARAM_CONTROL: Record<string, string> = {
 	number: "number",
 	integer: "integer",
 	string: "string",
+	// The field language's multi-line string (`FieldType` `text`): an
+	// envoy's instructions are the first parameter to use it. `read.ts`
+	// bridges it to a `text@1` value declaration with `multiline` set.
+	text: "text",
 	boolean: "boolean",
 	enum: "enum",
 	"string[]": "string[]",
@@ -138,8 +151,8 @@ export function humanizeCamel(key: string): string {
 }
 
 /** `core:query/session-history@1` becomes `Session history` — from the row, not from code. */
-export function humanizeTypeId(typeId: string): string {
-	const tail = typeId.replace(/@\d+$/, "").split("/").pop() ?? typeId
+export function humanizeTypeId(definitionId: string): string {
+	const tail = definitionId.replace(/@\d+$/, "").split("/").pop() ?? definitionId
 	const words = tail.split(/[-_]/).join(" ")
 	return words.charAt(0).toUpperCase() + words.slice(1)
 }
@@ -174,7 +187,7 @@ function declsForSlot(
 	slotName: string,
 	decl: SlotDecl,
 	typeLabel: string,
-	typeId: string,
+	definitionId: string,
 	nodeKind: string
 ): Decl[] {
 	const matrixSlot = WRITE_MATRIX[slotName]
@@ -216,7 +229,7 @@ function declsForSlot(
 				// boundaries: an action reusing this node is offered these same
 				// rows, because the node does the same job wherever it runs.
 				// Version stripped, for the reason `poolKeyFor` gives.
-				nodeTypeId: poolKeyFor(typeId),
+				nodeDefinitionId: poolKeyFor(definitionId),
 				promptFields: Object.keys(decl.fields ?? {}),
 				label: humanizeCamel(slotName),
 				...(slotDescription ? { description: slotDescription } : {}),
@@ -256,14 +269,20 @@ function declsForSlot(
 			}
 		})
 
-	if (decl.kind === "parameters")
+	// A `settings` slot is the same shape one kind over — declared fields,
+	// one option each — and renders through the same branch, which is what
+	// "the panel renders it like any slot" means. Its one difference is per
+	// field: `review` carries a facet of its own (`FieldDecl.facet`), so the
+	// gate keeps the heading it has always had beside the switch's.
+	if (decl.kind === "parameters" || decl.kind === "settings")
 		return Object.entries(decl.schema ?? {}).map(([param, raw]) => {
 			const p = raw as ParamDecl
 			const paramDescription = i18nText(p?.description)
 			return {
 				...base,
+				...(p?.facet ? { facet: p.facet } : {}),
 				path: param,
-				label: i18nText(p?.i18n) ?? humanizeCamel(param),
+				label: i18nText(fieldLabel(p ?? {})) ?? humanizeCamel(param),
 				...(paramDescription ? { description: paramDescription } : {}),
 				...(p?.quick ? { quick: true } : {}),
 				control: PARAM_CONTROL[p?.type] ?? "string",
@@ -331,7 +350,7 @@ function declsForSlot(
 			{
 				...base,
 				path: "",
-				nodeTypeId: poolKeyFor(typeId),
+				nodeDefinitionId: poolKeyFor(definitionId),
 				label: humanizeCamel(slotName),
 				...(slotDescription ? { description: slotDescription } : {}),
 				control: "context-template-ref"
@@ -458,19 +477,23 @@ export async function published(
 	}
 }
 
-/** What the spec subscribes to, and whether that subscription is live. */
+/**
+ * What the spec subscribes to: its **inlet lock** — the one subscription a
+ * pipeline has (R-4, 2026-09-16; the subscriptions table it replaced was read
+ * by nothing at dispatch and is gone). The lock's event id
+ * (`core:event/message-respond@1`) is what a preset binds and dispatch keys on.
+ * `enabled` is kept for the panel's shape: a lock has no off switch, so it is
+ * always live.
+ */
 export async function subscription(db: Db, specVersionId: number) {
 	const [row] = await db
-		.select()
-		.from(schema.pipelineEventSubscriptions)
-		.where(
-			eq(schema.pipelineEventSubscriptions.specVersionId, specVersionId)
-		)
-		.orderBy(asc(schema.pipelineEventSubscriptions.id))
+		.select({ inputEvent: schema.pipelineSpecVersions.inputEvent })
+		.from(schema.pipelineSpecVersions)
+		.where(eq(schema.pipelineSpecVersions.id, specVersionId))
 		.limit(1)
 	return {
-		event: (row?.eventRef as string | undefined) ?? null,
-		enabled: row ? !!row.enabled : true
+		event: (row?.inputEvent as string | undefined) ?? null,
+		enabled: true
 	}
 }
 
@@ -484,7 +507,10 @@ export async function subscription(db: Db, specVersionId: number) {
  *
  * Node position then declaration order, so an option's place in the panel does
  * not move between reads — and so the first writable option a keyboard user
- * lands on is the same one twice running.
+ * lands on is the same one twice running. A gather clause's settings step
+ * rides along at the spine position of its first member node, not at the
+ * tail; an envoy's step sorts past the end, because `read.ts` pulls it out
+ * of the spine into its own trailing group.
  */
 export async function declarations(
 	db: Db,
@@ -495,22 +521,46 @@ export async function declarations(
 		.from(schema.pipelineNodes)
 		.where(eq(schema.pipelineNodes.specVersionId, specVersionId))
 		.orderBy(asc(schema.pipelineNodes.position))
+	// Fetched here rather than beside the clause-settings loop below (its
+	// original home) because a clause's spine position is needed to place
+	// its settings step among the node steps — see the sort at the bottom of
+	// this function.
+	const clauseRows = await db
+		.select()
+		.from(schema.pipelineClauses)
+		.where(eq(schema.pipelineClauses.specVersionId, specVersionId))
+		.orderBy(asc(schema.pipelineClauses.position))
+	/**
+	 * A clause's `position` is the builder's node counter at the moment
+	 * `.gather()`/`.each()`/… was called (`declareClause`, SDK `builder.ts`)
+	 * — which is also the position the clause's first member node gets, since
+	 * nothing else is pushed between declaring the clause and building its
+	 * first chain. So a clause and its first member always tie here; the
+	 * sort below breaks the tie in the clause's favour, which is what "sits
+	 * at its spine position" means: right where the block it governs begins.
+	 */
+	const positionByClauseId = new Map<string, number>(
+		(clauseRows as any[]).map((c) => [c.clauseId, c.position as number])
+	)
+	const positionByNodeKey = new Map<string, number>(
+		(nodes as any[]).map((n) => [n.nodeKey, n.position as number])
+	)
 
-	const registry = await db.select().from(schema.pipelineTypeRegistry)
+	const registry = await db.select().from(schema.pipelineDefinitionRegistry)
 	const byPin = new Map<string, any>(
-		(registry as any[]).map((r) => [`${r.typeId}@${r.version}`, r])
+		(registry as any[]).map((r) => [`${r.definitionId}@${r.version}`, r])
 	)
 
 	const out: Decl[] = []
 	for (const node of nodes as any[]) {
-		const row = byPin.get(`${node.typeId}@${node.typeVersion}`)
+		const row = byPin.get(`${node.definitionId}@${node.definitionVersion}`)
 		if (!row) continue
 		// The name the type declares, and only then a name made up from its id.
 		// The row is already in hand here — it was being read for `slots` while
 		// the label beside it was invented, so the panel called a node one
 		// thing and the pipeline map called it another.
 		const typeLabel =
-			i18nText(row.i18n?.name) ?? humanizeTypeId(node.typeId)
+			i18nText(row.i18n?.name) ?? humanizeTypeId(node.definitionId)
 		const slots = (row.slots ?? {}) as Record<string, SlotDecl>
 		for (const [slotName, decl] of Object.entries(slots)) {
 			// A slot the spec wired as a *reference to another node's* is not
@@ -518,66 +568,70 @@ export async function declarations(
 			// exists, and offering a second box for the same authored text is
 			// the three-System-boxes defect (13 §12 finding i). The wiring
 			// lives in the node's stored config — a `slot` ref with `ofNode`.
+			//
+			// ⚠ For `params` the line runs through the slot, not around it
+			// (R-7 P2, refined 2026-09-16 — `FieldDecl.shared`): the fields the
+			// definition marks `shared` are the owner's and render there once;
+			// the rest are this node's own — its share of the window, its
+			// ceiling — resolve at its own address through the same reference,
+			// and render here, on the step a reader is looking at, labelled
+			// with the band the declaration names. `reconcileConfigs` derives
+			// the addresses it back-fills and culls from this list, so an own
+			// field left off it would have its stored row culled as orphaned.
 			const wired = (node.config ?? {})[slotName]
-			if (
+			const referenced =
 				wired &&
 				typeof wired === "object" &&
 				(wired as any).__ref === "slot" &&
-				(wired as any).ofNode &&
-				(wired as any).ofNode !== node.nodeKey
+				// Another node's slot, or an envoy's (`slot.prompts({ envoy })`,
+				// U5g) — either way the owner's option is the one that exists.
+				(((wired as any).ofNode && (wired as any).ofNode !== node.nodeKey) ||
+					!!(wired as any).ofEnvoy)
+			if (referenced && decl.kind !== "parameters") continue
+			const forThisNode: SlotDecl =
+				referenced && decl.kind === "parameters"
+					? ({
+							...decl,
+							schema: Object.fromEntries(
+								Object.entries(
+									(decl.schema ?? {}) as Record<
+										string,
+										{ shared?: boolean }
+									>
+								).filter(([, f]) => f?.shared !== true)
+							)
+						} as SlotDecl)
+					: decl
+			if (
+				forThisNode.kind === "parameters" &&
+				!Object.keys(forThisNode.schema ?? {}).length
 			)
 				continue
 			out.push(
 				...declsForSlot(
 					node.nodeKey,
 					slotName,
-					decl,
+					forThisNode,
 					typeLabel,
-					node.typeId,
+					node.definitionId,
 					String(row.kind ?? "")
 				)
 			)
 		}
 
-		// Every gated node offers its review position (01 §7) — synthesized
-		// from the row's declared effects rather than authored per type,
-		// because the gate itself keys on effects and a node the gate applies
-		// to that the panel cannot configure would make F14's "an author
-		// cannot forbid review" true in the executor and false on screen.
-		// The executor reads it at `settings.review`; writing it here is what
-		// parks the run and generates a form from the payload.
-		// Only a node whose contract says an empty result is fine may be
-		// switched off — `optional`, read from the row rather than from an
-		// in-process descriptor that does not exist for a plugin type (F6).
-		// Offering the control anywhere else would let somebody turn off a node
-		// whose output the next one requires, and find out at the consumer.
-		if (row.optional)
-			out.push({
-				nodeKey: node.nodeKey,
-				slot: "settings",
-				matrixSlot: "settings",
-				path: "enabled",
-				facet: "settings",
-				quick: true,
-				label: "Use this source",
-				description:
-					"Off skips the step entirely rather than fetching and discarding it — cheaper than starving it with a zero share.",
-				control: "boolean",
-				authorDefault: true,
-				typeLabel,
-				nodeKind: String(row.kind ?? "")
-			})
-
 		// Interior script points (18 §4e): one chain option per declared point,
 		// addressed as slot `scripts` at the point's own path — which is where
 		// the executor's `ctx.scripts.applyText` reads it, so what the panel
 		// writes is what the broker runs. Read from the row like everything
-		// else (F6); v1 points are text-transform only, matching the broker.
-		for (const point of (row.scriptPoints ?? []) as Array<{
-			key: string
-			i18n?: unknown
-			description?: unknown
-		}>) {
+		// else (F6). What the point accepts is the point's own declaration
+		// (R-11) — read through the SDK's one reader, which folds a row
+		// written before points carried `accepts` to the text-transform kind,
+		// the only kind a point can mean without saying.
+		for (const point of scriptPointsOf({
+			scriptPoints: (row.scriptPoints ?? []) as Array<
+				Record<string, unknown>
+			>
+		})) {
 			const description = i18nText(point.description)
 			out.push({
 				nodeKey: node.nodeKey,
@@ -585,74 +639,122 @@ export async function declarations(
 				matrixSlot: "scripts",
 				path: point.key,
 				facet: "scripts",
-				label: i18nText(point.i18n) ?? humanizeCamel(point.key),
+				label: i18nText(point.label) ?? humanizeCamel(point.key),
 				...(description ? { description } : {}),
 				control: "scripts-chain",
-				accepts: ["core:script:text/transform@1"],
+				accepts: [...point.accepts],
 				typeLabel,
 				nodeKind: String(row.kind ?? "")
 			})
 		}
-
-		if (row.effects === "write" || row.effects === "external")
-			out.push({
-				nodeKey: node.nodeKey,
-				slot: "settings",
-				matrixSlot: "settings",
-				path: "review",
-				facet: "review",
-				label: "Review",
-				description:
-					"Pause this step for approval before it takes effect.",
-				control: "enum",
-				of: ["off", "on"],
-				authorDefault: "off",
-				typeLabel,
-				nodeKind: String(row.kind ?? "")
-			})
 	}
 
 	/**
-	 * One option per block: does this group run together or in turn?
+	 * The envoys this spec reads (plans/29 R-18 (2); U5g): one step per
+	 * `envoy:<key>` a `slot.prompts({ envoy })` compiled to, at that
+	 * address — the same address the executor resolves config for, so the
+	 * panel's row and the run's value cannot part. Only the envoys the spec
+	 * *references*: a genre's other envoys are not this pipeline's to tune,
+	 * and a control nothing reads is the dead-control family.
 	 *
-	 * Addressed by the block's id in the same `settings` slot a node's review
-	 * uses, because that is how the executor reads it — blocks are passed to
-	 * `resolveConfig` alongside nodes, so `settings.mode` on a block id
+	 * An envoy is not a node and has no registry row, so the SDK declares
+	 * its slot (`envoyPromptsSlotFor`) from the genre's declaration — read
+	 * off the create spec's row through `declaredEnvoys`, never from the
+	 * running registry — and it renders through `declsForSlot` like a
+	 * node's. The genre's text is the author default; an admin's edit is a
+	 * deviation above it. An envoy absent from the genre's declaration
+	 * still gets its step, with empty defaults: the stored deviation stays
+	 * reachable rather than becoming an orphan `reconcileConfigs` would cull.
+	 */
+	const envoyKeys = new Set<string>()
+	for (const node of nodes as any[])
+		for (const target of Object.values(
+			(node.resolvedRefs ?? {}) as Record<string, string>
+		))
+			if (isEnvoyConfigKey(target)) envoyKeys.add(target)
+	if (envoyKeys.size) {
+		const [version] = await db
+			.select({ inputGenre: schema.pipelineSpecVersions.inputGenre })
+			.from(schema.pipelineSpecVersions)
+			.where(eq(schema.pipelineSpecVersions.id, specVersionId))
+			.limit(1)
+		const { declaredEnvoys } = await import(
+			"$lib/server/pipelines/entities/envoys"
+		)
+		const declared = version?.inputGenre
+			? await declaredEnvoys(db, version.inputGenre)
+			: []
+		for (const key of envoyKeys) {
+			const slug = key.slice(ENVOY_CONFIG_PREFIX.length)
+			const envoy = declared.find((d) => d.slug === slug)
+			out.push(
+				...declsForSlot(
+					key,
+					"prompts",
+					envoyPromptsSlotFor(
+						envoy
+							? { key: envoy.key, name: envoy.name, prompts: envoy.prompts }
+							: { key: slug, name: { en: slug } }
+					),
+					`Envoy · ${(envoy && i18nText(envoy.name)) || slug}`,
+					"",
+					"envoy"
+				)
+			)
+		}
+	}
+
+	/**
+	 * One option per gather clause: does this group run together or in turn?
+	 *
+	 * Addressed by the clause's id in the same `settings` slot a node's review
+	 * uses, because that is how the executor reads it — clauses are passed to
+	 * `resolveConfig` alongside nodes, so `settings.mode` on a clause id
 	 * resolves exactly like `settings.review` on a node key.
 	 *
-	 * The wording comes from `BLOCK_MODE_DECL` in the SDK rather than from
-	 * here. A block is not a node type and has no descriptor to carry its
-	 * label, which is precisely how a string ends up invented by whichever
-	 * screen drew it.
+	 * A clause is not a node definition and has no registry row to carry the
+	 * declaration, so the SDK declares it (`clauseSettingsSlotFor`, R-9) from
+	 * the two facts the row does carry — its kind and its authored mode — and
+	 * it renders through `declsForSlot` like a node's slot. Only a gather
+	 * gets one; the SDK says why the other three do not.
 	 */
-	const blocks = await db
-		.select()
-		.from(schema.pipelineBlocks)
-		.where(eq(schema.pipelineBlocks.specVersionId, specVersionId))
-		.orderBy(asc(schema.pipelineBlocks.position))
-
-	for (const block of blocks as any[]) {
-		// `map` and `loop` have a mode too, but theirs is a property of what
-		// they iterate rather than a choice about concurrency — offering it
-		// would be a control whose effect nobody can predict from its label.
-		if (block.kind !== "async") continue
-		out.push({
-			nodeKey: block.blockId,
-			slot: "settings",
-			matrixSlot: "settings",
-			path: BLOCK_MODE_DECL.path,
-			facet: "settings",
-			label: i18nText(BLOCK_MODE_DECL.i18n) ?? "Run",
-			...(i18nText(BLOCK_MODE_DECL.description)
-				? { description: i18nText(BLOCK_MODE_DECL.description)! }
-				: {}),
-			control: "enum",
-			of: BLOCK_MODE_DECL.of,
-			authorDefault: block.mode ?? "parallel",
-			typeLabel: humanizeCamel(block.blockId),
-			nodeKind: "block"
+	for (const clause of clauseRows as any[]) {
+		const decl = clauseSettingsSlotFor({
+			kind: String(clause.kind ?? ""),
+			mode: clause.mode ?? null
 		})
+		if (!decl) continue
+		out.push(
+			...declsForSlot(
+				clause.clauseId,
+				"settings",
+				decl,
+				humanizeCamel(clause.clauseId),
+				"",
+				"clause"
+			)
+		)
 	}
+
+	/**
+	 * The spine order: a node at its own position, a clause's settings step
+	 * tied with (and, on the tie, sorted just before) its first member node,
+	 * and an envoy's step pushed past the end — it is not a step in the
+	 * spine at all any more (see `namespaceView` in `read.ts`, which lifts
+	 * `nodeKind === "envoy"` out into its own trailing, unnumbered group).
+	 * `Array.prototype.sort` is stable, so decls that tie here — every decl
+	 * of one node, or one clause, or the envoys among themselves — keep the
+	 * relative order they were pushed in above.
+	 */
+	const spineKey = (d: Decl): number => {
+		if (d.nodeKind === "envoy") return Number.POSITIVE_INFINITY
+		if (d.nodeKind === "clause") {
+			const p = positionByClauseId.get(d.nodeKey)
+			return p != null ? p - 0.5 : Number.POSITIVE_INFINITY
+		}
+		return positionByNodeKey.get(d.nodeKey) ?? Number.POSITIVE_INFINITY
+	}
+	out.sort((a, b) => spineKey(a) - spineKey(b))
 
 	return disambiguate(out)
 }

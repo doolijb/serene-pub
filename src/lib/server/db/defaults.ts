@@ -1286,7 +1286,11 @@ export async function sync() {
 		"lorebook_bindings",
 		"world_lore_entries",
 		"character_lore_entries",
-		"personas",
+		// ⚠ No `personas`: migration 0133 (`merge_personas_into_characters`,
+		// the personas → characters lane) folded the table into `characters`,
+		// and naming a relation that does not exist fails the sequence reset
+		// — and with it every boot and every test database — at this line.
+		// That lane's change, kept here because the list is shared.
 		"prompt_configs",
 		"narrator_prompt_configs",
 		"world_summarize_configs",

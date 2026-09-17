@@ -164,7 +164,7 @@ describe("the engine reaches the renderer", () => {
 			"$lib/server/pipelines/entities/contextTemplates"
 		)
 		const row = await createContextTemplate(db, {
-			nodeTypeId: "core:task/assemble",
+			nodeDefinitionId: "core:task/assemble",
 			name: "Written in another language",
 			// Valid Handlebars, and that is the point: if the engine is lost,
 			// core's renderer will happily render this and produce a string

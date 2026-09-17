@@ -27,14 +27,13 @@
 	import {
 		normalizeZoneLayout,
 		placedWidgetIds,
-		resolveMessageCap,
 		resolveZone,
 		withWidget,
 		withoutWidget,
 		type ResolvedZone,
 		type ZoneLayout
 	} from "./schema"
-	// The BASE message + composer styling (the zero-styled grid skeleton, the
+	// The BASE conversation styling (the zero-styled grid skeleton, the
 	// shared message-state treatment, and the mode-aware `--sp-*` skin palette).
 	// The looks themselves are widget styles now — see messageLayouts.css.
 	// Imported here as a plain global sheet so it lands outside Tailwind's
@@ -49,20 +48,17 @@
 		mobileSidePanels,
 		type MobileGroup
 	} from "./mobileSidePanels.svelte"
-	// PLAN 25: the chat middle is a widget grid. Messages (GROW) + Composer
-	// (FIXED, bottom) are two required widgets that fall out of the model — no
-	// bespoke center layout. The surrounding zones stay the interim system for
-	// now; this proves the normal chat in the new model first.
+	// PLAN 25: the chat middle is a widget grid. Messages (GROW, filling it) is
+	// the one required widget that falls out of the model — no bespoke center
+	// layout. The surrounding zones stay the interim system for now; this
+	// proves the normal chat in the new model first.
 	import WidgetZone from "./WidgetZone.svelte"
 	import {
-		cellsFromPx,
 		DEFAULT_CELL,
 		loadChatLayout,
 		placementOf,
-		updateWidget,
 		widgetsInZone,
 		type GridLayout,
-		type SizeSpec,
 		type WidgetConfig,
 		type Zone
 	} from "./widgetGrid"
@@ -169,9 +165,9 @@
 	} from "$lib/shared/widgets/settings"
 	import { CORE_WIDGETS } from "$lib/shared/widgets/types"
 	import { legacyLayoutAttr } from "$lib/shared/widgets/corePresets"
-	// The per-widget context + skin wrapper. Messages and Composer wear one for
-	// the same reason every other widget does (ruled 2026-08-30): it is what
-	// injects their style and what grows their Style-mode overlay.
+	// The per-widget context + skin wrapper. Messages wears one for the same
+	// reason every other widget does (ruled 2026-08-30): it is what injects its
+	// style and what grows its Style-mode overlay.
 	import WidgetHost from "./WidgetHost.svelte"
 	// The same per-widget style controls, in the sheet a touch screen gets:
 	// there is no hover there, so the phone editor opens them full-screen
@@ -188,13 +184,12 @@
 		sessionId: number | null
 		session?: unknown
 		/**
-		 * The two middle-zone widgets (PLAN 25). The page owns each one's wiring;
-		 * the layout only decides where they sit. `messagesChildren` is the
-		 * message list (GROW-anchored to the top); `composerChildren` is the
-		 * composer (FIXED, anchored to the bottom).
+		 * The middle zone's content (PLAN 25): the ONE `messages` widget, log
+		 * and composer together, as the page wires it. The page owns that
+		 * wiring and the widget owns its own arrangement; this host decides
+		 * only where the widget sits, and renders it inside one `WidgetHost`.
 		 */
-		messagesChildren?: Snippet
-		composerChildren?: Snippet
+		conversationChildren?: Snippet
 		/**
 		 * The layout presets this user may pick for the session's genre (PLAN
 		 * 25 redesign): the shipped default first, then their own saved ones.
@@ -248,8 +243,7 @@
 		manager,
 		sessionId,
 		session,
-		messagesChildren,
-		composerChildren,
+		conversationChildren,
 		presets = [],
 		activePresetId = null,
 		onApplyPreset,
@@ -264,14 +258,12 @@
 	}: Props = $props()
 
 	// The chat's widget grid: the genre's default Chat layout merged with this
-	// user's saved widget blob (courier'd verbatim by the manager). Editing
-	// commits back through the manager, which debounce-persists it.
+	// user's saved widget blob (courier'd verbatim by the manager). Read here —
+	// what the editor changes about the middle is its ARRANGEMENT, which
+	// commits through `manager.setArrangedGrid` on Done.
 	let chatGrid = $derived<GridLayout>(
 		loadChatLayout(manager.effectiveWidgetGrid)
 	)
-	function commitGrid(next: GridLayout) {
-		manager.setWidgetGrid(next)
-	}
 	/**
 	 * The ids the middle widget grid places. The zone template covers the sides
 	 * and never names the middle, so every "is this widget placed?" question has
@@ -281,111 +273,6 @@
 	let middleGridIds = $derived(
 		new Set<string>(widgetsInZone(chatGrid, "middle").map((w) => w.id))
 	)
-
-	// ── middle-zone widget editing (PLAN 25 §9, structural controls) ──────
-	// The composer's minimum height, in cells. "Auto" = content-sized (fixed);
-	// a cell count reserves at least that much room (great for a multi-line
-	// writing composer) while still growing with content.
-	const COMPOSER_HEIGHTS: { label: string; h: SizeSpec }[] = [
-		{ label: "Auto", h: "fixed" },
-		{ label: "3", h: { minCells: 3 } },
-		{ label: "4", h: { minCells: 4 } },
-		{ label: "5", h: { minCells: 5 } }
-	]
-	let composerWidget = $derived(
-		widgetsInZone(chatGrid, "middle").find((w) => w.id === "composer")
-	)
-	function composerHeightActive(h: SizeSpec): boolean {
-		const cur = composerWidget?.size.h
-		if (h === "fixed") return cur === "fixed" || cur === "grow"
-		return (
-			typeof cur === "object" &&
-			typeof h === "object" &&
-			cur.minCells === h.minCells
-		)
-	}
-	function setComposerHeight(h: SizeSpec) {
-		if (!composerWidget) return
-		commitGrid(
-			updateWidget(chatGrid, "composer", {
-				size: { w: composerWidget.size.w, h }
-			})
-		)
-	}
-
-	/* ── drag-to-resize (§ "widgets are draggable, resizable across grid
-	 * cells") ────────────────────────────────────────────────────────────
-	 * The presets above are the 90% path; this handle is the free-form one —
-	 * grabbing the boundary between the message list and the composer and
-	 * dragging sets an exact cell count, snapping to the same grid the model
-	 * already speaks. Pointer capture keeps the drag tracking even if the
-	 * cursor crosses a sandboxed frame panel in a side zone. */
-	const MIN_COMPOSER_CELLS = 2
-	const MAX_COMPOSER_CELLS = 16
-	let composerDrag = $state<{ startY: number; startCells: number } | null>(
-		null
-	)
-	function currentComposerCells(): number {
-		const h = composerWidget?.size.h
-		if (typeof h === "object" && h.minCells != null) return h.minCells
-		const el = rootEl?.querySelector<HTMLElement>(
-			'.chat-core .widget[data-widget-id="composer"]'
-		)
-		return cellsFromPx(
-			el?.getBoundingClientRect().height ?? chatGrid.cell * 3,
-			chatGrid.cell
-		)
-	}
-	function setComposerCells(cells: number) {
-		if (!composerWidget) return
-		const clamped = Math.min(
-			MAX_COMPOSER_CELLS,
-			Math.max(MIN_COMPOSER_CELLS, cells)
-		)
-		commitGrid(
-			updateWidget(chatGrid, "composer", {
-				size: { w: composerWidget.size.w, h: { minCells: clamped } }
-			})
-		)
-	}
-	function startComposerResize(e: PointerEvent) {
-		if (!placing) return
-		// Capture is a robustness nicety (keeps tracking if the cursor strays
-		// over a sandboxed frame panel) — the drag still works without it via
-		// the direct listeners below, so a capture failure must never abort it.
-		try {
-			;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-		} catch {
-			/* no active pointer for this id — proceed uncaptured */
-		}
-		composerDrag = { startY: e.clientY, startCells: currentComposerCells() }
-	}
-	function onComposerResizeMove(e: PointerEvent) {
-		if (!composerDrag) return
-		// Dragging UP (clientY decreases) grows the composer.
-		const deltaCells = Math.round(
-			(composerDrag.startY - e.clientY) / chatGrid.cell
-		)
-		setComposerCells(composerDrag.startCells + deltaCells)
-	}
-	function endComposerResize(e: PointerEvent) {
-		if (!composerDrag) return
-		composerDrag = null
-		try {
-			;(e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId)
-		} catch {
-			/* capture was never established (see startComposerResize) */
-		}
-	}
-	function onComposerResizeKeydown(e: KeyboardEvent) {
-		if (e.key === "ArrowUp") {
-			e.preventDefault()
-			setComposerCells(currentComposerCells() + 1)
-		} else if (e.key === "ArrowDown") {
-			e.preventDefault()
-			setComposerCells(currentComposerCells() - 1)
-		}
-	}
 
 	/* ── shell awareness + margin geometry ─────────────────────────────
 	 * In STANDARD width the app centres the chat (main = ½) with a permanent
@@ -629,25 +516,22 @@
 	let bottomStrips = $derived(
 		resolved.filter((z) => z.def.kind === "strip" && z.def.area === "bottom")
 	)
-	let msgCap = $derived(resolveMessageCap(layout, containerW))
 
-	/* ── the message + composer style packs ────────────────────────────────
+	/* ── the message style packs ───────────────────────────────────────────
 	 * The packs are per-widget STYLES now (ruled 2026-08-30): shipped
 	 * `widget_styles` rows the widget's own `WidgetHost` injects, picked from
 	 * the widget's own overlay. Two things are left here.
 	 *
-	 * ONE: the layout blob's old `styles.chat` / `styles.composer` choice is
-	 * pushed to the store as a fallback UNDER the pins, so a session saved
-	 * before the change still opens on the look it was saved with. It is
-	 * derived, never written back — the first pick from the overlay writes a
-	 * real pin and this stops mattering. Cleared on teardown so it cannot leak
-	 * into the next session.
+	 * ONE: the layout blob's old `styles.chat` choice is pushed to the store as
+	 * a fallback UNDER the pins, so a session saved before the change still
+	 * opens on the look it was saved with. It is derived, never written back —
+	 * the first pick from the overlay writes a real pin and this stops
+	 * mattering. Cleared on teardown so it cannot leak into the next session.
 	 *
-	 * TWO: `data-msg-layout` / `data-composer-layout` are still written on
-	 * `.chat-core`, from the RESOLVED style rather than the blob. TRANSITIONAL,
-	 * for one release: nothing in this repo keys off them any more (the packs'
-	 * rules moved into the style rows), so they are there for CSS outside it.
-	 * Drop both after 0.6. */
+	 * TWO: `data-msg-layout` is still written on `.chat-core`, from the RESOLVED
+	 * style rather than the blob. TRANSITIONAL, for one release: nothing in this
+	 * repo keys off it any more (the packs' rules moved into the style rows), so
+	 * it is there for CSS outside it. Drop it after 0.6. */
 	$effect(() => {
 		setLegacyStylePacks(layout.styles ?? null)
 		return () => setLegacyStylePacks(null)
@@ -659,9 +543,6 @@
 	const sheetStyles = widgetStylesStore()
 	let msgLayoutAttr = $derived(
 		legacyLayoutAttr("messages", resolveWidgetStyle("messages")?.slug)
-	)
-	let composerLayoutAttr = $derived(
-		legacyLayoutAttr("composer", resolveWidgetStyle("composer")?.slug)
 	)
 
 	function inst(id: string): PanelInstance | undefined {
@@ -695,10 +576,10 @@
 	let editorLeftPanels = $derived(leftZones.flatMap(widgetsOf))
 	let editorRightPanels = $derived(rightZones.flatMap(widgetsOf))
 	function middleWidgetLabel(id: string): string {
-		return id === "messages" ? "Messages" : id === "composer" ? "Composer" : id
+		return id === "messages" ? "Messages" : id
 	}
-	function middleWidgetIcon(id: string) {
-		return id === "composer" ? Icons.PanelBottom : Icons.MessagesSquare
+	function middleWidgetIcon(_id: string) {
+		return Icons.MessagesSquare
 	}
 	// The editor draws cells at the SAME module the live grid uses, so the cell
 	// count you see = the cell count you get.
@@ -707,16 +588,10 @@
 	// The editor renders each zone through the real WidgetZone engine, so a
 	// widget's grow/fixed/anchor shows exactly as it will on Done — the editor
 	// is the live layout plus cell guides.
-	//   Middle: the real chat grid; a bare-"fixed" composer gets a small min
-	//   height only so its (content-less) card is visible as the bottom strip.
+	//   Middle: the real chat grid, at the editor's cell module.
 	let editorMiddleGrid = $derived<GridLayout>({
 		...chatGrid,
-		cell: EDITOR_CELL,
-		widgets: chatGrid.widgets.map((w) =>
-			w.id === "composer" && w.size.h === "fixed"
-				? { ...w, size: { ...w.size, h: { minCells: 3 } } }
-				: w
-		)
+		cell: EDITOR_CELL
 	})
 	//   Sides: each panel is a full-width widget (grow width, a min-height so an
 	//   empty card reads as a real block), top-anchored — the panel stack.
@@ -797,7 +672,7 @@
 				id: w.id,
 				title: widgetLabel(w.id),
 				// Locked hides the remove button, which is the anchor
-				// guarantee: messages and composer are movable and never
+				// guarantee: the conversation is movable and never
 				// removable. Anything else a layout puts in the middle is an
 				// ordinary widget and comes out again.
 				locked: !!w.required,
@@ -931,7 +806,7 @@
 	 * Unmeasured for a frame → 0 → `compact`, corrected by an ordinary
 	 * `layout:changed`. */
 	/**
-	 * The two primary widgets' channel declaration: none, i.e. the whole log.
+	 * The primary widget's channel declaration: none, i.e. the whole log.
 	 *
 	 * A constant rather than an `[]` literal in the mount below because a widget
 	 * host SUBSCRIBES against this array — a fresh literal on every re-render
@@ -951,13 +826,13 @@
 		// what a tab group is — while pinned/collapsed and the chrome are the
 		// individual widget's.
 		const p = inst(id)
-		const primary = id === "messages" || id === "composer"
+		const primary = id === "messages"
 		return placementOf({
 			zone: { cols: zone.cols, rows: zone.rows },
 			box: u.box,
 			widthPx,
 			// The contract's `pinned`: "placed in the grid, not collapsible /
-			// closable away". For the two chat widgets that is the anchor
+			// closable away". For the conversation that is the anchor
 			// guarantee (`required`); for a panel it is its own declaration.
 			pinned: primary ? true : !(p?.layout.closable ?? true),
 			collapsed: p?.collapsed ?? false,
@@ -968,7 +843,7 @@
 			// Told, not derived. `deriveChrome`'s rule (pinned or drawered ⇒ the
 			// host paints) is the pack-era host's; here the answer is simply
 			// known — `Panel` paints a card and a title bar for every secondary,
-			// and the two primary widgets render full-bleed with neither. A
+			// and the primary widget renders full-bleed with neither. A
 			// grouped member's title comes from its TAB, so it gets no bar.
 			chrome: primary
 				? { background: false, wrapper: false, titleBar: false }
@@ -991,12 +866,11 @@
 	 * for this list is the Style panel's one line of guidance: with nothing
 	 * here, there is nothing to hover, and saying so beats an empty panel.
 	 *
-	 * `messages` and `composer` are named explicitly because they are the
-	 * primary SNIPPETS rather than panel instances — `inst()` has never known
-	 * them — but they wear a `WidgetHost` like everything else now (the packs
-	 * became styles, ruled 2026-08-30), so they belong here. Nothing renders
-	 * without a `WidgetHost`, so everything in this list is a widget the skin
-	 * can actually reach.
+	 * `messages` is named explicitly because it is a primary SNIPPET rather than
+	 * a panel instance — `inst()` has never known it — but it wears a
+	 * `WidgetHost` like everything else now (the packs became styles, ruled
+	 * 2026-08-30), so it belongs here. Nothing renders without a `WidgetHost`,
+	 * so everything in this list is a widget the skin can actually reach.
 	 */
 	let styleableWidgets = $derived.by(() => {
 		const ids = new Set<string>([
@@ -1010,7 +884,6 @@
 			.filter(
 				(id) =>
 					id === "messages" ||
-					id === "composer" ||
 					(inst(id)?.role && inst(id)!.role !== "primary")
 			)
 			.map((id) => ({ id, label: widgetLabel(id) }))
@@ -1380,7 +1253,7 @@
 	function groupIcon(u: RenderUnit) {
 		if (u.members.length > 1) return Icons.Layers
 		const id = u.members[0].id
-		if (id === "messages" || id === "composer") return middleWidgetIcon(id)
+		if (id === "messages") return middleWidgetIcon(id)
 		const p = inst(id)
 		return p ? iconOf(p) : Icons.LayoutPanelTop
 	}
@@ -1393,7 +1266,6 @@
 		if (u.members.length > 1) return "Layers"
 		const id = u.members[0].id
 		if (id === "messages") return "MessagesSquare"
-		if (id === "composer") return "PanelBottom"
 		return inst(id)?.icon || "LayoutPanelTop"
 	}
 	/** A group's tooltip: every title in it, which is what opening it opens. */
@@ -1661,10 +1533,11 @@
 	type ZoneKey = "left" | "middle" | "right"
 
 	/**
-	 * The cell rows an UN-arranged middle is read at: the composer's 3-cell
-	 * strip against the messages that fill what is left. A stated choice, not a
-	 * measured one — the grid editor measures its own zone, and this is for the
-	 * editor that has no grid to measure.
+	 * The cell rows an UN-arranged middle is read at: enough of them that a
+	 * strip above the conversation reads as a strip against the widget that
+	 * fills what is left. A stated choice, not a measured one — the grid editor
+	 * measures its own zone, and this is for the editor that has no grid to
+	 * measure.
 	 */
 	const MIDDLE_SEED_ROWS = 12
 
@@ -1690,8 +1563,8 @@
 		// No frame yet (a layout never arranged): the items' own default
 		// placement is the arrangement, and its rows are what they stack to.
 		// The middle is the exception — its messages widget FILLS, so its rows
-		// are a proportion rather than a sum, and summing them would hand the
-		// composer half the chat.
+		// are a proportion rather than a sum, and summing them would hand a
+		// 3-cell strip half the chat.
 		const rows =
 			frame?.rows ??
 			(side === "middle"
@@ -2262,7 +2135,7 @@
 	function rowIcon(row: MobileRow) {
 		if (row.members.length > 1) return Icons.Layers
 		const id = row.members[0]
-		if (id === "messages" || id === "composer") return middleWidgetIcon(id)
+		if (id === "messages") return middleWidgetIcon(id)
 		const p = inst(id)
 		return p ? iconOf(p) : Icons.LayoutPanelTop
 	}
@@ -2519,19 +2392,18 @@
 	bare?: boolean
 	placement?: PlacementInput
 })}
-	{#if id === "messages" || id === "composer"}
-		{@const primary = id === "messages" ? messagesChildren : composerChildren}
-		<!-- The two primary widgets go through a `WidgetHost` like every other
-		     one (ruled 2026-08-30): same ctx projection, same skin injection,
-		     same Style-mode hover overlay — which is what makes the message and
-		     composer packs ordinary widget styles rather than a special case.
-		     They get the same FOUR inputs a panel does — placement, channels,
-		     props and the session event source — so nothing about their ctx is a
-		     special case either. `channels` is deliberately empty: the primary
-		     log is the whole session, not a view onto one channel, and an empty
-		     declaration is exactly what `scopeMessages` reads as "all of it".
-		     A session-less mount has nothing to project, so it renders bare,
-		     exactly as Panel's native branch does. -->
+	{#if id === "messages"}
+		<!-- The primary widget goes through a `WidgetHost` like every other one
+		     (ruled 2026-08-30): same ctx projection, same skin injection, same
+		     Style-mode hover overlay — which is what makes the message packs
+		     ordinary widget styles rather than a special case. It gets the same
+		     FOUR inputs a panel does — placement, channels, props and the
+		     session event source — so nothing about its ctx is a special case
+		     either. `channels` is deliberately empty: the primary log is the
+		     whole session, not a view onto one channel, and an empty declaration
+		     is exactly what `scopeMessages` reads as "all of it". A session-less
+		     mount has nothing to project, so it renders bare, exactly as Panel's
+		     native branch does. -->
 		{@const r = resolvedWidget(id)}
 		{#if session}
 			<WidgetHost
@@ -2549,10 +2421,10 @@
 				source={manager}
 				onAction={onFrameAction}
 			>
-				{@render primary?.()}
+				{@render conversationChildren?.()}
 			</WidgetHost>
 		{:else}
-			{@render primary?.()}
+			{@render conversationChildren?.()}
 		{/if}
 	{:else}
 		{@const p = inst(id)}
@@ -2841,7 +2713,7 @@
      footprint. `id` resolves everything: middle chat widgets are display-only,
      panels are draggable/removable and know their zone. -->
 {#snippet editCard({ id }: { id: string })}
-	{@const mid = id === "messages" || id === "composer"}
+	{@const mid = id === "messages"}
 	{@const p = mid ? undefined : inst(id)}
 	{@const title = widgetLabel(id)}
 	{@const IconCmp = mid
@@ -3743,9 +3615,9 @@
 	     toolbar at all — the sticky bar at the foot of the row editor is it. -->
 	{#if editing && !isNarrow}
 		<!-- The layout editor: a tabbed toolbar over the chat. Presets picks a
-		     saved layout (and saves the current one); Style picks the
-		     message/composer packs (live preview); Move places and arranges
-		     widgets in the zones. -->
+		     saved layout (and saves the current one); Style picks the message
+		     packs (live preview); Move places and arranges widgets in the
+		     zones. -->
 		<div class="editor" data-pop-keep>
 			<div class="editor-tabs" role="tablist" aria-label="Layout editor">
 				<span class="editor-title">
@@ -4184,17 +4056,15 @@
 			{#each topStrips as z (z.id)}
 				{@render stripZone(z)}
 			{/each}
-			<!-- The two layout attributes are TRANSITIONAL (see the block above
+			<!-- The layout attribute is TRANSITIONAL (see the block above
 			     `msgLayoutAttr`): written from the RESOLVED style so CSS outside
 			     this repo that still keys on a pack name keeps working for one
-			     release. A style with no pack name (someone's own) writes
-			     neither, which is correct — no pack is active. -->
-			<div
-				class="chat-core"
-				data-msg-layout={msgLayoutAttr}
-				data-composer-layout={composerLayoutAttr}
-				style={msgCap ? `max-inline-size:${msgCap}rem;` : ""}
-			>
+			     release. A style with no pack name (someone's own) writes none,
+			     which is correct — no pack is active. -->
+			<!-- The measure of the message column belongs to the `messages`
+			     widget, which centres its own stage inside whatever width this
+			     zone gives it; the zone takes the width it is given. -->
+			<div class="chat-core" data-msg-layout={msgLayoutAttr}>
 				{#if arranged.middle}
 					<!-- Temporary connector: render the live chat from the editor
 					     arrangement. A PROPORTIONAL grid (repeat(cols,1fr) ×
@@ -4247,7 +4117,7 @@
 					</div>
 				{:else}
 					<!-- No arrangement yet (fresh / never edited): the default —
-					     Messages fill, Composer pins to the bottom. -->
+					     Messages fills the middle. -->
 					<WidgetZone layout={chatGrid} zone="middle" gap="0" widget={middleWidget} />
 				{/if}
 			</div>
@@ -4486,7 +4356,6 @@
 		min-block-size: 0;
 		min-inline-size: 0;
 		inline-size: 100%;
-		margin-inline: auto; /* centered when a message cap applies */
 		display: flex;
 		flex-direction: column;
 	}
@@ -4506,10 +4375,10 @@
 		/* The containing block for this cell's widget overlay. `WidgetHost`'s
 		   wrapper is `display: contents` and has no box, so an inset-0 overlay
 		   inside a widget anchors to the nearest POSITIONED ancestor — which,
-		   with these cells static, was some zone far above: Messages' and
-		   Composer's controls stretched across the whole chat column instead of
-		   sitting on the widget they style. (A Panel-chromed widget was already
-		   fine — Panel's own section is relative.) Nothing inside a cell is
+		   with these cells static, was some zone far above: the conversation's
+		   controls stretched across the whole chat column instead of sitting on
+		   the widget they style. (A Panel-chromed widget was already fine —
+		   Panel's own section is relative.) Nothing inside a cell is
 		   absolutely positioned against anything higher: the message list roots
 		   itself in a `relative` box of its own, and the composer's only
 		   escapees are `fixed` modals, which a positioned ancestor does not

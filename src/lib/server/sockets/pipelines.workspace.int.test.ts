@@ -56,6 +56,31 @@ function fakeSocket(userId: number, isAdmin: boolean) {
 }
 const noop = () => {}
 
+/**
+ * An `emitToUser` that keeps what a handler sent, resolving a lazy payload.
+ *
+ * `pipelines:get` is a gated event, so the refreshed view a write answers with
+ * is now a THUNK the real `emitToUser` runs only for a socket that wants it
+ * (socket-interest plan, ruling 4). Running it here is what the gate does when
+ * somebody is listening — and this is where the view lives now: `register`
+ * discards what a handler returns, so the emit has always been the real answer.
+ */
+function collecting() {
+	const sent: { event: string; data: any }[] = []
+	return {
+		sent,
+		emit: async (event: string, data: any) => {
+			sent.push({
+				event,
+				data: typeof data === "function" ? await data() : data
+			})
+		},
+		/** The payload of the last emit of one event. */
+		last: (event: string) =>
+			[...sent].reverse().find((e) => e.event === event)?.data
+	}
+}
+
 const RESPOND = "core:spec/respond"
 
 /**
@@ -120,6 +145,7 @@ describe("pipelines:setOptions — the batch save", () => {
 		)
 
 		const configId = await ensureEditableConfig()
+		const set = collecting()
 		const res: any = await pipelinesSetOptions.handler(
 			fakeSocket(adminId, true),
 			{
@@ -131,23 +157,24 @@ describe("pipelines:setOptions — the batch save", () => {
 				],
 				clear: []
 			} as any,
-			noop
+			set.emit
 		)
 		expect(res.error).toBeUndefined()
-		const after = (res.pipeline.steps as any[])
+		const after = (set.last("pipelines:get").pipeline.steps as any[])
 			.flatMap((s) => [...s.options, ...s.advanced])
 			.filter((o) => o.id === a || o.id === b)
 		expect(after.find((o) => o.id === a)!.value).toBe(7)
 		expect(after.find((o) => o.id === b)!.value).toBe(9)
 
 		// And the clear half: reset both through the same event.
-		const cleared: any = await pipelinesSetOptions.handler(
+		const cleared = collecting()
+		const clearedRes: any = await pipelinesSetOptions.handler(
 			fakeSocket(adminId, true),
 			{ slug: RESPOND, configId, set: [], clear: [a, b] } as any,
-			noop
+			cleared.emit
 		)
-		expect(cleared.error).toBeUndefined()
-		const rows = (cleared.pipeline.steps as any[])
+		expect(clearedRes.error).toBeUndefined()
+		const rows = (cleared.last("pipelines:get").pipeline.steps as any[])
 			.flatMap((s) => [...s.options, ...s.advanced])
 			.filter((o) => o.id === a || o.id === b)
 		for (const o of rows) expect(o.overriddenHere).toBe(false)
@@ -156,7 +183,7 @@ describe("pipelines:setOptions — the batch save", () => {
 	it("a refusal mid-batch stops it and names what landed", async () => {
 		const { pipelinesSetOptions } = await import("./pipelines")
 		const [a] = await twoNumericOptionIds()
-		const events: { event: string; data: any }[] = []
+		const out = collecting()
 
 		const configId = await ensureEditableConfig()
 		const res: any = await pipelinesSetOptions.handler(
@@ -170,16 +197,17 @@ describe("pipelines:setOptions — the batch save", () => {
 				],
 				clear: []
 			} as any,
-			(event, data) => events.push({ event, data })
+			out.emit
 		)
 		expect(res.error).toBeTruthy()
 		// The first entry landed before the refusal — said, not silent.
 		expect(res.applied).toBe(1)
 		expect(
-			events.some((e) => e.event === "pipelines:setOptions:error")
+			out.sent.some((e) => e.event === "pipelines:setOptions:error")
 		).toBe(true)
-		// The view still refreshed so the panel shows what actually landed.
-		expect(events.some((e) => e.event === "pipelines:get")).toBe(true)
+		// The view still refreshed so the panel shows what actually landed —
+		// and it really was BUILT, not merely announced: the payload resolves.
+		expect(out.last("pipelines:get").pipeline).toBeTruthy()
 
 		// Tidy the landed write.
 		await pipelinesSetOptions.handler(
@@ -191,7 +219,11 @@ describe("pipelines:setOptions — the batch save", () => {
 })
 
 describe("pipelines:run — the receipt", () => {
-	async function seedRun(userId: number, runId: string) {
+	async function seedRun(
+		userId: number,
+		runId: string,
+		receiptExtra: Record<string, unknown> = {}
+	) {
 		await testDb.insert(schema.pipelineRuns).values({
 			runId,
 			specSlug: RESPOND,
@@ -211,15 +243,142 @@ describe("pipelines:run — the receipt", () => {
 					{
 						nodeKey: "generate",
 						seq: 1,
-						kind: "provider",
+						kind: "oracle",
 						result: "ok",
 						elapsedMs: 900,
 						tokens: 42
 					}
-				]
+				],
+				...receiptExtra
 			}
 		})
 	}
+
+	it("names the receipt's pinned portrayals, says 'you' for the viewer, and never names a stranger (U5a)", async () => {
+		const { pipelinesRun } = await import("./pipelines")
+		const [tom] = await testDb
+			.insert(schema.characters)
+			.values({ userId: adminId, name: "Tom", description: "A cast member." })
+			.returning()
+		const [elara] = await testDb
+			.insert(schema.characters)
+			.values({
+				userId: adminId,
+				name: "Elara",
+				description: "The admin's persona.",
+				isPersona: true
+			})
+			.returning()
+		const [ghost] = await testDb
+			.insert(schema.characters)
+			.values({
+				userId: strangerId,
+				name: "Ghost",
+				description: "In nobody's session."
+			})
+			.returning()
+		await seedRun(adminId, "run-portrayed", {
+			portrayals: {
+				owner: { by: "person", userId: String(adminId) },
+				"run-owner": { by: "person", userId: String(adminId) },
+				[`character:${tom.id}`]: { by: "ai" },
+				[`character:${elara.id}`]: {
+					by: "person",
+					userId: String(adminId)
+				},
+				// Nobody's — a non-member and a character in no session. The
+				// rows exist; the line must not read them.
+				[`user:${strangerId}`]: { by: "none" },
+				[`character:${ghost.id}`]: { by: "none" },
+				"envoy:mascot": { by: "ai" },
+				// Not a reference, and not a portrayal: read as data, skipped.
+				"persona:9": { by: "ai" },
+				[`character:${tom.id + 1000}`]: "ai",
+				// Ids no integer column holds: nobody's, and no query is
+				// attempted for them (S1).
+				"character:99999999999": { by: "ai" },
+				"user:2147483648": { by: "person", userId: "2147483648" }
+			}
+		})
+		const res: any = await pipelinesRun.handler(
+			fakeSocket(adminId, true),
+			{ runId: "run-portrayed" } as any,
+			noop
+		)
+		expect(res.error).toBeUndefined()
+		// The receipt is served as stored — the map is still on it.
+		expect(res.run.receipt.portrayals[`character:${tom.id}`]).toEqual({
+			by: "ai"
+		})
+		// And named beside it, in the receipt's order, for the line.
+		expect(res.run.portrayals).toEqual([
+			{
+				ref: "owner",
+				name: "owner",
+				by: "person",
+				person: { name: "workspace-admin", you: true }
+			},
+			{
+				ref: "run-owner",
+				name: "run-owner",
+				by: "person",
+				person: { name: "workspace-admin", you: true }
+			},
+			{ ref: `character:${tom.id}`, name: "Tom", by: "ai" },
+			{
+				ref: `character:${elara.id}`,
+				name: "Elara",
+				by: "person",
+				person: { name: "workspace-admin", you: true }
+			},
+			{ ref: `user:${strangerId}`, name: `user:${strangerId}`, by: "none" },
+			{
+				ref: `character:${ghost.id}`,
+				name: `character:${ghost.id}`,
+				by: "none"
+			},
+			{ ref: "envoy:mascot", name: "mascot", by: "ai" },
+			{ ref: "character:99999999999", name: "character:99999999999", by: "ai" },
+			{
+				ref: "user:2147483648",
+				name: "user:2147483648",
+				by: "person",
+				person: { name: "2147483648", you: false }
+			}
+		])
+		expect(JSON.stringify(res.run.portrayals)).not.toContain(
+			"workspace-stranger"
+		)
+		expect(JSON.stringify(res.run.portrayals)).not.toContain("Ghost")
+	})
+
+	it("reads a receipt stored under the old `voices` key (⏳ pre-rename blobs)", async () => {
+		const { pipelinesRun } = await import("./pipelines")
+		await seedRun(adminId, "run-voiced-blob", {
+			voices: { "envoy:mascot": { by: "ai" } }
+		})
+		const res: any = await pipelinesRun.handler(
+			fakeSocket(adminId, true),
+			{ runId: "run-voiced-blob" } as any,
+			noop
+		)
+		expect(res.error).toBeUndefined()
+		expect(res.run.portrayals).toEqual([
+			{ ref: "envoy:mascot", name: "mascot", by: "ai" }
+		])
+	})
+
+	it("serves no portrayals for a receipt that pinned none", async () => {
+		const { pipelinesRun } = await import("./pipelines")
+		await seedRun(adminId, "run-unportrayed")
+		const res: any = await pipelinesRun.handler(
+			fakeSocket(adminId, true),
+			{ runId: "run-unportrayed" } as any,
+			noop
+		)
+		expect(res.error).toBeUndefined()
+		expect("portrayals" in res.run).toBe(false)
+	})
 
 	it("returns the stored receipt, node rows and all", async () => {
 		const { pipelinesRun } = await import("./pipelines")

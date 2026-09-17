@@ -1,30 +1,57 @@
 <script lang="ts">
 	import {
-		docsIndex,
-		getAllSections,
+		docsManifest,
+		loadSearchIndex,
 		type DocSection
 	} from "$lib/shared/utils/docsIndex"
 
 	let query = $state("")
+	let sections = $state<DocSection[]>([])
+	let requested = false
 
-	let filteredDocs = $derived.by(() => {
-		const q = query.trim().toLowerCase()
-		if (!q) return docsIndex
-		return docsIndex.filter(
-			(d) =>
-				d.title.toLowerCase().includes(q) ||
-				d.description.toLowerCase().includes(q)
-		)
+	// Same bargain as the standard site: the search index is every heading and
+	// its opening prose, fetched on the first keystroke rather than shipped to
+	// a reader who only wanted one page.
+	$effect(() => {
+		if (!query.trim() || requested) return
+		requested = true
+		loadSearchIndex().then((entries) => (sections = entries))
 	})
+
+	let groups = $derived(
+		docsManifest.nav.map((group) => ({
+			...group,
+			meta: docsManifest.sources[group.source],
+			pages: group.pages
+				.map((slug) => docsManifest.pages[slug])
+				.filter((page) => !!page)
+		}))
+	)
 
 	let matchingSections = $derived.by((): DocSection[] => {
 		const q = query.trim().toLowerCase()
 		if (!q) return []
-		return getAllSections().filter(
+		return sections.filter(
 			(s) =>
 				s.title.toLowerCase().includes(q) ||
 				s.preview.toLowerCase().includes(q)
 		)
+	})
+
+	let matchingPages = $derived.by(() => {
+		const q = query.trim().toLowerCase()
+		return groups
+			.map((group) => ({
+				...group,
+				pages: q
+					? group.pages.filter(
+							(p) =>
+								p.title.toLowerCase().includes(q) ||
+								p.description.toLowerCase().includes(q)
+						)
+					: group.pages
+			}))
+			.filter((group) => group.pages.length > 0)
 	})
 </script>
 
@@ -68,16 +95,25 @@
 	{/if}
 {/if}
 
-<h2>All Pages</h2>
-{#if filteredDocs.length === 0}
+{#if matchingPages.length === 0}
+	<h2>All Pages</h2>
 	<p>No documentation pages matched "{query}".</p>
 {:else}
-	<ul class="a11y-list">
-		{#each filteredDocs as doc (doc.slug)}
-			<li class="a11y-list-item">
-				<a href="/document-view/docs/{doc.slug}">{doc.title}</a>
-				{#if doc.description}<p>{doc.description}</p>{/if}
-			</li>
-		{/each}
-	</ul>
+	{#each matchingPages as group (group.source)}
+		<h2>{group.group}</h2>
+		{#if group.meta?.banner}
+			<p>
+				<strong>Note:</strong>
+				{group.meta.banner}
+			</p>
+		{/if}
+		<ul class="a11y-list">
+			{#each group.pages as page (page.slug)}
+				<li class="a11y-list-item">
+					<a href="/document-view/docs/{page.slug}">{page.title}</a>
+					{#if page.description}<p>{page.description}</p>{/if}
+				</li>
+			{/each}
+		</ul>
+	{/each}
 {/if}

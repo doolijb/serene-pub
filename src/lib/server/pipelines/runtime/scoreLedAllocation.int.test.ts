@@ -20,7 +20,7 @@
  * parity corpus measuring the shipped path and makes the change reviewable.
  *
  * **The registry refusal.** `rank-hybrid`'s content hash moved.
- * `syncTypeRegistry` refuses to republish a changed version,
+ * `syncDefinitionRegistry` refuses to republish a changed version,
  * `bootstrapPipelines` catches that refusal, records it in `report.conflict`
  * and **returns early** — no specs seeded, no configs reconciled, pipelines
  * dead on every upgraded install. 0196's re-projection is what stops that, and
@@ -261,11 +261,11 @@ describe("the declared switch and the shipped behaviour are one answer", () => {
 		// never re-projected would still ship the old surface.
 		const [row] = await db
 			.select()
-			.from(schema.pipelineTypeRegistry)
+			.from(schema.pipelineDefinitionRegistry)
 			.where(
 				and(
-					eq(schema.pipelineTypeRegistry.typeId, RANK_HYBRID),
-					eq(schema.pipelineTypeRegistry.version, 1)
+					eq(schema.pipelineDefinitionRegistry.definitionId, RANK_HYBRID),
+					eq(schema.pipelineDefinitionRegistry.version, 1)
 				)
 			)
 			.limit(1)
@@ -284,14 +284,14 @@ describe("the declared switch and the shipped behaviour are one answer", () => {
 		// not write.
 		const [row] = await db
 			.select()
-			.from(schema.pipelineTypeRegistry)
+			.from(schema.pipelineDefinitionRegistry)
 			.where(
 				and(
 					eq(
-						schema.pipelineTypeRegistry.typeId,
+						schema.pipelineDefinitionRegistry.definitionId,
 						"core:task/rank-by-recency"
 					),
-					eq(schema.pipelineTypeRegistry.version, 1)
+					eq(schema.pipelineDefinitionRegistry.version, 1)
 				)
 			)
 			.limit(1)

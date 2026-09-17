@@ -167,7 +167,7 @@ async function listModels(
 }
 
 async function testConnection(
-	connection: SelectConnection
+	connection: SelectConnection & { model?: string | null }
 ): Promise<{ ok: boolean; error?: string; extra?: Record<string, unknown> }> {
 	const base = root(connection.baseUrl)
 	if (!base) return { ok: false, error: "No base URL is set." }

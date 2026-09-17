@@ -6,7 +6,8 @@ import { getUserConfigurations } from "./getUserConfigurations"
  * session + user: the session's own override (set via Edit Session) always wins;
  * otherwise falls back to the requesting user's active config, then the
  * system default (same chain as every other per-session override in the app —
- * see resolveTaskConfig.ts's session-level connection/sampling override).
+ * see resolveTaskConfig.ts's session-level sampling override, the only other
+ * one: a session names no connection).
  *
  * Shared by generateResponse.ts (actual generation), triggerNarratorResponseHandler
  * (stamping the display name onto a new message), and the

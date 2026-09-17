@@ -192,21 +192,16 @@ describe("what a new version does to a tuned config", () => {
 		await db.insert(schema.pipelineConfigValues).values([
 			{
 				configId: mine,
-				nodeKey: "rank",
+				// Any surviving address. This was `budget` on the ranker, then
+				// `minMessageTokens`, then the ranker's `maxEntries` map; that
+				// map moved onto the sources (R-7 P5, 2026-09-16), and the
+				// conversation's ceiling now lives on the node that produces
+				// the conversation. What the test needs is a value that
+				// survives the version, not that particular setting.
+				nodeKey: "gather.history.read",
 				slot: "params",
-				// Any surviving address on the ranker. This was `budget`, then
-				// `minMessageTokens`; both were retired as the ranker's knobs
-				// became per-source stacks, and there is no plain scalar left
-				// on it at all. What the test needs is a value that survives
-				// the version, not that particular setting.
 				path: "maxEntries",
-				value: {
-					messages: 9999,
-					worldLore: 20,
-					characterLore: 15,
-					history: 10,
-					relationships: 0
-				}
+				value: 9999
 			},
 			{
 				configId: mine,
@@ -251,10 +246,11 @@ describe("what a new version does to a tuned config", () => {
 		// values it recognised, every release would wipe everyone's tuning.
 		const rows = await valuesOf(mine)
 		const kept = rows.find(
-			(r: any) => r.nodeKey === "rank" && r.path === "maxEntries"
+			(r: any) =>
+				r.nodeKey === "gather.history.read" && r.path === "maxEntries"
 		)
 		expect(kept).toBeTruthy()
-		expect((kept!.value as any).messages).toBe(9999)
+		expect(kept!.value).toBe(9999)
 	})
 
 	it("back-fills every option the config had never held, from the default", async () => {
@@ -659,8 +655,8 @@ describe("naming what was culled", () => {
 			specVersionId: prior.id,
 			nodeKey: "retiredStep",
 			kind: node.kind,
-			typeId: node.typeId,
-			typeVersion: node.typeVersion,
+			definitionId: node.definitionId,
+			definitionVersion: node.definitionVersion,
 			position: 0
 		})
 

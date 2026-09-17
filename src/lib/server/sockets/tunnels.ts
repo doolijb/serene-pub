@@ -209,6 +209,56 @@ function failWith(
 	throw err instanceof Error ? err : new Error(message)
 }
 
+/**
+ * The tunnel view, as one function, so the four cascades below can be handed
+ * the BUILDER rather than the handler.
+ *
+ * It reads the server row, the tunnel row, the supervisor and the accounts
+ * setting — and it can WRITE, when the row claims a tunnel the supervisor is
+ * not running. That self-healing correction is why this is worth gating: with
+ * the admin Remote Access page closed nobody is told, so nobody pays for the
+ * read that would have corrected it, and the next reader corrects it instead.
+ * The row is no less honest for having been left alone while unobserved.
+ */
+async function buildTunnelsGet(): Promise<Sockets.Tunnels.Get.Response> {
+	const unavailableReason = tunnelsUnavailableReason()
+	// Read even when unavailable: an instance that once had a tunnel
+	// configured and later moved to Android should still be able to see
+	// what is on file, not have it silently vanish.
+	const server = await getLocalServer()
+	let tunnel = await getLocalTunnel(server.id)
+
+	// Liveness is derived from the supervisor, never read from the row.
+	// A row outlives the process it describes — after a restart it still
+	// says `running` while nothing is — so a stale one is corrected here
+	// rather than reported. Self-healing on read keeps the record honest
+	// even for a row that boot reconciliation never saw.
+	if (tunnel && (tunnel.enabled || tunnel.status !== "stopped")) {
+		const { isSupervising } = await import("$lib/server/tunnels/supervisor")
+		if (!isSupervising(tunnel.id)) {
+			const [corrected] = await db
+				.update(schema.tunnels)
+				.set({
+					enabled: false,
+					status: TunnelStatuses.STOPPED,
+					expiresAt: null,
+					stoppedAt: tunnel.stoppedAt ?? new Date()
+				})
+				.where(eq(schema.tunnels.id, tunnel.id))
+				.returning()
+			tunnel = corrected
+		}
+	}
+
+	return {
+		serverId: server.id,
+		tunnel: tunnel ? toTunnelView(tunnel) : null,
+		available: !unavailableReason,
+		...(unavailableReason ? { unavailableReason } : {}),
+		accountsEnabled: await accountsEnabled()
+	}
+}
+
 export const tunnelsGet: Handler<
 	Sockets.Tunnels.Get.Params,
 	Sockets.Tunnels.Get.Response
@@ -216,44 +266,7 @@ export const tunnelsGet: Handler<
 	event: "tunnels:get",
 	handler: async (socket, _params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
-		const unavailableReason = tunnelsUnavailableReason()
-		// Read even when unavailable: an instance that once had a tunnel
-		// configured and later moved to Android should still be able to see
-		// what is on file, not have it silently vanish.
-		const server = await getLocalServer()
-		let tunnel = await getLocalTunnel(server.id)
-
-		// Liveness is derived from the supervisor, never read from the row.
-		// A row outlives the process it describes — after a restart it still
-		// says `running` while nothing is — so a stale one is corrected here
-		// rather than reported. Self-healing on read keeps the record honest
-		// even for a row that boot reconciliation never saw.
-		if (tunnel && (tunnel.enabled || tunnel.status !== "stopped")) {
-			const { isSupervising } = await import(
-				"$lib/server/tunnels/supervisor"
-			)
-			if (!isSupervising(tunnel.id)) {
-				const [corrected] = await db
-					.update(schema.tunnels)
-					.set({
-						enabled: false,
-						status: TunnelStatuses.STOPPED,
-						expiresAt: null,
-						stoppedAt: tunnel.stoppedAt ?? new Date()
-					})
-					.where(eq(schema.tunnels.id, tunnel.id))
-					.returning()
-				tunnel = corrected
-			}
-		}
-
-		const res: Sockets.Tunnels.Get.Response = {
-			serverId: server.id,
-			tunnel: tunnel ? toTunnelView(tunnel) : null,
-			available: !unavailableReason,
-			...(unavailableReason ? { unavailableReason } : {}),
-			accountsEnabled: await accountsEnabled()
-		}
+		const res = await buildTunnelsGet()
 		emitToUser("tunnels:get", res)
 		return res
 	}
@@ -349,7 +362,9 @@ export const tunnelsUpdateConfig: Handler<
 			tunnel: toTunnelView(row)
 		}
 		emitToUser("tunnels:updateConfig", res)
-		await tunnelsGet.handler(socket, {}, emitToUser)
+		// Lazy: the Remote Access page this admin just saved from wants the
+		// refreshed view, and nothing else does. See `buildTunnelsGet`.
+		await emitToUser("tunnels:get", () => buildTunnelsGet())
 		return res
 	}
 }
@@ -382,7 +397,7 @@ export const tunnelsEnable: Handler<
 			// Refresh first: a failed start still moved the row to `error`
 			// with a lastError, and the page should show that alongside the
 			// toast rather than looking untouched.
-			await tunnelsGet.handler(socket, {}, emitToUser)
+			await emitToUser("tunnels:get", () => buildTunnelsGet())
 			failWith("tunnels:enable", emitToUser, err)
 		}
 
@@ -390,7 +405,8 @@ export const tunnelsEnable: Handler<
 			tunnel: toTunnelView(row)
 		}
 		emitToUser("tunnels:enable", res)
-		await tunnelsGet.handler(socket, {}, emitToUser)
+		// Lazy, for the reason given in `tunnelsUpdateConfig` above.
+		await emitToUser("tunnels:get", () => buildTunnelsGet())
 		return res
 	}
 }
@@ -428,7 +444,8 @@ export const tunnelsDisable: Handler<
 			tunnel: toTunnelView(row)
 		}
 		emitToUser("tunnels:disable", res)
-		await tunnelsGet.handler(socket, {}, emitToUser)
+		// Lazy, for the reason given in `tunnelsUpdateConfig` above.
+		await emitToUser("tunnels:get", () => buildTunnelsGet())
 		return res
 	}
 }

@@ -1,9 +1,14 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import { onDestroy, onMount, untrack } from "svelte"
+	import { onMount, untrack } from "svelte"
 	import { diffWords } from "diff"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import {
+		declareInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
+	import { interestKey } from "$lib/shared/sockets/interest"
 	import AiTaskModal, { type AiTaskStep } from "./AiTaskModal.svelte"
 	import {
 		HISTORY_TYPE_ID,
@@ -121,19 +126,48 @@
 		step = "error"
 	}
 
-	onMount(() => {
-		socket.on("scenes:compile:progress", handleProgress)
-		socket.on("scenes:compile:complete", handleComplete)
-		socket.on("scenes:compile:error", handleError)
-		if (step === "running" && !internalActivityId) {
-			startCompile()
+	/**
+	 * The compile this modal is watching, SCOPED to its history entry — both
+	 * payloads carry `historyEntryId` (see `SCOPED_EVENTS`), so a second modal
+	 * open on another entry is not sent this one's ticks.
+	 *
+	 * An effect rather than `useInterest` because the key moves: `historyEntry`
+	 * is a prop, and `useInterest` keeps the key it was first given. Declared
+	 * above `onMount` so the interest exists before `startCompile()` emits
+	 * (effects run in creation order, and `onMount` is one of them).
+	 *
+	 * ⚠ `handleProgress` has no id check of its own — the scope IS its filter,
+	 * which is why `scenes:compile:progress` has to carry `historyEntryId`.
+	 */
+	$effect(() => {
+		const id = historyEntry.id
+		const releases = [
+			declareInterest<"scenes:compile:progress">(
+				interestKey("scenes:compile:progress", id),
+				handleProgress
+			),
+			declareInterest<"scenes:compile:complete">(
+				interestKey("scenes:compile:complete", id),
+				handleComplete
+			)
+		]
+		return () => {
+			for (const release of releases) release()
 		}
 	})
 
-	onDestroy(() => {
-		socket.off("scenes:compile:progress", handleProgress)
-		socket.off("scenes:compile:complete", handleComplete)
-		socket.off("scenes:compile:error", handleError)
+	/**
+	 * BARE: the refusal carries no id to scope on, so `scenes:compile:error`
+	 * has no entry in `SCOPED_EVENTS` and a `#<id>` key would match no payload
+	 * at all. Errors are never gated either (plan ruling 2) — the registry is
+	 * simply the only listener path now.
+	 */
+	useInterest<"scenes:compile:error">("scenes:compile:error", handleError)
+
+	onMount(() => {
+		if (step === "running" && !internalActivityId) {
+			startCompile()
+		}
 	})
 
 	function save() {

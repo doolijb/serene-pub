@@ -1,11 +1,15 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
-	import { onMount, onDestroy, getContext } from "svelte"
+	import {
+		requestWithInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
+	import { onMount, getContext } from "svelte"
 	import { SvelteSet } from "svelte/reactivity"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { OllamaModelSearchSource } from "$lib/shared/constants/OllamaModelSource"
-	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
+	import { ollamaChatDefaultModelName } from "./defaultModel"
 	import HuggingFaceQuantizationModal from "$lib/client/components/modals/HuggingFaceQuantizationModal.svelte"
 	import OllamaManualPullModal from "$lib/client/components/modals/OllamaManualPullModal.svelte"
 
@@ -60,22 +64,16 @@
 	// reassignment, not in-place mutation.
 	let currentlyDownloading = new SvelteSet<string>()
 
-	// Derive the current active connection model name for reactivity
-	let currentConnectionModelName: string | null = $derived.by(() => {
-		// The instance's CHAT default, from connection_defaults — the only place
-		// a default lives since 0181. This tab labels a model "in use", which is
-		// a claim about what a reply would actually run on.
-		const activeConnection = connectionsList.find(
-			(c) =>
-				c.id ===
-				(systemSettingsCtx.capabilityDefaults?.["text->text"]
-					?.connectionId ?? null)
+	// The instance's CHAT capability default — the (endpoint, model) pair from
+	// connection_defaults, the only place a default lives since 0181. This tab
+	// marks a search result "active", which is a claim about what a reply would
+	// actually run on, so it reads the same helper the Installed tab does.
+	let currentConnectionModelName: string | null = $derived(
+		ollamaChatDefaultModelName(
+			connectionsList,
+			systemSettingsCtx.capabilityDefaults
 		)
-		if (activeConnection?.type === CONNECTION_TYPE.OLLAMA) {
-			return activeConnection.model ?? null
-		}
-		return null
-	})
+	)
 
 	// Create a derived set of installed model names for efficient lookups and reactivity
 	let installedModelNames = $derived(
@@ -125,52 +123,72 @@
 		return currentConnectionModelName.startsWith(modelName)
 	}
 
-	// Neither response event carries a request-echo, so a per-dispatch
-	// self-unsubscribing listener (matching SessionsSidebar's search pattern) is
-	// the only way to tell a stale response apart from the latest one: the
-	// token check below discards a response if a newer search has since been
-	// dispatched, instead of letting an out-of-order response overwrite
-	// fresher results.
+	/**
+	 * A search asks ONCE, so its interest is one-shot: declared as the request
+	 * goes out and released by the reply that answers it. Two things end a
+	 * key, and both have to, or a user typing past a request leaves keys
+	 * declared behind them:
+	 *
+	 * - a newer search supersedes it — `releasePendingSearch()` at the top of
+	 *   this function, before the new key is taken;
+	 * - the reply lands — the same call inside the handler.
+	 *
+	 * Neither reply carries a request echo, so `searchToken` says whether a
+	 * reply is still the one being waited for. The handler checks it BEFORE
+	 * releasing, which is what makes one pending release safe to share: a
+	 * current token means `releaseSearch` is this request's own release, and a
+	 * stale one means a newer search already released it.
+	 *
+	 * The two sources are separate events, so switching source releases the
+	 * one key and takes the other.
+	 */
 	let searchToken = 0
+	let releaseSearch: (() => void) | null = null
+
+	function releasePendingSearch() {
+		releaseSearch?.()
+		releaseSearch = null
+	}
 
 	function searchAvailableModels() {
 		const token = ++searchToken
 		isSearching = true
+		releasePendingSearch()
 		if (selectedSource === OllamaModelSearchSource.RECOMMENDED) {
-			const handler = (
-				message: Sockets.Ollama.RecommendedModels.Response
-			) => {
-				socket.off("ollama:recommendedModels", handler)
-				if (token !== searchToken) return
-				isSearching = false
-				if (message.error) {
-					toaster.error({ title: message.error })
-					recommendedModels = []
-				} else {
-					recommendedModels = message.recommendedModels || []
+			releaseSearch = requestWithInterest(
+				"ollama:recommendedModels",
+				{},
+				(message) => {
+					if (token !== searchToken) return
+					releasePendingSearch()
+					isSearching = false
+					if (message.error) {
+						toaster.error({ title: message.error })
+						recommendedModels = []
+					} else {
+						recommendedModels = message.recommendedModels || []
+					}
 				}
-			}
-			socket.on("ollama:recommendedModels", handler)
-			socket.emit("ollama:recommendedModels", {})
+			)
 		} else {
-			const handler = (
-				message: Sockets.Ollama.SearchAvailableModels.Response
-			) => {
-				socket.off("ollama:searchAvailableModels", handler)
-				if (token !== searchToken) return
-				isSearching = false
-				if (message.error) {
-					toaster.error({ title: message.error })
-					availableModels = []
-				} else {
-					availableModels = message.models || []
+			releaseSearch = requestWithInterest(
+				"ollama:searchAvailableModels",
+				{
+					searchTerm: searchString.trim(),
+					source: selectedSource
+				},
+				(message) => {
+					if (token !== searchToken) return
+					releasePendingSearch()
+					isSearching = false
+					if (message.error) {
+						toaster.error({ title: message.error })
+						availableModels = []
+					} else {
+						availableModels = message.models || []
+					}
 				}
-			}
-			socket.on("ollama:searchAvailableModels", handler)
-			socket.emit("ollama:searchAvailableModels", {
-				searchTerm: searchString.trim(),
-				source: selectedSource
-			})
+			)
 		}
 	}
 
@@ -225,23 +243,10 @@
 		onDownloadStart?.(cleanedModelName)
 	}
 
-	$effect(() => {
-		const _search = searchString.trim()
-		const _source = selectedSource
-		const timeoutId = setTimeout(() => {
-			searchAvailableModels()
-		}, 500) // 500ms delay
-
-		return () => clearTimeout(timeoutId)
-	})
-
 	async function refreshInstalled() {
 		socket.emit("ollama:modelsList", {})
 	}
 
-	// Named handlers for the persistent (non-search) listeners — cleanup
-	// must pass the exact same reference to .off(); a no-arg .off() call
-	// removes *every* listener for that event, not just this component's.
 	function handleOllamaModelsList(
 		message: Sockets.Ollama.ModelsList.Response
 	) {
@@ -262,7 +267,7 @@
 
 	// The server response doesn't carry which model failed, so this just
 	// clears the whole in-flight set - the per-model progress/error state
-	// lives in the Downloads tab (driven by "ollamaPullProgress").
+	// lives in the Downloads tab (driven by "ollama:pullProgress").
 	function handleOllamaPullModelError(message: { error?: string }) {
 		currentlyDownloading.clear()
 		toaster.error({
@@ -275,22 +280,51 @@
 		connectionsList = message.connectionsList
 	}
 
+	/**
+	 * The four STANDING interests, all BARE — nothing in these families is
+	 * scoped. Each lands unprompted rather than once in reply: a pull finishes
+	 * minutes after it was asked for, and the installed list and the
+	 * connection list are both re-emitted by work started elsewhere. The
+	 * `:error` half is never gated (plan ruling 2), so it is declared like any
+	 * other.
+	 *
+	 * Declared ABOVE the debounce effect and `onMount`, both of which emit:
+	 * effects run in creation order, and the typed `emit` flushes the interest
+	 * sync ahead of itself (plan ruling 3), so the keys these replies need are
+	 * already the server's before the first request leaves.
+	 */
+	useInterest<"ollama:modelsList">(
+		"ollama:modelsList",
+		handleOllamaModelsList
+	)
+	useInterest<"ollama:pullModel">("ollama:pullModel", handleOllamaPullModel)
+	useInterest<"ollama:pullModel:error">(
+		"ollama:pullModel:error",
+		handleOllamaPullModelError
+	)
+	useInterest<"connections:list">("connections:list", handleConnectionsList)
+
+	$effect(() => {
+		const _search = searchString.trim()
+		const _source = selectedSource
+		const timeoutId = setTimeout(() => {
+			searchAvailableModels()
+		}, 500) // 500ms delay
+
+		// Drops the debounce, and the key of a search already in flight: this
+		// cleanup runs both when the query changes and when the tab goes away,
+		// and in neither case is that reply still wanted.
+		return () => {
+			clearTimeout(timeoutId)
+			releasePendingSearch()
+		}
+	})
+
 	onMount(() => {
-		socket.on("ollama:modelsList", handleOllamaModelsList)
-		socket.on("ollama:pullModel", handleOllamaPullModel)
-		socket.on("ollama:pullModel:error", handleOllamaPullModelError)
-		socket.on("connections:list", handleConnectionsList)
 		socket.emit("connections:list", {})
 
 		// Load initial installed models
 		refreshInstalled()
-	})
-
-	onDestroy(() => {
-		socket.off("ollama:modelsList", handleOllamaModelsList)
-		socket.off("connections:list", handleConnectionsList)
-		socket.off("ollama:pullModel", handleOllamaPullModel)
-		socket.off("ollama:pullModel:error", handleOllamaPullModelError)
 	})
 </script>
 

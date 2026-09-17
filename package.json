@@ -50,12 +50,18 @@
 		"android:full": "npm run build && npm install --omit=dev && npm rebuild && npm run android:prepare && npm run android:build && npm install",
 		"sdk:build": "npm run build --prefix ../serene-pub-sdk",
 		"sdk:test": "npm test --prefix ../serene-pub-sdk",
-		"pipeline:ab": "node scripts/prompt-ab.js"
+		"pipeline:ab": "node scripts/prompt-ab.js",
+		"docs:build": "node scripts/build-docs.js",
+		"docs:site": "node scripts/build-docs.js --site"
 	},
 	"devDependencies": {
 		"@fontsource/fira-mono": "^5.0.0",
+		"@fontsource/funnel-display": "^5.3.0",
+		"@fontsource/funnel-sans": "^5.3.0",
+		"@fontsource/literata": "^5.3.0",
 		"@serene-pub/cli": "file:../serene-pub-sdk/cli",
 		"@serene-pub/conformance": "file:../serene-pub-sdk/conformance",
+		"@serene-pub/docs": "file:../serene-pub-sdk/docs",
 		"@skeletonlabs/skeleton": "^5.0.0",
 		"@skeletonlabs/skeleton-svelte": "^5.0.0",
 		"@sveltejs/adapter-node": "^5.2.12",
@@ -153,6 +159,7 @@
 		"svelte-dnd-action": "^0.9.61",
 		"translate": "^3.1.0",
 		"uuid": "^11.1.0",
+		"yaml": "^2.9.1",
 		"zod": "^3.25.76",
 		"zod-to-json-schema": "^3.24.6"
 	}

@@ -165,3 +165,51 @@ describe("pause", () => {
 		expect(m.isPaused()).toBe(true)
 	})
 })
+
+/**
+ * The docs half of the route map.
+ *
+ * A doc slug stopped being one word when the SDK reference pages arrived: they
+ * are namespaced under their source and named after node ids, so
+ * "sdk/pipelines/core_spec_respond" has to survive the round trip. The regexes
+ * matched `[a-z0-9-]+` and quietly fell through to the Document View home
+ * instead — which looks like the toggle working, on the wrong page.
+ */
+describe("documentation route mapping", () => {
+	it("maps a plain guide in both directions", async () => {
+		const m = await loadModule()
+		expect(m.mapToAccessibleRoute("/docs/hosting")).toBe(
+			"/document-view/docs/hosting"
+		)
+		expect(m.mapToStandardRoute("/document-view/docs/hosting")).toBe(
+			"/docs/hosting"
+		)
+	})
+
+	it("maps a reference page whose slug has slashes and underscores", async () => {
+		const m = await loadModule()
+		const slug = "sdk/pipelines/core_spec_respond"
+		expect(m.mapToAccessibleRoute(`/docs/${slug}`)).toBe(
+			`/document-view/docs/${slug}`
+		)
+		expect(m.mapToStandardRoute(`/document-view/docs/${slug}`)).toBe(
+			`/docs/${slug}`
+		)
+	})
+
+	it("does not carry a trailing slash into the mapped path", async () => {
+		const m = await loadModule()
+		expect(m.mapToAccessibleRoute("/docs/sdk/index/")).toBe(
+			"/document-view/docs/sdk/index"
+		)
+		expect(m.mapToStandardRoute("/document-view/docs/sdk/index/")).toBe(
+			"/docs/sdk/index"
+		)
+	})
+
+	it("maps the index itself", async () => {
+		const m = await loadModule()
+		expect(m.mapToAccessibleRoute("/docs")).toBe("/document-view/docs")
+		expect(m.mapToStandardRoute("/document-view/docs")).toBe("/docs")
+	})
+})

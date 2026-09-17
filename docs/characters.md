@@ -1,20 +1,36 @@
 # Characters
 
-Characters are the personas the AI plays in a session — everything from their name and backstory to how they greet you and speak. This page covers every field on a character, how avatars and image galleries work, the two ways to create a character, importing from the built-in library or a file, exporting a character card, and controlling how much of a character's info is exposed inside a given session.
+Characters are the people in a session — the ones the AI plays and, since the library merge, the ones _you_ play too (your [personas](./personas.md)) — everything from their name and backstory to how they greet you and speak. This page covers every field on a character, how avatars and image galleries work, the two ways to create a character, importing from the built-in library or a file, exporting a character card, and controlling how much of a character's info is exposed inside a given session.
 
 ## Overview
 
-Every character lives in your personal character list, accessible from the Characters sidebar. From there you can create a character from scratch, import an existing character card (PNG, APNG, JPEG, JPG, WEBP, or JSON), or browse the community character library. Each character has a required **Name** and **Description**; every other field is optional. Characters can be attached to a [lorebook](./lorebooks.md) for world/setting info, tagged for organization (see [Tags](./tags.md)), marked as a favorite, and added to any number of [sessions](./sessions.md), including group sessions with multiple characters.
+Every character lives in your personal character list, accessible from the Characters sidebar. The **New** button at the top of the list opens a menu with the three ways to add one: **Write a character** starts from a blank card, **Browse the library** opens the community character library, and **Import a card** brings in an existing character card (PNG, APNG, JPEG, JPG, WEBP, or JSON). Dropping a card file anywhere on the list imports it too. Each character has a required **Name** and **Description**; every other field is optional. Characters can be attached to a [lorebook](./lorebooks.md) for world/setting info, tagged for organization (see [Tags](./tags.md)), marked as a favorite, and added to any number of [sessions](./sessions.md), including group sessions with multiple characters.
 
 Characters are private to your account — the character list is scoped to the logged-in user, so different accounts on the same Serene Pub instance don't see each other's characters. See [Users & Accounts](./users-and-accounts.md) for more on account scoping.
 
-### Characters vs. Personas
+### Characters and Personas
 
-A **character** is the persona the AI plays; a [persona](./personas.md) is the persona _you_ play as when sessionting. Both are configured separately but follow a similar create/edit/avatar pattern — this page covers characters specifically.
+A [persona](./personas.md) is a character _you_ play. There is one library and one form; a **Persona** flag on the character marks the ones that are yours to voice, and the same character can be AI-driven in one session and your persona in another. This page covers the character itself; the persona page covers the flag, the default persona and how personas behave in sessions.
 
 ### Searching the Character List
 
-The search box above the character list filters as you type, matching against the character's **name**, **description**, and any attached **tags**. Favorited characters are always sorted to the top of the list, regardless of the search filter.
+The filter box at the top of the list narrows it as you type, matching the character's **name**,
+**description**, and any attached **tags**. The sliders button beside it opens a filter menu:
+**All**, **Favorites**, **Personas**, or one of your tags, each tag with its colour. Pick one and a
+small chip under the toolbar shows it, with an **×** to clear it. The two icons at the right switch
+between a grid of portrait cards, which is the default, and a list; the choice is remembered on
+this browser. Favorited characters always sort to the top of their folder. Jump (Ctrl K) with
+Characters open drives the same filter.
+
+Characters you have put in a [folder](#folders) are listed under that folder's header, which
+collapses on click; characters in no folder come first, under no header. A filter that empties a
+folder hides the folder.
+
+Each row shows the avatar, the name with a small star when favorited and a small person badge
+when it is one of your personas, the first line of the description, and the first tag as a
+coloured chip, with **+N** when there are more. The row's menu (⋮) offers **View**, **Edit**,
+**Export**, **Use as persona** (or **Not a persona**), **Set as default persona**, **Move to
+folder…** and **Delete**.
 
 ### The Vectorization Status Icon
 
@@ -26,7 +42,7 @@ The character edit form (opened via **Edit** on any character) exposes the follo
 
 - **Name\*** — required. The character's full or primary name.
 - **Nickname** — optional. If set, the nickname is used in conversations and prompts instead of the full name.
-- **Aliases** — a list of alternate names/spellings for the character (collapsible, advanced field).
+- **Aliases** — a list of alternate names/spellings for the character.
 - **Summary** — a short (up to 200 characters) one- or two-sentence description. The form notes this is "used as a concise graph node description" and is **not** injected into session context — it exists for [RAG/graph](./embeddings-and-rag.md) lookups, not for prompting.
 - **Description\*** — required. The character's core description (appearance, background, role).
 - **Personality** — the character's personality traits and behavior. Marked visible in prompts.
@@ -44,13 +60,37 @@ The character edit form (opened via **Edit** on any character) exposes the follo
 - **Tags** — searchable labels attached to the character; see [Tags](./tags.md).
 - **Favorite** — a toggle that pins the character to the top of your character list.
 
-### Advanced Fields and "Show All Fields"
+### The Editor's Tabs, and "Show All Fields"
 
-By default, the character form only shows the core fields (Name, Nickname, Aliases, Summary, Description, Personality, Greeting). Scenario, Alternate Greetings, Example Dialogues, Creator Notes, Creator Notes (Multilingual), Group-Only Greetings, Post-History Instructions, and Character Version are hidden behind a **Show All Fields** switch at the bottom of the form. Toggling it is a per-user setting (also available on the User Settings tab as **Show All Character Fields**) and persists across every character you edit afterward.
+The editor opens on the character's name and nickname beside the avatar, and sorts everything else
+into three tabs. **Profile** holds Summary, Description, Aliases, Tags and Favorite. **Voice** holds
+Personality and First message. **Notes** holds Creator notes. Turning on **Show all fields**, at the
+foot of the form, adds the rest of what a character card can carry: Version, Creator and Category
+on Profile; Scenario, Alternate greetings, Example dialogues, Group-only greetings and Post-history
+instructions on Voice; and the multilingual creator notes on Notes. The switch is a user setting
+and is remembered.
+
+A tab whose required field is missing shows a small red dot. The **Save** button at the top right
+lights up gold when there are unsaved changes; **Ctrl S** saves and **Esc** leaves the form while
+the cursor is inside it.
 
 ### Favoriting a Character
 
 Each character has an **isFavorite** flag, toggled with the **Favorite** switch in the edit form. Favorited characters get a highlighted border in the character list and are always sorted before non-favorites.
+
+### The Persona Flag
+
+Beside **Favorite**, the form has a **Persona** switch ("a character you play") and, under it, **Default persona**. The Persona flag is also set for you the first time the character joins a session as your persona, and it can be toggled from the row's ⋮ menu. What the flag means, and what the default is for, is on the [Personas](./personas.md) page.
+
+### Folders
+
+Folders group characters in the list for your own organisation — "Campaign 2", "Retired", "NPCs". They are flat (no folders inside folders), a character sits in one folder or none, and a folder holds only characters. Folders are yours alone and never affect a session or a prompt.
+
+- **New folder** under the **New** button creates one; folder names are unique within your account.
+- **Move to folder…** in a character's ⋮ menu opens a picker listing your folders plus **No folder**; choosing one moves the character there, and **No folder** takes it back out.
+- A folder header shows its name and character count; click it to collapse or expand, and use its own ⋮ menu to **Rename** or **Delete** the folder. Deleting a folder keeps its characters — they simply return to the top of the list.
+
+Folders and [tags](./tags.md) are different tools: a tag is a label a character can carry several of and that also applies to lorebooks and sessions; a folder is one place in one list.
 
 ### Tagging a Character
 
@@ -70,11 +110,11 @@ Several fields — Name, Nickname, Aliases, Description, Personality, Scenario, 
 
 ## Avatar & Gallery
 
-Each character has one active **avatar** image plus an optional image gallery of alternates. The two live in different places: the avatar picker is part of the create/edit form, but the gallery itself is only available from a character's read-only **View** panel, in a dedicated **Gallery** tab — it's not part of the edit form.
+Each character has one active **avatar** image plus an optional image gallery of alternates. The two live in different places: the avatar picker is part of the create/edit form, but the gallery itself is only available from a character's read-only **detail**, in a dedicated **Gallery** tab — it's not part of the edit form.
 
 - In the create/edit form, drop or click the dashed upload box to select an avatar image (JPG, PNG, or GIF). The image is only staged locally as a preview until you save the character — nothing uploads until you click **Create**/**Update**.
 - Use **Clear Selection** to discard a staged (not-yet-saved) avatar file before saving.
-- Once a character exists, open its **View** panel and switch to the **Gallery** tab to manage additional images. Here you can:
+- Once a character exists, open its **detail** and switch to the **Gallery** tab to manage additional images. Here you can:
     - **Upload** additional images to the character's gallery.
     - Click a thumbnail to open it in a **lightbox** for a closer look.
     - Use each thumbnail's **⋮** (overflow) menu to **Set as avatar** or **Delete** it (deletion asks for confirmation).
@@ -106,7 +146,7 @@ To choose your own:
 
 ## Creating a Character
 
-There are two ways to create a character, both reachable from the **New** button (plus icon) in the Characters sidebar:
+There are two ways to create a character, both reachable from **Write a character** under the **New** button in the Characters sidebar (**Write a persona**, in the same menu, is the same flow with the Persona flag already on):
 
 - **Character Creator** (guided wizard) — used when the **Easy Character Creation** user setting is enabled (this is the default). It's a 5-step wizard: **Name**, **Avatar**, **Description**, **Personality**, **First Message**. Name and Description are required steps; Avatar, Personality, and First Message can be skipped. Each step includes an inline example and writing guidelines (e.g. what to include in a description vs. a personality). A progress bar shows which step you're on, and leaving with unsaved data prompts a **Discard Character?** confirmation.
 - **Full Character Form** — used when Easy Character Creation is disabled. This opens the same detailed form used for editing (see Character Fields above), with every field available immediately (subject to the Show All Fields setting).
@@ -117,17 +157,21 @@ The **Easy Character Creation** switch on the User Settings tab controls which o
 
 ### Editing and Deleting
 
-From the character list, each entry has a menu (the "..." button) with **View**, **Edit**, and **Delete** actions. Deleting a character asks for confirmation ("Delete Character? This action cannot be undone") and removes the character's stored data directory (avatar and gallery images) along with its database record.
+From the character list, each entry has a menu (the "..." button) with **View**, **Edit**, **Export**, the persona and folder actions described above, and **Delete**. Deleting a character asks for confirmation ("Delete Character? This action cannot be undone") and removes the character's stored data directory (avatar and gallery images) along with its database record.
 
 ### Viewing a Character
 
-Clicking a character in the list (rather than its menu) opens a read-only **View** panel showing avatar, name/nickname, version, tags, description, personality, scenario, and first message, with **View Sessions** and **Edit** buttons in the header.
+Clicking a character in the list (rather than its menu) opens a read-only **detail**: the
+avatar, name and nickname, version and owner on one line, its tags, then Details (description,
+personality, scenario, first message, alternate greetings, creator notes, each shown only when it
+has content) and a **Gallery** tab. The pencil in the header edits; the menu offers **View
+Sessions** and **Export**. At full page the list stays beside the panel.
 
 ## Browsing the Character Library
 
-The **Character Library** is a searchable catalog of community-contributed character cards, browsed and imported without leaving the app. Open it from the Characters sidebar's dedicated **Browse** button — unlike creating or importing a file, this takes you to a full-page Character Library rather than opening a dialog in the sidebar.
+The **Character Library** is a searchable catalog of community-contributed character cards, browsed and imported without leaving the app. Open it from **Browse the library** under the **New** button in the Characters sidebar — unlike creating or importing a file, this takes you to a full-page Character Library rather than opening a dialog in the sidebar.
 
-- If more than one catalog is available, a row of tabs lets you switch between sources. Today there are two: the original **Serene Pub** catalog (the `serene-pub-chara-list` GitHub repository, grouped into named categories) and **CharaVault**, a much larger third-party card catalog shown as a flat grid instead, since CharaVault's own category/folder structure doesn't map onto a meaningful browsing grouping the way the curated catalog's does.
+- A **Characters · Personas** switch at the top picks which kind of card you are browsing; the Personas catalog is described on the [Personas](./personas.md#the-personas-catalog) page. Under Characters, if more than one catalog is available, a row of tabs lets you switch between sources. Today there are two: the original **Serene Pub** catalog (the `serene-pub-chara-list` GitHub repository, grouped into named categories) and **CharaVault**, a much larger third-party card catalog shown as a flat grid instead, since CharaVault's own category/folder structure doesn't map onto a meaningful browsing grouping the way the curated catalog's does.
 - Each entry shows its thumbnail, name, an excerpt of its description, author, and card spec version. Type in the search box to filter by name, description, category, or tags — it searches as you type (debounced) or immediately on Enter; there's no separate Search button.
 - When browsing CharaVault specifically, you also get a **Sort** dropdown (Top Rated, Most Downloaded, Newest, Oldest, Name A–Z/Z–A, Token Count, Most Discussed), an **Only cards with a lorebook** toggle, a creator filter (click an author's name in a card's detail view to filter the whole list to their cards, removable via the chip that appears above the results), and support for advanced query syntax in the search box — `tag:name`, `-exclude`, `creator:name`, and `"exact phrase"`, which can be combined freely (e.g. `elf tag:fantasy -romance creator:anon`). If the admin has enabled unsafe/NSFW browsing, an **Include NSFW results** toggle also appears. Results load a page at a time with a **Load More** button rather than infinite scroll, and a source that's unreachable or rate-limited shows its own message with a **Retry** button instead of an empty grid.
 - Clicking an entry opens a detail view with the full description, tags, author, version, spec, category, and (if the card carries one) a note that it includes a lorebook, plus a **Download Character** button to pull it directly into your own character list. Downloading also triggers the same lorebook-import prompt as a manual file import if the card includes an embedded lorebook.
@@ -138,7 +182,7 @@ The Serene Pub catalog is sourced live from a public, community-maintained catal
 
 ## Importing a Character from a File
 
-Besides the library, the Characters sidebar's **Import** button opens a dialog that accepts a local file upload in PNG, APNG, JPEG, JPG, WEBP, or JSON format — this covers standard character card formats (including cards exported from other apps). See [Importing from SillyTavern](./importing-from-sillytavern.md) for details on cross-compatibility with SillyTavern-style cards. On import, fields such as name, nickname, description, personality, scenario, first message, example dialogues, alternate greetings, creator notes, post-history instructions, character version, aliases, summary, and tags are all mapped in from the card, and the avatar image (if embedded) is extracted and set automatically.
+Besides the library, **Import a card** under the **New** button opens a dialog that accepts a local file upload, and dropping a card file anywhere on the list imports it the same way; the dialog accepts a local file upload in PNG, APNG, JPEG, JPG, WEBP, or JSON format — this covers standard character card formats (including cards exported from other apps). See [Importing from SillyTavern](./importing-from-sillytavern.md) for details on cross-compatibility with SillyTavern-style cards. On import, fields such as name, nickname, description, personality, scenario, first message, example dialogues, alternate greetings, creator notes, post-history instructions, character version, aliases, summary, and tags are all mapped in from the card, and the avatar image (if embedded) is extracted and set automatically.
 
 ### What Happens After Import
 

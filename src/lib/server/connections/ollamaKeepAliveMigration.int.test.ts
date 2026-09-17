@@ -50,7 +50,6 @@ async function insert(
 			name,
 			type,
 			baseUrl: "http://localhost:11434/",
-			model: "m",
 			extraJson,
 			capabilities: {}
 		})

@@ -1,49 +1,45 @@
 /**
- * The routing rule, read off the shipped documents.
+ * Which oracle streams, read off the shipped documents.
  *
- * Both halves matter and they fail in opposite directions. A chat spec that
- * grew a second Provider onto its spine would silently move every ordinary
- * reply onto the full-run road; an Adventure spec that lost one would move the
- * genre back onto the preview shortcut and start shipping its planner's JSON to
- * the screen again. Neither shows up as a type error.
+ * Every reply runs end to end (09-B B4): the spec creates its row, its oracles
+ * run, its last outlet fills the row. What is still read off the shape is
+ * which oracle's tokens are the reply's prose — a run has one live row, and a
+ * multi-stage spec has several oracles that must not all write into it. An
+ * Adventure spec whose narrator lost its edge to the write would start
+ * streaming its planner's JSON to the screen, and nothing shows that as a
+ * type error.
  */
 
 import { describe, expect, it } from "vitest"
 import { CORE_SPECS } from "@serene-pub/core-catalog"
-import {
-	narratingProvider,
-	runsToCompletion,
-	spineProviders
-} from "./specShape"
+import { narratingProvider, spineProviders } from "./specShape"
 
 const doc = (slug: string) => CORE_SPECS.find((s) => s.slug === slug)!.build()
 
-describe("which road a reply takes", () => {
-	it("keeps chat on the adapter path", () => {
-		const respond = doc("core:spec/respond")
-		// Three Providers, two of them inside retrieval blocks — which is why
-		// the count is of the SPINE and not of the document.
-		expect(spineProviders(respond).map((n) => n.key)).toEqual(["generate"])
-		expect(runsToCompletion(respond)).toBe(false)
+describe("the stages on the spine", () => {
+	it("counts the spine only — respond's two embed providers sit in blocks", () => {
+		expect(
+			spineProviders(doc("core:spec/respond")).map((n) => n.key)
+		).toEqual(["generate"])
 	})
 
-	it("keeps both narrator specs on the adapter path", () => {
-		for (const slug of ["core:spec/narrate", "core:spec/narrate-character"])
-			expect(runsToCompletion(doc(slug)), slug).toBe(false)
-	})
-
-	it("runs an Adventure turn to completion", () => {
-		const adventure = doc("core:spec/adventure-respond")
-		expect(spineProviders(adventure).map((n) => n.key)).toEqual([
-			"planWrite",
-			"scene",
-			"keeperWrite"
-		])
-		expect(runsToCompletion(adventure)).toBe(true)
+	it("sees all three of an Adventure turn's stages", () => {
+		expect(
+			spineProviders(doc("core:spec/adventure-respond")).map((n) => n.key)
+		).toEqual(["planWrite", "scene", "keeperWrite"])
 	})
 })
 
 describe("which stage streams", () => {
+	it("is the one whose text fills the placeholder, on every reply spec", () => {
+		for (const slug of [
+			"core:spec/respond",
+			"core:spec/narrate",
+			"core:spec/narrate-character"
+		])
+			expect(narratingProvider(doc(slug)), slug).toBe("generate")
+	})
+
 	it("is the narrator, not the planner that fed it", () => {
 		// The planner is an ancestor of the reply too — its plan is in the
 		// narrator's context — so nearest wins over earliest.

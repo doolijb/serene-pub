@@ -1,6 +1,5 @@
 /**
- * The MODEL half of an (endpoint, model) pair — reading it, merging it, and the
- * one column that mirrors it.
+ * The MODEL half of an (endpoint, model) pair — reading it and merging it.
  *
  * ## The ruling this file is
  *
@@ -12,8 +11,10 @@
  * `connections` is the ENDPOINT: where the compute is, what the key is, which
  * wire protocol it speaks. `connection_models` is what is reachable through it.
  * A selection anywhere in the app — a capability default, a pipeline config's
- * provider slot, a session override — is a PAIR, and a pair that names only the
- * endpoint means "its default model".
+ * provider slot, and since 0130 those two are the whole list — is a PAIR, and
+ * both halves are required:
+ * connections have no default model, so a pair naming only the endpoint is
+ * incomplete and resolves as unconfigured rather than guessing.
  *
  * ## The merge is a ROW, deliberately
  *
@@ -40,7 +41,7 @@
  * static manifest only, which is what makes the capability merge legal here.
  */
 
-import { and, asc, count, eq, inArray, ne } from "drizzle-orm"
+import { and, asc, count, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { CapabilityOverrides, CapabilitySet } from "@serene-pub/sdk"
 import {
@@ -53,10 +54,18 @@ import {
  * A connection row with its model's answers merged in.
  *
  * A `SelectConnection` and not a new shape, for the reason the header gives —
- * plus three fields the endpoint has no column for, which is exactly the set
- * that only exists once a pair has been formed.
+ * plus the fields the endpoint has no column for. `model` is one of them now:
+ * the endpoint carries no identifier since the per-connection default went
+ * away, so the merge writes it — the model's identifier, or null when no
+ * model was merged — and every adapter keeps reading `connection.model`
+ * without having moved.
  */
 export type ResolvedConnectionPair = SelectConnection & {
+	/**
+	 * What the adapter sends. Written by the merge from the model row, or
+	 * null when no model was merged. Never read off the endpoint.
+	 */
+	model: string | null
 	/** Which model row this pair resolved to, or null when the endpoint has none. */
 	connectionModelId: number | null
 	/** Its display name, for a queue label and a receipt. Never the identifier. */
@@ -73,12 +82,11 @@ export type ResolvedConnectionPair = SelectConnection & {
 }
 
 /**
- * The models on an endpoint, in display order.
+ * The endpoint's models, in display order.
  *
- * `sort_order` then `name`, which is the order every picker shows and the order
- * `is_default` is chosen from when a write has to pick one. Ordering in the
- * query rather than at each caller: three callers sorting three ways is three
- * different "first model", and one of them is what a fallback would pick.
+ * `sort_order` then `name`, which is the order every picker shows. Ordering
+ * in the query rather than at each caller: three callers sorting three ways
+ * is three different "first models".
  */
 export async function connectionModels(
 	db: Db,
@@ -88,6 +96,23 @@ export async function connectionModels(
 		.select()
 		.from(schema.connectionModels)
 		.where(eq(schema.connectionModels.connectionId, connectionId))
+		.orderBy(
+			asc(schema.connectionModels.sortOrder),
+			asc(schema.connectionModels.name),
+			asc(schema.connectionModels.id)
+		)
+}
+
+/**
+ * Every model on the instance, in the same display order — for the list,
+ * which renders every endpoint with its models in one message.
+ */
+export async function allConnectionModels(
+	db: Db
+): Promise<SelectConnectionModel[]> {
+	return await db
+		.select()
+		.from(schema.connectionModels)
 		.orderBy(
 			asc(schema.connectionModels.sortOrder),
 			asc(schema.connectionModels.name),
@@ -106,57 +131,6 @@ export async function connectionModelById(
 		.where(eq(schema.connectionModels.id, id))
 		.limit(1)
 	return row
-}
-
-/**
- * The endpoint's default model, or undefined when it has none.
- *
- * ⚠ It does NOT fall back to "the first one". An endpoint with models but no
- * default is a state the writers below cannot produce — every path that creates
- * a model marks one — so reaching for a fallback here would be inventing an
- * answer for a state that means the data is wrong, and inventing it silently.
- * The pair resolver treats "no default" the same way it treats "no models": the
- * endpoint's own legacy column, which is the honest last word.
- */
-export async function defaultConnectionModel(
-	db: Db,
-	connectionId: number
-): Promise<SelectConnectionModel | undefined> {
-	const [row] = await db
-		.select()
-		.from(schema.connectionModels)
-		.where(
-			and(
-				eq(schema.connectionModels.connectionId, connectionId),
-				eq(schema.connectionModels.isDefault, true)
-			)
-		)
-		.limit(1)
-	return row
-}
-
-/**
- * Every endpoint's default model, in one query, keyed by connection id.
- *
- * For the two LIST readers — the config panel's choice set and the pipeline
- * world's connection descriptors — each of which renders every connection on the
- * instance and used to take the model straight off the endpoint's column. One
- * query rather than a lookup per row: the panel builds this set once and reads
- * it against every slot, which is the one place a per-row query would cost most
- * (the same argument the cached `resolved` capability set makes).
- *
- * ⚠ Defaults only. A picker showing every model of every endpoint as a top-level
- * row is a different screen — the models live under their endpoint, and what a
- * connection row needs to say here is which one it means when nobody has said.
- */
-export async function defaultModelsByConnection(
-	db: Db
-): Promise<Map<number, SelectConnectionModel>> {
-	const rows = await db
-		.select()
-		.from(schema.connectionModels)
-		.where(eq(schema.connectionModels.isDefault, true))
-	return new Map(rows.map((r) => [r.connectionId, r]))
 }
 
 /**
@@ -210,9 +184,9 @@ export function layerCapabilities(
  * `withCompletionTemplate` precedent, so a caller holding the row it passed in
  * still holds a plain row.
  *
- * A null `model` is not a failure. An endpoint whose `model` column was never
- * filled in has no model rows, and the pair is then the endpoint alone — which
- * is precisely what it was before 0114, so nothing that worked stops working.
+ * A null `model` is not a failure, but it is incomplete: the merged pair
+ * carries a null identifier, and resolution refuses it with the fix attached
+ * rather than guessing a row.
  */
 export function mergeEndpointModel(
 	endpoint: SelectConnection,
@@ -221,6 +195,7 @@ export function mergeEndpointModel(
 	if (!model)
 		return {
 			...endpoint,
+			model: null,
 			connectionModelId: null,
 			connectionModelName: null,
 			contextWindow: null
@@ -282,84 +257,17 @@ export function pairCapabilities(
 }
 
 /**
- * Keep `connections.model` in step with the endpoint's default model.
+ * The endpoint names a model it can send, one way or another.
  *
- * ⚠ THE ONLY WRITER of that column outside the migration, and the reason its
- * docblock can say "read by nothing after 0114". The column survives the version
- * freeze so a downgrade, a backup restored into an older build, and the two
- * managed flows that genuinely do mean "one connection, one model" all keep
- * finding the string where it has always been.
- *
- * It writes NULL when the endpoint has no default model, which is the honest
- * answer and the pre-0114 state for a connection nobody finished setting up.
- *
- * Called after every write that can move the default: creating the first model,
- * deleting the current default, and `setDefaultConnectionModel`. Not called on a
- * plain rename — the mirror carries the IDENTIFIER, and a rename does not touch
- * it.
- */
-export async function mirrorDefaultModel(
-	db: Db,
-	connectionId: number
-): Promise<void> {
-	const current = await defaultConnectionModel(db, connectionId)
-	await db
-		.update(schema.connections)
-		.set({ model: current?.model ?? null })
-		.where(eq(schema.connections.id, connectionId))
-}
-
-/**
- * Make one model the endpoint's default, in two statements.
- *
- * ⚠ Two statements and not one `SET is_default = (id = $1)`. The partial unique
- * index is checked per tuple as the update walks the table, so a single
- * statement that promotes one row before demoting the other fails on an index
- * whose whole job is to make that state impossible — and which row is written
- * first is the planner's choice, so it would fail intermittently. Clear, then
- * set. In a transaction, so a crash between them cannot leave an endpoint with
- * no default at all.
- */
-export async function setDefaultConnectionModel(
-	db: Db,
-	connectionId: number,
-	modelId: number
-): Promise<void> {
-	await (db as any).transaction(async (tx: Db) => {
-		await tx
-			.update(schema.connectionModels)
-			.set({ isDefault: false })
-			.where(
-				and(
-					eq(schema.connectionModels.connectionId, connectionId),
-					eq(schema.connectionModels.isDefault, true),
-					ne(schema.connectionModels.id, modelId)
-				)
-			)
-		await tx
-			.update(schema.connectionModels)
-			.set({ isDefault: true })
-			.where(
-				and(
-					eq(schema.connectionModels.id, modelId),
-					eq(schema.connectionModels.connectionId, connectionId)
-				)
-			)
-	})
-	await mirrorDefaultModel(db, connectionId)
-}
-
-/**
- * The endpoint has a default model naming `model`, one way or another.
- *
- * The shared spine of the three paths that create a connection ALREADY knowing
+ * The shared spine of the paths that create a connection ALREADY knowing
  * which model it is for: `connections:create` with a `model` field (every
  * connection form), `ollama:connectModel`, and `koboldcpp:connectModel`. Each
- * used to write the string onto the row and stop; each now gets a real pair,
- * spelled once here rather than three times with three sets of edge cases.
+ * gets a real row, spelled once here rather than three times with three sets
+ * of edge cases. It ensures a ROW, nothing more — connections have no default
+ * model, so nothing here marks one and nothing mirrors one anywhere.
  *
  * Idempotent by the (connection_id, model) unique index: called twice with the
- * same identifier it promotes what is already there rather than inserting a
+ * same identifier it returns what is already there rather than inserting a
  * duplicate — which is what makes it safe on the managed flows, whose whole
  * pattern is "find or create the connection for this gguf".
  *
@@ -368,7 +276,7 @@ export async function setDefaultConnectionModel(
  * whole save because the model box is empty would stop a person from creating an
  * endpoint before they know what is on it.
  */
-export async function ensureDefaultModel(
+export async function ensureConnectionModel(
 	db: Db,
 	connectionId: number,
 	model: string | null | undefined,
@@ -386,28 +294,16 @@ export async function ensureDefaultModel(
 			)
 		)
 		.limit(1)
-	if (existing) {
-		if (!existing.isDefault)
-			await setDefaultConnectionModel(db, connectionId, existing.id)
-		else await mirrorDefaultModel(db, connectionId)
-		return (await connectionModelById(db, existing.id)) ?? existing
-	}
-	// Whether this becomes the default: only if nothing else already is. The
-	// first model on an endpoint has to be, or a pair naming just the endpoint
-	// resolves to nothing; a later one must NOT silently steal the star from a
-	// model somebody chose.
-	const current = await defaultConnectionModel(db, connectionId)
+	if (existing) return existing
 	const [row] = await db
 		.insert(schema.connectionModels)
 		.values({
 			connectionId,
 			model: identifier,
 			name: (name ?? "").trim() || identifier,
-			isDefault: !current,
 			enabled: true
 		})
 		.returning()
-	if (!current) await mirrorDefaultModel(db, connectionId)
 	return row
 }
 
@@ -452,7 +348,7 @@ export async function importProbedModels(
 			skipped++
 			continue
 		}
-		await ensureDefaultModel(db, connectionId, identifier, m.name)
+		await ensureConnectionModel(db, connectionId, identifier, m.name)
 		added++
 	}
 	return { added, skipped }
@@ -499,23 +395,21 @@ export async function endpointIdsServingModel(
 /**
  * Forget a model that is no longer on disk, everywhere it is named.
  *
- * ## ⚠ It deletes the MODEL, and the endpoint only if that empties it
- *
- * The managed delete paths used to run `DELETE FROM connections WHERE model =
- * $1`, and their own comment gave the reason: "a connection names exactly one
- * model". After 0114 that sentence is false, and the statement it justified
- * became a way to delete an endpoint serving four other ggufs because one of
- * them was removed from the Manager's directory.
+ * It deletes the MODEL, and the endpoint only if that empties it. The managed
+ * delete paths used to run `DELETE FROM connections WHERE model = $1`, and
+ * their own comment gave the reason: "a connection names exactly one model".
+ * That sentence is false, and the statement it justified became a way to
+ * delete an endpoint serving four other ggufs because one of them was removed
+ * from the Manager's directory.
  *
  * So: drop the model rows, then drop the endpoints that are left with nothing.
  * For every row the managed flows actually create — one connection, one model —
  * that is byte-identical to the old behaviour, including the
- * `connection_defaults` release the FK cascade performs on the way out. For a
- * connection somebody added a second model to by hand it is the answer they
- * would expect and the old statement could not give.
- *
- * The survivors are re-mirrored, because deleting a model can move a default and
- * the mirror is only honest if every path that can move one says so.
+ * `connection_defaults` release the FK cascade performs on the way out (a
+ * registration that named a deleted model is cleared to endpoint-only, which
+ * now resolves as incomplete rather than stranded). For a connection somebody
+ * added a second model to by hand it is the answer they would expect and the
+ * old statement could not give.
  */
 export async function forgetModelEverywhere(
 	db: Db,
@@ -546,16 +440,4 @@ export async function forgetModelEverywhere(
 		await db
 			.delete(schema.connections)
 			.where(inArray(schema.connections.id, emptied))
-	for (const id of survivors) {
-		// Deleting the default leaves the endpoint with none, which
-		// `defaultConnectionModel` refuses to guess at — so promote the first in
-		// display order, which is the order every picker shows and therefore the
-		// one a person would have called "the top one".
-		const current = await defaultConnectionModel(db, id)
-		if (!current) {
-			const [first] = await connectionModels(db, id)
-			if (first) await setDefaultConnectionModel(db, id, first.id)
-			else await mirrorDefaultModel(db, id)
-		} else await mirrorDefaultModel(db, id)
-	}
 }

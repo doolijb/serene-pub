@@ -112,7 +112,7 @@ const promptDeclFor = async (nodeKey: string) => {
 	)
 	expect(decl, `${nodeKey} declares no prompts slot`).toBeTruthy()
 	expect(
-		decl!.nodeTypeId,
+		decl!.nodeDefinitionId,
 		"a prompts declaration must carry its node type — it is half the pool key"
 	).toBeTruthy()
 	return decl!
@@ -133,7 +133,7 @@ const promptInPoolOf = async (
 	const [row] = await db
 		.insert(schema.pipelinePrompts)
 		.values({
-			nodeTypeId: decl.nodeTypeId!,
+			nodeDefinitionId: decl.nodeDefinitionId!,
 			slot: decl.slot,
 			createdForSpecId: specId,
 			name,
@@ -192,7 +192,7 @@ describe("the shipped configuration reaches a run", () => {
 		const decl = await promptDeclFor("context")
 		const id = await defaultPromptFor(
 			db,
-			decl.nodeTypeId!,
+			decl.nodeDefinitionId!,
 			decl.slot,
 			{
 				id: specId,
@@ -235,7 +235,7 @@ describe("the prompts floor follows each node's own pool", () => {
 		// The premise: this pipeline really does have prompts nodes of more
 		// than one type. Without it the test would pass on a pipeline where
 		// pool-blind and pool-aware are the same answer, and prove nothing.
-		const pools = new Set(decls.map((d) => `${d.nodeTypeId}#${d.slot}`))
+		const pools = new Set(decls.map((d) => `${d.nodeDefinitionId}#${d.slot}`))
 		expect(
 			pools.size,
 			"the summarize pipeline should declare prompts on more than one kind of step"
@@ -258,7 +258,7 @@ describe("the prompts floor follows each node's own pool", () => {
 		for (const d of decls) {
 			const id = await defaultPromptFor(
 				db,
-				d.nodeTypeId!,
+				d.nodeDefinitionId!,
 				d.slot,
 				{ id: spec.id, slug: SUMMARIZE_WORLD_SPEC_ID }
 			)

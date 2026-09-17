@@ -456,9 +456,9 @@ export function explicitStopsFrom(value: unknown): string[] {
  *
  * ## Why this exists, and why it must be the only way in
  *
- * There are FIVE places in this app that construct a text adapter and call
- * `generateText()` — `pipelines/runtime/dispatch.ts` (every Provider node),
- * `utils/generateResponse.ts` (every reply), `utils/summarizer/index.ts`,
+ * There are FOUR places in this app that construct a text adapter and call
+ * `generateText()` — `pipelines/runtime/dispatch.ts` (every Provider node,
+ * which since the one road is every reply too), `utils/summarizer/index.ts`,
  * `utils/graphBuilder.ts` and `pipelines/runtime/dispatchStep.ts`. An adapter no
  * longer composes for itself, so a construction site that forgets `withStops`
  * sends NO stop sequences at all — and on a completion wire that means the model

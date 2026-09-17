@@ -4,7 +4,12 @@
 	interface Props {
 		user: SelectUser
 		isCurrentUserAdmin: boolean
-		onBack: () => void
+		/**
+		 * Back to the list. Omitted when the list is already on screen beside
+		 * this panel (a view in desk mode), where a "back" that goes nowhere
+		 * visible is only a button to explain.
+		 */
+		onBack?: () => void
 		onEdit: () => void
 	}
 
@@ -14,13 +19,15 @@
 <div class="flex h-full flex-col gap-0 overflow-hidden">
 	<!-- Header -->
 	<div class="flex shrink-0 items-center gap-2 pb-3">
-		<button
-			class="btn btn-sm preset-filled-surface-400-600 p-2"
-			onclick={onBack}
-			title="Back to users"
-		>
-			<Icons.ChevronLeft size={16} />
-		</button>
+		{#if onBack}
+			<button
+				class="btn btn-sm preset-filled-surface-400-600 p-2"
+				onclick={onBack}
+				title="Back to users"
+			>
+				<Icons.ChevronLeft size={16} />
+			</button>
+		{/if}
 		<h2 class="flex-1 truncate font-semibold">
 			{user.displayName || user.username}
 		</h2>

@@ -1,8 +1,9 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
-	import { getContext, onMount, onDestroy } from "svelte"
+	import { getContext, onMount } from "svelte"
 
 	interface Props {
 		onDownloadStarted: () => void
@@ -101,8 +102,6 @@
 		downloadStarted = true
 	}
 
-	// Named so `off` can name them too. A bare `socket.off("koboldcpp:listBinaryVariants")`
-	// removes EVERY listener for that event.
 	function handleListReleaseVersions(
 		msg: Sockets.KoboldCPP.ListReleaseVersions.Response
 	) {
@@ -141,51 +140,43 @@
 		download = msg.download
 	}
 
+	// Every key is BARE: nothing in `koboldcpp:` has an interest scope, and a
+	// picker is about the release list as a whole rather than one asset. All
+	// standing: `binaryDownloadProgress` is pushed for the life of a download,
+	// and the variant list is re-requested whenever the release tag changes.
+	//
+	// Declared ABOVE the mount that emits, because effects run in creation
+	// order and a declaration made after one would miss the sync those first
+	// requests flush.
+	useInterest<"koboldcpp:listReleaseVersions">(
+		"koboldcpp:listReleaseVersions",
+		handleListReleaseVersions
+	)
+	useInterest<"koboldcpp:listReleaseVersions:error">(
+		"koboldcpp:listReleaseVersions:error",
+		handleListReleaseVersionsError
+	)
+	useInterest<"koboldcpp:listBinaryVariants">(
+		"koboldcpp:listBinaryVariants",
+		handleListBinaryVariants
+	)
+	useInterest<"koboldcpp:listBinaryVariants:error">(
+		"koboldcpp:listBinaryVariants:error",
+		handleListBinaryVariantsError
+	)
+	useInterest<"koboldcpp:binaryDownloadProgress">(
+		"koboldcpp:binaryDownloadProgress",
+		handleBinaryDownloadProgress
+	)
+	useInterest<"koboldcpp:getBinaryDownloadProgress">(
+		"koboldcpp:getBinaryDownloadProgress",
+		handleGetBinaryDownloadProgress
+	)
+
 	onMount(() => {
 		socket.emit("koboldcpp:listReleaseVersions", {})
 		socket.emit("koboldcpp:listBinaryVariants", {})
 		socket.emit("koboldcpp:getBinaryDownloadProgress", {})
-
-		socket.on("koboldcpp:listReleaseVersions", handleListReleaseVersions)
-		socket.on(
-			"koboldcpp:listReleaseVersions:error",
-			handleListReleaseVersionsError
-		)
-
-		socket.on("koboldcpp:listBinaryVariants", handleListBinaryVariants)
-		socket.on(
-			"koboldcpp:listBinaryVariants:error",
-			handleListBinaryVariantsError
-		)
-		socket.on(
-			"koboldcpp:binaryDownloadProgress",
-			handleBinaryDownloadProgress
-		)
-		socket.on(
-			"koboldcpp:getBinaryDownloadProgress",
-			handleGetBinaryDownloadProgress
-		)
-	})
-
-	onDestroy(() => {
-		socket.off("koboldcpp:listReleaseVersions", handleListReleaseVersions)
-		socket.off(
-			"koboldcpp:listReleaseVersions:error",
-			handleListReleaseVersionsError
-		)
-		socket.off("koboldcpp:listBinaryVariants", handleListBinaryVariants)
-		socket.off(
-			"koboldcpp:listBinaryVariants:error",
-			handleListBinaryVariantsError
-		)
-		socket.off(
-			"koboldcpp:binaryDownloadProgress",
-			handleBinaryDownloadProgress
-		)
-		socket.off(
-			"koboldcpp:getBinaryDownloadProgress",
-			handleGetBinaryDownloadProgress
-		)
 	})
 </script>
 

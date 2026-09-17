@@ -1,0 +1,43 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "koboldcpp/qwen38",
+  "provider": {
+    "koboldcpp": {
+      "name": "KoboldCpp",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://127.0.0.1:5001/v1"
+      },
+      "models": {
+        "qwen38": {
+          "name": "Qwen3.8 27B",
+          "id": "koboldcpp/Qwen3.8-27B-UD-IQ3_XXS",
+          "tool_call": true,
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 65536,
+            "output": 16384
+          },
+          "compaction": {
+            "auto": true,
+            "keep": {
+              "tokens": 12000
+            },
+            "buffer": 12000
+          },
+          "tool_output": {
+            "max_lines": 1500,
+            "max_bytes": 40000
+          }
+        }
+      }
+    }
+  }
+}

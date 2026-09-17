@@ -212,21 +212,23 @@ beforeAll(async () => {
 			name: "RAG Parity Embeddings",
 			modality: "embeddings",
 			type: CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS,
-			model: "Xenova/all-MiniLM-L6-v2",
 			extraJson: {},
 			capabilities: {}
 		} as any)
 		.returning()
-	await db.insert(schema.connectionModels).values({
-		connectionId: embeddingConn.id,
-		model: "Xenova/all-MiniLM-L6-v2",
-		name: "Xenova/all-MiniLM-L6-v2",
-		isDefault: true
-	})
+	const [embeddingModel] = await db
+		.insert(schema.connectionModels)
+		.values({
+			connectionId: embeddingConn.id,
+			model: "Xenova/all-MiniLM-L6-v2",
+			name: "Xenova/all-MiniLM-L6-v2"
+		})
+		.returning()
 	await db.insert(schema.connectionDefaults).values({
 		input: "text",
 		output: "embedding",
-		connectionId: embeddingConn.id
+		connectionId: embeddingConn.id,
+		connectionModelId: embeddingModel.id
 	})
 
 	configs = {
@@ -264,12 +266,12 @@ async function seedRag(
 		})
 		.returning()
 	const [bob] = await db
-		.insert(schema.personas)
+		.insert(schema.characters)
 		.values({
 			userId: user.id,
+			isPersona: true,
 			name: "Bob",
-			description: "A traveller.",
-			isDefault: false
+			description: "A traveller."
 		})
 		.returning()
 	const [lorebook] = await db

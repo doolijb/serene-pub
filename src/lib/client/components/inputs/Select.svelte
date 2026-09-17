@@ -178,10 +178,17 @@
 	<!-- `data-[highlighted]` and not just `hover:` — zag sets that attribute for
 	     the arrow-key cursor as well as for pointer-over, and styling only
 	     `hover:` (as the older pickers do) leaves keyboard navigation with
-	     nothing moving on screen, which a native `<select>` never does. -->
+	     nothing moving on screen, which a native `<select>` never does.
+
+	     The CHECKED option was `preset-filled-primary-500` — the app's button
+	     treatment, which puts option text on primary at 3.62:1. Tonal primary
+	     measures 11.57:1 and still reads as chosen. It matches the highlighted
+	     option deliberately: an option is not a list row, it has no leading
+	     edge to mark, and `ItemIndicator`'s check is what separates "the one
+	     you picked" from "the one under the cursor". -->
 	<Combobox.Item
 		item={option}
-		class="data-[highlighted]:preset-tonal-primary data-[state=checked]:preset-filled-primary-500 flex cursor-pointer items-center justify-between gap-2 rounded px-2 py-1.5 text-sm"
+		class="data-[highlighted]:preset-tonal-primary data-[state=checked]:preset-tonal-primary flex cursor-pointer items-center justify-between gap-2 rounded px-2 py-1.5 text-sm"
 	>
 		<!-- Wraps rather than truncates: model ids run long, and the popup is
 		     the one place the whole name is worth reading. -->

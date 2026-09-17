@@ -98,7 +98,7 @@ const assembleKeysOf = async (slug: string): Promise<string[]> => {
 		.where(
 			and(
 				eq(schema.pipelineNodes.specVersionId, spec.activeVersionId!),
-				eq(schema.pipelineNodes.typeId, "core:task/assemble")
+				eq(schema.pipelineNodes.definitionId, "core:task/assemble")
 			)
 		)
 	return nodes.map((n) => n.nodeKey)

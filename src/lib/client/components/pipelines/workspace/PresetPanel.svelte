@@ -8,9 +8,10 @@
 	 * question — "which presets reach for this pipeline?" — with a link out
 	 * along each edge.
 	 */
-	import { onDestroy, onMount } from "svelte"
+	import { onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
-	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { requestWithInterest } from "$lib/client/sockets/interest.svelte"
+	import { eventDisplayName } from "$lib/client/utils/eventName"
 
 	interface Props {
 		slug: string
@@ -19,8 +20,6 @@
 	}
 
 	let { slug }: Props = $props()
-
-	const socket = useTypedSocket()
 
 	type Preset = Sockets.SessionAdmin.PresetRow
 	let presets: Preset[] = $state([])
@@ -31,13 +30,15 @@
 		loading = false
 	}
 
-	onMount(() => {
-		socket.on("sessionPresets:list", onPresets)
-		socket.emit("sessionPresets:list", {})
-	})
-	onDestroy(() => {
-		socket.off("sessionPresets:list", onPresets)
-	})
+	/**
+	 * BARE — `sessionPresets:list` is not in `SCOPED_EVENTS`; this panel reads
+	 * every preset and filters for the ones that reach this pipeline itself.
+	 * Declare-then-emit in one call so the key is on the wire ahead of the
+	 * request, and held for as long as the panel is open rather than released
+	 * on the reply: the list is a cascade target, so a preset rebound
+	 * elsewhere re-sends it and this "used by" answer stays true.
+	 */
+	onMount(() => requestWithInterest("sessionPresets:list", {}, onPresets))
 
 	/** The presets whose bindings reach this pipeline, and through which slot. */
 	const using = $derived(
@@ -103,7 +104,7 @@
 								? `${e.event} @ config #${e.config}`
 								: `${e.event} @ shipped default`}
 						>
-							{e.event}
+							{eventDisplayName(e.event)}
 						</span>
 					{/each}
 					<a

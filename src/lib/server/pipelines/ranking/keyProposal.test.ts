@@ -31,7 +31,9 @@ import type { GazetteerName } from "$lib/server/pipelines/ranking/entities"
 const CAST: GazetteerName[] = [
 	{ name: "Cade", ref: { kind: "character", id: 1 } },
 	{ name: "Captain Vell", ref: { kind: "character", id: 2 } },
-	{ name: "Nix", ref: { kind: "persona", id: 7 } }
+	// Nix stands in for a persona cast member — since the 0133 merge a persona
+	// IS a character row, so its ref carries the same "character" kind.
+	{ name: "Nix", ref: { kind: "character", id: 7 } }
 ]
 
 const keysOf = (input: Parameters<typeof proposeKeys>[0]) =>

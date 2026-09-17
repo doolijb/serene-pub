@@ -53,8 +53,48 @@
 	)
 	let activeTab = $state<"activity" | "queue">("activity")
 
+	/**
+	 * ⚠ `document.visibilityState` is a plain DOM property — reading it in an
+	 * effect samples it once and never hears about it changing. Mirrored into
+	 * state so the poll below actually stops when the browser tab goes away.
+	 */
+	let pageVisible = $state(true)
 	$effect(() => {
-		if (activeTab !== "queue" || !isAdmin) return
+		const onVisibilityChange = () => {
+			pageVisible = document.visibilityState === "visible"
+		}
+		onVisibilityChange()
+		document.addEventListener("visibilitychange", onVisibilityChange)
+		return () =>
+			document.removeEventListener(
+				"visibilitychange",
+				onVisibilityChange
+			)
+	})
+
+	/**
+	 * Four conditions, all of them live, because this shell keeps every view
+	 * a person has opened MOUNTED behind the `hidden` attribute. Gated on the
+	 * tab alone, one visit to the Queue tab left a 1 Hz socket round-trip
+	 * running for the rest of the session — invisible, unstoppable, and paid
+	 * for again by every other Activity tab anyone ever opened.
+	 *
+	 * `activeView` is the one that fixes that: it is false for a view that is
+	 * open but hidden. Page visibility is the same argument one level up —
+	 * a backgrounded browser tab has nobody watching the numbers tick.
+	 *
+	 * All four are read reactively, so the poll restarts on its own the
+	 * moment the view is shown again or the tab comes back to the front.
+	 */
+	let pollTaskQueue = $derived(
+		isAdmin &&
+			activeTab === "queue" &&
+			panelsCtx.activeView === "activity" &&
+			pageVisible
+	)
+
+	$effect(() => {
+		if (!pollTaskQueue) return
 		socket.emit("taskQueue:get", {})
 		const interval = setInterval(
 			() => socket.emit("taskQueue:get", {}),

@@ -162,20 +162,27 @@ export global {
 	 */
 	export type AdapterConnection = SelectConnection & {
 		/**
-		 * Which `connection_models` row this connection was MERGED with (0114),
-		 * or null for an endpoint that has none.
-		 *
-		 * ⚠ The merge is why every adapter still reads `this.connection.model`
-		 * and still gets the right string: `mergeEndpointModel` substitutes the
-		 * model's identifier, template, tokenizer and capability layers INTO the
-		 * row before it travels, so the adapters did not move. These three
-		 * fields are what the endpoint has no column for, carried so a queue
-		 * label, a receipt and `dispatchStep`'s token budget can name the model
-		 * rather than the endpoint.
+		 * What the adapter sends, written by `mergeEndpointModel` from the
+		 * model row — or null when no model was merged. The endpoint carries
+		 * no identifier since the per-connection default went away, so an
+		 * adapter reading this off anything but a merged pair is reading a
+		 * hole, and the resolver refuses such pairs before any adapter loads.
 		 *
 		 * ⚠ OPTIONAL, for the reason `completionTemplate` and `wireMode` below
 		 * are: a hand-built connection (a unit test, `connections:test` on
 		 * unsaved form state) has never been through the merge.
+		 */
+		model?: string | null
+		/**
+		 * Which `connection_models` row this connection was MERGED with, or
+		 * null for an endpoint that has none.
+		 *
+		 * These three fields are what the endpoint has no column for, carried
+		 * so a queue label, a receipt and `dispatchStep`'s token budget can
+		 * name the model rather than the endpoint.
+		 *
+		 * ⚠ OPTIONAL, for the reason above: a hand-built connection has never
+		 * been through the merge.
 		 */
 		connectionModelId?: number | null
 		connectionModelName?: string | null
@@ -282,10 +289,6 @@ export global {
 	export type SelectCharacterTag = typeof schema.characterTags.$inferSelect
 	export type InsertCharacterTag = typeof schema.characterTags.$inferInsert
 
-	// Persona Tag types
-	export type SelectPersonaTag = typeof schema.personaTags.$inferSelect
-	export type InsertPersonaTag = typeof schema.personaTags.$inferInsert
-
 	// Lorebook Tag types
 	export type SelectLorebookTag = typeof schema.lorebookTags.$inferSelect
 	export type InsertLorebookTag = typeof schema.lorebookTags.$inferInsert
@@ -299,10 +302,18 @@ export global {
 	export type InsertCharacter = typeof schema.characters.$inferInsert
 	export type UpdateCharacter = Partial<SelectCharacter> & { id: number }
 
-	// Persona types
-	export type SelectPersona = typeof schema.personas.$inferSelect
-	export type InsertPersona = typeof schema.personas.$inferInsert
-	export type UpdatePersona = Partial<SelectPersona> & { id: number }
+	// ⚠ There are no persona types. A persona is a character the user voices,
+	// so `SelectCharacter` IS the persona shape and `characters.isPersona` is
+	// the fact that says so.
+
+	// Character Folder types
+	export type SelectCharacterFolder =
+		typeof schema.characterFolders.$inferSelect
+	export type InsertCharacterFolder =
+		typeof schema.characterFolders.$inferInsert
+	export type UpdateCharacterFolder = Partial<SelectCharacterFolder> & {
+		id: number
+	}
 
 	// Session types
 	export type SelectSession = typeof schema.sessions.$inferSelect

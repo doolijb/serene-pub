@@ -28,8 +28,13 @@
 	 * for the message it came from.
 	 */
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import {
+		declareInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
+	import { interestKey } from "$lib/shared/sockets/interest"
 	import * as Icons from "@lucide/svelte"
-	import { onMount, onDestroy } from "svelte"
+	import { onMount } from "svelte"
 	import { SvelteSet } from "svelte/reactivity"
 	import { toaster } from "$lib/client/utils/toaster"
 
@@ -129,17 +134,39 @@
 		"bindingSuggestions:add:error"
 	] as const
 
+	/**
+	 * This book's suggestions, SCOPED to it — the payload carries `lorebookId`
+	 * (see `SCOPED_EVENTS`), so a panel open on another book is not sent this
+	 * one's list. STANDING rather than one-shot: every accept/ignore/unignore
+	 * cascades a fresh `bindingSuggestions:list`, which is how a row moves
+	 * between the two halves of this panel without a reload.
+	 *
+	 * An effect rather than `useInterest` because the key moves: `lorebookId`
+	 * is a prop, and `useInterest` keeps the key it was first given. Declared
+	 * above `onMount` so the interest exists before `refresh()` goes out
+	 * (effects run in creation order, and `onMount` is one of them).
+	 */
+	$effect(() =>
+		declareInterest<"bindingSuggestions:list">(
+			interestKey("bindingSuggestions:list", lorebookId),
+			handleList
+		)
+	)
+
+	/**
+	 * The four refusals, BARE — none of them is in `SCOPED_EVENTS`, and a
+	 * `#<id>` key for an unscoped event matches no payload at all. One
+	 * `useInterest` call per key, each its own `$effect`, released with the
+	 * component. Errors are never gated (plan ruling 2); the registry is
+	 * simply the only listener path now.
+	 */
+	for (const e of ERRORS) {
+		useInterest<"bindingSuggestions:list:error">(e, handleError)
+	}
+
 	onMount(() => {
 		if (!socket) return
-		socket.on("bindingSuggestions:list", handleList)
-		for (const e of ERRORS) socket.on(e, handleError)
 		refresh()
-	})
-
-	onDestroy(() => {
-		if (!socket) return
-		socket.off("bindingSuggestions:list", handleList)
-		for (const e of ERRORS) socket.off(e, handleError)
 	})
 
 	/** A date a person reads, or nothing if the value never made it over. */

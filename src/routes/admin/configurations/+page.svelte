@@ -7,16 +7,15 @@
 	 * declarations), so rows deep-link into the owning workspace's Configure
 	 * tab and editing stays one surface.
 	 */
-	import { getContext, onDestroy, onMount } from "svelte"
+	import { getContext, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { goto } from "$app/navigation"
-	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { requestWithInterest } from "$lib/client/sockets/interest.svelte"
 	import AdminList, {
 		type AdminColumn
 	} from "$lib/client/components/admin/AdminList.svelte"
 
 	const userCtx: { user: SelectUser } = getContext("userCtx")
-	const socket = useTypedSocket()
 
 	type Row = Sockets.Pipelines.ConfigsIndex.Row
 	let rows: Row[] = $state([])
@@ -32,11 +31,19 @@
 			goto("/")
 			return
 		}
-		socket.on("pipelines:configsIndex", onIndex)
-		socket.emit("pipelines:configsIndex", {})
 	})
-	onDestroy(() => {
-		socket.off("pipelines:configsIndex", onIndex)
+
+	/**
+	 * The inventory, asked for and listened for in one. BARE — it spans every
+	 * pipeline, so there is nothing to scope it to.
+	 *
+	 * The app-wide registry, not `adminInterest`: `pipelines:` is a MIXED
+	 * family — most of its handlers answer every user — so this is an ordinary
+	 * key, and the admin check here is the same one the redirect above makes.
+	 */
+	$effect(() => {
+		if (!userCtx.user?.isAdmin) return
+		return requestWithInterest("pipelines:configsIndex", {}, onIndex)
 	})
 
 	const workspaceHref = (r: Row) =>

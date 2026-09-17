@@ -378,7 +378,7 @@ describe("numbers and booleans", () => {
 /**
  * The shipped schemas, compiled.
  *
- * `core:provider/generate-json@1` hands a schema to whichever door a connection
+ * `core:oracle/generate-json@1` hands a schema to whichever door a connection
  * opens, and on the llama.cpp family that door is this converter. A schema
  * outside its subset is REFUSED, so an adventure turn on KoboldCPP would fail at
  * the request rather than produce a looser answer — which is the right failure

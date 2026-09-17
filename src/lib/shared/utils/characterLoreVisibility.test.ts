@@ -7,34 +7,33 @@ import {
 const characterBinding: BindingLike = {
 	id: 1,
 	characterId: 10,
-	personaId: null,
 	character: { name: "Aria", nickname: null }
 }
 
 const characterBindingWithNickname: BindingLike = {
 	id: 2,
 	characterId: 11,
-	personaId: null,
 	character: { name: "Aria Longname", nickname: "Ari" }
 }
 
-const personaBinding: BindingLike = {
+// A persona is a character (0133) — its binding is a character binding like
+// any other, just naming a character the user happens to voice. There is no
+// separate `persona`/`personaId` shape left on `BindingLike` to fixture.
+const personaFlavoredCharacterBinding: BindingLike = {
 	id: 3,
-	characterId: null,
-	personaId: 20,
-	persona: { name: "Traveler" }
+	characterId: 20,
+	character: { name: "Traveler", nickname: null }
 }
 
 const backgroundBinding: BindingLike = {
 	id: 4,
-	characterId: null,
-	personaId: null
+	characterId: null
 }
 
 const allBindings = [
 	characterBinding,
 	characterBindingWithNickname,
-	personaBinding,
+	personaFlavoredCharacterBinding,
 	backgroundBinding
 ]
 
@@ -58,7 +57,7 @@ describe("getCharacterLoreVisibility", () => {
 		expect(v.description).toContain("no longer points")
 	})
 
-	test("a binding with neither characterId nor personaId is a background/NPC row, visible only to the Narrator", () => {
+	test("a binding with no characterId is a background/NPC row, visible only to the Narrator", () => {
 		const v = getCharacterLoreVisibility(backgroundBinding.id, allBindings)
 		expect(v.kind).toBe("narrator")
 		expect(v.label).toBe("Narrator only")
@@ -82,17 +81,18 @@ describe("getCharacterLoreVisibility", () => {
 		expect(v.description).toContain("Ari's perspective")
 	})
 
-	test("a persona binding is private to that persona", () => {
-		const v = getCharacterLoreVisibility(personaBinding.id, allBindings)
-		expect(v.kind).toBe("persona")
+	test("a binding on a character one of the session's users voices still reports as a character binding — the session-persona visibility rule survives the merge, it just no longer has a kind of its own", () => {
+		const v = getCharacterLoreVisibility(
+			personaFlavoredCharacterBinding.id,
+			allBindings
+		)
+		expect(v.kind).toBe("character")
 		expect(v.label).toBe("Private to Traveler")
-		expect(v.description).toContain("Traveler is the active persona")
+		expect(v.description).toContain("Traveler's perspective")
 	})
 
-	test("falls back to a generic noun when the bound character/persona record is missing", () => {
-		const v = getCharacterLoreVisibility(5, [
-			{ id: 5, characterId: 99, personaId: null }
-		])
+	test("falls back to a generic noun when the bound character record is missing", () => {
+		const v = getCharacterLoreVisibility(5, [{ id: 5, characterId: 99 }])
 		expect(v.label).toBe("Private to this character")
 	})
 })

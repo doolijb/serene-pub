@@ -9,19 +9,19 @@
 	Responsive by construction rather than by breakpoint: the grid is
 	`auto-fill / minmax`, so the same component fills a 320px sidebar, an
 	expanded panel and a mobile sheet without a single media query. See
-	PersonasSidebar's matching grid for why the codebase settled on this over
+	CharactersSidebar's matching grid for why the codebase settled on this over
 	named container breakpoints — a panel's pixel width does not track the
 	viewport's, and a capped column count leaves oversized cards on a 4K
 	fullscreen panel.
 -->
 <script lang="ts">
-	import { onMount } from "svelte"
 	import { SvelteMap } from "svelte/reactivity"
 	import * as Icons from "@lucide/svelte"
 	import { Dialog, Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { fade } from "svelte/transition"
 	import { flip } from "svelte/animate"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import PanelToolbar from "$lib/client/components/panels/PanelToolbar.svelte"
 	import Select from "$lib/client/components/inputs/Select.svelte"
@@ -101,6 +101,30 @@
 			entityId: item.id
 		})
 	}
+
+	// Provenance. Silent on failure by design: "which run made this" is an
+	// ambient detail on a panel opened to look at pictures, and a toast for
+	// a line the reader did not ask for is noise, not honesty — the line
+	// simply does not appear.
+	const onArtifactRuns = (res: Sockets.Pipelines.ArtifactRuns.Response) => {
+		if (res.entityId == null || res.error) return
+		artifactRuns.set(res.entityId, res.runs)
+	}
+
+	/**
+	 * A STANDING interest, declared at init rather than folded into a request:
+	 * `loadRuns` asks once per file as its popover opens, so there are many
+	 * requests against the one reply event and the key has to outlive each of
+	 * them. BARE — `pipelines:artifactRuns` has no entry in `SCOPED_EVENTS`,
+	 * and the handler keys the answer by `res.entityId` as it did before.
+	 *
+	 * Declared at init scope, like every other key in this file, so it is held
+	 * before anything asks (plan ruling 3).
+	 */
+	useInterest<"pipelines:artifactRuns">(
+		"pipelines:artifactRuns",
+		onArtifactRuns
+	)
 
 	// Storage cleanup (0182). Collapsed and unpriced until asked for: the
 	// preview is a full pass over this user's variant rows, and nobody opening
@@ -213,6 +237,145 @@
 		})
 	}
 
+	const onList = (res: Sockets.Media.List.Response) => {
+		items = res.media
+		totalBytes = res.totalBytes
+		isLoading = false
+		busyId = null
+		// A regenerated thumbnail is a new row behind the same
+		// `?v=thumb` URL, so anything previously marked broken deserves
+		// another chance.
+		brokenIds = new Set()
+	}
+	const onRegen = (res: Sockets.Media.RegenerateThumbnail.Response) => {
+		busyId = null
+		toaster.success({
+			title: res.regenerated
+				? "Thumbnail regenerated"
+				: "Already at full size — the original is served"
+		})
+	}
+	const onSetFrame = (res: Sockets.Media.SetFrame.Response) => {
+		// Re-listed rather than patched in place: the thumbnail row is gone
+		// and `storedBytes` with it, and `refresh()` keeps whatever sort and
+		// filter this panel is showing.
+		toaster.success({
+			title: res.media.frame ? "Crop saved" : "Crop reset"
+		})
+		refresh()
+	}
+	const onDelete = (res: Sockets.Media.Delete.Response) =>
+		toaster.success({
+			title: "Image deleted",
+			// The server's own count, not the one the dialog showed — it
+			// re-counts, so this is what actually happened.
+			description: res.messageRefs
+				? `${res.messageRefs} ${res.messageRefs === 1 ? "message" : "messages"} now show a broken image.`
+				: undefined
+		})
+	const onCleanup = (res: Sockets.Media.CleanupPreview.Response) => {
+		cleanup = res
+		cleanupBusy = false
+	}
+	const onCullDerived = (res: Sockets.Media.CullDerived.Response) => {
+		cleanupBusy = false
+		toaster.success({
+			title: res.variants
+				? `Freed ${formatBytes(res.bytes)} across ${res.variants} ${res.variants === 1 ? "copy" : "copies"}`
+				: "Nothing to remove"
+		})
+		socket.emit("media:cleanupPreview", {})
+	}
+	const onCullOriginals = (res: Sockets.Media.CullOriginals.Response) => {
+		cleanupBusy = false
+		toaster.success({
+			title: res.files
+				? `Freed ${formatBytes(res.freedBytes)} from ${res.files} ${res.files === 1 ? "file" : "files"}`
+				: "No originals could be removed safely",
+			// The net, not the gross: reporting only what was freed while
+			// bytes went straight back on disk deriving the fallbacks is
+			// the number an admin would later call a lie.
+			description: res.addedBytes
+				? `${formatBytes(res.addedBytes)} written to derive the copies left behind.`
+				: undefined
+		})
+		socket.emit("media:cleanupPreview", {})
+	}
+	const onCachePolicy = (res: Sockets.Media.SetCachePolicy.Response) => {
+		if (cleanup)
+			cleanup = {
+				...cleanup,
+				derivedCacheEnabled: res.derivedCacheEnabled
+			}
+		toaster.success({
+			title: res.derivedCacheEnabled
+				? "Derived forms will be kept on disk"
+				: "Derived forms will be re-made on every request"
+		})
+	}
+	const onError = (e: any) => {
+		cleanupBusy = false
+		toaster.error({ title: e?.error ?? "Something went wrong" })
+	}
+
+	/**
+	 * Every `media:` event this panel renders, all BARE — no `media:` event is
+	 * in `SCOPED_EVENTS`, and this is the whole of one user's library rather
+	 * than one entity's pictures — and all STANDING, because every write here
+	 * answers through a fresh `media:list` or `media:cleanupPreview`, so a
+	 * panel that can delete, crop and cull has to hold those keys for as long
+	 * as it is open.
+	 *
+	 * Declared at init scope, ABOVE the effect that calls `refresh()`, never
+	 * inside an `onMount`: Svelte runs `onMount` as a user effect in creation
+	 * order, so a key declared there lets the first `media:list` request go
+	 * out before the key exists — behind the effect that asks for it. A gated
+	 * request must be preceded by the interest its reply needs (plan ruling
+	 * 3), and the typed `emit` can only flush a sync for a key already held.
+	 *
+	 * The nine `:error` events are typed members of `SocketEventMap`, so the
+	 * `as any` casts the old listeners carried were never needed. Errors are
+	 * not gated either way (plan ruling 2) — the registry is simply the only
+	 * listener path now, and it is what releases them: a bare
+	 * `socket.off(event)` removed the FIRST listener for that event, usually
+	 * Layout's, and that caused two real bugs here.
+	 */
+	useInterest<"media:list">("media:list", onList)
+	useInterest<"media:regenerateThumbnail">(
+		"media:regenerateThumbnail",
+		onRegen
+	)
+	useInterest<"media:setFrame">("media:setFrame", onSetFrame)
+	useInterest<"media:delete">("media:delete", onDelete)
+	useInterest<"media:cleanupPreview">("media:cleanupPreview", onCleanup)
+	useInterest<"media:cullDerived">("media:cullDerived", onCullDerived)
+	useInterest<"media:cullOriginals">("media:cullOriginals", onCullOriginals)
+	useInterest<"media:setCachePolicy">("media:setCachePolicy", onCachePolicy)
+	useInterest<"media:list:error">("media:list:error", onError)
+	useInterest<"media:regenerateThumbnail:error">(
+		"media:regenerateThumbnail:error",
+		onError
+	)
+	useInterest<"media:setFrame:error">("media:setFrame:error", onError)
+	useInterest<"media:delete:error">("media:delete:error", onError)
+	useInterest<"media:setVisibility:error">(
+		"media:setVisibility:error",
+		onError
+	)
+	useInterest<"media:cleanupPreview:error">(
+		"media:cleanupPreview:error",
+		onError
+	)
+	useInterest<"media:cullDerived:error">("media:cullDerived:error", onError)
+	useInterest<"media:cullOriginals:error">(
+		"media:cullOriginals:error",
+		onError
+	)
+	useInterest<"media:setCachePolicy:error">(
+		"media:setCachePolicy:error",
+		onError
+	)
+
 	// Re-query the server whenever a server-side control changes. Search is
 	// deliberately absent from this list — see `filtered`.
 	$effect(() => {
@@ -318,143 +481,6 @@
 		pendingDeleteId = null
 		ackMessageRefs = false
 	}
-
-	onMount(() => {
-		const onList = (res: Sockets.Media.List.Response) => {
-			items = res.media
-			totalBytes = res.totalBytes
-			isLoading = false
-			busyId = null
-			// A regenerated thumbnail is a new row behind the same
-			// `?v=thumb` URL, so anything previously marked broken deserves
-			// another chance.
-			brokenIds = new Set()
-		}
-		const onRegen = (res: Sockets.Media.RegenerateThumbnail.Response) => {
-			busyId = null
-			toaster.success({
-				title: res.regenerated
-					? "Thumbnail regenerated"
-					: "Already at full size — the original is served"
-			})
-		}
-		const onSetFrame = (res: Sockets.Media.SetFrame.Response) => {
-			// Re-listed rather than patched in place: the thumbnail row is gone
-			// and `storedBytes` with it, and `refresh()` keeps whatever sort and
-			// filter this panel is showing.
-			toaster.success({
-				title: res.media.frame ? "Crop saved" : "Crop reset"
-			})
-			refresh()
-		}
-		const onDelete = (res: Sockets.Media.Delete.Response) =>
-			toaster.success({
-				title: "Image deleted",
-				// The server's own count, not the one the dialog showed — it
-				// re-counts, so this is what actually happened.
-				description: res.messageRefs
-					? `${res.messageRefs} ${res.messageRefs === 1 ? "message" : "messages"} now show a broken image.`
-					: undefined
-			})
-		const onCleanup = (res: Sockets.Media.CleanupPreview.Response) => {
-			cleanup = res
-			cleanupBusy = false
-		}
-		const onCullDerived = (res: Sockets.Media.CullDerived.Response) => {
-			cleanupBusy = false
-			toaster.success({
-				title: res.variants
-					? `Freed ${formatBytes(res.bytes)} across ${res.variants} ${res.variants === 1 ? "copy" : "copies"}`
-					: "Nothing to remove"
-			})
-			socket.emit("media:cleanupPreview", {})
-		}
-		const onCullOriginals = (res: Sockets.Media.CullOriginals.Response) => {
-			cleanupBusy = false
-			toaster.success({
-				title: res.files
-					? `Freed ${formatBytes(res.freedBytes)} from ${res.files} ${res.files === 1 ? "file" : "files"}`
-					: "No originals could be removed safely",
-				// The net, not the gross: reporting only what was freed while
-				// bytes went straight back on disk deriving the fallbacks is
-				// the number an admin would later call a lie.
-				description: res.addedBytes
-					? `${formatBytes(res.addedBytes)} written to derive the copies left behind.`
-					: undefined
-			})
-			socket.emit("media:cleanupPreview", {})
-		}
-		const onCachePolicy = (res: Sockets.Media.SetCachePolicy.Response) => {
-			if (cleanup)
-				cleanup = {
-					...cleanup,
-					derivedCacheEnabled: res.derivedCacheEnabled
-				}
-			toaster.success({
-				title: res.derivedCacheEnabled
-					? "Derived forms will be kept on disk"
-					: "Derived forms will be re-made on every request"
-			})
-		}
-		const onError = (e: any) => {
-			cleanupBusy = false
-			toaster.error({ title: e?.error ?? "Something went wrong" })
-		}
-
-		// Provenance. Silent on failure by design: "which run made this" is an
-		// ambient detail on a panel opened to look at pictures, and a toast for
-		// a line the reader did not ask for is noise, not honesty — the line
-		// simply does not appear.
-		const onArtifactRuns = (
-			res: Sockets.Pipelines.ArtifactRuns.Response
-		) => {
-			if (res.entityId == null || res.error) return
-			artifactRuns.set(res.entityId, res.runs)
-		}
-
-		socket.on("media:list", onList)
-		socket.on("pipelines:artifactRuns", onArtifactRuns)
-		socket.on("media:regenerateThumbnail", onRegen)
-		socket.on("media:setFrame", onSetFrame)
-		socket.on("media:delete", onDelete)
-		socket.on("media:cleanupPreview", onCleanup)
-		socket.on("media:cullDerived", onCullDerived)
-		socket.on("media:cullOriginals", onCullOriginals)
-		socket.on("media:setCachePolicy", onCachePolicy)
-		socket.on("media:list:error" as any, onError)
-		socket.on("media:regenerateThumbnail:error" as any, onError)
-		socket.on("media:setFrame:error" as any, onError)
-		socket.on("media:delete:error" as any, onError)
-		socket.on("media:setVisibility:error" as any, onError)
-		socket.on("media:cleanupPreview:error" as any, onError)
-		socket.on("media:cullDerived:error" as any, onError)
-		socket.on("media:cullOriginals:error" as any, onError)
-		socket.on("media:setCachePolicy:error" as any, onError)
-
-		// Every teardown names its listener. A bare `socket.off(event)` removes
-		// the FIRST registered listener for that event — usually Layout's — and
-		// that has caused two real bugs in this codebase.
-		return () => {
-			socket.off("media:list", onList)
-			socket.off("pipelines:artifactRuns", onArtifactRuns)
-			socket.off("media:regenerateThumbnail", onRegen)
-			socket.off("media:setFrame", onSetFrame)
-			socket.off("media:delete", onDelete)
-			socket.off("media:cleanupPreview", onCleanup)
-			socket.off("media:cullDerived", onCullDerived)
-			socket.off("media:cullOriginals", onCullOriginals)
-			socket.off("media:setCachePolicy", onCachePolicy)
-			socket.off("media:list:error" as any, onError)
-			socket.off("media:regenerateThumbnail:error" as any, onError)
-			socket.off("media:setFrame:error" as any, onError)
-			socket.off("media:delete:error" as any, onError)
-			socket.off("media:setVisibility:error" as any, onError)
-			socket.off("media:cleanupPreview:error" as any, onError)
-			socket.off("media:cullDerived:error" as any, onError)
-			socket.off("media:cullOriginals:error" as any, onError)
-			socket.off("media:setCachePolicy:error" as any, onError)
-		}
-	})
 </script>
 
 {#snippet itemMenu(item: Item)}
@@ -626,9 +652,12 @@
 		</div>
 	</PanelToolbar>
 
-	<!-- max-w caps only bind once there is room to spare: in a 320px sidebar
-	     and on mobile the controls still share the row via flex-1, but in a
-	     fullscreen panel they stop stretching to 700px each.
+	<!-- max-w caps only bind once there is room to spare, asked of the VIEW's
+	     own container rather than the window: on a phone the controls still
+	     share the row via flex-1, but in the dock and in a fullscreen panel
+	     they stop stretching to 700px each. A viewport `sm:` said nothing
+	     about this panel's width — a desktop window is past 640px whether the
+	     panel has 400px or 1300px.
 
 	     `class` lands on Select's own wrapper (it already carries
 	     `flex flex-col gap-1`), so the flex-item sizing that used to sit on the
@@ -638,7 +667,7 @@
 		<Select
 			label="Sort media"
 			labelHidden
-			class="min-w-0 flex-1 basis-36 sm:max-w-[220px]"
+			class="min-w-0 flex-1 basis-36 @sm/view:max-w-[220px]"
 			value={sort}
 			onValueChange={(v) => (sort = v as typeof sort)}
 			options={[
@@ -652,7 +681,7 @@
 		<Select
 			label="Filter by type"
 			labelHidden
-			class="min-w-0 flex-1 basis-32 sm:max-w-[200px]"
+			class="min-w-0 flex-1 basis-32 @sm/view:max-w-[200px]"
 			value={kind}
 			onValueChange={(v) => (kind = v as typeof kind)}
 			options={[

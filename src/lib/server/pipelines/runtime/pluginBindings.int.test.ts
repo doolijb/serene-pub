@@ -2,14 +2,14 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest"
 import { createTestDb, createTestUser, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
-import { pluginNodeBindings, nodeTypesOf } from "./pluginBindings"
+import { pluginNodeBindings, nodeDefinitionsOf } from "./pluginBindings"
 import { RuntimeManager } from "$lib/server/plugins/RuntimeManager"
 import {
 	spec,
 	compile,
 	run,
 	pin,
-	describeTaskType
+	describeTaskDefinition
 } from "@serene-pub/sdk"
 import * as C from "@serene-pub/contracts"
 
@@ -24,7 +24,7 @@ import * as C from "@serene-pub/contracts"
 // The plugin's own type, declared locally the way its authoring package
 // would — registration is what lets `compile` validate the spec against it.
 const lookup = pin(
-	describeTaskType({
+	describeTaskDefinition({
 		id: "acme.tools:task/lookup@1",
 		i18n: { name: { en: "Acme lookup" } },
 		timeoutMs: 5000,
@@ -66,13 +66,13 @@ beforeAll(async () => {
 			bundleHash: "h-node",
 			enabled: true,
 			manifest: {
-				nodeTypes: { "acme.tools:task/lookup@1": "lookup" }
+				nodeDefinitions: { "acme.tools:task/lookup@1": "lookup" }
 			}
 		})
 		.returning()
 
-	await db.insert(schema.pipelineTypeRegistry).values({
-		typeId: "acme.tools:task/lookup",
+	await db.insert(schema.pipelineDefinitionRegistry).values({
+		definitionId: "acme.tools:task/lookup",
 		version: 1,
 		kind: "task",
 		ownerPluginId: plugin.id,
@@ -101,8 +101,7 @@ afterAll(async () => {
 const doc = () =>
 	compile(
 		spec("acme.tools:spec/lookup-turn", { version: "1.0.0" })
-			.on("core:event/message-created@1")
-			.input("input", C.userMessage.v1())
+			.inlet("input", C.userMessage.v1())
 			.task("look", ($) => lookup.v1({ q: $.input.text }))
 			.build()
 	)
@@ -155,13 +154,13 @@ describe("a process-transport node runs through the executor", () => {
 	}, 30_000)
 
 	it("an unmapped or missing hook is a named err, not a mystery", async () => {
-		expect(nodeTypesOf({ nodeTypes: { a: "b", c: 7 } })).toEqual({ a: "b" })
+		expect(nodeDefinitionsOf({ nodeDefinitions: { a: "b", c: 7 } })).toEqual({ a: "b" })
 		const [plugin] = await db
 			.select()
 			.from(schema.plugins)
 			.limit(1)
-		await db.insert(schema.pipelineTypeRegistry).values({
-			typeId: "acme.tools:task/ghost",
+		await db.insert(schema.pipelineDefinitionRegistry).values({
+			definitionId: "acme.tools:task/ghost",
 			version: 1,
 			kind: "task",
 			ownerPluginId: plugin.id,

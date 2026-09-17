@@ -35,22 +35,55 @@ const displayNameSchema = z
 	.max(50, "Display name must not exceed 50 characters")
 	.trim()
 
+/**
+ * The signed-in user's own row.
+ *
+ * One read behind both `users:get` and `users:current`, split out so the
+ * cascades that refresh them — here, and in four other config families — can be
+ * handed the BUILDER rather than a handler. Both events are gated, so a theme
+ * change or an active-config switch made from a surface that shows no user
+ * profile pays for no re-read at all. Skipping the emit alone would save
+ * nothing; the query is the cost.
+ *
+ * ⚠ Columns only — no `with`. That is what keeps this payload free of the
+ * passphrase and TOTP rows, which live in their own tables (`passphrases`,
+ * `user_totp`) and are joined by relations this deliberately does not ask for.
+ */
+async function loadUserRow(userId: number) {
+	const user = await db.query.users.findFirst({
+		where: (u, { eq }) => eq(u.id, userId)
+	})
+	if (!user) throw new Error("User not found")
+	return user
+}
+
+/** `users:get`'s payload. See `loadUserRow`. */
+export async function buildUsersGet(
+	userId: number
+): Promise<Sockets.Users.Get.Response> {
+	return { user: await loadUserRow(userId) }
+}
+
+/**
+ * `users:current`'s payload — the same row under the other event name.
+ *
+ * Two builders rather than one shared alias because the gate keys on the EVENT:
+ * a call site that says which event it is refreshing is the one thing that keeps
+ * the two from being cascaded interchangeably.
+ */
+export async function buildUsersCurrent(
+	userId: number
+): Promise<Sockets.Users.Get.Response> {
+	return { user: await loadUserRow(userId) }
+}
+
 export const usersGet: Handler<
 	Sockets.Users.Get.Params,
 	Sockets.Users.Get.Response
 > = {
 	event: "users:get",
 	handler: async (socket, params, emitToUser) => {
-		const userId = socket.user!.id
-		const user = await db.query.users.findFirst({
-			where: (u, { eq }) => eq(u.id, userId)
-		})
-
-		if (!user) {
-			throw new Error("User not found")
-		}
-
-		const res: Sockets.Users.Get.Response = { user }
+		const res = await buildUsersGet(socket.user!.id)
 		emitToUser("users:get", res)
 		return res
 	}
@@ -73,17 +106,15 @@ export const usersCurrent: Handler<
 			throw new Error("Not authenticated")
 		}
 
-		const user = await db.query.users.findFirst({
-			where: (u, { eq }) => eq(u.id, userId)
-		})
-
-		if (!user) {
+		let res: Sockets.Users.Get.Response
+		try {
+			res = await buildUsersCurrent(userId)
+		} catch (error) {
 			console.error(`[usersCurrent] User with ID ${userId} not found`)
 			emitToUser("users:current:error", { error: "User not found" })
-			throw new Error("User not found")
+			throw error
 		}
 
-		const res: Sockets.Users.Get.Response = { user }
 		emitToUser("users:current", res)
 		return res
 	}
@@ -111,7 +142,9 @@ export const usersSetTheme: Handler<
 
 		const res: Sockets.Users.SetTheme.Response = {}
 		emitToUser("users:setTheme", res)
-		await usersGet.handler(socket, {}, emitToUser)
+		// Lazy: only a surface showing the user row wants it re-read. See
+		// `loadUserRow`.
+		await emitToUser("users:get", () => buildUsersGet(userId))
 		return res
 	}
 }
@@ -240,21 +273,33 @@ export const usersCurrentHasPassphrase: Handler<
 }
 
 // Legacy functions for compatibility
+/**
+ * Push the caller's own user row — the cascade five other config families use
+ * after a write that changes what the row says (active configs, theme).
+ *
+ * ⚠ This emitted RAW until 2026-09-15: `socket.server.to("user_" + userId)`,
+ * straight past `emitToUser` and therefore past both `redactConnections` and the
+ * interest gate. It was the only emit in `sockets/` that did. It now goes the
+ * way everything else goes, in the lazy form, so the read is paid only for a
+ * client that is showing the row.
+ *
+ * Recipients are unchanged: `emitToUser` addresses the same `user_<id>` room,
+ * narrowing to the interested SOCKETS in it once `users:current` is gated.
+ *
+ * One behaviour change, deliberate: a missing row throws inside the thunk, where
+ * `evaluate` logs it. Raised from here instead, it turns a caller's finished
+ * write into an `{event}:error`. The row belongs to the authenticated socket and
+ * deleting a user force-disconnects their sockets, so the case needs the account
+ * to vanish mid-request — and a successful write reported as a failure is not
+ * the better answer to that.
+ */
 export async function user(
 	socket: any,
 	message: {},
 	emitToUser: (event: string, data: any) => void
 ) {
 	const userId = socket.user!.id
-	const user = await db.query.users.findFirst({
-		where: (u, { eq }) => eq(u.id, userId)
-	})
-
-	if (!user) {
-		throw new Error("User not found")
-	}
-
-	socket.server.to("user_" + userId).emit("users:current", { user })
+	await emitToUser("users:current", () => buildUsersCurrent(userId))
 }
 
 export async function setTheme(
@@ -314,8 +359,9 @@ export const usersCurrentUpdateDisplayName: Handler<
 			}
 
 			emitToUser("users:current:updateDisplayName", res)
-			// Refresh current user data
-			await usersCurrent.handler(socket, {}, emitToUser)
+			// Refresh current user data — lazily, for the reason given on
+			// `loadUserRow`.
+			await emitToUser("users:current", () => buildUsersCurrent(userId))
 			return res
 		} catch (error: any) {
 			console.error(

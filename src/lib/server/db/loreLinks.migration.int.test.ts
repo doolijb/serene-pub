@@ -123,7 +123,7 @@ beforeAll(async () => {
 	)
 	relationshipId = rel.id
 
-	// The entry type's FK points at `pipeline_type_registry`, which the boot
+	// The entry type's FK points at `pipeline_type_registry` (its name at this journal cut, before 0134), which the boot
 	// projection fills and the migrations do not — so this test, which runs the
 	// migrator alone, declares the one type it writes rows of.
 	await db.execute(

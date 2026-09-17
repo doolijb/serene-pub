@@ -15,7 +15,7 @@
  * ## Where each half comes from
  *
  *  - **`ctx`** is the SDK's own per-kind injection surface — `TaskCtx`,
- *    `QueryCtx`, `ProviderCtx`, `ConsumerCtx`, exactly as `executor.ts` builds
+ *    `QueryCtx`, `OracleCtx`, `OutletCtx`, exactly as `executor.ts` builds
  *    them. Nothing here re-declares one; `CoreQueryCtx` below narrows a single
  *    member of `QueryCtx` and inherits the rest, and the reason is written at
  *    it.
@@ -32,7 +32,7 @@
  * value `any`. Two things were lost to that, and both are back:
  *
  *  1. **Parameters were never checked at all.** A `params` slot's schema keys
- *     had nowhere to come from, because `describeQueryType` erased its slots
+ *     had nowhere to come from, because `describeQueryDefinition` erased its slots
  *     into `Record<string, SlotDecl>` — so `input.params.anything` was an `any`
  *     lookup, which is exactly how `topK` and `limit` came to be read at a
  *     spelling nothing supplies. The SDK's `describe*` now captures its slots
@@ -50,9 +50,9 @@
  */
 
 import type {
-	ConsumerCtx,
+	OutletCtx,
 	InputOf,
-	ProviderCtx,
+	OracleCtx,
 	QueryCtx,
 	SharedInput as ContractIntersection,
 	TaskCtx
@@ -89,7 +89,7 @@ import type {
  * be declared, and declaring it is a public-contract change with a content-hash
  * and re-projection cost, so it is reported rather than made here.
  *
- * ## ⚠ The population is currently EMPTY, and that is the point
+ * ## ⚠ The population is TWO, and both are supplied by code rather than a spec
  *
  * There were seven, across five handlers, and D-I declared all seven: `decisions`
  * and `messages` on `core:task/assemble@2`, the two relationship reads and the
@@ -97,11 +97,17 @@ import type {
  * `loreType` on the three summarize Providers. Each one is now a real in-port,
  * so each read is typed by the contract and no longer needs naming here.
  *
- * The alias is kept rather than deleted. It is the word the next such finding is
- * written under, and an empty population is a *result* — it says every key a
- * handler is really given is now something the contract declares — where a
- * missing alias would only say nobody had looked. `grep -c 'Supplied<'` reading
- * zero is the fact; the day it reads one, that one is a finding.
+ * Two remain, and both name a supplier this file can see and no spec can: the
+ * `tools` port `generateBinding` reads, declared on `generate-with-tools@1` and
+ * not on `generate-text@1` (the handler is typed against the intersection); and
+ * `fields` on `core:task/build-template-context@1`, which the four adventure
+ * wrappers hand to the shared builder off their OWN declared `fields` ports.
+ * Each pin's `reads<…>()` declaration names the port only where its definition
+ * declares it, so the guard in `boot/declaredReads.ts` sees both as read where
+ * they are declared and neither as a phantom.
+ *
+ * The alias is kept as the word the next such finding is written under; `grep
+ * -c 'Supplied<'` is the count, and a third is a finding.
  *
  * @typeParam Why A sentence naming what supplies the key. Required for the same
  * reason `Unsupplied`'s is — see there.
@@ -111,12 +117,15 @@ export type Supplied<K extends string, Why extends string> = K
 /**
  * A key **nothing supplies today** — a fallback branch that cannot fire.
  *
- * Kept rather than deleted, and the reason is the one that governs every dead
- * control in this subsystem: node config is stored JSON off a `pipeline_configs`
- * row, so a spec version or a hand-edited config from an earlier release can
- * still carry the key. Removing the read would change what that install
- * retrieves, silently, in a lane whose whole contract is that behaviour does not
- * move. Reported instead, with the site named.
+ * ## ⚠ The population is ZERO (R-12, 2026-09-16)
+ *
+ * Sixteen reads carried this word and every one was swept — see the note at
+ * the top of `bindings.ts` for the list. The archaeology the earlier text
+ * asked for was done: no spec, no migration and no host write ever formed any
+ * of those keys, so each `??` was a branch that could not fire, and deleting
+ * it changes what no install retrieves. The alias stays as the word the next
+ * such read is written under, should one be needed; `grep -c 'Unsupplied<'`
+ * reading zero is the fact.
  *
  * @typeParam Why Why this exemption exists, written at the site.
  *
@@ -164,7 +173,7 @@ export type NodeInput<
 		: { params?: Partial<Record<ExtraParams, any>> })
 
 /**
- * One handler, several node types.
+ * One handler, several node definitions.
  *
  * Its input is the **intersection** of what those contracts supply: it may read
  * only what *every* one of them declares. That is what makes binding one
@@ -240,4 +249,4 @@ export interface CoreQueryCtx extends Omit<QueryCtx, "read"> {
 	read(table: HostTable, query?: unknown): Promise<any>
 }
 
-export type { ConsumerCtx, ProviderCtx, TaskCtx }
+export type { OutletCtx, OracleCtx, TaskCtx }

@@ -1,3 +1,36 @@
+/**
+ * The typed socket facade — every event name the client may emit or listen
+ * for, with its params and its response.
+ *
+ * ## Listening: the interest registry, and only it
+ *
+ * `src/lib/client/sockets/interest.svelte.ts` is the one listener path. It
+ * keeps ONE raw listener per event however many views want it, hands each
+ * caller a release, and tells the server which events are actually wanted
+ * (**interest sync**) so a reply helper can skip the query behind an event
+ * nobody is listening to. This facade therefore has no `on`/`off`/`once`:
+ * phase 4 of the socket-interest plan retires them now that the last consumer
+ * has moved, and with them the `off(event)` footgun that removed every
+ * listener for an event across the whole app. `emit` stays — a
+ * fire-and-forget command has no listener to declare.
+ *
+ * The one thing that is NOT interest is a catch-all: `onAny` names no event,
+ * so it can declare nothing, and Layout's global error/success toasts read the
+ * raw socket (`socketInstance`) directly rather than going through here.
+ *
+ * ## Emitting: the interest sync goes first
+ *
+ * `emit` flushes any pending interest sync before the packet leaves (plan
+ * ruling 3), so a view may declare interest and ask for the data in the same
+ * flush without the request overtaking the key its own reply needs. No call
+ * site has to remember the ordering.
+ *
+ * Dependency direction: this module imports a VALUE from the registry, and the
+ * registry imports only a TYPE (`SocketEventMap`) back — erased at build, so
+ * there is no runtime cycle. Keep it that way: nothing here may be imported
+ * into `interest.svelte.ts` as a value.
+ */
+import { flushInterestSync } from "./interest.svelte"
 import { getSocket } from "./socketInstance"
 import type {
 	ImageProfileSchemaParams,
@@ -8,6 +41,11 @@ import type {
 	ImagesGenerateResponse
 } from "$lib/shared/sockets/imageGen"
 import type { RunProgress } from "$lib/shared/sockets/progress"
+import type { InterestSyncParams } from "$lib/shared/sockets/interest"
+import type {
+	JumpSearchParams,
+	JumpSearchResponse
+} from "$lib/shared/sockets/jump"
 
 // Type mapping for socket events - this maps event names to their param/response types
 export type SocketEventMap = {
@@ -200,6 +238,20 @@ export type SocketEventMap = {
 		params: Sockets.Characters.DeleteGalleryImage.Params
 		response: Sockets.Characters.DeleteGalleryImage.Response
 	}
+	// Emitted by the gallery handlers' catch blocks; were missing from the map
+	// (two consumers cast to any). Error events are never gated.
+	"characters:listGallery:error": {
+		params: Sockets.Characters.ListGallery.Params
+		response: Sockets.ErrorResponse
+	}
+	"characters:uploadGalleryImage:error": {
+		params: Sockets.Characters.UploadGalleryImage.Params
+		response: Sockets.ErrorResponse
+	}
+	"characters:deleteGalleryImage:error": {
+		params: Sockets.Characters.DeleteGalleryImage.Params
+		response: Sockets.ErrorResponse
+	}
 	"characters:setAvatar": {
 		params: Sockets.Characters.SetAvatar.Params
 		response: Sockets.Characters.SetAvatar.Response
@@ -207,6 +259,56 @@ export type SocketEventMap = {
 	"characters:reorderGallery": {
 		params: Sockets.Characters.ReorderGallery.Params
 		response: Sockets.Characters.ReorderGallery.Response
+	}
+	"characters:setDefaultPersona": {
+		params: Sockets.Characters.SetDefaultPersona.Params
+		response: Sockets.Characters.SetDefaultPersona.Response
+	}
+	"characters:setDefaultPersona:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"characters:setFolder": {
+		params: Sockets.Characters.SetFolder.Params
+		response: Sockets.Characters.SetFolder.Response
+	}
+	"characters:setFolder:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+
+	// Character folder events — the library's groupings
+	"characterFolders:list": {
+		params: Sockets.CharacterFolders.List.Params
+		response: Sockets.CharacterFolders.List.Response
+	}
+	"characterFolders:list:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"characterFolders:create": {
+		params: Sockets.CharacterFolders.Create.Params
+		response: Sockets.CharacterFolders.Create.Response
+	}
+	"characterFolders:create:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"characterFolders:update": {
+		params: Sockets.CharacterFolders.Update.Params
+		response: Sockets.CharacterFolders.Update.Response
+	}
+	"characterFolders:update:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"characterFolders:delete": {
+		params: Sockets.CharacterFolders.Delete.Params
+		response: Sockets.CharacterFolders.Delete.Response
+	}
+	"characterFolders:delete:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
 	}
 
 	// Connection events
@@ -457,14 +559,6 @@ export type SocketEventMap = {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
 	}
-	"connections:setDefaultModel": {
-		params: Sockets.Connections.SetDefaultModel.Params
-		response: Sockets.Connections.SetDefaultModel.Response
-	}
-	"connections:setDefaultModel:error": {
-		params: Sockets.ErrorResponse
-		response: Sockets.ErrorResponse
-	}
 	"connections:deleteModel": {
 		params: Sockets.Connections.DeleteModel.Params
 		response: Sockets.Connections.DeleteModel.Response
@@ -477,111 +571,59 @@ export type SocketEventMap = {
 		params: Sockets.Connections.ImportModels.Params
 		response: Sockets.Connections.ImportModels.Response
 	}
+	// Reconcile an endpoint's rows (or every endpoint's) against what the
+	// service lists. The server also broadcasts `connections:models` per
+	// synced endpoint and `connections:list` afterwards, so the views that
+	// render those update on their own; this response is the summary.
+	"connections:syncModels": {
+		params: Sockets.Connections.SyncModels.Params
+		response: Sockets.Connections.SyncModels.Response
+	}
+	"connections:syncModels:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 	"connections:importModels:error": {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
 	}
-
-	// Persona events
-	"personas:list": {
-		params: Sockets.Personas.List.Params
-		response: Sockets.Personas.List.Response
+	// Local ONNX model files: warm, cancel, remove, add by Hub id. Admin;
+	// refused on every other endpoint type. Progress is pushed per user.
+	"connections:downloadModel": {
+		params: Sockets.Connections.DownloadModel.Params
+		response: Sockets.Connections.DownloadModel.Response
 	}
-	"personas:list:error": {
+	"connections:downloadModel:error": {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
 	}
-	"personas:get": {
-		params: Sockets.Personas.Get.Params
-		response: Sockets.Personas.Get.Response
+	"connections:cancelModelDownload": {
+		params: Sockets.Connections.CancelModelDownload.Params
+		response: Sockets.Connections.CancelModelDownload.Response
 	}
-	"personas:create": {
-		params: Sockets.Personas.Create.Params
-		response: Sockets.Personas.Create.Response
-	}
-	"personas:create:error": {
+	"connections:cancelModelDownload:error": {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
 	}
-	"personas:update": {
-		params: Sockets.Personas.Update.Params
-		response: Sockets.Personas.Update.Response
+	"connections:removeModelFiles": {
+		params: Sockets.Connections.RemoveModelFiles.Params
+		response: Sockets.Connections.RemoveModelFiles.Response
 	}
-	"personas:update:error": {
+	"connections:removeModelFiles:error": {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
 	}
-	"personas:delete": {
-		params: Sockets.Personas.Delete.Params
-		response: Sockets.Personas.Delete.Response
+	"connections:addHubModel": {
+		params: Sockets.Connections.AddHubModel.Params
+		response: Sockets.Connections.AddHubModel.Response
 	}
-	"personas:delete:error": {
+	"connections:addHubModel:error": {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
 	}
-	"personas:searchLibrary": {
-		params: Sockets.Personas.SearchLibrary.Params
-		response: Sockets.Personas.SearchLibrary.Response
-	}
-	"personas:searchLibrary:error": {
-		params: Sockets.SearchLibraryErrorResponse
-		response: Sockets.SearchLibraryErrorResponse
-	}
-	"personas:importCard": {
-		params: Sockets.Personas.ImportCard.Params
-		response: Sockets.Personas.ImportCard.Response
-	}
-	"personas:importCard:error": {
-		params: Sockets.ErrorResponse
-		response: Sockets.ErrorResponse
-	}
-	"personas:importResolve": {
-		params: Sockets.Personas.ImportResolve.Params
-		response: Sockets.Personas.ImportResolve.Response
-	}
-	"personas:importResolve:error": {
-		params: Sockets.ErrorResponse
-		response: Sockets.ErrorResponse
-	}
-	"personas:exportCard": {
-		params: Sockets.Personas.ExportCard.Params
-		response: Sockets.Personas.ExportCard.Response
-	}
-	"personas:exportCard:error": {
-		params: Sockets.ErrorResponse
-		response: Sockets.ErrorResponse
-	}
-	"personas:importFromLibrary": {
-		params: Sockets.Personas.ImportFromLibrary.Params
-		response: Sockets.Personas.ImportFromLibrary.Response
-	}
-	"personas:importFromLibrary:error": {
-		params: Sockets.ErrorResponse
-		response: Sockets.ErrorResponse
-	}
-	"personas:listGallery": {
-		params: Sockets.Personas.ListGallery.Params
-		response: Sockets.Personas.ListGallery.Response
-	}
-	"personas:uploadGalleryImage": {
-		params: Sockets.Personas.UploadGalleryImage.Params
-		response: Sockets.Personas.UploadGalleryImage.Response
-	}
-	"personas:deleteGalleryImage": {
-		params: Sockets.Personas.DeleteGalleryImage.Params
-		response: Sockets.Personas.DeleteGalleryImage.Response
-	}
-	"personas:setAvatar": {
-		params: Sockets.Personas.SetAvatar.Params
-		response: Sockets.Personas.SetAvatar.Response
-	}
-	"personas:reorderGallery": {
-		params: Sockets.Personas.ReorderGallery.Params
-		response: Sockets.Personas.ReorderGallery.Response
-	}
-	"personas:setDefault": {
-		params: Sockets.Personas.SetDefault.Params
-		response: Sockets.Personas.SetDefault.Response
+	"connections:modelDownloadProgress": {
+		params: Sockets.Connections.ModelDownloadProgress.Params
+		response: Sockets.Connections.ModelDownloadProgress.Response
 	}
 
 	// Card source events
@@ -638,6 +680,11 @@ export type SocketEventMap = {
 	"sessions:userTyping": {
 		params: Sockets.Sessions.UserTyping.Params
 		response: Sockets.Sessions.UserTyping.Response
+	}
+	// Server-pushed only: a run's status changed, or ended (R-19).
+	"sessions:runStatus": {
+		params: Sockets.Sessions.RunStatus.Params
+		response: Sockets.Sessions.RunStatus.Response
 	}
 	"sessions:get": {
 		params: Sockets.Sessions.Get.Params
@@ -762,6 +809,14 @@ export type SocketEventMap = {
 		params: Sockets.Sessions.Triggers.Params
 		response: Sockets.Sessions.Triggers.Response
 	}
+	"sessions:actions": {
+		params: Sockets.Sessions.Actions.Params
+		response: Sockets.Sessions.Actions.Response
+	}
+	"sessions:actionsSeen": {
+		params: Sockets.Sessions.ActionsSeen.Params
+		response: Sockets.Sessions.ActionsSeen.Response
+	}
 	"sessions:triggerFunction": {
 		params: Sockets.Sessions.TriggerFunction.Params
 		response: Sockets.Sessions.TriggerFunction.Response
@@ -849,6 +904,10 @@ export type SocketEventMap = {
 	"sessions:toggleSessionCharacterActive": {
 		params: Sockets.Sessions.ToggleSessionCharacterActive.Params
 		response: Sockets.Sessions.ToggleSessionCharacterActive.Response
+	}
+	"sessions:setEnvoySeat": {
+		params: Sockets.Sessions.SetEnvoySeat.Params
+		response: Sockets.Sessions.SetEnvoySeat.Response
 	}
 	"sessions:updateSessionCharacterVisibility": {
 		params: Sockets.Sessions.UpdateSessionCharacterVisibility.Params
@@ -1195,8 +1254,8 @@ export type SocketEventMap = {
 		response: Sockets.SamplingConfigs.Create.Response
 	}
 	// Both of these have been EMITTED by the server for a while (see
-	// samplingConfigs.ts) with nothing able to listen: `TypedSocket.on` is keyed
-	// on this map, so `socket.on("samplingConfigs:create:error", …)` was a type
+	// samplingConfigs.ts) with nothing able to listen: an interest key is keyed
+	// on this map, so declaring `"samplingConfigs:create:error"` was a type
 	// error and every one of these errors could only reach the generic toast.
 	// Registered so the sidebar can render a name collision inline, where the
 	// name that collided is. No new namespace: `ErrorResponse` is exactly what
@@ -2198,11 +2257,11 @@ export type SocketEventMap = {
 		params: Sockets.Ollama.RecommendedModels.Params
 		response: Sockets.Ollama.RecommendedModels.Response
 	}
-	// Raw legacy progress event (no colon-namespacing) - emitted directly via
-	// emitToUser("ollamaPullProgress", ...) in src/lib/server/sockets/ollama.ts
-	// rather than through the Handler/register pattern, so it never got a
-	// "ollama:" prefix like the rest of this namespace.
-	ollamaPullProgress: {
+	// The pull's progress push — emitted from inside `ollama:pullModel`'s
+	// stream loop (src/lib/server/sockets/ollama.ts), never requested on its
+	// own. Spelled inside the family so the `ollama:` restricted interest
+	// prefix covers it like every other admin-only push.
+	"ollama:pullProgress": {
 		params: never
 		response: Sockets.Ollama.PullProgress.Response
 	}
@@ -2280,6 +2339,10 @@ export type SocketEventMap = {
 		params: Sockets.Ner.Status.Params
 		response: Sockets.Ner.Status.Response
 	}
+	"ner:unloadModel": {
+		params: Sockets.Ner.UnloadModel.Params
+		response: Sockets.Ner.UnloadModel.Response
+	}
 	"vectorization:listModels": {
 		params: Sockets.Vectorization.ListModels.Params
 		response: Sockets.Vectorization.ListModels.Response
@@ -2299,6 +2362,14 @@ export type SocketEventMap = {
 	"vectorization:stopQueue": {
 		params: Sockets.Vectorization.StopQueue.Params
 		response: Sockets.Vectorization.StopQueue.Response
+	}
+	"vectorization:status": {
+		params: Sockets.Vectorization.Status.Params
+		response: Sockets.Vectorization.Status.Response
+	}
+	"vectorization:unloadModel": {
+		params: Sockets.Vectorization.UnloadModel.Params
+		response: Sockets.Vectorization.UnloadModel.Response
 	}
 	"vectorization:progress": {
 		params: Sockets.Vectorization.Progress.Params
@@ -2378,10 +2449,6 @@ export type SocketEventMap = {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
 	}
-	"userSettings:updateEasyPersonaCreation": {
-		params: Sockets.UserSettings.UpdateEasyPersonaCreation.Params
-		response: Sockets.UserSettings.UpdateEasyPersonaCreation.Response
-	}
 	"userSettings:updateEasyCharacterCreation": {
 		params: Sockets.UserSettings.UpdateEasyCharacterCreation.Params
 		response: Sockets.UserSettings.UpdateEasyCharacterCreation.Response
@@ -2423,6 +2490,11 @@ export type SocketEventMap = {
 	"lorebooks:create": {
 		params: Sockets.Lorebooks.Create.Params
 		response: Sockets.Lorebooks.Create.Response
+	}
+	// Synthesised by `register()` on a throw — see `entries:update:error`.
+	"lorebooks:create:error": {
+		params: never
+		response: { error?: string }
 	}
 	"lorebooks:update": {
 		params: Sockets.Lorebooks.Update.Params
@@ -2539,6 +2611,11 @@ export type SocketEventMap = {
 		params: Sockets.Entries.Create.Params
 		response: Sockets.Entries.Create.Response
 	}
+	// Synthesised by `register()` on a throw — see `entries:update:error`.
+	"entries:create:error": {
+		params: never
+		response: { error?: string }
+	}
 	"entries:update": {
 		params: Sockets.Entries.Update.Params
 		response: Sockets.Entries.Update.Response
@@ -2610,6 +2687,11 @@ export type SocketEventMap = {
 	"scenes:create": {
 		params: Sockets.Scenes.Create.Params
 		response: Sockets.Scenes.Create.Response
+	}
+	// Synthesised by `register()` on a throw — see `entries:update:error`.
+	"scenes:create:error": {
+		params: never
+		response: { error?: string }
 	}
 	"scenes:update": {
 		params: Sockets.Scenes.Update.Params
@@ -2759,6 +2841,18 @@ export type SocketEventMap = {
 		params: Sockets.Tags.Delete.Params
 		response: Sockets.Tags.Delete.Response
 	}
+	"tags:create:error": {
+		params: Sockets.Tags.Create.Params
+		response: Sockets.ErrorResponse
+	}
+	"tags:update:error": {
+		params: Sockets.Tags.Update.Params
+		response: Sockets.ErrorResponse
+	}
+	"tags:delete:error": {
+		params: Sockets.Tags.Delete.Params
+		response: Sockets.ErrorResponse
+	}
 	"tags:getRelatedData": {
 		params: Sockets.Tags.GetRelatedData.Params
 		response: Sockets.Tags.GetRelatedData.Response
@@ -2786,8 +2880,8 @@ export type SocketEventMap = {
 		response: Sockets.NarrativeGraph.Build.ErrorResponse
 	}
 	"narrativeGraph:buildLog": {
-		params: Sockets.NarrativeGraph.TraceEntry
-		response: Sockets.NarrativeGraph.TraceEntry
+		params: Sockets.NarrativeGraph.BuildLogEntry
+		response: Sockets.NarrativeGraph.BuildLogEntry
 	}
 	"narrativeGraph:applyProposal": {
 		params: Sockets.NarrativeGraph.ApplyProposal.Params
@@ -3110,6 +3204,30 @@ export type SocketEventMap = {
 		response: Sockets.State.Changed.Response
 	}
 
+	// Jump — the shell's universal search overlay. Request and reply share the
+	// event name, the app's request/reply convention; the reply echoes its
+	// `query` so a client can recognise the answer to its own last keystroke.
+	// Types live in shared/sockets/jump rather than the Sockets namespace
+	// (mid-refactor), imported at the top of the file, like images: above.
+	"jump:search": {
+		params: JumpSearchParams
+		response: JumpSearchResponse
+	}
+	"jump:search:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+
+	/**
+	 * The client's full interest key list, replacing the server's per-socket
+	 * interest set. Sent by the interest registry only — eagerly on change,
+	 * every 30s, and on every connect. Nothing answers it, hence `never`.
+	 */
+	"interest:sync": {
+		params: InterestSyncParams
+		response: never
+	}
+
 	// Global error/success events
 	error: {
 		params: never
@@ -3129,39 +3247,9 @@ export interface TypedSocket {
 		params: SocketEventMap[K]["params"]
 	): void
 
-	// Type-safe on method for listeners
-	on<K extends keyof SocketEventMap>(
-		event: K,
-		listener: (data: SocketEventMap[K]["response"]) => void
-	): void
-
-	/**
-	 * Type-safe off method.
-	 *
-	 * WARNING: omitting `listener` removes EVERY listener for `event` across
-	 * the whole app, not just the caller's — socket.io treats `off(event,
-	 * undefined)` as "remove all". A component tearing itself down that way
-	 * silently kills sibling components' listeners for the rest of the
-	 * session. `listener` is therefore required — always pass the same
-	 * function reference you gave `on`.
-	 */
-	off<K extends keyof SocketEventMap>(
-		event: K,
-		listener: (data: SocketEventMap[K]["response"]) => void
-	): void
-
-	// Type-safe once method - listener fires at most once, then auto-removes
-	once<K extends keyof SocketEventMap>(
-		event: K,
-		listener: (data: SocketEventMap[K]["response"]) => void
-	): void
-
-	// Generic catch-all listener - Socket.IO does NOT support glob/wildcard
-	// event names (eg. "**:error") without a plugin, so this is the only real
-	// mechanism for observing every event (used eg. to toast on any unhandled
-	// "*:error" event). Fires for every event this socket receives.
-	onAny(listener: (event: string, ...args: any[]) => void): void
-	offAny(listener?: (event: string, ...args: any[]) => void): void
+	// There is no on/off/once here, and no catch-all: listening is the interest
+	// registry's job (see the header). A view that wants an event declares it;
+	// a one-shot request uses `requestWithInterest`.
 
 	// Original socket methods for backward compatibility
 	id: string
@@ -3186,38 +3274,12 @@ export function createTypedSocket(): TypedSocket {
 			event: K,
 			params: SocketEventMap[K]["params"]
 		) => {
+			// Ruling 3, guaranteed here rather than at ~570 call sites: a pending
+			// interest sync goes out on this same socket FIRST, so the handler that
+			// answers this request already holds the reply's key. A no-op — one
+			// boolean read — when nothing is pending.
+			flushInterestSync()
 			socket.emit(event as string, params)
-		},
-
-		on: (<K extends keyof SocketEventMap>(
-			event: K,
-			listener: (data: SocketEventMap[K]["response"]) => void
-		) => {
-			socket.on(event as string, listener)
-		}) as any,
-
-		off: (<K extends keyof SocketEventMap>(
-			event: K,
-			listener: (data: SocketEventMap[K]["response"]) => void
-		) => {
-			if (socket.off) {
-				socket.off(event as string, listener)
-			}
-		}) as any,
-
-		once: (<K extends keyof SocketEventMap>(
-			event: K,
-			listener: (data: SocketEventMap[K]["response"]) => void
-		) => {
-			socket.once(event as string, listener)
-		}) as any,
-
-		onAny: (listener: (event: string, ...args: any[]) => void) => {
-			if (socket.onAny) socket.onAny(listener)
-		},
-
-		offAny: (listener?: (event: string, ...args: any[]) => void) => {
-			if (socket.offAny) socket.offAny(listener)
 		},
 
 		// Pass through original socket properties with safe access
@@ -3242,4 +3304,19 @@ export function createTypedSocket(): TypedSocket {
 // Convenience hook for getting a typed socket
 export function useTypedSocket(): TypedSocket {
 	return createTypedSocket()
+}
+
+/**
+ * The typed socket if one exists yet, else `null`.
+ *
+ * `createTypedSocket` throws when the socket is not up — the right answer for a
+ * component that cannot run without one, and the wrong one for a module-scoped
+ * store that may be read during SSR or in the tick before the socket connects.
+ * A store answering that for itself has to import `socketInstance`, the raw
+ * socket, into a file whose listeners belong to the interest registry. One
+ * helper here, where reading the live socket is this directory's job, keeps the
+ * instance module unimported outside `sockets/`.
+ */
+export function typedSocketOrNull(): TypedSocket | null {
+	return getSocket() ? createTypedSocket() : null
 }

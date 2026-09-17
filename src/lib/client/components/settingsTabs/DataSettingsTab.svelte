@@ -25,12 +25,22 @@
 	 * works again. Without this, the honest "nothing is ever deleted" promise
 	 * would leave tens of gigabytes with no way to find them.
 	 */
-	import { getContext, onDestroy, onMount } from "svelte"
+	import { getContext } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { getInterestContext } from "$lib/client/sockets/interest.svelte"
 
 	const socket = useTypedSocket()
+	/**
+	 * The app-wide context, not the admin one: this tab lives in the ordinary
+	 * Settings sidebar (`SettingsSidebar`), not under `/admin`, where
+	 * `adminInterest` does not exist. `backups:` is RESTRICTED interest all the
+	 * same, so for a non-admin every declare below is refused and no request
+	 * leaves at all — which matches the panel they see ("Backups are managed by
+	 * an administrator") rather than asking for an Unauthorized error to toast.
+	 */
+	const interest = getInterestContext()
 	let userCtx: UserCtx = $state(getContext("userCtx"))
 
 	let listing = $state<Sockets.Backups.List.Response | null>(null)
@@ -79,19 +89,19 @@
 		"backups:delete:error"
 	] as const
 
-	onMount(() => {
-		socket.on("backups:list", handleList)
-		socket.on("backups:create", handleCreated)
-		socket.on("backups:delete", handleDeleted)
-		for (const event of ERROR_EVENTS) socket.on(event, handleError)
-		socket.emit("backups:list", {})
-	})
+	// Declared at initialisation and released on destroy, by the registry. The
+	// three success events are gated, so the server runs no `listBackups` for a
+	// tab nobody has open.
+	interest.useInterest<"backups:create">("backups:create", handleCreated)
+	interest.useInterest<"backups:delete">("backups:delete", handleDeleted)
+	for (const event of ERROR_EVENTS)
+		interest.useInterest<"backups:list:error">(event, handleError)
 
-	onDestroy(() => {
-		socket.off("backups:list", handleList)
-		socket.off("backups:create", handleCreated)
-		socket.off("backups:delete", handleDeleted)
-		for (const event of ERROR_EVENTS) socket.off(event, handleError)
+	$effect(() => {
+		// The list interest and the request that fills it, in one: the sync
+		// naming `backups:list` leaves before the request, so the handler
+		// answering it already sees the key.
+		return interest.requestWithInterest("backups:list", {}, handleList)
 	})
 
 	function backUpNow() {

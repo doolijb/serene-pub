@@ -1,5 +1,24 @@
 @import "tailwindcss";
 @import "@fontsource/fira-mono";
+/* Self-hosted like fira-mono above — the theme names these two families
+   (--typo-base--font-family / --typo-heading--font-family) and this is a
+   local-first app, so it must not depend on Google Fonts being reachable.
+   A fontsource package's bare specifier ships weight 400 only; the extra
+   per-weight imports cover UI medium/semibold and the theme's
+   --typo-heading--font-weight: 600. */
+@import "@fontsource/funnel-sans";
+@import "@fontsource/funnel-sans/500.css";
+@import "@fontsource/funnel-sans/600.css";
+@import "@fontsource/funnel-sans/700.css";
+@import "@fontsource/funnel-display";
+@import "@fontsource/funnel-display/600.css";
+@import "@fontsource/funnel-display/700.css";
+/* Self-hosted like funnel-sans above — --sp-prose (below) names this
+   family for session prose. Weight 400/500 upright plus 400 italic
+   cover body copy and its emphasis run. */
+@import "@fontsource/literata";
+@import "@fontsource/literata/500.css";
+@import "@fontsource/literata/400-italic.css";
 @plugin '@tailwindcss/forms';
 @plugin '@tailwindcss/typography';
 
@@ -29,6 +48,19 @@
 @import "@skeletonlabs/skeleton/themes/vintage";
 @import "@skeletonlabs/skeleton/themes/vox";
 @import "@skeletonlabs/skeleton/themes/wintry";
+/* Serene Pub's own built-in theme, and the default for new installs.
+   Local file rather than a package import, so it is a relative path. */
+@import "./lib/client/themes/lamplight.css";
+/* The compiler's own markup classes — admonitions, figures, banners, shiki.
+   Imported here rather than from the docs layout so the rules land in the same
+   cascade layer order as the themes above them; a component-scoped <style>
+   could not reach {@html} content anyway. */
+@import "./lib/client/styles/docs.css";
+
+:root {
+	/* The prose face for story text in a session; STYLE-GUIDE §3.1. */
+	--sp-prose: Literata, Charter, "Iowan Old Style", Georgia, serif;
+}
 
 @custom-variant dark (&:where([data-mode="dark"], [data-mode="dark"] *));
 
@@ -75,8 +107,67 @@
 	@apply border-surface-300-700 max-h-48 max-w-full cursor-pointer rounded-lg border object-cover;
 }
 
+/* The two tones story prose is set in (STYLE-GUIDE §3.3): dialogue inside
+   quotation marks is one colour and the narration around it another, so who is
+   speaking to whom reads before the words do. Which two colours is the widget
+   style's call — a pack sets `--sp-body` and `--sp-quote` on the conversation
+   and the message bodies under it inherit them here. Scoped to
+   `.sp-conversation` so it reaches session prose only; Document View keeps its
+   own greyscale palette and its own AAA promise. */
+.sp-conversation .rendered-session-message-content {
+	color: var(--sp-body, inherit);
+}
+
+.sp-conversation .rendered-session-message-content span.quoted-text {
+	color: var(--sp-quote, inherit);
+}
+
 .sidebar-list-item {
 	@apply card hover:preset-filled-surface-200-800 flex cursor-pointer items-center gap-2 rounded-lg p-2 transition;
+}
+
+/* The selected row, anywhere a list marks one — see
+   components/SidebarListItem.svelte's `active` prop, which is the normal way
+   to get this; the bare class is here so the hand-rolled rows can share the
+   one treatment rather than each inventing a highlight.
+
+   ⚠ This REPLACED `preset-filled-primary-500` on rows. That preset paints the
+   row in the primary colour and puts body text on top of it, which measures
+   3.62:1 under the shipped theme — below the 4.5:1 this app promises in its
+   own accessibility copy. The fix is not a darker primary: a filled row is a
+   button's treatment, and a list of them reads as a list of buttons. So
+   selection is said twice, neither time with contrast on the line: a tonal
+   surface one step off the list's ground, and a 3px primary bar inset on the
+   leading edge. The bar carries the colour; the text keeps the surface
+   contrast it had.
+
+   Left as a plain rule rather than @utility on purpose, unlike .panel-actions
+   below: the rows that take it also take a hover preset, and a hover preset is
+   a Tailwind utility — in the utilities layer these two would be settled by
+   source order and hover would sometimes lose. Unlayered, the active row wins
+   and hover is a no-op on it, which is what a selected row should do.
+
+   `box-shadow` and not a border: a border would move the row's content 3px
+   when it became selected, and `inset` keeps the bar inside the rounded
+   corners the card already has. */
+.sidebar-row-active {
+	@apply bg-surface-200 dark:bg-surface-800;
+	box-shadow: inset 3px 0 0 var(--color-primary-500);
+}
+
+/* The one card a panel's sections sit in — STYLE-GUIDE §6.4, "cards, not
+   separators". The card boundary IS the separator, so a stack of these needs
+   no rule between them and an empty section is simply not rendered.
+
+   One step lighter than the ground it sits on: the panes are surface-950 in
+   the dark themes and surface-50 in the light ones, which makes surface-900
+   and surface-100 the steps a card reads against without a shadow.
+
+   @utility rather than a plain rule, matching .panel-actions below: a call
+   site adds its own layout utilities beside this one, and an unlayered rule
+   beats every Tailwind utility regardless of specificity. */
+@utility panel-card {
+	@apply border-surface-300 bg-surface-100 dark:border-surface-800 dark:bg-surface-900 rounded-[12px] border p-4;
 }
 
 /* The action row that sits under a panel's back/title row — see
@@ -162,6 +253,17 @@
    every "..." trigger in the app. */
 .popover-menu-title {
 	@apply flex items-center gap-2 text-lg font-bold;
+}
+
+/* The *new* mark on an action a person has not met yet (R-15, U5c): a quiet
+   badge on the menu row, a dot on the overflow trigger that lists one. The
+   mark is data (`isNew` off `sessions:actions`) and clears when the list that
+   shows it is opened; a CSS pack may restyle it, never remove the row. */
+.sp-action-new {
+	@apply preset-tonal-primary ml-auto rounded-full px-1.5 py-0 text-[0.65em] font-semibold tracking-wide uppercase;
+}
+.sp-action-new-dot {
+	@apply bg-primary-500 absolute -top-0.5 -right-0.5 size-2 rounded-full;
 }
 
 /* --- Chat message header controls -----------------------------------------
@@ -264,25 +366,226 @@
 	min-inline-size: calc(var(--msg-ctrl-size) * 2 + --spacing(2));
 }
 
-/* The composer's primary action (Send, and Stop while generating). Larger
-   than a message-header control because it's the main affordance on the
-   screen, but built the same way and for the same reason: `btn` supplies the
-   press/focus/disabled treatment below, and the icon has to be sized here
-   because Skeleton's `btn` drives child svg size from --btn-size. Send and
-   Stop share the box so swapping between them doesn't shift the row. */
-.composer-btn {
-	display: inline-flex;
-	flex: none;
-	align-items: center;
-	justify-content: center;
-	inline-size: 3rem;
-	block-size: 3rem;
-	padding: 0;
+/* --- The session composer -------------------------------------------------
+
+   One card carries the field and a 32px footer; everything around it — the
+   Actions disclosure, the keyboard hint — is quiet text above or below it.
+
+   The chip rules matter most: the session page hands the composer its genre
+   actions and its turn controls as snippets of ordinary buttons, and the chip
+   shape those buttons take is set here, on the row that wraps them, so the
+   page has nothing to change. Unlayered, like .popover-menu-btn and
+   .msg-ctrl-btn above, so a rule here wins over the utility classes those
+   buttons already carry; `:where()` keeps the specificity at zero so a call
+   site can still override one property on purpose. */
+
+.composer-card {
+	@apply border-surface-300 bg-surface-50 dark:border-surface-800 dark:bg-surface-950 relative rounded-[14px] border;
+	@apply focus-within:border-primary-500 focus-within:ring-primary-500 focus-within:ring-1;
+}
+
+[data-composer-skin="minimal"] .composer-card {
+	@apply rounded-[9999px] px-2;
+}
+
+.composer-body {
+	@apply px-2 pt-2;
+}
+
+/* The field is the card, so the textarea brings no box of its own. */
+.composer-field {
+	@apply w-full resize-none border-none bg-transparent p-0 text-[15px] leading-[1.5] outline-none;
+	max-block-size: 9em; /* six lines, then it scrolls */
+	overflow-y: auto;
+}
+
+[data-composer-skin="minimal"] .composer-field {
+	max-block-size: 1.6em;
+}
+
+[data-composer-skin="writer"] .composer-field {
+	font-family: var(--sp-prose, inherit);
+	font-size: 17px;
+	line-height: 1.65;
+	min-block-size: 13.2em; /* eight lines of prose */
+	max-block-size: none;
+}
+
+/* The `/` palette (R-15 slash names, U5c): a listbox above the field inside
+   the card, drawn by the composer rather than portalled, so it moves with the
+   composer's position (top or bottom) and never floats over the log. */
+.composer-palette {
+	@apply border-surface-200 dark:border-surface-800 mb-1 flex max-h-56 flex-col gap-px overflow-y-auto border-b pb-1;
+}
+
+.composer-palette-btn {
+	@apply flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px];
+}
+
+.composer-palette-row.is-highlighted .composer-palette-btn {
+	@apply preset-tonal-primary;
+}
+
+.composer-palette-row.is-disabled .composer-palette-btn {
+	@apply cursor-not-allowed opacity-50;
+}
+
+.composer-palette-slash {
+	@apply font-mono text-[12px];
+}
+
+.composer-palette-label {
+	@apply text-surface-700 dark:text-surface-300 truncate;
+}
+
+.composer-palette-note {
+	@apply text-surface-500 ml-auto text-[11px];
+}
+
+.composer-preview {
+	font-family: var(--sp-prose, inherit);
+	font-size: 17px;
+	line-height: 1.65;
+	min-block-size: 1.65em;
+	max-block-size: 18em;
+	overflow-y: auto;
+}
+
+/* The draft's share of the context window, along the card's top inner edge. */
+.composer-meter {
+	@apply pointer-events-none absolute inset-x-0 top-0 h-[2px] overflow-hidden;
+	border-start-start-radius: inherit;
+	border-start-end-radius: inherit;
+}
+
+.composer-meter-fill {
+	@apply bg-surface-500 h-full;
+
+	&.is-high {
+		@apply bg-warning-500;
+	}
+}
+
+.composer-footer {
+	@apply flex items-center gap-1 p-2;
+}
+
+.composer-footer-end {
+	@apply ml-auto flex items-center gap-1;
+}
+
+.composer-persona-chip {
+	@apply inline-flex h-8 items-center gap-1.5 rounded-full py-0 pr-2 pl-1 text-[13px] leading-[1.45] font-medium;
+	@apply text-surface-700 dark:text-surface-200;
+	@apply max-lg:h-11 pointer-coarse:h-11;
+
+	&.is-button {
+		@apply hover:bg-surface-200 dark:hover:bg-surface-800 cursor-pointer;
+	}
+
+	&:focus-visible {
+		@apply outline-primary-500 outline-2 outline-offset-2;
+	}
+}
+
+[data-composer-skin="minimal"] .composer-persona-name,
+[data-composer-skin="minimal"] .composer-persona-chip > :where(svg) {
+	display: none;
+}
+
+.composer-icon-btn {
+	@apply inline-flex size-8 items-center justify-center rounded-full;
+	@apply max-lg:size-11 pointer-coarse:size-11;
+
+	/* The idle tint is unlayered, so it has to stand aside for the tonal
+	   preset an open panel or a pressed Preview carries. */
+	&:not(.is-active) {
+		@apply text-surface-600 dark:text-surface-400 hover:text-surface-900 dark:hover:text-surface-50;
+	}
+
+	&:focus-visible {
+		@apply outline-primary-500 outline-2 outline-offset-2;
+	}
 
 	& > :where(svg) {
-		inline-size: 1.5rem;
-		block-size: 1.5rem;
+		@apply size-4;
 	}
+}
+
+.composer-send {
+	@apply inline-flex h-8 items-center justify-center gap-1.5 rounded-full px-3 text-[13px] leading-[1.45] font-medium;
+	@apply max-lg:h-11 max-lg:px-4 pointer-coarse:h-11 pointer-coarse:px-4;
+
+	& > :where(svg) {
+		@apply size-4;
+	}
+}
+
+/* A panel taking the field area names itself and offers the way back. */
+.composer-pane-head {
+	@apply mb-1 flex items-center justify-between gap-2;
+}
+
+.composer-pane-title {
+	@apply text-surface-600 dark:text-surface-400 text-xs;
+}
+
+.composer-quiet-btn {
+	@apply text-surface-600 dark:text-surface-400 hover:text-surface-900 dark:hover:text-surface-50 inline-flex h-7 items-center gap-1 rounded-[6px] text-xs;
+	@apply pointer-coarse:h-11;
+
+	&:focus-visible {
+		@apply outline-primary-500 outline-2 outline-offset-2;
+	}
+}
+
+.composer-actions-toggle {
+	@apply text-surface-500 hover:text-surface-700 dark:hover:text-surface-300 inline-flex h-7 items-center gap-1 rounded-[6px] text-xs;
+	@apply pointer-coarse:h-11;
+
+	&:focus-visible {
+		@apply outline-primary-500 outline-2 outline-offset-2;
+	}
+
+	& > :where(svg) {
+		@apply transition-transform duration-150;
+	}
+}
+
+.composer-actions-row {
+	@apply flex flex-wrap items-center gap-1.5 pt-1 pb-1;
+}
+
+.composer-chips {
+	@apply flex flex-wrap items-center gap-1.5;
+}
+
+.composer-chips :where(button) {
+	@apply inline-flex h-8 items-center justify-center gap-1.5 rounded-full px-3 text-[13px] leading-[1.45] font-medium;
+	@apply pointer-coarse:h-11 pointer-coarse:px-4;
+}
+
+.composer-chips :where(button) > :where(svg) {
+	@apply size-4;
+}
+
+/* The genre's contributed actions read as the session's own vocabulary. */
+.composer-chips-tonal :where(button) {
+	@apply bg-surface-200 text-surface-700 dark:bg-surface-800 dark:text-surface-200 border-none;
+}
+
+/* The turn controls sit a step quieter than the genre's own actions. */
+.composer-chips-outlined :where(button) {
+	@apply border-surface-300 text-surface-600 dark:border-surface-800 dark:text-surface-400 border bg-transparent;
+}
+
+.composer-hint {
+	@apply text-surface-500 mt-1 flex flex-wrap items-center gap-1 text-xs;
+}
+
+.composer-kbd {
+	@apply border-surface-300 text-surface-600 dark:border-surface-800 dark:text-surface-400 rounded-[6px] border px-1 py-px text-[11px];
+	font-family: "Fira Mono", monospace;
 }
 
 /* Consistent press/focus/disabled feedback across every button in the app —

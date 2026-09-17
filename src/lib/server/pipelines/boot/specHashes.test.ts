@@ -49,10 +49,43 @@ import { CORE_SPECS } from "$lib/server/pipelines/specs"
  * than editing one, so the diff shows a version and a shape changing together
  * instead of a hash quietly moving underneath a version that did not.
  */
+/**
+ * ## The one-shot rename (2026-09-16; plans/30 §U3, migration 0134) — all seventeen moved at once
+ *
+ * Every stored document changed words and nothing else: node kinds (`input ·
+ * provider · consumer` → `inlet · oracle · outlet`) and the definition ids that
+ * carry them, clause kinds (`async · map · route` → `gather · each · junction`)
+ * and the `clauses` key itself, `subscribes` deleted (R-4), the inlet lock and
+ * the genre surface keyed by event id, triggers saying `venue`, the taxonomy
+ * `zone` culled, the tool loop keyed `tools`, and — the one semantic change —
+ * the two loser lore lanes and the loser embed node reading their `params`
+ * through the owner (R-7 P2). Migration 0134 rewrites every stored row to the
+ * same document these hashes name; `renameMigration.int.test.ts` proves the
+ * rewritten rows hash to exactly these values, and the boot after it moves each
+ * slug's pointer once. The rows the pointers moved off keep their old hashes,
+ * marked `renamed_at`, for the receipts that pinned them.
+ */
 const PUBLISHED: Record<string, string> = {
 	// 1.0.0: the standard session type as a create spec (23 §7) — the F29
 	// floor's shape moves from the input descriptor to this document.
-	"core:spec/create-chat@2.2.0": "fa56525a69fb9",
+	// Hash moved (R-15 *Forms*, 2026-09-17 — U5d): the genre's event surface,
+	// which rides `meta.genre` on the create spec, declares
+	// `core:event/form-addressed@1` (optional) — the same move for all three
+	// create specs. Nothing the pipeline sends changes. (was "9bfdda8a4f589")
+	"core:spec/create-chat@2.2.0": "1bc0b0f6dc8999",
+	/**
+	 * The guide genre (plans/29 R-18; U5g, 2026-09-16) — two new slugs, and
+	 * nothing above them moves. `create-guide` carries the genre's
+	 * declaration, its one envoy included, on the version row;
+	 * `guide-respond` is `respond` with the lore machinery replaced by
+	 * `core:query/docs-search@1`, the envoy on the inlet's `speaker`, its
+	 * card on the context builder's `speaker` port, and its instructions read
+	 * by `slot.prompts({ envoy: 'mascot' })` — configuration at
+	 * `envoy:mascot`, never a prompt row.
+	 */
+	// (was "cbca3b3df89e2") — moved with the genre surface, U5d; see create-chat.
+	"core:spec/create-guide@1.0.0": "fa7a3eb64e2a9",
+	"core:spec/guide-respond@1.0.0": "1d39898d4c7a0c",
 	/**
 	 * The Adventure genre (DESIGN-adventure-genre.md) — five new slugs, and
 	 * nothing above them moves. Every node they pin is either one core already
@@ -64,9 +97,10 @@ const PUBLISHED: Record<string, string> = {
 	 * unless the session trusts the narrator. The other three are actions on the
 	 * open `session-action` slot.
 	 */
-	"core:spec/adventure-create@1.0.0": "8ffc3130734e3",
+	// (was "1c67b7acb698cf") — moved with the genre surface, U5d; see create-chat.
+	"core:spec/adventure-create@1.0.0": "240458abb4e3b",
 	// ⚠ MOVED, in place, while the genre is still unreleased: the planner and
-	// the keeper now pin `core:provider/generate-json@1` instead of
+	// the keeper now pin `core:oracle/generate-json@1` instead of
 	// `generate-text` + `parse-json`, their transcript comes from
 	// `core:task/prose-transcript@1`, and the narrator builds its own. A live
 	// playtest showed why: asked as ordinary replies, both JSON stages wrote the
@@ -84,13 +118,90 @@ const PUBLISHED: Record<string, string> = {
 	// by seed identity (`{ seedKey: 'sampling-background' }`) because a row id
 	// differs per install. The narrator and the voices are untouched: those
 	// are the prose a person waits for, and they keep the session's own pick.
-	"core:spec/adventure-respond@1.0.0": "890fe65ccfdc4",
-	"core:spec/adventure-look@1.0.0": "17e9e37a86a2c2",
+	// ⚠ MOVED, same unreleased-genre terms (09-B B4, 2026-09-15): the turn
+	// creates its own row — a `placeholder` outlet after the inlet, `save`
+	// an `update-message` filling it — and `contextBudget` shares the
+	// narrator's connection for the model's own window (R-8).
+	// (was "890fe65ccfdc4")
+	// Hash moved (R-12, 2026-09-16): the generating step no longer wires
+	// `prompts: slot.prompts({ node: … })` — `core:oracle/generate-*@1`
+	// declares no such slot any more; the share existed only to keep the
+	// panel from rendering a copy. Nothing the run sends changes.
+	// (was "179a33c33b9856")
+	// Hash moved (R-7 P5, 2026-09-16 — U3b): the lore pool concatenates the
+	// conversation's `band` port — `session-history`'s band intent, alone —
+	// so the ranker reserves the transcript's slice from the source's own
+	// declaration rather than from a map on itself. Same numbers, same
+	// prompt; the parity corpus holds it.
+	// (was "1cce782246906a")
+	// Hash moved (U5a, 2026-09-16): the voices' context builder takes the
+	// planner's voice on `sideCharacter` (was `speaker`) — the port rename
+	// on `build-side-character-context@1`, R-18 (3). Same value, same
+	// prompt. (was "5822ccf7f43da")
+	"core:spec/adventure-respond@1.0.0": "6471d909046c2",
+	// ⚠ MOVED, unreleased-genre terms (R-8, 2026-09-15): the three actions'
+	// `contextBudget` shares the writing step's connection for the model's
+	// own window, like every other budget node.
+	// (was "17e9e37a86a2c2")
+	// Hash moved (R-12, 2026-09-16): the generating step no longer wires
+	// `prompts: slot.prompts({ node: … })` — `core:oracle/generate-*@1`
+	// declares no such slot any more; the share existed only to keep the
+	// panel from rendering a copy. Nothing the run sends changes.
+	// (was "eb29ca84d5098")
+	// Hash moved (R-7 P5, 2026-09-16 — U3b): a `lore` concat now sits between
+	// the keyword scan and `rank`, carrying the conversation's band intent
+	// beside the scan's candidates — a ranker takes one list and the intent
+	// needs a seat in it. (was "11669b8b5b66fd")
+	// Hash moved (R-15, 2026-09-16 — U5c): `contributes.triggers` became
+	// `contributes.actions` — each entry now carries `key`, a venue list
+	// (`[{ kind: 'composer' }]`), `quick` and `label` in place of `i18n`.
+	// Content of the contribution, not of the run: nothing the pipeline
+	// sends changes. (was "15e41a328459f3")
+	"core:spec/adventure-look@1.0.0": "197bb42b7b2bb6",
 	// ⚠ MOVED, in place, on the same unreleased-genre terms: Rest and Time
-	// passes ask `core:provider/generate-json@1` for the keeper's own shape
+	// passes ask `core:oracle/generate-json@1` for the keeper's own shape
 	// instead of parsing prose out of a prefilled reply.
-	"core:spec/adventure-rest@1.0.0": "eaa7a41b6cd8c",
-	"core:spec/adventure-advance-time@1.0.0": "135459cfe7c4c0",
+	// (was "eaa7a41b6cd8c" — R-8, see `adventure-look`)
+	// Hash moved (R-12, 2026-09-16): the generating step no longer wires
+	// `prompts: slot.prompts({ node: … })` — `core:oracle/generate-*@1`
+	// declares no such slot any more; the share existed only to keep the
+	// panel from rendering a copy. Nothing the run sends changes.
+	// (was "1dea5cfc5a78d2")
+	// Hash moved (R-15, 2026-09-16 — U5c): `contributes.triggers` became
+	// `contributes.actions` — each entry now carries `key`, a venue list
+	// (`[{ kind: 'composer' }]`), `quick` and `label` in place of `i18n`.
+	// Content of the contribution, not of the run: nothing the pipeline
+	// sends changes. (was "4e32a33712802")
+	"core:spec/adventure-rest@1.0.0": "3755831896611",
+	// (was "135459cfe7c4c0" — R-8, see `adventure-look`)
+	// Hash moved (R-12, 2026-09-16): the generating step no longer wires
+	// `prompts: slot.prompts({ node: … })` — `core:oracle/generate-*@1`
+	// declares no such slot any more; the share existed only to keep the
+	// panel from rendering a copy. Nothing the run sends changes.
+	// (was "e1c078298920d")
+	// Hash moved (R-15, 2026-09-16 — U5c): `contributes.triggers` became
+	// `contributes.actions` — each entry now carries `key`, a venue list
+	// (`[{ kind: 'composer' }]`), `quick` and `label` in place of `i18n`.
+	// Content of the contribution, not of the run: nothing the pipeline
+	// sends changes. (was "17168783bd30d0")
+	"core:spec/adventure-advance-time@1.0.0": "1173a06c378df0",
+	/**
+	 * Forms (plans/29 R-15 *Forms*; 30 §U5d, 2026-09-17) — five new slugs,
+	 * and the three create specs above move with their genre surface. The
+	 * three `answer-form-*` are one graph published once per shipped genre
+	 * (a preset binds a spec locked to its genre): `form-addressed` inlet →
+	 * history + cast → the addressee's card → `form-context` → prose
+	 * transcript → assemble (inline template) → `generate-json` against the
+	 * form's schema → `answer-form`, which fires the block's action as the
+	 * addressee. `adventure-ask` is the worked form — the narrator puts a
+	 * question with choices to one of the cast — and `adventure-answer` is
+	 * what its options fire, by a click or by the answer pipeline.
+	 */
+	"core:spec/adventure-ask@1.0.0": "b2c4f4431d9a2",
+	"core:spec/adventure-answer@1.0.0": "1387dc7a4901d6",
+	"core:spec/answer-form-chat@1.0.0": "a2ddb2700ce09",
+	"core:spec/answer-form-adventure@1.0.0": "b89f3d6c0484b",
+	"core:spec/answer-form-guide@1.0.0": "1ddc286846b82d",
 	"core:spec/create-chat@2.1.0": "ea80f2679383c",
 	"core:spec/create-chat@2.0.0": "a6281141b21ea",
 	// 1.16.0 / 1.10.0: the three lore gather branches and the narrator's trigger query
@@ -254,10 +365,70 @@ const PUBLISHED: Record<string, string> = {
 	// every run ever recorded.
 	// (was "127bfb179f55dd", then "13d5772f33e5ec", then "9cfae9a28583f",
 	//  then "17c8c28ac7fd7f")
-	"core:spec/narrate-character@1.0.0": "1a1055550a18d6",
+	// ⚠ MOVED (09-B B4, R-17, 2026-09-15): the pipeline owns its row. A
+	// `placeholder` outlet straight after the inlet creates the narration row
+	// — the speaker fact and the instructions beside it — and `save` is an
+	// `update-message` filling it; `contextBudget` shares the generating
+	// step's connection for the model's own window (R-8). The trigger inserts
+	// nothing any more. Under the 0.6 freeze the semver stays.
+	// (was "1a1055550a18d6")
+	// ⚠ MOVED again (U1 review C1, 2026-09-16): the placeholder wires
+	// `row: $.input.messageId`, as `respond`'s does — a regenerate, swipe or
+	// continue on a side character's line routes back here, and without the
+	// wire this node inserted a second row while the verb's spun forever.
+	// (was "1ef5a87d5d82cd")
+	// Hash moved (R-12, 2026-09-16): the generating step no longer wires
+	// `prompts: slot.prompts({ node: … })` — `core:oracle/generate-*@1`
+	// declares no such slot any more; the share existed only to keep the
+	// panel from rendering a copy. Nothing the run sends changes.
+	// (was "b85fb72d78a44")
+	// Hash moved (R-7 P5, 2026-09-16 — U3b): the lore pool concatenates the
+	// conversation's `band` port — `session-history`'s band intent, alone —
+	// so the ranker reserves the transcript's slice from the source's own
+	// declaration rather than from a map on itself. Same numbers, same
+	// prompt; the parity corpus holds it.
+	// (was "1dcc060b10f7fb")
+	// Hash moved (U5a, R-18 (3), 2026-09-16): the side-character fact rides
+	// `$.input.sideCharacter` into the placeholder and the context builder
+	// (was `$.input.speaker`; that port is the participant reference now).
+	// Same fact, same row, same prompt. (was "6ddff19a519fb")
+	// Hash moved (R-15, 2026-09-16 — U5c): `contributes.triggers` became
+	// `contributes.actions` — each entry now carries `key`, a venue list
+	// (`[{ kind: 'composer' }]`), `quick` and `label` in place of `i18n`.
+	// Content of the contribution, not of the run: nothing the pipeline
+	// sends changes. (was "1e7b25867803a2")
+	// Hash moved (2026-09-16): the placeholder wires `speaker:
+	// $.input.speaker` — the inlet's participant reference — so a picked
+	// character's row carries `metadata.speaker = character:<id>`, the same
+	// shape 0138 writes for a migrated row. (was "e3ab80dc58afa")
+	"core:spec/narrate-character@1.0.0": "174220ef023ed7",
 	// (was "b6ba835e86244", then "431aa4254af1", then "12971669b900fd",
 	//  then "bc304a8a52b71")
-	"core:spec/narrate@1.11.0": "1276c81165cdd1",
+	// ⚠ MOVED on the same terms as `narrate-character` above (09-B B4):
+	// placeholder → update, the instructions stored beside the row by the
+	// placeholder, the connection shared onto `contextBudget`.
+	// (was "1276c81165cdd1")
+	// ⚠ MOVED again (U1 review C1, 2026-09-16): `row: $.input.messageId` on
+	// the placeholder — the paragraph above `narrate-character@1.0.0`, for the
+	// verb on a narration row.
+	// (was "8d82b49922817")
+	// Hash moved (R-12, 2026-09-16): the generating step no longer wires
+	// `prompts: slot.prompts({ node: … })` — `core:oracle/generate-*@1`
+	// declares no such slot any more; the share existed only to keep the
+	// panel from rendering a copy. Nothing the run sends changes.
+	// (was "1dae47bcb08545")
+	// Hash moved (R-7 P5, 2026-09-16 — U3b): the lore pool concatenates the
+	// conversation's `band` port — `session-history`'s band intent, alone —
+	// so the ranker reserves the transcript's slice from the source's own
+	// declaration rather than from a map on itself. Same numbers, same
+	// prompt; the parity corpus holds it.
+	// (was "1be02ac2c726fc")
+	// Hash moved (R-15, 2026-09-16 — U5c): `contributes.triggers` became
+	// `contributes.actions` — each entry now carries `key`, a venue list
+	// (`[{ kind: 'composer' }]`), `quick` and `label` in place of `i18n`.
+	// Content of the contribution, not of the run: nothing the pipeline
+	// sends changes. (was "11ca2223b19a22")
+	"core:spec/narrate@1.11.0": "3d0b93608ab5b",
 	// ⚠ `core:spec/respond@1.20.0`'s hash MOVED for the SECOND time without a
 	// bump, on the same terms as the two paragraphs above and paired with
 	// `drizzle/0106_continuation_prefill_reprojection`, which deletes its
@@ -297,7 +468,7 @@ const PUBLISHED: Record<string, string> = {
 	// tracks: the `generate` node wires `params: slot.params()`, so the stop
 	// sequences a person types reach `input?.params?.stopSequences` instead of
 	// arriving as `undefined`. Behaviour-preserving, and the declaration is what
-	// makes it so — `core:provider/generate-text@1` gives `stopSequences` no
+	// makes it so — `core:oracle/generate-text@1` gives `stopSequences` no
 	// default, so an install that never typed one resolves `undefined` exactly
 	// as it always has. All three documents moved for this and nothing else;
 	// `registryHashes.test.ts` records nothing, because no DECLARATION changed.
@@ -339,7 +510,33 @@ const PUBLISHED: Record<string, string> = {
 	// (was "1f78a2ce64600", then "1bc665208daf27", then "196d136945332b",
 	//  then "1586b6f70f4a1c", then "1799ea677e50b5", then "11ff0e3a9af9c9",
 	//  then "40057185a1f3c")
-	"core:spec/respond@1.20.0": "1459d5e20d701a",
+	// ⚠ MOVED a THIRD time without a bump (09-B B4, R-17, 2026-09-15): the
+	// reply creates its own row. `placeholder` (`create-message`, `generating:
+	// true`, the inlet's `characterId` and the row a verb re-drives) sits
+	// straight after the inlet, `save` is an `update-message` targeting it,
+	// and `contextBudget` shares `generate`'s connection so the one window
+	// computation (R-8) reads the model's own window. `generateResponse`'s
+	// trigger-side insert and the preview-halt road are gone with it. Under
+	// the 0.6 freeze the semver stays; declarations moved too, so
+	// `registryHashes.test.ts` records five.
+	// (was "1459d5e20d701a")
+	// Hash moved (R-12, 2026-09-16): the generating step no longer wires
+	// `prompts: slot.prompts({ node: … })` — `core:oracle/generate-*@1`
+	// declares no such slot any more; the share existed only to keep the
+	// panel from rendering a copy. Nothing the run sends changes.
+	// (was "18917086c3f34")
+	// Hash moved (R-7 P5, 2026-09-16 — U3b): the lore pool concatenates the
+	// conversation's `band` port — `session-history`'s band intent, alone —
+	// so the ranker reserves the transcript's slice from the source's own
+	// declaration rather than from a map on itself. Same numbers, same
+	// prompt; the parity corpus holds it.
+	// (was "19cac7b1208d4e")
+	// Hash moved (U5a, R-18 (3), 2026-09-16): the turn strategy takes
+	// `speaker: $.input.speaker` — the participant reference — beside the
+	// bare `characterId`, so an envoy can be the trigger's pick. Every
+	// downstream reader still takes `$.speaker.characterId`; nothing the run
+	// sends changes. (was "1ace29594a6283")
+	"core:spec/respond@1.20.0": "1c503cc437da52",
 	"core:spec/respond@1.19.0": "fdf2f7090f13c",
 	"core:spec/respond@1.18.0": "9315ce3ddeaa4",
 	"core:spec/respond@1.17.0": "118378cf44739b",
@@ -376,15 +573,15 @@ const PUBLISHED: Record<string, string> = {
 	// against. Shared rather than a picker of its own — a slot wired with
 	// `ofNode` is the owner's to configure (13 §12 finding i) — so an untouched
 	// pipeline gains no second Sampling control in the panel.
-	"core:spec/summarize-world@1.3.0": "84568ea6ee309",
-	"core:spec/summarize-character@1.3.0": "1e14d56806d21f",
+	"core:spec/summarize-world@1.3.0": "6a5f107fa3641",
+	"core:spec/summarize-character@1.3.0": "102b4ae06e92a1",
 	// ⚠ `summarize-scene@1.3.0`'s hash MOVED a SECOND time, again under an
 	// unchanged version, and again paired with a migration —
 	// `drizzle/0104_ice_scene_cast_extraction.sql` deletes its published
 	// `pipeline_spec_versions` row so boot republishes it. **A moved hash here
 	// with no such migration is still the failure this file is for.**
 	//
-	// What moved: the `cast` step is gone. `core:provider/extract-cast` is on
+	// What moved: the `cast` step is gone. `core:oracle/extract-cast` is on
 	// ice, not deleted (plan §2, ruled 2026-09-08) — the node type, its script
 	// hooks and its shipped prompt all survive untouched, and reviving it is
 	// restoring one property in the catalog. The scene summarizer stops making
@@ -392,9 +589,9 @@ const PUBLISHED: Record<string, string> = {
 	// speech-gated proposal (100% precision, zero fabrications, no model) and
 	// whose mentioned half is derived from `message_annotations` instead.
 	// (was "9c990d835747a" between 0102 and this)
-	"core:spec/summarize-scene@1.3.0": "c51485ac64a65",
-	"core:spec/summarize-history@1.3.0": "12bf9f369f626e",
-	"core:spec/graph-build@1.2.0": "1d9e569016efb3",
+	"core:spec/summarize-scene@1.3.0": "63c1e956ffead",
+	"core:spec/summarize-history@1.3.0": "d31fcf98fd3d6",
+	"core:spec/graph-build@1.2.0": "1cb6f0d989e99c",
 	// 1.12.0: the session rename (0141) — session-scope/-history/-cast ids
 	// and sessionId/sessionScope ports ripple into every pinned type.
 	"core:spec/respond@1.12.0": "72df744027f6d",
@@ -416,12 +613,33 @@ const PUBLISHED: Record<string, string> = {
 	// 1.0.0: the echo spec — the minimal action harness that proves the review
 	// gate end to end (a button fires it, `create-message` parks, the modal's
 	// form IS the entry). Template for the image provider spec.
-	"core:spec/echo@1.0.0": "155ebfa1de7484",
+	// Hash moved (R-15, 2026-09-16 — U5c): `contributes.triggers` became
+	// `contributes.actions` — each entry now carries `key`, a venue list
+	// (`[{ kind: 'composer' }]`), `quick` and `label` in place of `i18n`.
+	// Content of the contribution, not of the run: nothing the pipeline
+	// sends changes. (was "19cc4810162b94")
+	"core:spec/echo@1.0.0": "d249a44903c21",
+	/**
+	 * The built-in writes (U5b, R-15, 2026-09-16) — five NEW slugs, one per
+	 * message verb core implements: `core:inlet/built-in-request@1` straight
+	 * into the write outlet, bound to no genre. Published like every other
+	 * spec so a delete is a receipted, gate-eligible run pinning a hash.
+	 */
+	"core:spec/builtin-delete@1.0.0": "12f3d9411b2680",
+	"core:spec/builtin-hide@1.0.0": "2d89ebfc08d47",
+	"core:spec/builtin-edit@1.0.0": "1f50517efb4c61",
+	"core:spec/builtin-swipe@1.0.0": "b69ef788e2df7",
+	"core:spec/builtin-branch@1.0.0": "be5ac081454e9",
 	// 1.0.0: local image generation end to end — a composer button, the review
 	// gate as the prompt entry, and the render posted as a message.
 	// Hash moved: `render` names its `params` slot, which the node type now
 	// declares — without it the streaming control would render and do nothing.
-	"core:spec/generate-image@1.0.0": "59e76913bf2cf",
+	// Hash moved (R-15, 2026-09-16 — U5c): `contributes.triggers` became
+	// `contributes.actions` — each entry now carries `key`, a venue list
+	// (`[{ kind: 'composer' }]`), `quick` and `label` in place of `i18n`.
+	// Content of the contribution, not of the run: nothing the pipeline
+	// sends changes. (was "19338b1db2497c")
+	"core:spec/generate-image@1.0.0": "1d6cc6d87de48",
 	// 1.0.0: the tool-loop reference (20 §9, 01 §4a) — a bounded agentic turn
 	// written out, bound to no genre so it is never offered in a composer. New
 	// slug, not a bump: the 0.6 freeze forbids moving an existing semver and
@@ -430,7 +648,19 @@ const PUBLISHED: Record<string, string> = {
 	// which owns the pool, instead of the reverse (2026-09-10).
 	// Hash moved: the template's opening instruction and its closing reminder
 	// are the `prompts` slot's shipped row now, not literals (2026-09-10).
-	"core:spec/tool-loop@1.0.0": "1802d01a31438f"
+	// Hash moved (09-B B4, 2026-09-15): the answer's row is the pipeline's —
+	// a `placeholder` after the inlet, `save` an `update-message` filling it.
+	// (was "1802d01a31438f")
+	// Hash moved (U1 review C1, 2026-09-16): the placeholder wires
+	// `row: $.input.messageId`, so a genre binding this spec to a reply
+	// function has a regenerate claim the verb's row as the reply specs do.
+	// (was "1aa8631e70603b")
+	// Hash moved (R-12, 2026-09-16): the generating step no longer wires
+	// `prompts: slot.prompts({ node: … })` — `core:oracle/generate-*@1`
+	// declares no such slot any more; the share existed only to keep the
+	// panel from rendering a copy. Nothing the run sends changes.
+	// (was "9420cfdf9c246")
+	"core:spec/tool-loop@1.0.0": "1d560d3f202dd5"
 }
 
 describe("published spec hashes", () => {

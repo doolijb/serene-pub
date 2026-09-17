@@ -117,7 +117,7 @@ describe("the turn is a multi-agent turn", () => {
 		// per spec: four agents on one context type would ship four agents one
 		// set of instructions.
 		const types = new Set(
-			doc().nodes.map((n: any) => `${n.typeId}@${n.typeVersion}`)
+			doc().nodes.map((n: any) => `${n.definitionId}@${n.definitionVersion}`)
 		)
 		expect(types).toContain("core:task/build-planner-context@1")
 		expect(types).toContain("core:task/build-scene-context@1")
@@ -128,7 +128,7 @@ describe("the turn is a multi-agent turn", () => {
 	it("reads the session state once and hands it to every agent that needs it", () => {
 		const d = doc()
 		const stateReads = d.nodes.filter(
-			(n: any) => n.typeId === "core:query/session-state"
+			(n: any) => n.definitionId === "core:query/session-state"
 		)
 		expect(stateReads).toHaveLength(1)
 		const fed = d.edges
@@ -145,9 +145,9 @@ describe("the turn is a multi-agent turn", () => {
 		])
 	})
 
-	it("the voices map is bounded, and it maps over the planner's speakers", () => {
-		const block = doc().blocks.find((b: any) => b.id === "voices")
-		expect(block?.kind).toBe("map")
+	it("the voices each-clause is bounded, and it runs over the planner's speakers", () => {
+		const block = doc().clauses.find((b: any) => b.id === "voices")
+		expect(block?.kind).toBe("each")
 		// Mandatory (F9): the only thing between a planner that names the whole
 		// tavern and a turn that costs twenty calls.
 		expect(block?.max).toBeGreaterThan(0)
@@ -168,12 +168,12 @@ describe("the turn is a multi-agent turn", () => {
 		).toBe(true)
 	})
 
-	it("routes on trustNarrator, and only the trusted branch applies", () => {
+	it("branches on trustNarrator at a junction, and only the trusted branch applies", () => {
 		const d = doc()
-		const route = d.blocks.find((b: any) => b.id === "commit")
-		expect(route?.kind).toBe("route")
-		expect((route?.routes as any)?.trusted?.path).toBe("trustNarrator")
-		expect((route?.routes as any)?.reviewed?.default).toBe(true)
+		const route = d.clauses.find((b: any) => b.id === "commit")
+		expect(route?.kind).toBe("junction")
+		expect((route?.branches as any)?.trusted?.path).toBe("trustNarrator")
+		expect((route?.branches as any)?.reviewed?.default).toBe(true)
 		const preset = d.presets.find((p: any) => p.default)
 		const applied = preset?.values.find(
 			(v: any) => v.nodeKey === "commit.trusted.apply"
@@ -195,13 +195,13 @@ describe("the turn is a multi-agent turn", () => {
 		const d = doc()
 		for (const key of ["planWrite", "keeperWrite"]) {
 			const node = d.nodes.find((n: any) => n.key === key)
-			expect(`${key}:${node?.typeId}`).toBe(
-				`${key}:core:provider/generate-json`
+			expect(`${key}:${node?.definitionId}`).toBe(
+				`${key}:core:oracle/generate-json`
 			)
 			expect((node?.config as any)?.schema?.type, key).toBe("object")
 		}
 		// And neither reads a transcript with a turn to continue in it.
-		expect(d.nodes.find((n: any) => n.key === "lines")?.typeId).toBe(
+		expect(d.nodes.find((n: any) => n.key === "lines")?.definitionId).toBe(
 			"core:task/prose-transcript"
 		)
 	})
@@ -261,17 +261,17 @@ describe("the two keeper actions", () => {
 		]) {
 			const d: any = action(slug)
 			const write = d.nodes.find((n: any) => n.key === "write")
-			expect(`${slug}:${write?.typeId}`).toBe(
-				`${slug}:core:provider/generate-json`
+			expect(`${slug}:${write?.definitionId}`).toBe(
+				`${slug}:core:oracle/generate-json`
 			)
 			expect((write?.config as any)?.schema?.type, slug).toBe("object")
 			// No prose to salvage, and no parse step left to salvage it with.
 			expect(
-				d.nodes.some((n: any) => n.typeId === "core:task/parse-json"),
+				d.nodes.some((n: any) => n.definitionId === "core:task/parse-json"),
 				slug
 			).toBe(false)
 			expect(
-				d.nodes.find((n: any) => n.key === "lines")?.typeId,
+				d.nodes.find((n: any) => n.key === "lines")?.definitionId,
 				slug
 			).toBe("core:task/prose-transcript")
 			const preset = d.presets.find((p: any) => p.default)
@@ -296,10 +296,11 @@ describe("the preset and the prompts", () => {
 		expect(p.bindings[sessionEvents.messageRespond]?.spec).toBe(
 			ADVENTURE_RESPOND_SPEC_ID
 		)
+		// By identity (W-A): the declaration, not the spec.
 		expect(p.actions?.include).toEqual([
-			ADVENTURE_LOOK_SPEC_ID,
-			ADVENTURE_REST_SPEC_ID,
-			ADVENTURE_ADVANCE_TIME_SPEC_ID
+			`${ADVENTURE_LOOK_SPEC_ID}#look`,
+			`${ADVENTURE_REST_SPEC_ID}#rest`,
+			`${ADVENTURE_ADVANCE_TIME_SPEC_ID}#advance-time`
 		])
 	})
 
@@ -416,7 +417,19 @@ describe("the Adventure layout", () => {
 describe("parity", () => {
 	it("chat's respond spec is byte-identical — adventure edited no shipped node", () => {
 		// Recorded in `boot/specHashes.test.ts` as well; here so the failure
-		// names the lane that would have caused it.
-		expect(canonicalHash(built(RESPOND_SPEC_ID))).toBe("1459d5e20d701a")
+		// names the lane that would have caused it. The hash moved on
+		// 2026-09-15 for the reply's own reason (09-B B4: the placeholder
+		// outlet and the update that fills it), and again on 2026-09-16 (R-12:
+		// the generating step wires no `prompts` share — the slot is culled
+		// from `generate-text@1`), and once more on 2026-09-16 with the
+		// one-shot rename (plans/30 §U3 — every shipped document moved once),
+		// each recorded there in the same change — and once more on
+		// 2026-09-16 (R-7 P5, U3b: the lore pool concatenates the
+		// conversation's `band` port), and once more on 2026-09-16 (U5a,
+		// R-18 (3): the turn strategy takes the inlet's `speaker` reference
+		// beside the bare id) — none by this genre.
+		// (was "18917086c3f34", then "3f0e84937c657", then "19cac7b1208d4e",
+		//  then "1ace29594a6283")
+		expect(canonicalHash(built(RESPOND_SPEC_ID))).toBe("1c503cc437da52")
 	})
 })

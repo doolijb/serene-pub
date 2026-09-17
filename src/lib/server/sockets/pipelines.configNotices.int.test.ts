@@ -109,6 +109,32 @@ const fakeSocket = (isAdmin = true) =>
 
 const noopEmit = () => {}
 
+/**
+ * An `emitToUser` that keeps what a handler sent, resolving a lazy payload.
+ *
+ * `pipelines:configNotices` is a gated event, so the refreshed list a dismissal
+ * answers with is now a THUNK the real `emitToUser` runs only for a socket that
+ * wants it (socket-interest plan, ruling 4) — with no banner open anywhere, the
+ * pending-notice read is never paid. Running it here is what the gate does when
+ * somebody IS listening, and it is where the list lives: `register` discards
+ * what a handler returns, so the emit has always been the real answer.
+ */
+function collecting() {
+	const sent: { event: string; data: any }[] = []
+	return {
+		sent,
+		emit: async (event: string, data: any) => {
+			sent.push({
+				event,
+				data: typeof data === "function" ? await data() : data
+			})
+		},
+		/** The payload of the last emit of one event. */
+		last: (event: string) =>
+			[...sent].reverse().find((e) => e.event === event)?.data
+	}
+}
+
 describe("pipelines:configNotices", () => {
 	test("answers with the pending notices, named and valued", async () => {
 		const { pipelinesConfigNotices } = await import("./pipelines")
@@ -175,13 +201,18 @@ describe("pipelines:acknowledgeConfigNotices", () => {
 		const { pipelinesAcknowledgeConfigNotices } = await import(
 			"./pipelines"
 		)
+		const out = collecting()
 		const res = await pipelinesAcknowledgeConfigNotices.handler(
 			fakeSocket(),
 			{ slug: "test:spec/notices", configId, noticeId: culledId },
-			noopEmit
+			out.emit
 		)
 		expect(res.error).toBeUndefined()
-		expect((res.notices ?? []).map((n) => n.id)).toEqual([backfilledId])
+		expect(
+			(out.last("pipelines:configNotices").notices ?? []).map(
+				(n: any) => n.id
+			)
+		).toEqual([backfilledId])
 	})
 
 	test("the dismissal is on the row, so it outlives the request", async () => {
@@ -224,11 +255,12 @@ describe("pipelines:acknowledgeConfigNotices", () => {
 		const { pipelinesAcknowledgeConfigNotices } = await import(
 			"./pipelines"
 		)
-		const res = await pipelinesAcknowledgeConfigNotices.handler(
+		const out = collecting()
+		await pipelinesAcknowledgeConfigNotices.handler(
 			fakeSocket(),
 			{ slug: "test:spec/notices", configId },
-			noopEmit
+			out.emit
 		)
-		expect(res.notices).toEqual([])
+		expect(out.last("pipelines:configNotices").notices).toEqual([])
 	})
 })

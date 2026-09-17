@@ -22,12 +22,25 @@
 		parts: SelectMessagePart[]
 		activeRevisions: Record<string, number>
 		onContentClick?: (e: MouseEvent) => void
-		/** Declared block actions (20 §6) — fn + payload up to the page. */
-		onAction?: (fn: string, payload?: Record<string, unknown>) => void
+		/** Declared block actions (20 §6) — fn + payload up to the page; a form's `blockId` rides along (U5d). */
+		onAction?: (
+			fn: string,
+			payload?: Record<string, unknown>,
+			action?: string,
+			blockId?: string
+		) => void
+		/** The message body, so a form's question is not shown twice. */
+		bodyText?: string
 	}
 
-	let { messageId, parts, activeRevisions, onContentClick, onAction }: Props =
-		$props()
+	let {
+		messageId,
+		parts,
+		activeRevisions,
+		onContentClick,
+		onAction,
+		bodyText
+	}: Props = $props()
 
 	/** Expanded state per collapsible, keyed by part id. Default collapsed. */
 	let expanded = $state<Record<number, boolean>>({})
@@ -179,7 +192,7 @@
 		{:else if Array.isArray((part.data as any)?.blocks)}
 			<!-- A block tree (20 §6): plugin content as data, core's renderer,
 			     whatever the part's namespace — the convention, not a registry. -->
-			<MessageBlocksView blocks={(part.data as any).blocks} {onAction} />
+			<MessageBlocksView blocks={(part.data as any).blocks} {onAction} {bodyText} />
 		{:else}
 			{@render collapsible(part, part.type, "puzzle", unknownBody(part))}
 		{/if}

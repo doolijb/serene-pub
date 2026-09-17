@@ -10,7 +10,7 @@
  * implementation with no declaration is power nothing can reference.
  *
  * Empty today: core has no in-process hook implementations yet (core's
- * script *sites* are declared on node types in @serene-pub/contracts and
+ * script *sites* are declared on node definitions in @serene-pub/contracts and
  * filled by user/plugin scripts through the unified dispatch). The first
  * core hook lands in both maps in the same commit, or boot refuses.
  */

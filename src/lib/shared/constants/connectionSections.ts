@@ -70,7 +70,7 @@ export const CONNECTION_SECTIONS: readonly ConnectionSection[] = [
 		label: "Large Language Models",
 		description:
 			"Connections used for session, summarization, and narration.",
-		icon: "Cable",
+		icon: "Type",
 		starCapability: "text->text",
 		starVerb: "chat",
 		servicePicker: "AI Service",
@@ -93,6 +93,9 @@ export const CONNECTION_SECTIONS: readonly ConnectionSection[] = [
 		label: "Embeddings",
 		description:
 			"Turns lore, characters and past messages into vectors so retrieval can find them.",
+		// `Zap` is the embedding kind's icon — the same mark an entry shows when
+		// its vectors are current (EmbeddingStatusIcon) and the Embeddings group
+		// wears in admin/defaults. `Network` is the narrative graph's (NOMENCLATURE §22).
 		icon: "Zap",
 		starCapability: "text->embedding",
 		starVerb: "embeddings",

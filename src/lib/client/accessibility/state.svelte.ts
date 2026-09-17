@@ -238,10 +238,13 @@ export function mapToAccessibleRoute(pathname: string): string {
 	if (sessionMatch) return `/document-view/sessions/${sessionMatch[1]}`
 
 	if (pathname === "/library/characters") return "/document-view/characters"
-	if (pathname === "/library/personas") return "/document-view/personas"
 
 	if (pathname === "/docs") return "/document-view/docs"
-	const docMatch = pathname.match(/^\/docs\/([a-z0-9-]+)\/?$/i)
+	// A doc slug can contain slashes and underscores: the SDK reference pages
+	// are namespaced under their source and named after node ids
+	// ("sdk/pipelines/core_spec_respond"). The quantifier is lazy so the
+	// optional trailing slash is not swallowed into the capture.
+	const docMatch = pathname.match(/^\/docs\/([a-z0-9_/-]+?)\/?$/i)
 	if (docMatch) return `/document-view/docs/${docMatch[1]}`
 
 	return "/document-view"
@@ -252,7 +255,7 @@ export function mapToAccessibleRoute(pathname: string): string {
  * "Turn Off Document View" so leaving Document View lands on the equivalent
  * standard page when one exists (eg. the same open session), falling back to
  * the standard home ("/") for anything that only exists as a sidebar panel
- * in the standard UI (characters/personas' own lists, connections, manager
+ * in the standard UI (the characters list, connections, manager
  * pages, settings, session creation/editing) rather than a dedicated route.
  */
 export function mapToStandardRoute(pathname: string): string {
@@ -266,11 +269,11 @@ export function mapToStandardRoute(pathname: string): string {
 
 	if (pathname === "/document-view/characters/browse")
 		return "/library/characters"
-	if (pathname === "/document-view/personas/browse")
-		return "/library/personas"
 
 	if (pathname === "/document-view/docs") return "/docs"
-	const docMatch = pathname.match(/^\/document-view\/docs\/([a-z0-9-]+)\/?$/i)
+	const docMatch = pathname.match(
+		/^\/document-view\/docs\/([a-z0-9_/-]+?)\/?$/i
+	)
 	if (docMatch) return `/docs/${docMatch[1]}`
 
 	return "/"

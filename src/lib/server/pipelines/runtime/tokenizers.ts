@@ -23,7 +23,7 @@
  * The SDK is consumed through a `file:` link to a sibling checkout, so a bare
  * specifier written inside it resolves against *that* tree, where these four
  * packages are not installed and must never be: they are ~69 MB, an author who
- * installed the SDK to write one node type should not download a BPE merge
+ * installed the SDK to write one node definition should not download a BPE merge
  * table, and the app already carries them for the legacy path.
  *
  * So core registers eight loaders and passes an id. `defineTokenizer` is the
@@ -47,13 +47,16 @@
  */
 
 import { defineTokenizer } from "@serene-pub/sdk/tokenizers"
-import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import {
-	resolveCapabilityTarget,
-	TEXT_CAPABILITY
-} from "$lib/server/connections/capabilityTarget"
-import * as schema from "$lib/server/db/schema"
-import { eq } from "drizzle-orm"
+	getDefinition,
+	resolveConfig,
+	slotConnectionId,
+	SLOT_VALUE,
+	type ConfigWorld,
+	type SpecDocument
+} from "@serene-pub/sdk"
+import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
+import { spineProviders } from "$lib/server/pipelines/runtime/specShape"
 
 /**
  * What a counter measures when handed something that is not a string.
@@ -145,57 +148,63 @@ defineTokenizer({
 /**
  * Which tokenizer THIS run budgets with.
  *
- * Resolved from the connection the run will most likely dispatch to, by the
- * same rule `connectionStopsFor` uses for the connection's stop guards — the
- * registered default for `text->text`, with the session's own override on top.
+ * Resolved off the RUN's connection — the one the executor will resolve for
+ * the node the budget sizes to — read from the same world the run is about to
+ * resolve against, with the SDK's own primitives (`resolveConfig`, the pick
+ * then the instance default by shape). Not a second walk of the database
+ * (R-8): the capability default is already IN the world (`activeConnection`),
+ * and so is a pipeline panel's per-node pick, which a walk of
+ * `resolveCapabilityTarget` alone cannot see. The tokenizer therefore follows
+ * the connection the request goes to, which is what a connection carries one
+ * for.
  *
- * ⚠ **Tier 2 is deliberately not consulted.** A pipeline config can point one
- * provider node's `connection` slot somewhere else, and that decision is made
- * *inside* the run, when the executor resolves that node's slots. The tokenizer
- * has to be resident before the first block is counted, so there is no moment
- * at which both facts are known. Reaching for it here would mean reimplementing
- * slot resolution outside the executor and guessing which provider counts — two
- * spellings of one rule, which is the failure `capabilityTarget.ts`'s own header
- * is about. A per-node connection override therefore budgets with the default
- * connection's tokenizer; that is a smaller error than the flat estimate this
- * replaces, and an honest one.
+ * Which node: the context-budget node's `connection` ref names it
+ * (`slot.connectionOf('generate')` on the shipped specs); a document with no
+ * budget node budgets for its first spine provider, the preview target.
+ *
+ * ⚠ The tokenizer has to be resident before the first block is counted, so it
+ * is read here, before `run`, rather than at the node — which is why this is a
+ * pre-run read of the world and not a fact the executor reports back. The two
+ * cannot disagree: `resolveConfig` is the executor's own resolution, over the
+ * same rows, and the shape fallback is the one its `resolveSlot` takes.
  *
  * Returns `undefined` rather than an id when nothing is set up, which the SDK
  * reads as "no preference" and answers with the rough estimate — silently,
  * because a host that configured nothing has no problem to report.
  */
-export async function tokenizerFor(
-	db: Db,
-	sessionId?: number | null
-): Promise<string | undefined> {
+export function tokenizerFor(
+	world: ConfigWorld,
+	doc: SpecDocument
+): string | undefined {
 	try {
-		const target = await resolveCapabilityTarget(db, {
-			capability: TEXT_CAPABILITY,
-			sessionOverride: sessionId
-				? { connectionId: await sessionConnectionId(db, sessionId) }
-				: null
-		})
-		// The refusal sentence is dropped rather than surfaced, for the reason
-		// `connectionStopsFor` gives: nothing here is the run. A turn with no
-		// connection fails at dispatch with that same sentence, and raising it
-		// from a budgeting lookup would report a missing default twice, from the
-		// wrong place, and before the thing that actually needs one.
-		if (!target.ok) return undefined
-		return target.connection.tokenCounter ?? undefined
+		const budget = doc.nodes.find(
+			(n) => n.definitionId === "core:task/context-budget"
+		)
+		const ref = budget?.config?.["connection"] as
+			| { __ref?: unknown; ofNode?: unknown }
+			| undefined
+		const named =
+			ref && ref.__ref === "slot" && typeof ref.ofNode === "string"
+				? doc.nodes.find((n) => n.key === ref.ofNode)
+				: undefined
+		const target = named ?? spineProviders(doc)[0]
+		if (!target) return undefined
+		const stored = resolveConfig(world, [target.key])[target.key]?.[
+			"connection"
+		]?.[SLOT_VALUE]
+		const shape = getDefinition(`${target.definitionId}@${target.definitionVersion}`)?.shape
+		const chosenId =
+			stored == null
+				? shape
+					? world.activeConnection[shape]
+					: undefined
+				: slotConnectionId(stored)
+		if (chosenId == null) return undefined
+		const connection = world.connections.find(
+			(c) => String(c.id) === String(chosenId)
+		)
+		return connection?.metadata?.tokenizer ?? undefined
 	} catch {
 		return undefined
 	}
-}
-
-/** The session's own connection choice — tier 3, and one column of it. */
-async function sessionConnectionId(
-	db: Db,
-	sessionId: number
-): Promise<number | undefined> {
-	const [row] = await db
-		.select({ connectionId: schema.sessions.connectionId })
-		.from(schema.sessions)
-		.where(eq(schema.sessions.id, sessionId))
-		.limit(1)
-	return row?.connectionId ?? undefined
 }

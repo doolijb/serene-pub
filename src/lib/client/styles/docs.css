@@ -1,0 +1,444 @@
+/**
+ * The docs dialect (NOMENCLATURE §27).
+ *
+ * `prose` already styles the ordinary markdown a page is mostly made of. What
+ * is left is the markup the compiler adds on top of it — banners, admonitions,
+ * captioned figures, playgrounds and shiki code blocks — none of which Tailwind
+ * Typography knows about.
+ *
+ * Everything is scoped under `.docs-article` on purpose. These are generic
+ * class names emitted by a package, and unscoped rules for `.doc-figure` or
+ * `.shiki` would be waiting for the first component that happens to pick the
+ * same word. `.doc-banner` is the one exception: the compiler prepends it to
+ * every page of a source, and the docs index reuses it to show that source's
+ * banner once above the group, outside any article. Document View renders the
+ * same markup under `.a11y-doc-content`
+ * and deliberately does NOT get these rules: it keeps its own greyscale palette
+ * and its own AAA contrast promise (STYLE-GUIDE §2.5), and the dialect degrades
+ * to plain semantic markup there rather than borrowing themed colour it never
+ * measured.
+ *
+ * Colours are Skeleton role tokens and paired for light mode throughout
+ * (STYLE-GUIDE §2.6): the docs are read under all twenty-five themes.
+ */
+
+/* --- Banner ---------------------------------------------------------------
+   The per-source notice, prepended to every page of a source. It is a caveat
+   about the whole page rather than a point inside it, so it sits above the
+   content as a bar and carries no icon — an icon here would compete with the
+   admonitions below, which do use one and mean something narrower. */
+.doc-banner,
+.docs-article .doc-banner {
+	border-left: 3px solid var(--color-warning-500);
+	border-radius: var(--radius-container, 0.5rem);
+	background-color: color-mix(
+		in oklch,
+		var(--color-warning-500) 12%,
+		transparent
+	);
+	color: var(--color-surface-700);
+	padding: 0.75rem 1rem;
+	margin-block: 0 1.5rem;
+	font-size: 0.875rem;
+	line-height: 1.5;
+}
+
+[data-mode="dark"] .doc-banner {
+	color: var(--color-surface-200);
+}
+
+/* --- Admonitions ----------------------------------------------------------
+   note = surface (an aside), tip = success (something that helps), warning =
+   warning (something that costs you). Three kinds and no more: a palette of
+   callouts wide enough to choose from is a palette nobody reads. */
+.docs-article .doc-admonition {
+	border: 1px solid var(--color-surface-300);
+	border-left-width: 3px;
+	border-radius: var(--radius-container, 0.5rem);
+	padding: 0.875rem 1rem;
+	margin-block: 1.5rem;
+}
+
+[data-mode="dark"] .docs-article .doc-admonition {
+	border-color: var(--color-surface-700);
+}
+
+.docs-article .doc-admonition > :first-child {
+	margin-top: 0;
+}
+
+.docs-article .doc-admonition > :last-child {
+	margin-bottom: 0;
+}
+
+.docs-article .doc-admonition-title {
+	font-weight: 600;
+	font-size: 0.8125rem;
+	letter-spacing: 0.02em;
+	text-transform: uppercase;
+	margin-bottom: 0.375rem;
+}
+
+.docs-article .doc-admonition-note {
+	border-left-color: var(--color-surface-500);
+	background-color: color-mix(
+		in oklch,
+		var(--color-surface-500) 8%,
+		transparent
+	);
+}
+.docs-article .doc-admonition-note .doc-admonition-title {
+	color: var(--color-surface-700);
+}
+[data-mode="dark"] .docs-article .doc-admonition-note .doc-admonition-title {
+	color: var(--color-surface-300);
+}
+
+.docs-article .doc-admonition-tip {
+	border-left-color: var(--color-success-500);
+	background-color: color-mix(
+		in oklch,
+		var(--color-success-500) 10%,
+		transparent
+	);
+}
+.docs-article .doc-admonition-tip .doc-admonition-title {
+	color: var(--color-success-700);
+}
+[data-mode="dark"] .docs-article .doc-admonition-tip .doc-admonition-title {
+	color: var(--color-success-300);
+}
+
+.docs-article .doc-admonition-warning {
+	border-left-color: var(--color-warning-500);
+	background-color: color-mix(
+		in oklch,
+		var(--color-warning-500) 10%,
+		transparent
+	);
+}
+.docs-article .doc-admonition-warning .doc-admonition-title {
+	color: var(--color-warning-700);
+}
+[data-mode="dark"] .docs-article .doc-admonition-warning .doc-admonition-title {
+	color: var(--color-warning-300);
+}
+
+/* --- Figures --------------------------------------------------------------
+   A screenshot is a card: the same rounded, bordered recipe as everything else
+   that sits on the page ground (STYLE-GUIDE §6.4). max-width keeps a 2x
+   screenshot inside a narrow column instead of forcing the page to scroll
+   sideways, which §11's checklist forbids. */
+.docs-article .doc-figure {
+	margin-block: 1.75rem;
+}
+
+.docs-article .doc-figure img {
+	display: block;
+	max-width: 100%;
+	height: auto;
+	margin-inline: auto;
+	border: 1px solid var(--color-surface-300);
+	border-radius: 12px;
+}
+
+[data-mode="dark"] .docs-article .doc-figure img {
+	border-color: var(--color-surface-800);
+}
+
+.docs-article .doc-figure figcaption {
+	margin-top: 0.625rem;
+	text-align: center;
+	font-size: 0.8125rem;
+	line-height: 1.5;
+	color: var(--color-surface-600);
+}
+
+[data-mode="dark"] .docs-article .doc-figure figcaption {
+	color: var(--color-surface-400);
+}
+
+/* --- Pipeline graphs --------------------------------------------------
+   The compiler's other generated figure (@serene-pub/sdk docs/README.md,
+   "Pipeline graphs"): an SVG of a spec's inlet/query/task/oracle/outlet
+   chain. Every stroke and fill in the markup is `currentColor` or `none` as
+   a presentation attribute — deliberately uncoloured, because the app and
+   the standalone site theme these pages differently — so this stylesheet is
+   the only place any of it gets a colour. Same card recipe as `.doc-figure`
+   (STYLE-GUIDE §6.4): rounded, 1px border, page-ground background.
+   `overflow-x: auto` because core's own `core:spec/respond` lays out at
+   about 2400×1360 — without it a wide graph would either overrun the column
+   or scale into illegibility, exactly as an unwrapped `.doc-table` would. */
+.docs-article .doc-graph {
+	display: block;
+	max-width: 100%;
+	overflow: auto;
+	/* A 27-node map is ~2400×1400px; the reader scrolls inside the card
+	   rather than the page growing by a screen and a half. */
+	max-height: 32rem;
+	margin-block: 1.75rem;
+	padding: 0.75rem;
+	border: 1px solid var(--color-surface-300);
+	border-radius: 12px;
+	background-color: var(--color-surface-50);
+}
+
+[data-mode="dark"] .docs-article .doc-graph {
+	border-color: var(--color-surface-800);
+	background-color: var(--color-surface-950);
+}
+
+/* The svg carries its own viewBox and matching width/height (the compiler's
+   layout, in px) and must NOT be stretched to fill the column — the wrapper
+   above is what scrolls instead. `display: block` drops the inline
+   baseline gap svg otherwise sits in. Setting `color` here is what tints
+   the arrowhead `<marker>`: its `<path fill="currentColor">` lives in
+   `<defs>`, a descendant of this svg but not of any one edge, so it can
+   only ever inherit from here. */
+.docs-article .doc-graph svg {
+	display: block;
+	color: var(--color-surface-400);
+}
+
+[data-mode="dark"] .docs-article .doc-graph svg {
+	color: var(--color-surface-600);
+}
+
+.docs-article .doc-graph figcaption {
+	margin-top: 0.625rem;
+	text-align: center;
+	font-size: 0.8125rem;
+	line-height: 1.5;
+	color: var(--color-surface-600);
+}
+
+[data-mode="dark"] .docs-article .doc-graph figcaption {
+	color: var(--color-surface-400);
+}
+
+/* Node cards sit one step lighter than the figure's own ground — the same
+   ladder `panel-card` climbs in app.css. Kind is the one thing that gets a
+   colour of its own, carried entirely by the stroke so the card still reads
+   as a card. */
+.docs-article .doc-graph-node rect {
+	fill: var(--color-surface-100);
+	stroke-width: 1.5;
+}
+
+[data-mode="dark"] .docs-article .doc-graph-node rect {
+	fill: var(--color-surface-900);
+}
+
+.docs-article .doc-graph-node-inlet rect {
+	stroke: var(--color-primary-500);
+}
+
+.docs-article .doc-graph-node-query rect {
+	stroke: var(--color-secondary-500);
+}
+
+.docs-article .doc-graph-node-task rect {
+	stroke: var(--color-surface-500);
+}
+
+.docs-article .doc-graph-node-oracle rect {
+	stroke: var(--color-warning-500);
+}
+
+.docs-article .doc-graph-node-outlet rect {
+	stroke: var(--color-success-500);
+}
+
+.docs-article .doc-graph-node text {
+	fill: var(--color-surface-700);
+	font: 500 13px/1.2 var(--font-sans, ui-sans-serif);
+}
+
+[data-mode="dark"] .docs-article .doc-graph-node text {
+	fill: var(--color-surface-200);
+}
+
+.docs-article .doc-graph-node .doc-graph-sublabel {
+	fill: var(--color-surface-600);
+	font-size: 11px;
+	font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+[data-mode="dark"] .docs-article .doc-graph-node .doc-graph-sublabel {
+	fill: var(--color-surface-400);
+}
+
+.docs-article .doc-graph-edge {
+	fill: none;
+	stroke: var(--color-surface-400);
+	stroke-width: 1.25;
+}
+
+[data-mode="dark"] .docs-article .doc-graph-edge {
+	stroke: var(--color-surface-600);
+}
+
+.docs-article .doc-graph-edge-label {
+	fill: var(--color-surface-600);
+	font: 400 11px/1.2 var(--font-sans, ui-sans-serif);
+}
+
+[data-mode="dark"] .docs-article .doc-graph-edge-label {
+	fill: var(--color-surface-400);
+}
+
+/* --- Playground -----------------------------------------------------------
+   One card holding two faces of the same code — the highlighted `pre` the
+   compiler wrote, and the frame that runs it — with a toolbar above them
+   carrying the one control that trades one for the other
+   (`docsPlayground.ts`, NOMENCLATURE §27).
+
+   A block the compiler emitted without a source script gets no toolbar at
+   all: it is still a code block, and the card is all the treatment it wants.
+   Nothing here implies a control the page does not have. */
+.docs-article .doc-playground {
+	border: 1px solid var(--color-surface-300);
+	border-radius: var(--radius-container, 0.5rem);
+	overflow: hidden;
+	margin-block: 1.5rem;
+}
+
+[data-mode="dark"] .docs-article .doc-playground {
+	border-color: var(--color-surface-800);
+}
+
+/* The card draws the border and the radius; its contents fill it edge to
+   edge rather than each drawing a second one inside it, and `prose`'s own
+   `pre` margin would otherwise show as a band of card ground. */
+.docs-article .doc-playground > pre {
+	margin: 0;
+	border: 0;
+	border-radius: 0;
+}
+
+/* The toolbar sits above both faces, so the control is in the same place
+   whichever one is showing. Tonal, not filled: this is a secondary action on
+   a reading surface and there is no primary here (STYLE-GUIDE §6.1). */
+.docs-article .doc-playground-toolbar {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 0.5rem;
+	padding: 0.4375rem 0.5rem;
+	border-bottom: 1px solid var(--color-surface-300);
+	background-color: var(--color-surface-100);
+}
+
+[data-mode="dark"] .docs-article .doc-playground-toolbar {
+	border-bottom-color: var(--color-surface-800);
+	background-color: var(--color-surface-900);
+}
+
+/* Height is set by the host from the frame's own `playground:height` messages
+   and clamped there, so nothing about it is stated here. */
+.docs-article .doc-playground-frame {
+	display: block;
+	width: 100%;
+	border: 0;
+	background-color: var(--color-surface-50);
+}
+
+[data-mode="dark"] .docs-article .doc-playground-frame {
+	background-color: var(--color-surface-950);
+}
+
+/* The two faces trade places by `hidden`, and BOTH stay in the DOM: removing
+   the frame to show the code would end the session the reader started. Spelt
+   out because the rules above set `display` and would otherwise win. */
+.docs-article .doc-playground > pre[hidden],
+.docs-article .doc-playground > iframe[hidden] {
+	display: none;
+}
+
+/* --- Code blocks ----------------------------------------------------------
+   Shiki renders one set of spans carrying BOTH themes as custom properties, so
+   the same markup serves light and dark and the theme switch costs no re-render
+   and no second copy of the highlighted HTML. Reading each span's own
+   `--shiki-light`/`--shiki-dark` back through `color` is the whole of "pick
+   one": without it every span falls back to its inline `color`, which is the
+   light theme, and dark mode shows dark ink on a dark ground.
+
+   ⚠ The dark selector matches `[data-mode="dark"]` because that is where this
+   app puts the mode — on <html>, read by app.css's `dark` variant. A media
+   query on prefers-color-scheme would ignore the user's own choice. */
+.docs-article .shiki span {
+	color: var(--shiki-light);
+}
+
+[data-mode="dark"] .docs-article .shiki span {
+	color: var(--shiki-dark);
+}
+
+/* One rule set for every `pre`, highlighted or not. Shiki sets
+   `--shiki-light(-bg)`/`--shiki-dark(-bg)` inline on the `<pre>` it renders,
+   so a highlighted block keeps its own theme colours; a fence Shiki left
+   untouched (no language, or one it does not know) never gets those vars, so
+   the fallback is what keeps it off Typography's near-black `pre` default in
+   light mode. */
+.docs-article pre {
+	border: 1px solid var(--color-surface-300);
+	border-radius: var(--radius-container, 0.5rem);
+	padding: 0.875rem 1rem;
+	/* The one place a doc page may scroll sideways (STYLE-GUIDE §11): a code
+	   line cannot be wrapped without changing what it says. */
+	overflow-x: auto;
+	font-size: 0.8125rem;
+	line-height: 1.6;
+	background: var(--shiki-light-bg, var(--color-surface-100));
+	color: var(--shiki-light, var(--color-surface-700));
+}
+
+[data-mode="dark"] .docs-article pre {
+	border-color: var(--color-surface-700);
+	background: var(--shiki-dark-bg, var(--color-surface-900));
+	color: var(--shiki-dark, var(--color-surface-200));
+}
+
+/* prose puts quotes and a tinted ground on inline <code>; inside a shiki block
+   that is a second background fighting the highlighted one. */
+.docs-article pre.shiki code {
+	background: none;
+	padding: 0;
+	font-size: inherit;
+	font-weight: inherit;
+}
+
+.docs-article pre.shiki code::before,
+.docs-article pre.shiki code::after {
+	content: none;
+}
+
+/* Typography quotes every inline `code` with a literal backtick via
+   `::before`/`::after` content — inside headings and table cells too, since
+   they get `prose` styling the same as a paragraph. Drop only the quote; the
+   tinted pill (background/padding/radius) is what still reads as code. */
+.docs-article :where(code)::before,
+.docs-article :where(code)::after {
+	content: none;
+}
+
+/* --- Tables -----------------------------------------------------------
+   The compiler wraps every table in a `<div class="doc-table">` so a wide
+   reference table scrolls sideways (STYLE-GUIDE §11) instead of forcing the
+   whole page to. `table` keeps its natural column widths inside the
+   scroller rather than stretching to fill it. `prose`'s vertical margin
+   moves from `table` to the wrapper so a scrolling table takes the same
+   space in the flow as one that fits. */
+.docs-article .doc-table {
+	overflow-x: auto;
+	max-width: 100%;
+	margin-block: 2em;
+}
+
+.docs-article .doc-table > table {
+	/* Cells wrap to the column first; the wrapper scrolls only when a
+	   column cannot shrink any further (a phone-width option table). */
+	min-width: 100%;
+	width: auto;
+	margin: 0;
+}

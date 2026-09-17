@@ -61,8 +61,8 @@ describe("every published node has something to run it", () => {
 
 		const rows = await db
 			.select({
-				typeId: schema.pipelineNodes.typeId,
-				version: schema.pipelineNodes.typeVersion,
+				definitionId: schema.pipelineNodes.definitionId,
+				version: schema.pipelineNodes.definitionVersion,
 				nodeKey: schema.pipelineNodes.nodeKey,
 				slug: schema.pipelineSpecs.slug
 			})
@@ -82,8 +82,8 @@ describe("every published node has something to run it", () => {
 		expect(rows.length).toBeGreaterThan(0)
 
 		const unbound = rows
-			.filter((r: any) => !bound.has(`${r.typeId}@${r.version}`))
-			.map((r: any) => `${r.slug} · ${r.nodeKey} (${r.typeId})`)
+			.filter((r: any) => !bound.has(`${r.definitionId}@${r.version}`))
+			.map((r: any) => `${r.slug} · ${r.nodeKey} (${r.definitionId})`)
 
 		expect(unbound, `unbound nodes:\n${unbound.join("\n")}`).toEqual([])
 	})
@@ -108,15 +108,15 @@ describe("every provider has a dispatch path", () => {
 		// is covered, which the throw alone cannot tell us in advance.
 		const providers = await db
 			.select({
-				typeId: schema.pipelineNodes.typeId,
+				definitionId: schema.pipelineNodes.definitionId,
 				kind: schema.pipelineNodes.kind
 			})
 			.from(schema.pipelineNodes)
 
 		const ids = new Set(
 			providers
-				.filter((p: any) => p.kind === "provider")
-				.map((p: any) => p.typeId)
+				.filter((p: any) => p.kind === "oracle")
+				.map((p: any) => p.definitionId)
 		)
 		expect(ids.size).toBeGreaterThan(0)
 
@@ -130,11 +130,11 @@ describe("every provider has a dispatch path", () => {
 		// plugin sandbox behind it.
 		const dispatchable = new Set([
 			...STEP_TYPES_FOR_TEST,
-			"core:provider/generate-text",
-			"core:provider/generate-json",
-			"core:provider/embed-text",
-			"core:provider/generate-image",
-			"core:provider/run-tool"
+			"core:oracle/generate-text",
+			"core:oracle/generate-json",
+			"core:oracle/embed-text",
+			"core:oracle/generate-image",
+			"core:oracle/run-tool"
 		])
 
 		const missing = [...ids].filter((id) => !dispatchable.has(id))

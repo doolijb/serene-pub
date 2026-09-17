@@ -10,33 +10,42 @@ A session lives at `/sessions/[id]` and is built from a few core pieces:
 - **Personas** — one or more user-driven participants. The session owner and any guests each send messages as one of the personas attached to the session.
 - **Scenario** — an optional block of scene-setting text that's fed into every prompt.
 - **Lorebook** — an optional bound [lorebook](./lorebooks.md) supplying world lore, character lore, and history entries.
-- **AI overrides** — admin-only per-session overrides for connection, sampling, [prompt config](./prompt-configs.md), and [Narrator Prompt config](./prompt-configs.md#session-prompts-narrator).
+- **Which connection a session uses** — none of its own: the pipeline configuration's pair, or the instance default. Overrides are by model, never by connection (see [below](#which-connection-a-session-uses)).
 
 Everything in the session updates live over sockets — new messages, generation progress, edits, and deletions are pushed to every connected participant (owner and guests alike) as they happen.
 
 Under the hood every session is a `roleplay`-type session with an `isGroup` flag that's automatically true once more than one character is attached.
 
-## Starting a New Session
+## Starting a session
 
-Click the **+** button at the top of the Sessions sidebar to open the new-session form. Creating a session is three answers, stacked down one column, each appearing once the one above it is answered: first the **Genre** — what kind of session this is, which decides what systems exist for it (characters, personas, lorebooks, the composer) and stays with the session for its life; then the **Preset** — the bundle an administrator has enabled for that genre, which decides which pipelines answer its events and which actions come along; then the session's own **Settings**, pre-filled from whatever the preset supplies — switching presets before you save only fills in fields you haven't typed into yet, never overwriting something you've already entered. A step with only one answer takes it silently rather than asking, so a stock install — one genre, one preset — shows you the settings form alone, exactly as it always has. If an administrator has enabled no preset for a genre, the form says so and **Create** is disabled: there is nothing to start the session from.
+Click **New** at the top of the Sessions sidebar — or **Start a session** on the home screen — to open the start screen. Both land on the same screen: the home's button opens the Sessions view straight onto it, passing along anything it already knows (a character to start with, a persona to speak as), and the wizard's first session on the home screen picks the genre and preset by the same rules, so its defaults and the start screen's never disagree. Starting a session is four answers stacked down one column, each a card that collapses to a one-line summary once it is answered, with a **Change** link to reopen it:
 
-The preset is doing more than labelling the bundle: its **event bindings** are what decide which pipeline answers each of the genre's events — the reply, the greeting on creation, each action that comes along — and which named configuration that pipeline runs with, so two presets on one genre can differ entirely in what a turn actually does. Administrators set both of those, and the pre-filled values the settings step opens with, on the preset's own page under **Admin → Session presets** (bindings under _Event bindings_, the pre-fill under _Creation defaults_) — the latter only ever fills in fields the person creating the session hasn't already touched, so it can't clobber something they've typed.
+1. **Genre** — what kind of session this is. The genre decides which systems exist for it (characters, personas, lorebooks, the composer) and stays with the session for its life. The screen opens on the genre whose default preset an administrator has starred, or the first one registered.
+2. **Preset** — the bundle an administrator has enabled for that genre, which decides which pipelines answer its events and which actions come along. It also supplies the pre-fill the fields below start from; switching presets only fills in fields you haven't typed into yet, never overwriting something you've already entered.
+3. **Who is in it** — the characters, at least as many as the genre requires, and the persona you play as. Your default persona is picked for you. With more than eight characters a filter box appears above the list.
+4. **Name** — optional. Leave it empty and the session takes the name shown in the box as a placeholder: _Session with Wren_ for one character, _Wren, Brother Alder and Sable_ for a group. Under it, **Add a scenario** reveals an optional Scenario box — scene-setting text every prompt will see. It stays closed unless you ask for it, or unless the preset's creation defaults already put text there, in which case it opens with that text in it.
+
+A step with exactly one answer takes it silently and shows as its summary line rather than asking — so a stock install, one genre and one preset, opens on **Who is in it**. If an administrator has enabled no preset for a genre, the step says so and **Start** is disabled: there is nothing to start the session from.
+
+Everything else a session has — the lorebook, tags, the group reply strategy, turn order, per-pipeline settings, and the scenario again if you skipped it here — is set afterwards in the session's own settings. See [Editing session settings](#editing-session-settings-later).
+
+The preset is doing more than labelling the bundle: its **event bindings** are what decide which pipeline answers each of the genre's events — the reply, the greeting on creation, each action that comes along — and which named configuration that pipeline runs with, so two presets on one genre can differ entirely in what a turn actually does. Administrators set both of those, and the pre-filled values the start screen opens with, on the preset's own page under **Admin → Session presets** (bindings under _Event bindings_, the pre-fill under _Creation defaults_).
+
+The preset is the session's second word on the matter, not its first. A session is a work rather than a preference, so a pipeline the session has chosen for itself — its own binding for the reply or for an action — wins over the preset's binding for that event, and the preset in turn wins over an administrator's instance-wide default; only then does the genre's own pipeline answer. A choice that has stopped being eligible — the pipeline it names was retired, or no longer answers this genre's reply — is skipped rather than honoured, and the next layer decides. Today nothing in the session screens makes that per-session choice; it is reachable through the session owner's socket API alone (`sessions:bindFunction`), and the lifecycle events — creation, the greeting — have no per-session choice yet, so for those the preset is still the first word.
 
 If a bound pipeline later stops being available — an upgrade republished it, a plugin that shipped it was removed — the session does **not** stop working: it runs the genre's default pipeline for that event instead, and says so. Everyone in the session sees a banner naming which event fell back (administrators also get the pipeline it was bound to and a link to fix it), the run's own report says which pipeline actually ran and why, and the preset is flagged in **Admin → Session presets** until the binding resolves again.
 
-The settings step requires:
-
-- **Session Name** — required, shown in the sidebar and browser tab.
-- **Characters** — at least one. Characters are listed in the order you add them; when there's more than one, you can drag them by the grip handle to reorder. This order is the round-robin turn order in group sessions.
-- **Personas** — at least one. Unlike Characters, the **Add Persona** button is never actually disabled — you can add multiple personas to a brand-new session before it's ever saved, the same as adding multiple characters.
-
-Optional fields available on the same form (covered in detail below): **Group Reply Strategy** (once 2+ characters are added), **Scenario**, **Lorebook**, **AI Override** (admin only), and **Tags**.
-
-Saving calls `sessions:create` (or `sessions:update` when editing) over the socket; a success toast confirms the save and the form closes. Open the session itself from its entry in the sidebar list.
+**Start** sends `sessions:create`, and the screen hands you straight to the new session. Leaving the screen part-answered — Escape, the back chevron, or closing the view — asks before it discards, the same confirmation the settings form uses.
 
 ### Editing Session Settings Later
 
-Reopening a session's settings (via the sidebar's Edit action, or the Edit button in a session's view panel) loads the same form used for creation, now pre-filled and with a few extra controls: per-character Active/Visibility toggles and the Guests section. Leaving the form with unsaved changes and trying to close the sidebar prompts a **"Your session has unsaved changes. Are you sure you want to discard them?"** confirmation before letting you navigate away.
+Reopening a session's settings (via the sidebar's Edit action, or Edit session in a session's detail) opens the session's own screen: its name at the top with **Save**, then three tabs.
+
+- **Participants** — the cast and the personas, each row carrying a drag handle, an Active switch, a visibility button and a remove action; removed participants, whose message history you can reassign; guests, when accounts are enabled; and the group reply strategy once there is more than one of anybody.
+- **Settings** — the scenario and the lorebook, the session's preset, its actions, turn order, any fields the genre declares, per-pipeline settings for this session only, and tags.
+- **Privacy** — what this session exposes of your own data, and to whom.
+
+A tab whose required field is missing carries a dot, so you can see where to look without opening it. Leaving the form with unsaved changes and trying to close the sidebar prompts a **"Your session has unsaved changes. Are you sure you want to discard them?"** confirmation before letting you navigate away.
 
 ### Guests
 
@@ -48,20 +57,25 @@ The sidebar's per-session overflow menu includes **Delete**, which opens a confi
 
 ## The Sessions Sidebar
 
-The sidebar list shows every session you own or have been added to as a guest, with:
+The sidebar list shows every session you own or have been added to as a guest. Each row is:
 
-- Stacked avatars for the session's characters and personas (up to 3 shown, with a "+N" badge for more).
-- The session name and a truncated list of character/persona names underneath.
-- A search box that filters by session name, persona name, character name, or tag.
+- A cover: the first character's picture, with the second badged onto its corner when the session has more than one, so a group reads as a group at a glance.
+- The session name, and at the end of the same line the time the session last moved ("2 h ago") with an ember dot before it when the last thing said was not yours — the session is waiting on you.
+- Underneath, the **last line**: who spoke and the opening of what they said. A session with nothing said in it yet lists its cast instead. While a reply is being written in that session — in this tab or anyone's — the line is the run's own status instead, with a pulsing dot: _Jasmine is thinking_, then _Jasmine is typing_, until the reply lands and the last line returns. The "your turn" dot yields to it.
+- A genre chip after the name, only on an install that actually has more than one genre, and a people icon when the session is one somebody shared with you.
 - A per-session overflow menu (View, Edit, Delete) — Delete is a destructive confirmation modal that also removes all of the session's messages.
 
-Clicking a session's **View** entry opens a compact read-only summary panel (characters, personas, scenario, tags) with **Go To Session** and **Edit** buttons, without leaving the sidebar. Clicking the session row itself navigates straight to `/sessions/[id]`.
+Above the list are a **New** button on its own row and, under it, the filter box and the **filter popout**. The box filters by session name, persona name, character name, or tag. The popout is a single choice: **All**, **Waiting on you** (every session whose last line is not yours), then one row per genre — only when there is more than one — and one row per tag any session carries. The choice shows as a dismissible chip under the toolbar and stacks with whatever you have typed, so a tag plus a word means both.
 
-The sidebar can also arrive pre-filtered: opening a session list from a character's or persona's own panel passes that character/persona's ID through, and the sidebar shows a removable filter chip plus only the matching sessions.
+The list itself is grouped by when each session last moved: **Today**, **Yesterday**, **This week**, **Earlier**, each heading appearing only when it has sessions under it. The session currently open sits above all of them under no heading, so it is never scrolled past.
+
+Clicking a session's **View** entry opens its read-only **detail** without leaving the sidebar: the session's cover and name, a line giving its genre, its message count and when it was last active, then cards for the cast (characters, then your personas under **You**), the last line, the scenario, the lorebook and anyone it is shared with. Every action lives in that panel's header — **Open session** as the primary button, with Edit session, View lorebook and Delete behind the `⋯` menu. Clicking the session row itself navigates straight to `/sessions/[id]`; clicking the row of the session you already have open shows its detail panel instead.
+
+The sidebar can also arrive pre-filtered: opening a session list from a character's or persona's own panel passes that character/persona's ID through, and the sidebar shows a removable filter chip — in the same strip as the popout's chip — plus only the matching sessions.
 
 ### Jumping to a Character or Persona from a Session
 
-Inside a session, clicking a message's avatar opens an **avatar gallery modal** for that character or persona (browsing every uploaded image for them), while clicking their _name_ opens their full profile panel ([Characters](./characters.md) or [Personas](./personas.md)) so you can review or edit them without losing your place in the conversation.
+Inside a session, clicking a message's avatar opens an **avatar gallery modal** for that character or persona (browsing every uploaded image for them), while clicking their _name_ opens their full profile panel in the [Characters](./characters.md) view with that character selected, so you can review or edit them without losing your place in the conversation.
 
 ## Group Sessions & Reply Strategy
 
@@ -73,17 +87,24 @@ When a session has 2+ characters, _or_ 2+ personas with just one character, the 
 
 - **Ordered (Round-robin)** — the default. Characters take turns in their configured order — see Turn Order & Round-Robin Replies, below, for exactly how Serene Pub decides who's due.
 - **User-Split (Round-robin by user)** — only offered when user accounts are enabled system-wide, since it's meaningless with a single user. Instead of interleaving every participant's cast together, it groups personas and characters by which user owns them — one user's entire cast completes a turn before the next user's does.
-- **Manual (User selects)** — you pick who responds using the Trigger Character controls described below instead of relying on the automatic rotation.
+- **Manual (User selects)** — you pick who responds with **Pick who speaks** in the Actions row instead of relying on the automatic rotation.
 
-### The "Ready to Continue" Banner
+### Who is due next
 
-In a group session, once it's a character's turn (and you don't have a draft message or an edit in progress), a rounded banner appears above the composer showing that character's avatar and name with **"ready to continue"**. It offers a **Continue** button (send them in) and a people-icon button to instead choose a different character.
+In a group session, once it is a character's turn (and you have no draft and no edit in progress),
+one line appears beside the composer: the character's avatar, *Wren is ready to continue*, a quiet
+**Someone else** button to pick a different character, and **Continue** to send them in. While it
+shows, Continue is the one primary button on the surface and Send steps back to a tonal fill. The
+Messages panel's **Show who is due next** setting hides the line.
 
 ### Triggering Responses Manually
 
-The composer's **Extra Controls** tab (see below) exposes buttons for taking control of who talks next: **Continue**, **Trigger Character**, **Regenerate**, and a Narrator trigger (see [Narrator Response](#narrator-response) below). **Trigger Character** opens a searchable grid of the session's characters (search matches name, nickname, description, or creator notes), with a pinned option above the search box labeled with the resolved Narrator display name (**"Narrator"** by default) — picking a character generates exactly one response from them regardless of whose "turn" it technically is; picking the pinned option opens the Narrator Response instructions modal instead.
-
-**Continue** (labeled "Continue Conversation" via its tooltip) repeatedly asks "is anyone due right now?" and generates for whoever is, one at a time, until nobody's due anymore (or a safety cap is hit) — useful for catching up a group session after several personas have spoken, without needing to click once per character.
+The **Actions** row above the composer (see [Actions](#actions)) holds the turn controls:
+**Continue**, **Pick who speaks**, **Regenerate**, and the Narrator trigger (see [Narrator
+Response](#narrator-response) below). **Pick who speaks** generates exactly one response from the
+character you choose regardless of whose turn it technically is. **Continue** repeatedly asks "is
+anyone due right now?" and generates for whoever is, one at a time, until nobody is due (or a safety
+cap is hit) — useful for catching a group session up after several personas have spoken.
 
 ### Activating, Deactivating & Visibility
 
@@ -106,21 +127,25 @@ Because this is recomputed from history rather than tracked as state, a persona 
 
 Every session needs at least one persona. If a session has more than one persona attached to your account, a **Switch Persona** control appears: an avatar with a chevron badge next to the composer on desktop-width screens, plus a dedicated "Switch Persona" tab on the composer's tab bar — always visible there even on mobile, unlike the other extra tabs (see The Composer's Tab Bar, below). On mobile, the avatar-and-chevron control is hidden in favor of that tab, so it's the one place to switch personas on a narrow screen.
 
+A persona is a [character](./characters.md) you play — see [Personas](./personas.md). The persona picker lists the characters flagged as your personas first, with a **Show all characters** toggle for the rest; picking an unflagged character flags it for you.
+
 If you're a guest in someone else's session and don't yet have a persona attached, the composer instead shows a **"Join the Conversation"** call-to-action with an **Add Your Persona** button, which opens a persona picker scoped to your own personas.
 
 Message-level controls respect persona ownership: as a guest, you can only edit, hide, or delete messages that belong to your own persona — you cannot touch other participants' persona messages. Regenerating, continuing, and swiping are different: those work on _character_ messages, and a guest can use them on any character _they_ own, even in someone else's session — see [Guest Permission Boundaries](#guest-permission-boundaries) for the precise rule. Trigger Character and the round-robin Continue button, however, are unavailable to guests, since the whole Extra Controls tab is hidden for them.
 
 ## Scenario
 
-The **Scenario** field (a multi-line textarea in the session settings form) is free text describing the setting, situation, or premise of the session. It's marked with an eye icon tooltipped "This field will be visible in prompts" — meaning its contents are compiled directly into the prompt sent to the model on every generation, alongside character and persona info. The scenario also displays in the session's read-only view panel in the sidebar.
+The **Scenario** field (a multi-line textarea in the session settings form) is free text describing the setting, situation, or premise of the session. It's marked with an eye icon tooltipped "This field will be visible in prompts" — meaning its contents are compiled directly into the prompt sent to the model on every generation, alongside character and persona info. The scenario also displays in the session's read-only detail panel in the sidebar.
 
 ## Lorebook Binding
 
 The **Lorebook** dropdown in session settings attaches a single [lorebook](./lorebooks.md) to the session (or "None"). Once attached, the session draws on that lorebook's world lore, character lore, and history entries when compiling prompts, and unlocks the composer's **Lore** tab (below) for browsing/creating history entries and scenes directly from the session. Summarizing session messages into lore (see [Summarization](./summarization.md)) will also auto-bind a lorebook to the session if one isn't already set. A session's lorebook can also be attached or detached from the [Lorebooks](./lorebooks.md) sidebar itself, via each lorebook's menu or the detail view, when that session is the one currently open.
 
-## Prompt Config, Connection & Sampling Overrides
+## Which connection a session uses
 
-Administrators editing a session see an **AI Override** section with a note that it "Overrides system defaults for this session. Leave as 'System default' to use the global setting." It lets an admin pin a specific **connection**, **sampling config** (both via the shared connection/sampling picker — see [Connections](./connections.md)), **prompt config**, and **Narrator Prompt** config (both plain dropdowns defaulting to "System default") to this one session, independent of what any individual user has active elsewhere. See [Prompt Configs](./prompt-configs.md) for what a prompt config controls, and the [Session Prompts: Narrator](./prompt-configs.md#session-prompts-narrator) section specifically for the Narrator Prompt override — note that unlike the Narrator Prompt override, the plain **prompt config** override on this form is currently a known no-op; see the caveat in [Per-session prompt override](./prompt-configs.md#per-session-prompt-override). This section is not shown to non-admin users.
+A session has no connection override. Every reply runs on the (endpoint, model) pair its pipeline configuration names, or on the instance's chat default from **Admin → Defaults** when the configuration names none — see [Connections](./connections.md#choosing-a-pair). Overrides are always by model, never by connection: to run one session on a different model, give it a pipeline configuration whose provider slot names that model (see [Pipelines](./pipelines.md)). The former per-session **connection** pick was retired in 0.6 because an endpoint alone no longer identifies what will run.
+
+The session row still stores per-session picks for a **sampling config**, a **prompt config** and a **Narrator Prompt** config, and generation reads the sampling and Narrator Prompt ones; the session edit form currently exposes no controls for them. See [Prompt Configs](./prompt-configs.md) for what those configs control.
 
 ## Tags
 
@@ -128,25 +153,117 @@ Sessions can be tagged from the settings form the same way [characters](./charac
 
 ## Sending Messages
 
-The composer at the bottom of the session has **Compose** and **Preview** tabs (Preview renders your draft's Markdown, including the app's quoted-text styling, before you send). On desktop-width screens (1024px and up), pressing **Enter** sends the message and **Shift+Enter** inserts a newline; on narrower/mobile layouts, Enter always inserts a newline and you send via the paper-plane **Send** button. While a response is generating, the Send button is replaced by a **Stop Generation** button.
+The composer is the card at the foot of the conversation (or at its head, if you set **Composer
+position** to *top* in the Messages panel's settings). Its placeholder names the persona you are
+writing as: *Write as Sable…*. On desktop-width screens (1024px and up) **Enter** sends and
+**Shift+Enter** inserts a newline; on narrower layouts Enter always inserts a newline and you send
+with the **Send** button. The first time you focus the field on a desktop, a one-line reminder of
+those keys appears under the card, once, and is not shown again. While a response is generating,
+**Send** becomes **Stop**.
 
-Your draft is autosaved to the server (debounced ~500ms as you type) so it survives a page reload or navigating away and back — drafts are restored automatically when you reopen the session.
+Your draft is autosaved to the server (debounced ~500ms as you type) so it survives a page reload or
+navigating away and back — drafts are restored automatically when you reopen the session.
 
-If [context debugging](./system-settings.md) is enabled system-wide, the composer also shows a live token count against your active context limit, and turns red with a "Token limit exceeded" warning if your draft would push the compiled prompt over budget.
+If [context debugging](./system-settings.md) is enabled system-wide, a 2px line along the top edge
+of the card fills as your compiled prompt approaches the context limit and turns ember past 90%.
+Over budget, one sentence appears under the field: "This draft pushes the prompt past the context
+limit. Older turns will be trimmed."
 
-### The Composer's Tab Bar
+### The composer's footer
 
-Beyond Compose and Preview, the composer's tab bar picks up extra tabs conditionally, in this order:
+The footer holds four things, left to right:
 
-1. **Switch Persona** — only if you have more than one persona attached to this session. This is the one extra tab guests still get.
-2. **Extra Controls** — hidden entirely if you're a guest, regardless of whether you have a persona in the session yet.
-3. **Lore** — only if the session has a lorebook attached, and hidden entirely for guests.
-4. **Pinned Images** — hidden entirely for guests.
-5. **Statistics** — only if context debugging is enabled system-wide, and hidden entirely for guests.
+1. **Your persona** — the avatar and name you are writing as. When more than one of your personas is
+   in the session, a chevron marks it and clicking opens the switcher (see [Personas & Persona
+   Switching](#personas--persona-switching)). This is the one control guests still get.
+2. **Preview** (eye) — toggles the field into the rendered Markdown of your draft, set in the prose
+   face exactly as it will read in the conversation. Press it again to go back to writing.
+3. **More** (⋮) — a menu of the composer's panels: **Lore** (only if the session has a lorebook
+   attached), **Pinned images**, and **Statistics** (only if context debugging is on). Picking one
+   opens that panel in place of the field, with **Back to compose** to return. Guests see none of
+   these.
+4. **Send**, or **Stop** while a reply is generating.
 
-A read-only token-count tab pins itself to the far right once a prompt has been compiled at least once (for example, after your first send, or once context debugging starts tracking your draft).
+### Actions
 
-On narrower/mobile layouts, Switch Persona stays its own permanent tab, but Extra Controls, Lore, Pinned Images, and Statistics collapse into a single "More" popover (an ellipsis button, or the active tab's own icon if one of them is open) to keep the tab row from overflowing.
+Above the card sits one quiet word, **Actions**. Click it (or press Enter on it) and a row of chips
+opens beneath it; the row stays while anything in it has focus and folds away when focus leaves or
+on Escape. It wraps as far as it needs and never scrolls sideways.
+
+What the genre contributes comes first as filled chips: an adventure session has **Look**, **Rest**
+and **Time passes**; a chat session has its Narrator, **Side character** and **Image**, and whatever
+its pipelines add. After them, as outlined chips, the turn controls (hidden from guests):
+
+- **Continue** — checks who is due per the round-robin logic (see Group Sessions above) and keeps
+  generating, one at a time, until nobody is due. Present when the genre offers `continue`.
+- **Pick who speaks** — opens the character search (name, nickname, description or creator notes)
+  with the Narrator pinned above the box, and generates exactly one response from whoever you pick;
+  the pinned option opens the Narrator instructions instead.
+- **Regenerate** — regenerates the most recent message, character or Narrator alike. Present when
+  the genre offers `retry`.
+
+Continue, Pick who speaks and Regenerate are disabled while anything is generating or if the
+session has no persona; the Narrator trigger is disabled only while something is generating.
+
+Unlike Regenerate, Continue and Swipe on an existing message (which enforce the owner-or-character-
+owner rule server-side), **Pick who speaks and the round-robin Continue have no server-side
+ownership check** — they are hidden from guests client-side and that is the whole gate.
+
+#### Where an action appears, and who may use it
+
+Every action a session offers — a genre's chip, a message's menu entry, a slash command — is
+declared once, by whatever contributes it, with three facts: a **venue** (where it appears: the
+composer row, a message's ⋮ menu, the turn controls, a widget; and optionally on one channel only),
+an **audience** (who may *see* it and who may *act* on it), and whether it is **quick**.
+
+- **Primary set and overflow.** Each venue shows its quick actions up front — the chips, the
+  message row's hover icons — and keeps *every* enabled action in an overflow: the **More** menu
+  beside the chips, the ⋮ menu on a message. Nothing is ever reachable only by being prominent, and
+  nothing is hidden by not being. A style pack may move the primary set around; it cannot take an
+  action away.
+- **New.** An action you have not met yet — one a newly installed plugin contributed, say — lands in
+  the overflow wearing a small **New** mark, and the **More** button carries a dot while it holds
+  one. Opening that menu (or the `/` palette) is meeting them; the mark clears for you and stays for
+  everyone else until they open it too.
+- **Who may act.** A genre's action is seen by every member of the session and, unless it says
+  otherwise, used by the owner alone: a guest sees the chip greyed with *not yours to use here*
+  rather than seeing nothing (the chip stays reachable by keyboard and reads the reason aloud; it
+  simply does nothing when pressed). An action may widen that to any participant. Core's message
+  verbs follow the per-message ownership rule under [Guest Permission
+  Boundaries](#guest-permission-boundaries) — Stop is any member's, Branch is the owner's, the rest
+  belong to whoever the message belongs to; a plugin's message action that names the same rule
+  follows it too. The server checks the same declaration when the action fires — *the one you
+  pressed*, not every action that happens to share its function: two actions on one function (say
+  Serene Pub's own **Summarize** and a plugin's) are two things, each with its own audience, each
+  running its own pipeline, each switched on and off on its own under **Actions** in session
+  settings. The greyed chip is a courtesy and the refusal is the law. A ⋮ menu entry that is grey
+  says why the same way — *not yours to change*, *wait for the reply to finish*, *finish the edit
+  first*, *unhide it first*, *only the newest reply can be regenerated*, *nothing to swipe to* —
+  in its tooltip and to a screen reader, and stays reachable by keyboard.
+- **A name two actions share.** When two pipelines offer the same function under one slash name,
+  the palette lists the name once and running it leaves the choice of pipeline to the bindings —
+  the session's own, then the preset's, then the instance's, then the genre's default — rather
+  than to whichever happened to be listed first.
+- **Channels.** An action declared for one channel appears on that channel's composer and messages
+  only; one declared for none appears everywhere. A channel decides where an action is *listed*,
+  never who may use it.
+
+#### Slash commands
+
+Type `/` at the start of an empty draft and a palette opens above the field listing every action
+the composer offers — the chips, the overflow and the turn controls — by its **slash name** with its
+label beside it. Keep typing to filter (`/nar` narrows to Narrate and Side character; a label
+matches too, so `/image` finds Image), **↑/↓** move the highlight, **Enter** runs the highlighted
+row, or the first match when nothing is highlighted (a bare `/` and Enter only highlights — nothing
+was named), **Tab** completes the name, and **Escape** closes the list until you change the draft.
+A name typed in full — `/narrate` then Enter — runs whether or not the list is open. Running a
+command clears the draft; it never sends it. While a reply is streaming the rows are greyed with
+*wait for the reply to finish*, exactly as the chips and the **More** menu are.
+
+Serene Pub's own actions have bare names (`/narrate`, `/continue`, `/retry`); a plugin's are
+`/<plugin>.<action>` (`/acme.roll`), so two authors can never claim one name, and the palette
+completes the long form so nobody types it. Slash names are stable and never translated — the label
+beside them is.
 
 ### Auto-Cascading Group Replies
 
@@ -154,38 +271,128 @@ In a group session, any single persona message is enough to trigger a check for 
 
 ## Message Actions
 
-Every message has a row of action buttons — shown inline on desktop (revealed on hover/focus) and via an overflow (⋮) popover on mobile. Which buttons appear depends on the message's role, position, and state.
+Every message is one turn: the speaker's avatar in the left gutter, a name row, and the prose. The
+name row carries the speaker's name, any badges (a handshake for a greeting, a ghost when hidden, a
+film mark naming the scene that took it), a status while the model is writing, and, on the right,
+the time, the swipe control, the quick actions and a ⋮ menu. The quick actions are the message
+venue's primary set — **Regenerate** and **Edit**, and the **Stop** pill while a reply streams — and
+appear when you hover or focus the turn on a mouse, always on a touch screen; the ⋮ menu is the
+venue's overflow and always lists every action the message offers, core's and a plugin's alike, so
+nothing is reachable only by hovering (see [Where an action appears](#where-an-action-appears-and-who-may-use-it)).
 
 ### Quick Reference
 
-| Action                   | Icon       | Where it appears                                                            | Who can use it                          |
-| ------------------------ | ---------- | --------------------------------------------------------------------------- | --------------------------------------- |
-| Stop Generation          | Square     | Only on the message currently generating                                    | Owner                                   |
-| Regenerate Response      | Refresh    | Only the newest character message, once idle                                | Owner, or whoever owns that character   |
-| Continue Response        | Down arrow | Only the newest character message, if it has content                        | Owner, or whoever owns that character   |
-| Edit Message             | Pencil     | Any message, unless something is generating or it's hidden                  | Owner, or the persona/character's owner |
-| Branch Session           | Git branch | Any message, unless something is generating                                 | Any participant with session access     |
-| Select for Summarization | Bookmark   | Any non-generating message                                                  | Any participant with session access     |
-| Inspect run              | Receipt    | Character or Narrator messages a pipeline run produced                      | Whoever triggered that run              |
-| View Prompt Details      | Info       | Character messages with recorded debug metadata, if context debugging is on | Anyone who can see the message          |
-| Hide / Unhide Message    | Ghost      | Any message                                                                 | Owner, or the persona/character's owner |
-| Delete Message           | Trash      | Any message                                                                 | Owner, or the persona/character's owner |
-| Swipe Left / Right       | Chevrons   | The newest character message, or an eligible greeting                       | Owner, or whoever owns that character   |
+| Action              | Where                       | Where it appears                                                            | Who can use it                          |
+| ------------------- | --------------------------- | --------------------------------------------------------------------------- | --------------------------------------- |
+| Stop generating     | Stop pill in the name row; also in ⋮ | Only on the message currently generating                           | Any participant                         |
+| Regenerate          | Quick action; ⋮             | Only the newest character message, once idle                                | Owner, or whoever owns that character   |
+| Continue            | ⋮                           | Only the newest character message, if it has content                        | Owner, or whoever owns that character   |
+| Edit                | Quick action; ⋮             | Any message, unless something is generating or it is hidden                 | Owner, or the persona/character's owner |
+| Branch from here    | ⋮                           | Any message, unless something is generating                                 | Owner                                   |
+| Select for summary  | ⋮                           | Any non-generating message                                                  | Any participant with session access     |
+| Inspect run         | ⋮                           | Character or Narrator messages a pipeline run produced                      | Whoever triggered that run              |
+| Prompt details      | ⋮                           | Character messages with recorded debug metadata, if context debugging is on | Anyone who can see the message          |
+| Hide / Unhide       | ⋮                           | Any message                                                                 | Owner, or the persona/character's owner |
+| Delete              | ⋮                           | Any message                                                                 | Owner, or the persona/character's owner |
+| Swipe               | ‹ n / m › in the name row; ⋮ | The newest character message, or an eligible greeting                      | Owner, or whoever owns that character   |
 
-The sections below go through the less self-explanatory of these in more detail.
+The time shown on a turn is when it was last written: the moment it landed, or, for an edited or
+regenerated reply, the moment of that change. **Show times** in the Messages panel's settings hides
+the column.
 
 ### What Each Action Does
 
-- **Stop Generation** (square icon) — only while that specific message is actively generating; cancels the in-flight LLM call.
-- **Regenerate Response** (refresh icon) — only on the most recent character message, and only once nothing else is generating. Clears the message and re-runs generation from scratch. Available to the session owner, or to whoever owns that specific character (so a guest who brought their own character into the session can regenerate its replies too).
-- **Continue Response** (down-arrow icon) — only on the most recent character message that already has content. Resumes generation, appending to the existing text instead of replacing it — useful when a response was cut off. Same owner-or-character-owner rule as Regenerate.
-- **Edit Message** (pencil icon) — swaps the message body for an inline composer so you can rewrite it in place, with Cancel/Save controls replacing the row's action buttons while editing. Disabled while any message is generating or while the message is hidden.
-- **Branch Session** (git-branch icon) — opens a small modal asking for a new session title, then creates a full copy of the session (same characters, personas, guests, tags, scenario, lorebook, and reply strategy) containing every message up to and including this one, and navigates you into the new session. Available to any participant with access to the session, not just the owner.
-- **Select for Summarization** (bookmark icon) — enters summarization selection mode (see below). Not shown while a message is generating.
-- **Inspect run** (receipt icon). Only on a reply a pipeline run produced, and only once it has finished generating. Opens the run inspector: one sentence saying what the run did, every stage in the order it ran, and for a selected stage the prompt it built, what it published, and which stop sequences went on the wire. See [Inspecting a run](./pipelines.md#inspecting-a-run).
-- **View Prompt Details** (info icon) — only shown with context debugging enabled and only once the message has recorded debug metadata; opens the same Prompt Details modal described under Statistics, scoped to that message's generation.
-- **Hide / Unhide Message** (ghost icon) — toggles `isHidden`; hidden messages are dimmed in the thread and excluded from what gets sent to the model, without deleting them.
-- **Delete Message** (trash icon) — opens a confirmation modal before permanently removing the message.
+- **Stop generating** — only while that specific message is actively generating; cancels the in-flight LLM call.
+- **Regenerate** — only on the most recent character message, and only once nothing else is generating. Clears the message and re-runs generation from scratch. Available to the session owner, or to whoever owns that specific character (so a guest who brought their own character into the session can regenerate its replies too).
+- **Continue** — only on the most recent character message that already has content. Resumes generation, appending to the existing text instead of replacing it — useful when a response was cut off. Same owner-or-character-owner rule as Regenerate.
+- **Edit** — swaps the prose for the composer so you can rewrite it in place; **Save** and a quiet **Cancel** replace the row's actions while editing, and the turn carries an ember outline. Disabled while any message is generating or while the message is hidden.
+- **Branch from here** — opens a small modal asking for a new session title, then creates a copy of the session containing every message up to and including this one, and navigates you into the new session. **Owner-only**: a branch copies the whole history into a new session, unbounded by any rate limit, so a guest cannot grow the owner's storage with sessions the owner never asked for — a guest wanting their own copy starts a new session with the same cast. The server refuses a guest's branch at the write as well as at the button.
+
+  What a branch copies, and what it deliberately leaves behind:
+
+  | Copied | Not copied |
+  | --- | --- |
+  | the cast (active members, with their order, activity and visibility), the presences (personas), the guests, the tags | session-scope function bindings — the branch resolves its functions from the genre and preset afresh |
+  | the messages up to and including the fork, each on its own channel, all settled | session-scope pipeline configuration overrides — a setting changed for the source session is the source's |
+  | the genre, the preset and the genre's field values; the scenario, the reply strategy, the lorebook attachment | the layout — the branch opens in the preset's default layout |
+  | | state anchored to messages (attribute and possession changes the ledger tied to a line) — the copies are new rows the ledger has never seen |
+  | | the session's changes — the record of what was deleted, edited or swiped is the source's; the branch's first change is the fork itself |
+
+  Members removed from the source are not copied at all: a removed row coming back as active in the branch would undo the removal.
+- **Select for summary** — enters summarization selection mode (see below). Not shown while a message is generating.
+- **Inspect run**. Only on a reply a pipeline run produced, and only once it has finished generating. Opens the run inspector: one sentence saying what the run did, every stage in the order it ran, and for a selected stage the prompt it built, what it published, and which stop sequences went on the wire. See [Inspecting a run](./pipelines.md#inspecting-a-run).
+- **Prompt details** — only shown with context debugging enabled and only once the message has recorded debug metadata; opens the same Prompt Details modal described under Statistics, scoped to that message's generation.
+- **Hide / Unhide** — toggles `isHidden`; hidden messages are dimmed in the thread, marked with the ghost badge, and excluded from what gets sent to the model, without deleting them.
+- **Delete** — opens a confirmation modal before permanently removing the message.
+
+### Floors, built-ins and what each action emits
+
+Every action that changes a message is a **built-in**: Serene Pub itself performs the write, as its
+own small pipeline run, and it always records an event saying what changed and what was lost. The
+write is receipted like a reply (the run inspector lists it under `core:spec/builtin-…`), an
+administrator may put a review gate on it in the Pipelines panel — a delete that asks first — and the
+event lands in the next reply's inlet as `sessionChanges`, so the pipeline knows the history it reads has
+moved (see [What changed since the last reply](./pipelines.md#what-changed-since-the-last-reply)).
+
+The actions fall into three groups, and a genre decides only the middle one:
+
+| Group | Actions | A genre may… | What the write emits |
+| --- | --- | --- | --- |
+| **Floors** | Stop · Branch from here · Edit | nothing — present in every genre | `message-stopped` (how much text had arrived) · `session-branched` (on the new session, naming the fork) · `message-edited` (the previous text) |
+| **Opt-in built-ins** | Delete · Hide / Unhide · Swipe | switch one off — never re-implement it | `message-deleted` (the content, role, speaker, channel and metadata lost) · `message-hidden` (which way) · `message-swiped` (the alternative that was showing, and the index now selected) |
+| **Genre-declared content** | Regenerate · Continue · (a swipe's fresh alternative) | forbid `retry` or `continue`, and supply the pipeline that writes the text | `message-updated` with `verb: regenerate` / `continue` / `swipe` from the reply's own finishing write |
+
+A genre switches an action off by declaring it in its `messageVerbs` (`{ delete: false }`); the
+control is then absent from the ⋮ menu and the name row, and the server refuses the verb regardless,
+naming the genre. A declaration that tries to switch off a floor is refused when the genre is
+registered — a person can always stop a reply and rewrite a line, and a session's owner can always
+branch it. A floor is a promise about the *genre*, not about who may act: branch is owner-only in
+every genre, and the ownership rules under [Guest Permission Boundaries](#guest-permission-boundaries)
+apply to a floor as to anything else.
+
+**What a review may change.** An administrator who puts a review gate on a built-in sees a form for
+the write, and the form offers only what the write declares as reviewable — the text of an edit, the
+direction of a hide, the title of a branch, nothing at all for a delete. Which message the write is
+about was settled when the person asked for it; the form never offers the message id, and a decision
+that supplies one is refused with a sentence while the run stays parked. The write re-checks, as it
+lands, that the person who asked may act on the row it is about to change.
+
+**What a delete leaves behind, and for how long.** Deleting a line records an event carrying what the
+line held — its content, role, speaker, channel and metadata — so the *next* reply can be told what
+went; an edit and a swipe carry the text they replaced the same way, and a regenerate carries the
+reply it discarded. That content exists for one reader. Once a reply has been handed the change, the
+record keeps the event, the message id and the rest of what it carried, and lets the content go: the
+session's history still says a line was deleted, without holding the line indefinitely. The run
+that performed the write keeps what it published on its own receipt, under the receipt's retention.
+A reply that fails or is stopped before it wrote anything is not that reader — the change waits for
+the next reply that lands.
+
+A reply that was stopped keeps the text that had arrived and wears a quiet **Stopped** mark in its
+name row; regenerating or continuing it clears the mark, and so does swiping onto another
+alternative — the stop belongs to the alternative that was streaming.
+
+### While a reply is written
+
+The speaker's name row shows an ember dot and the run's **status** — what the pipeline says it is
+doing right now, in your language, with the speaker's name filled in: _Jasmine is thinking_ while
+history and lore are read, _Jasmine is composing_ while the prompt is assembled, _Jasmine is
+typing_ from the moment the model is called, and _waiting for the model_ or _loading the model_ if
+the call is queued behind another or a managed backend is starting up and that wait lasts long
+enough to notice — while the prose streams in below. A row whose run has not said anything yet
+reads _working_. The ember dot is the only thing on the page that moves on its own. The same
+status shows on the progress card and on the session's row in the sidebar; see
+[Pipelines](./pipelines.md#every-reply-is-one-run) for where statuses come from. If the reply
+fails, the message shows what went wrong in its own words (the connection, the code) with a
+**Retry** link, rather than a red card.
+
+### Scenes and the timeline
+
+When a lorebook is attached, the conversation shows its history: a quiet centred date marks where a
+history entry begins, and a scene begins with its name, set in the scene's colour with a film mark
+(*open* beside it while the entry is still being written). Every turn inside a scene carries a thin
+bar in that colour left of the gutter, and a turn a scene has already taken wears a film badge with
+the scene's name. Clicking a date or a scene name opens it in the lorebook. **Show scenes and dates**
+in the Messages panel's settings hides all of this.
 
 ### Swiping Through Alternate Replies
 
@@ -202,24 +409,11 @@ A character's opening line — generated when they first join the conversation �
 
 ### Editing a Message
 
-Clicking Edit replaces the message content with the same composer used for new messages (Markdown, same keyboard shortcuts), pre-filled with the current text. Save writes the change via `sessionMessages:update`; Cancel discards it. You can't start editing while any message in the session is generating.
+Edit replaces the prose with the same composer used for new messages (Markdown, same keyboard shortcuts), pre-filled with the current text. Save writes the change via `sessionMessages:update`; Cancel discards it. You can't start editing while any message in the session is generating.
 
 ### Selecting Messages for Summarization
 
-Selecting a message for summarization switches the whole session into a multi-select mode: the composer area is replaced by a toolbar showing how many messages are selected, with **Select All**, **Select None**, **Cancel**, and three destination buttons — **Scene**, **World Lore**, and **Character Lore** — plus per-message **Select**, **Select All Above**, and **Select All Below** helpers. Messages already captured in an existing scene are locked out of selection (shown with a film-strip "In Scene" badge). Selecting **Scene** requires a _contiguous_ run of messages with no visible (non-hidden) gap between the earliest and latest picks — Serene Pub blocks the summarize action and explains why if you've skipped over an unselected, visible message. The actual summarization mechanics (what gets extracted and how it's stored) are covered in [Summarization](./summarization.md); how the result feeds RAG is covered in [Embeddings & RAG](./embeddings-and-rag.md).
-
-## The Extra Controls Tab
-
-The composer's **Extra Controls** tab (message-square icon) is a compact row of buttons for group-session, regeneration, and Narrator response shortcuts without leaving the compose area. Note this whole tab (like Lore, Pinned Images, and Statistics) is hidden entirely for guests — see [The Composer's Tab Bar](#the-composers-tab-bar) above:
-
-- **Continue** — checks who's due per the round-robin logic (see Group Sessions above) and keeps generating, one at a time, until nobody's due anymore.
-- **Trigger Character** — opens the character-search modal (with a pinned option, labeled with the resolved Narrator display name, above the search box) and generates exactly one response from whichever you pick.
-- **Regenerate** — re-generates the most recent message, character or Narrator response alike (equivalent to that message's own Regenerate action).
-- **A Narrator trigger**, labeled with the resolved config's Display Name (**"Narrator"** by default) — opens the Narrator Response instructions modal. See [Narrator Response](#narrator-response) below.
-
-Continue, Trigger Character, and Regenerate are disabled while any message is currently generating, or if the session has no persona at all; the Narrator trigger is disabled only while something is generating.
-
-Unlike Regenerate/Continue/Swipe on an existing message (which enforce the owner-or-character-owner rule server-side), **Trigger Character and the round-robin Continue button here have no server-side ownership check at all** — they're gated purely by this whole tab being hidden from guests client-side. In practice this only matters if a guest could somehow reach the tab; through the normal UI, guests never see it.
+Selecting a message for summarization switches the whole session into a multi-select mode: the composer area is replaced by a toolbar showing how many messages are selected, with **Select all**, **Select none**, **Cancel**, and three destination buttons — **Scene**, **World lore**, and **Character lore** — plus per-message **Select**, **Select all above**, and **Select all below** helpers. Messages already captured in an existing scene are locked out of selection (shown with the film badge naming the scene). Selecting **Scene** requires a _contiguous_ run of messages with no visible (non-hidden) gap between the earliest and latest picks — Serene Pub blocks the summarize action and explains why if you've skipped over an unselected, visible message. The actual summarization mechanics (what gets extracted and how it's stored) are covered in [Summarization](./summarization.md); how the result feeds RAG is covered in [Embeddings & RAG](./embeddings-and-rag.md).
 
 ## Chat
 
@@ -290,6 +484,21 @@ Rest and Time passes write no message at all. That is not a failure: a clock tic
 
 The **lorebook** is where the world lives, and an item somebody is carrying is an entry in it, so an adventure without one has nothing to describe or to hand out. The genre also makes several model calls per turn rather than one, so it is the genre to point at a local model you are not paying per token for. Each stage has its own connection and sampling settings in the pipeline panel, so the planner and the state-keeper can run on a small model while the prose runs on a large one.
 
+## Guide
+
+**Guide** is the pure question-and-answer session type: no characters, no story, at most one persona, and one speaker the genre brings with it — Serene Pub's **Guide**, who helps you use the app and knows its documentation. Start one from the New Session picker (the **Guide** preset), ask anything about connections, characters, lorebooks or sessions, and the Guide answers, grounding itself in the documentation pages that best match what you asked and naming the page they came from. It is not a character: you will not find it in the Characters view, it cannot be edited there, and it never roleplays.
+
+Under the hood the Guide is an **envoy** — see below — and its instructions are configuration: an administrator can tune what it is told in the Pipelines panel (**Guide reply → Envoy · Guide → System prompt**), and the change reaches the next answer without touching a prompt row.
+
+## Envoys
+
+An **envoy** is a speaker a **genre** brings with it: a cast member that exists nowhere in your library, declared by the genre (or by an action a plugin contributes) and seated in a session the way a character is. The Guide genre's mascot is the first. What follows from "a cast member":
+
+- **Seating.** Creating a session seats every envoy the genre marks as its default, with no choice offered; a preset may pre-seat others. In **Edit Session → Participants**, an **Envoys** card lists the genre's envoys with a switch to seat or unseat each one (the session owner's; guests see it read-only — a refused toggle springs back with the reason). An envoy an action brings — a dice plugin's *Roll* reporting as "the Dice Master" — is seated the moment its action posts and has no switch. A **branch** keeps the seats the source had; a genre **upgrade** seats the defaults the new version brings, and never re-seats one you unseated. An envoy is not a character: a genre that admits no characters is satisfied with an envoy seated.
+- **Turns.** An envoy that **replies in turn** is a candidate like any active character: when nobody else is due, it answers; with a mixed cast, the turn strategy may pick it. An envoy that speaks **on action** only ever posts through its action and is never picked for a turn — nor can it be asked to take one. If a session's genre admits no characters and no in-turn envoy is seated, sending a message tells you so: *This session has no one to answer — seat an envoy in Session settings.*
+- **Messages.** An envoy's reply shows its name and image from the genre's declaration. It has no character page to open, and Regenerate, Continue and Swipe work on it as on any reply; the inspector's *Portrayed by* line shows it as, for example, **Guide · AI**. An envoy's line is the **session owner's** to edit, regenerate or delete — as narration is — never a guest's. Your own line written with no persona is **yours**: the person who wrote it, and nobody else, may change it.
+- **Its words are configuration.** An envoy's instructions are the genre's defaults, tuned in the Pipelines panel as a deviation — the step named **Envoy · <name>** on the pipeline that reads them — and reset by clearing the field. There is no separate schema, no prompt row and no "envoy editor": what the genre and the installed actions ship is what a session gets, and nobody authors an envoy for another genre.
+
 ## Narrator Response
 
 **Narrator Response** is a manually-triggered message that narrates as the environment itself: weather, scenery, side characters, shopkeepers, monsters, or other third parties, rather than as any of the session's defined characters. It has no persistent identity of its own (no avatar, no character sheet) and is never auto-triggered: unlike ordinary character replies, a Narrator response never counts toward or interrupts round-robin turn order, and it's never suggested by the "ready to continue" banner.
@@ -341,9 +550,28 @@ The notice offers **Prioritize in queue** (moves this session's content to the f
 
 Individual messages also carry a small per-message embedding-status icon next to the sender's name: a lightning bolt when that message's embedding matches the currently active embedding model, or a refresh icon when it was embedded under a since-changed model and is stale. See [Embeddings & RAG](./embeddings-and-rag.md) for how retrieval, scoring, and the underlying embedding queue actually work.
 
+## Who portrays a participant this turn
+
+Every turn starts by deciding, for each participant it concerns, whether a **person** speaks as them, the **AI** does, or **nobody** can — the participant's **portrayal**. The answer is pinned on the run's receipt before the first step runs and shown as the **Portrayed by** line in the run inspector (see [Pipelines](./pipelines.md#inspecting-a-run)); a member joining or leaving while a reply is being written changes the next turn's answer, never the one under way.
+
+Participants are named by reference — `character:<id>`, `user:<id>`, `envoy:<slug>`, or a role word — and the rules are:
+
+| Participant      | Who portrays them                                                                                                                                                                                                                                                                                                              |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `user:<id>`      | That person, if they are a member of the session (the owner or a guest). Otherwise nobody.                                                                                                                                                                                                                                  |
+| `owner`          | The session's owner.                                                                                                                                                                                                                                                                                                         |
+| `admin`          | The person who started the turn, if they are an administrator. Otherwise nobody.                                                                                                                                                                                                                                             |
+| `participant`    | The person who started the turn, if they are a member. Otherwise nobody.                                                                                                                                                                                                                                                     |
+| `run-owner`      | The person who started the turn.                                                                                                                                                                                                                                                                                             |
+| `character:<id>` | A **person**, when the character is a member's own persona in this session (attached as theirs and owned by them — the same ownership rule that decides who may edit a persona's messages). Otherwise the **AI**, when the character is in the session's cast (benched characters included — being inactive keeps them out of the rotation, not out of the session) or is the turn's own speaker (a side character on a [Narrator Response](#narrator-response) speaks through the model for exactly that turn). Otherwise nobody: a character in the library but not in this session. |
+| `envoy:<slug>`   | The AI — a speaker a genre brings with it is always the model's. (Envoys are not yet data; every well-formed slug answers this way until they are.)                                                                                                                                                                             |
+| `item`           | Nobody, ahead of time: "whoever this message belongs to" is decided against the message itself, by the per-message ownership rule under [Guest Permission Boundaries](#guest-permission-boundaries).                                                                                                                              |
+
+A turn asks about the speaker, every character in the cast, every member's own persona in the session, the owner and the person who started it. It is decided for every run in a session that reaches the model — a reply, a summarize, an event a pipeline subscribes to — and not for a preview that stops before the model is called (the composer's token count, the inspector's debug preview): nobody speaks on those, so nobody is portrayed. The answer names members and characters — exactly what the session's member list already shows — and never a connection; a participant nobody portrays is shown by reference, never by name. A persona attached to the session is never offered as a side character, because the model would be speaking as somebody's own presence.
+
 ## Statistics Tab & Prompt Details
 
-If **context debugging** is enabled in [System Settings](./system-settings.md), the composer gains a **Statistics** tab (bar-chart icon) showing a live token count and included/total message count for your current draft, plus a **Details** button that opens the full **Prompt Details** modal. That modal breaks down, for the most recently compiled prompt:
+If **context debugging** is enabled in [System Settings](./system-settings.md), the composer's **More** menu gains a **Statistics** panel showing a live token count and included/total message count for your current draft, plus a **Details** button that opens the full **Prompt Details** modal. That modal breaks down, for the most recently compiled prompt:
 
 - **Token Budget** — total vs. limit, a progress bar, the active prompt format/template name, whether the RAG or keyword context-infill engine was used, and any truncation reason.
 - **Messages** — how many session messages were included vs. excluded (with excluded message IDs listed), and, when RAG is active, a Guaranteed / RAG-recalled / Fill-in breakdown.
@@ -366,9 +594,9 @@ Scrolling within ~200px of the top of the message list triggers loading the next
 
 If the active model/connection returns native "thinking" output (e.g. Ollama models with `think: true`) or assistant-mode XML-tag reasoning, the message shows a collapsible **Thinking** or **Reasoning** section above its main content — collapsed by default, expandable per-message.
 
-### Generation Stages
+### Generation Statuses
 
-While a message is generating with no content yet, the UI distinguishes **Queued** (waiting in the LLM queue) from **Loading model…** (a managed model is starting up) before falling back to the typing/generating animation once tokens start streaming.
+While a message is generating, its name row carries the run's status — _Jasmine is thinking_ · _Jasmine is composing_ · _Jasmine is typing_ — and, when the call has to wait, _waiting for the model_ (queued behind another call) or _loading the model_ (a managed backend starting up), before the pipeline's own status returns once tokens stream. The former fixed stages (_queued · loading · generating_) are gone; a row written by an older server still reads them for one release.
 
 ### Failed Generations
 
@@ -376,7 +604,7 @@ If a generation errors out, the message shows the error text/code inline with a 
 
 ### Guest Permission Boundaries
 
-To recap the ownership rules scattered through this page: guests can send messages as their own persona, edit/hide/delete only their own persona's messages, and branch the session — all of that is unconditional. Regenerating, continuing, and swiping a _character_ message, though, isn't session-owner-only: it's available to the session owner **or** to whoever owns that specific character, so a guest who brought their own character into someone else's session can control that character's replies too, even though they can't touch anyone else's. Triggering a character out of turn (Trigger Character) and the round-robin Continue button are the ones actually unavailable to guests — not because of a server-side ownership check, but because the whole Extra Controls tab (along with Lore, Pinned Images, and Statistics) is hidden from guests client-side. Select for Summarization has no ownership restriction at all — any participant with access to the session can use it, on any message.
+To recap the ownership rules scattered through this page: guests can send messages as their own persona and edit/hide/delete only their own persona's messages — all of that is unconditional. Branching is the owner's alone, in every genre. Regenerating, continuing, and swiping a _character_ message, though, isn't session-owner-only: it's available to the session owner **or** to whoever owns that specific character, so a guest who brought their own character into someone else's session can control that character's replies too, even though they can't touch anyone else's. Triggering a character out of turn (Trigger Character) and the round-robin Continue button are the ones actually unavailable to guests — not because of a server-side ownership check, but because the whole Extra Controls tab (along with Lore, Pinned Images, and Statistics) is hidden from guests client-side. Select for Summarization has no ownership restriction at all — any participant with access to the session can use it, on any message.
 
 ### Session Not Found
 
@@ -384,12 +612,12 @@ Navigating to a session you don't have access to (or that's been deleted) shows 
 
 ### Context Exceeded Warnings
 
-Both the composer and the Statistics tab track your compiled prompt's token total against your active context limit. If it goes over budget, the token counter turns red (in the composer tab bar and in the Statistics tab), the textarea gets an inline "Token limit exceeded. Message may be truncated." warning, and the Prompt Details modal's token bar switches from success-green through warning-orange to error-red as it fills up — the modal also surfaces the specific truncation reason (for example, oldest messages being dropped) when one applies.
+Both the composer and the Statistics panel track your compiled prompt's token total against your active context limit. The composer's top-edge meter turns ember past 90%; over budget, the sentence "This draft pushes the prompt past the context limit. Older turns will be trimmed." appears under the field, the Statistics counter turns red, and the Prompt Details modal's token bar switches from success-green through warning-orange to error-red as it fills up — the modal also surfaces the specific truncation reason (for example, oldest messages being dropped) when one applies.
 
 ### Why Can't I Regenerate, Continue, or Swipe?
 
-These three actions are available to the session's **owner**, or to whoever owns the specific character the message belongs to — this is enforced server-side (`checkMessageEditPermission`), not just hidden in the UI. If you're a guest and don't own that character, you'll be able to send messages as your own persona and manage your own persona's messages, but these controls won't take effect for you on someone else's character. Separately, Trigger Character and the Extra Controls tab's round-robin Continue button are unavailable to any guest regardless of character ownership — but that restriction is purely client-side (the whole Extra Controls tab is hidden for guests), not a server-side ownership check like the other three.
+These three actions are available to the session's **owner**, or to whoever owns the specific character the message belongs to — this is enforced server-side (`checkMessageEditPermission`), not just hidden in the UI. If you're a guest and don't own that character, you'll be able to send messages as your own persona and manage your own persona's messages, but these controls won't take effect for you on someone else's character. Separately, Pick who speaks and the round-robin Continue in the Actions row are unavailable to any guest regardless of character ownership — but that restriction is purely client-side (the turn controls are hidden for guests), not a server-side ownership check like the other three.
 
-### Why Isn't the Next-Character Banner Showing?
+### Why Isn't the "Ready to Continue" Line Showing?
 
-The "ready to continue" banner only appears when _all_ of the following are true: it's a group session with more than one active character, nothing is currently generating, you don't have unsent draft text, you aren't editing a message, the round-robin logic has a character queued up, and the session already has at least one message. Typing a draft or opening an edit will hide the banner until you clear it.
+The *ready to continue* line only appears when _all_ of the following are true: it's a group session with more than one active character, nothing is currently generating, you don't have unsent draft text, you aren't editing a message, the round-robin logic has a character queued up, and the session already has at least one message. Typing a draft or opening an edit hides the line until you clear it, and so does turning off **Show who is due next** in the Messages panel's settings.

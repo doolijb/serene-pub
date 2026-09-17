@@ -81,7 +81,9 @@ describe("the batch size is clamped to the window the drafts are sent against", 
 		expect(widest(batches) + BATCH_RESERVE_TOKENS).toBeLessThanOrEqual(4096)
 		// And it really is the window doing the clamping, not a coincidence of
 		// message sizes: the cut is close to the ceiling, not far under it.
-		expect(widest(batches)).toBeGreaterThan(4096 - BATCH_RESERVE_TOKENS - 400)
+		expect(widest(batches)).toBeGreaterThan(
+			4096 - BATCH_RESERVE_TOKENS - 400
+		)
 	})
 
 	it("reads a window stored as a string, rather than substituting a default", async () => {
@@ -104,7 +106,9 @@ describe("the batch size is clamped to the window the drafts are sent against", 
 		)
 		// And both really clamped — identical-but-unclamped would satisfy the
 		// line above while proving nothing.
-		expect(widest(asString) + BATCH_RESERVE_TOKENS).toBeLessThanOrEqual(2048)
+		expect(widest(asString) + BATCH_RESERVE_TOKENS).toBeLessThanOrEqual(
+			2048
+		)
 	})
 
 	it("leaves the declared size alone when the window cannot be read at all", async () => {
@@ -133,7 +137,9 @@ describe("the batch size is clamped to the window the drafts are sent against", 
 		// that cannot fit.
 		const result = await run({
 			messages: lines(20),
-			sampling: { contextTokens: BATCH_RESERVE_TOKENS + MIN_BATCH_TOKENS - 1 }
+			sampling: {
+				contextTokens: BATCH_RESERVE_TOKENS + MIN_BATCH_TOKENS - 1
+			}
 		})
 		expect(result?.kind).toBe("halt")
 		expect(String(result?.reason)).toMatch(/context/i)
@@ -182,5 +188,86 @@ describe("the declared batch size means what it says", () => {
 			sampling: { contextTokens: 131072 }
 		})
 		expect(huge.map((b) => b.length)).toEqual(small.map((b) => b.length))
+	})
+})
+
+/**
+ * `minBatchMessages` — declared since the node was written, read by nothing
+ * until R-12 (2026-09-16). "Never cut a batch smaller than this many messages":
+ * a batch does not close below the floor however far over `batchTokens` it
+ * runs, except the last one, which is whatever the source had left.
+ */
+describe("the minimum batch size means what it says", () => {
+	/** Wide lines: at this width the token budget alone closes every batch at ONE message. */
+	const wide = (n: number) => lines(n, 3000)
+	/** A budget one wide line already exceeds, so the floor is the only thing keeping a batch open. */
+	const tight = { batchTokens: MIN_BATCH_TOKENS, contextTokens: 131072 }
+
+	it("at the declared default of 1 cuts exactly as it always did", async () => {
+		const before = await batchesOf({
+			messages: wide(6),
+			params: { batchTokens: tight.batchTokens },
+			sampling: { contextTokens: tight.contextTokens }
+		})
+		const explicit = await batchesOf({
+			messages: wide(6),
+			params: { batchTokens: tight.batchTokens, minBatchMessages: 1 },
+			sampling: { contextTokens: tight.contextTokens }
+		})
+		// The token cut alone: one wide line per batch, six batches.
+		expect(before.map((b) => b.length)).toEqual([1, 1, 1, 1, 1, 1])
+		expect(explicit.map((b) => b.length)).toEqual(
+			before.map((b) => b.length)
+		)
+	})
+
+	it("never closes a batch below the floor, however far over budget it runs", async () => {
+		const batches = await batchesOf({
+			messages: wide(7),
+			params: { batchTokens: tight.batchTokens, minBatchMessages: 3 },
+			sampling: { contextTokens: tight.contextTokens }
+		})
+		// 3, 3, and the remainder — the source ran out, which is the one
+		// condition under which a batch may be smaller than the floor.
+		expect(batches.map((b) => b.length)).toEqual([3, 3, 1])
+		// And every message is in exactly one batch, in order.
+		expect(batches.flat().map((m) => m.content)).toEqual(
+			wide(7).map((m) => m.content)
+		)
+	})
+
+	it("is a floor, not a size: narrow lines still fill by tokens above it", async () => {
+		const byTokens = await batchesOf({
+			messages: lines(40),
+			sampling: { contextTokens: 8192 }
+		})
+		const floored = await batchesOf({
+			messages: lines(40),
+			params: { minBatchMessages: 2 },
+			sampling: { contextTokens: 8192 }
+		})
+		// Every token-cut batch here already holds more than two lines, so the
+		// floor changes nothing.
+		expect(byTokens.every((b) => b.length >= 2)).toBe(true)
+		expect(floored.map((b) => b.length)).toEqual(
+			byTokens.map((b) => b.length)
+		)
+	})
+
+	it("treats 0, a negative or a non-number as the default floor of 1", async () => {
+		for (const bad of [0, -4, "three", null, undefined])
+			expect(
+				(
+					await batchesOf({
+						messages: wide(4),
+						params: {
+							batchTokens: tight.batchTokens,
+							minBatchMessages: bad
+						},
+						sampling: { contextTokens: tight.contextTokens }
+					})
+				).map((b) => b.length),
+				`minBatchMessages: ${String(bad)}`
+			).toEqual([1, 1, 1, 1])
 	})
 })

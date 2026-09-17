@@ -44,15 +44,16 @@ const manifest = (overrides: Record<string, unknown> = {}) => ({
 			label: "Dice Board",
 			description: "The board, everything default.",
 			bindings: {
-				"session-created": { spec: "acme.dice:spec/create-board" },
+				"core:event/session-created@1": { spec: "acme.dice:spec/create-board" },
 				// A config slug, which is what a declaration carries and what
 				// the column cannot hold — see `syncPluginPresets`.
-				"message-respond": {
+				"core:event/message-respond@1": {
 					spec: "acme.dice:spec/roll",
 					config: "loud"
 				}
 			},
-			actions: { include: ["acme.dice:spec/reroll"] },
+			// By identity (W-A) — what `preset()` packages now.
+			actions: { include: ["acme.dice:spec/reroll#reroll"] },
 			...overrides
 		}
 	]
@@ -106,7 +107,7 @@ describe("plugin presets", () => {
 		expect(row.name).toBe("Dice Board")
 		expect(row.genreId).toBe("acme.dice:genre/board")
 		expect(row.ownerPluginId).toBe(pluginRowId)
-		expect(row.includedActions).toEqual(["acme.dice:spec/reroll"])
+		expect(row.includedActions).toEqual(["acme.dice:spec/reroll#reroll"])
 		expect(
 			row.enabled,
 			"a package must not decide what this instance offers"
@@ -119,7 +120,7 @@ describe("plugin presets", () => {
 		// is nothing to resolve it against, so the binding lands without one and
 		// the spec's shipped default applies.
 		const row = await presetRow()
-		expect(row.bindings["message-respond"]).toEqual({
+		expect(row.bindings["core:event/message-respond@1"]).toEqual({
 			spec: "acme.dice:spec/roll"
 		})
 	})
@@ -172,6 +173,156 @@ describe("plugin presets", () => {
 		})
 		await syncPluginPresets(db)
 		expect((await presetRow()).enabled).toBe(true)
+	})
+
+	it("reads a bare binding key from a previous-SDK manifest as the event id, once, and says so", async () => {
+		// A package built before R-4 keys its bindings by bare genre-event
+		// name. Written verbatim, that key would undo migration 0134's fold
+		// on every boot and the run's lookup by id would find nothing — a
+		// preset binding nothing, silently (U3 review, W6). One release of
+		// normalisation, then the bare key is refused at packaging only.
+		// A bare key only ever meant a CORE event, so this is exercised
+		// under a core genre — see the non-core case below.
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+		try {
+			await install({
+				enabled: true,
+				manifest: manifest({
+					genre: "core:genre/chat",
+					bindings: {
+						"session-created": { spec: "acme.dice:spec/create-board" },
+						"message-respond": { spec: "acme.dice:spec/roll" }
+					}
+				})
+			})
+			const report = await syncPluginPresets(db)
+			expect(report.normalisedBindingKeys).toEqual([SEED_KEY])
+			expect(Object.keys((await presetRow()).bindings).sort()).toEqual([
+				"core:event/message-respond@1",
+				"core:event/session-created@1"
+			])
+			// Logged once per preset per sync, not once per key.
+			expect(
+				warn.mock.calls.filter(([m]) =>
+					String(m).includes(`preset ${SEED_KEY} binds`)
+				).length
+			).toBe(1)
+			// And an id-keyed manifest is written as it is, with nothing to say.
+			await install({ enabled: true, manifest: manifest() })
+			const clean = await syncPluginPresets(db)
+			expect(clean.normalisedBindingKeys).toEqual([])
+		} finally {
+			warn.mockRestore()
+		}
+	})
+
+	it("skips a bare binding key declared under a non-core genre, and says so", async () => {
+		// The previous-SDK bare key only ever resolved to `core:event/<name>@1`
+		// — a plugin's own genre owns no bare-named events, so normalising it
+		// here would bind against an id nobody declared. `acme.dice:genre/board`
+		// is not core, so the binding is dropped rather than guessed at.
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+		try {
+			await install({
+				enabled: true,
+				manifest: manifest({
+					bindings: {
+						"session-created": { spec: "acme.dice:spec/create-board" }
+					}
+				})
+			})
+			const report = await syncPluginPresets(db)
+			expect(report.skippedBindingKeys).toEqual([SEED_KEY])
+			expect(report.normalisedBindingKeys).toEqual([])
+			expect((await presetRow()).bindings).toEqual({})
+			expect(
+				warn.mock.calls.filter(([m]) =>
+					String(m).includes(`preset ${SEED_KEY} binds`)
+				).length
+			).toBe(1)
+		} finally {
+			warn.mockRestore()
+			// Restore an id-keyed manifest so later tests in this file resume
+			// from the same fixture the rest of the suite assumes.
+			await install({ enabled: true, manifest: manifest() })
+			await syncPluginPresets(db)
+		}
+	})
+
+	it("promotes a bare included key exactly one action declares, keeps the rest bare, and says so once — never refusing (W1)", async () => {
+		// A manifest packaged by a previous SDK may include an action by bare
+		// function key. Written verbatim it would put the pre-identity shape
+		// back on every boot; refused, the preset would vanish. So it runs
+		// the lenient normaliser: a key one action of the genre declares
+		// becomes that identity, the rest stay bare and are reported.
+		const { spec, compile } = await import("@serene-pub/sdk")
+		const C = await import("@serene-pub/contracts")
+		const { saveDocument } = await import("$lib/server/pipelines/boot/store")
+		const GENRE = "acme.dice:genre/board"
+		const publish = async (id: string, fn: string) =>
+			saveDocument(
+				db as any,
+				compile(
+					spec(id, {
+						version: "1.0.0",
+						taxonomy: { role: "action", genre: GENRE },
+						contributes: {
+							actions: [
+								{
+									key: fn,
+									function: fn,
+									genre: GENRE,
+									venue: { kind: "composer" },
+									label: { en: fn }
+								}
+							]
+						}
+					})
+						.inlet("input", C.userMessage.v1(), {
+							genre: GENRE,
+							event: "core:event/session-action@1"
+						})
+						.outlet("save", ($) => C.createMessage.v1({ text: $.input.text }))
+						.build()
+				),
+				{ publish: true }
+			)
+		// `reroll`: one declarer. `cheat`: two. `teleport`: none.
+		await publish("acme.dice:spec/reroll", "reroll")
+		await publish("acme.dice:spec/cheat", "cheat")
+		await publish("acme.dice:spec/cheat-too", "cheat")
+
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+		try {
+			await install({
+				enabled: true,
+				manifest: manifest({
+					actions: { include: ["reroll", "cheat", "teleport", "acme.dice:spec/reroll#reroll"] }
+				})
+			})
+			const report = await syncPluginPresets(db)
+			expect(report.bareIncludedKeys).toEqual([SEED_KEY])
+			expect((await presetRow()).includedActions).toEqual([
+				"acme.dice:spec/reroll#reroll",
+				"cheat",
+				"teleport"
+			])
+			// Logged once per preset per sync, not once per key.
+			expect(
+				warn.mock.calls.filter(([m]) =>
+					String(m).includes(`preset ${SEED_KEY} includes`)
+				).length
+			).toBe(1)
+			// And an identity-keyed manifest is written as it is, with nothing to say.
+			await install({ enabled: true, manifest: manifest() })
+			const clean = await syncPluginPresets(db)
+			expect(clean.bareIncludedKeys).toEqual([])
+			expect((await presetRow()).includedActions).toEqual([
+				"acme.dice:spec/reroll#reroll"
+			])
+		} finally {
+			warn.mockRestore()
+		}
 	})
 
 	it("withdraws a preset the package stopped declaring", async () => {

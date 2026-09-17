@@ -17,8 +17,14 @@ function character(over: Record<string, unknown> = {}) {
 	return { id: 1, name: "Verity", ...over } as unknown as SelectCharacter
 }
 
+/** A persona is a character row flagged `isPersona` — same fixture shape. */
 function persona(over: Record<string, unknown> = {}) {
-	return { id: 7, name: "Jody", ...over } as unknown as SelectPersona
+	return {
+		id: 7,
+		name: "Jody",
+		isPersona: true,
+		...over
+	} as unknown as SelectCharacter
 }
 
 describe("messageSpeaker", () => {

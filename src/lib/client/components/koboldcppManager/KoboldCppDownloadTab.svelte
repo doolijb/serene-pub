@@ -1,7 +1,8 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import { onMount, onDestroy, getContext } from "svelte"
+	import { onMount, getContext } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import KoboldCppModelKindToggle from "./KoboldCppModelKindToggle.svelte"
 	import {
@@ -167,8 +168,6 @@
 		showQuantModal = true
 	}
 
-	// Named so `off` can name them too. A bare `socket.off("koboldcpp:searchModels")`
-	// removes EVERY listener for that event.
 	function handleSearchModels(msg: Sockets.KoboldCPP.SearchModels.Response) {
 		isSearching = false
 		searchResults = msg.models
@@ -216,19 +215,39 @@
 		toaster.error({ title: "Failed to load recommended models" })
 	}
 
+	// Every key is BARE — nothing in `koboldcpp:` carries an interest scope —
+	// and every one is standing: a search can be re-run, a download re-started
+	// and the recommended catalog re-fetched whenever the kind changes, all
+	// without this tab remounting.
+	//
+	// Declared ABOVE the mount that emits: effects run in creation order, so a
+	// declaration made after one would miss the sync its first request flushes.
+	useInterest<"koboldcpp:searchModels">(
+		"koboldcpp:searchModels",
+		handleSearchModels
+	)
+	useInterest<"koboldcpp:searchModels:error">(
+		"koboldcpp:searchModels:error",
+		handleSearchModelsError
+	)
+	useInterest<"koboldcpp:downloadModel">(
+		"koboldcpp:downloadModel",
+		handleDownloadModel
+	)
+	useInterest<"koboldcpp:downloadModel:error">(
+		"koboldcpp:downloadModel:error",
+		handleDownloadModelError
+	)
+	useInterest<"koboldcpp:recommendedModels">(
+		"koboldcpp:recommendedModels",
+		handleRecommendedModels
+	)
+	useInterest<"koboldcpp:recommendedModels:error">(
+		"koboldcpp:recommendedModels:error",
+		handleRecommendedModelsError
+	)
+
 	onMount(() => {
-		socket.on("koboldcpp:searchModels", handleSearchModels)
-		socket.on("koboldcpp:searchModels:error", handleSearchModelsError)
-
-		socket.on("koboldcpp:downloadModel", handleDownloadModel)
-		socket.on("koboldcpp:downloadModel:error", handleDownloadModelError)
-
-		socket.on("koboldcpp:recommendedModels", handleRecommendedModels)
-		socket.on(
-			"koboldcpp:recommendedModels:error",
-			handleRecommendedModelsError
-		)
-
 		// The sidebar owns the kind and this tab is remounted on every visit,
 		// so the first fetch is simply for whatever kind is current — which is
 		// not necessarily "text" if the user switched to Image on Models.
@@ -258,17 +277,6 @@
 		if (rerun) search()
 	}
 
-	onDestroy(() => {
-		socket.off("koboldcpp:searchModels", handleSearchModels)
-		socket.off("koboldcpp:searchModels:error", handleSearchModelsError)
-		socket.off("koboldcpp:downloadModel", handleDownloadModel)
-		socket.off("koboldcpp:downloadModel:error", handleDownloadModelError)
-		socket.off("koboldcpp:recommendedModels", handleRecommendedModels)
-		socket.off(
-			"koboldcpp:recommendedModels:error",
-			handleRecommendedModelsError
-		)
-	})
 </script>
 
 {#if !isLocal}

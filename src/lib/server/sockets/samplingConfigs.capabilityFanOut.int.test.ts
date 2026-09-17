@@ -49,8 +49,8 @@ beforeAll(async () => {
 		.onConflictDoNothing()
 	// A node type that demands both img2img transforms, so the aggregation has
 	// all three image capabilities to fan out over.
-	await testDb.insert(schema.pipelineTypeRegistry).values({
-		typeId: "test:provider/edit-image",
+	await testDb.insert(schema.pipelineDefinitionRegistry).values({
+		definitionId: "test:oracle/edit-image",
 		version: 1,
 		kind: "node",
 		slots: {

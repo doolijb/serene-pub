@@ -1,4 +1,5 @@
 import type { DataType } from "@huggingface/transformers"
+import { recommendedNerSnapshot } from "$lib/server/localModels/onnxList"
 
 /**
  * The entity models this build ships in its picker.
@@ -40,6 +41,31 @@ export interface NerModelDef {
 	 * that is a label per token rather than a vector anything is compared on.
 	 */
 	dtype?: DataType
+
+	/* ── What the PUBLISHED list adds ────────────────────────────────────
+	 * Optional so one shape serves both the compiled fallback above and an
+	 * entry fetched from the recommended list
+	 * (`$lib/server/localModels/onnxList`) — the same arrangement, field for
+	 * field, as `EmbeddingModelDef`. They ride onto the wire as
+	 * `LocalModelState.catalog`.
+	 */
+
+	/** Tier label for the picker, where the list publishes one. */
+	tier?: "fast" | "balanced" | "best"
+	/** Megabytes the list says the download is, for the dtype named above. */
+	sizeMb?: number
+	/** Tokens per pass; longer text is truncated by the pipeline. */
+	maxInputTokens?: number
+	/** The list's own filter vocabulary: `multilingual`, `cased`, … */
+	tags?: string[]
+	/** SPDX id, or the vendor's licence name. */
+	license?: string
+	/** `YYYY-MM` or `YYYY`. */
+	released?: string
+	/** Prose, e.g. "Ten high-resource languages". */
+	languages?: string
+	/** Prose, e.g. "108M". */
+	parameterSize?: string
 }
 
 export const NER_MODELS: NerModelDef[] = [
@@ -63,8 +89,16 @@ export const NER_MODELS: NerModelDef[] = [
 	}
 ]
 
+/**
+ * The definition for an id, from the recommended list first and the built-in
+ * catalogue second. The mirror of `findModel`, and synchronous for the same
+ * reason — see that function's note.
+ */
 export function findNerModel(id: string): NerModelDef | undefined {
-	return NER_MODELS.find((m) => m.id === id)
+	return (
+		recommendedNerSnapshot().find((m) => m.id === id) ??
+		NER_MODELS.find((m) => m.id === id)
+	)
 }
 
 /**

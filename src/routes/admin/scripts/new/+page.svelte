@@ -6,13 +6,17 @@
 	 * until the button. The response lands you on the new row's change page to
 	 * author the source.
 	 */
-	import { getContext, onDestroy, onMount } from "svelte"
+	import { getContext, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { goto } from "$app/navigation"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import {
+		declareInterest,
+		requestWithInterest
+	} from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 
-	type ScriptType = Sockets.Pipelines.Scripts.ScriptType
+	type ScriptKind = Sockets.Pipelines.Scripts.ScriptKind
 
 	const userCtx: { user: SelectUser } = getContext("userCtx")
 	const socket = useTypedSocket()
@@ -25,7 +29,7 @@
 	let priorIds: Set<number> = new Set()
 
 	let groups = $derived.by(() => {
-		const byScope = new Map<string, ScriptType[]>()
+		const byScope = new Map<string, ScriptKind[]>()
 		for (const t of view.types ?? []) {
 			const list = byScope.get(t.content) ?? []
 			list.push(t)
@@ -40,9 +44,6 @@
 	const scopeLabel = (content: string) =>
 		content.charAt(0).toUpperCase() + content.slice(1)
 
-	// Named so `off` can name them too. A bare `socket.off("pipelines:scripts")`
-	// removes EVERY listener for that event — including any other open
-	// page's, which then stops updating for the rest of the session.
 	function handlePipelinesScripts(res: Sockets.Pipelines.Scripts.Response) {
 		view = res
 		loading = false
@@ -72,22 +73,34 @@
 			goto("/")
 			return
 		}
-		socket.on("pipelines:scripts", handlePipelinesScripts)
-		socket.on("pipelines:createScript", handlePipelinesCreateScript)
-		socket.on(
-			"pipelines:createScript:error",
-			handlePipelinesCreateScriptError
-		)
-		socket.emit("pipelines:scripts", {})
 	})
 
-	onDestroy(() => {
-		socket.off("pipelines:scripts", handlePipelinesScripts)
-		socket.off("pipelines:createScript", handlePipelinesCreateScript)
-		socket.off(
-			"pipelines:createScript:error",
-			handlePipelinesCreateScriptError
-		)
+	/**
+	 * The type list, asked for and listened for in one; the create answer
+	 * stands, because it comes back when the button is pressed rather than in
+	 * reply to anything asked here. BARE, both: a script type is not one
+	 * session's anything.
+	 *
+	 * The app-wide registry, not `adminInterest`: `pipelines:` is a MIXED
+	 * family — most of its handlers answer every user — so these are ordinary
+	 * keys, and the admin check here is the same one the redirect above makes.
+	 */
+	$effect(() => {
+		if (!userCtx.user?.isAdmin) return
+		const releases = [
+			declareInterest<"pipelines:createScript">(
+				"pipelines:createScript",
+				handlePipelinesCreateScript
+			),
+			declareInterest<"pipelines:createScript:error">(
+				"pipelines:createScript:error",
+				handlePipelinesCreateScriptError
+			),
+			requestWithInterest("pipelines:scripts", {}, handlePipelinesScripts)
+		]
+		return () => {
+			for (const release of releases) release()
+		}
 	})
 
 	function create() {

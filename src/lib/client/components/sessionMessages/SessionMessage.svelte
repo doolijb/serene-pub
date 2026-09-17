@@ -1,9 +1,13 @@
 <script lang="ts">
 	import { avatarSrc } from "$lib/client/utils/media"
+	import { messageEnvoySlug } from "$lib/client/utils/messageSpeaker"
 	import type { Snippet } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import MessageComposer from "$lib/client/components/sessionMessages/MessageComposer.svelte"
 	import MessageControls from "$lib/client/components/sessionMessages/MessageControls.svelte"
+	import { actionIcon } from "$lib/client/components/sessionMessages/actionIcon"
+	import { quickRowActions } from "$lib/client/components/sessionMessages/messageVerbState"
+	import { actionIdentity } from "$lib/shared/actions/identity"
 	import MessagePartsView from "$lib/client/components/sessionMessages/MessagePartsView.svelte"
 	import MessageStateLedger from "$lib/client/components/sessionMessages/MessageStateLedger.svelte"
 	import { renderMarkdownWithQuotedText } from "$lib/client/utils/markdownToHTML"
@@ -11,6 +15,7 @@
 	import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 	import { animateHeight } from "$lib/client/utils/motion"
 	import { useWidgetContext } from "$lib/shared/widgets/context"
+	import { statusText, t } from "$lib/client/i18n/state.svelte"
 
 	interface Props {
 		msg: SelectSessionMessage
@@ -19,10 +24,17 @@
 			sessionMessages: SelectSessionMessage[]
 		}
 		isLastMessage: boolean
+		/**
+		 * The scene this message belongs to, when it belongs to one —
+		 * SessionContainer reads it off its own scene map and passes it with
+		 * the rest of the row's arguments. The row also carries the scene's
+		 * colour as `--sp-scene`, which the badge below inherits.
+		 */
+		sceneName?: string | null
 		// Functions
 		getMessageCharacter: (
 			msg: SelectSessionMessage
-		) => SelectCharacter | SelectPersona | undefined
+		) => SelectCharacter | undefined
 		canControlMessage: (msg: SelectSessionMessage) => boolean
 		showSwipeControls: (
 			msg: SelectSessionMessage,
@@ -43,9 +55,7 @@
 		onAbortMessage: (event: Event, msg: SelectSessionMessage) => void
 		onBranchMessage?: (event: Event, msg: SelectSessionMessage) => void
 		onCharacterNameClick: (msg: SelectSessionMessage) => void
-		onAvatarClick: (
-			char: SelectCharacter | SelectPersona | undefined
-		) => void
+		onAvatarClick: (char: SelectCharacter | undefined) => void
 		// Fired when an inline `![alt](url)` image rendered inside the
 		// message content is clicked — opens it in a lightbox.
 		onImageClick?: (src: string) => void
@@ -68,38 +78,60 @@
 		// own that state.
 		onSaveEditMessage(content: string, e?: Event): void
 		// Tracks which message's "more actions" popover is open, so only one
-		// is ever open at a time in a message list. No longer mobile-only —
-		// the popover now replaces the always-visible desktop toolbar too.
+		// is ever open at a time in a message list.
 		openMsgControlsMenu: number | undefined
 		// Edit state
 		editSessionMessage: SelectSessionMessage | undefined
 		canRegenerateLastMessage: boolean
 		hasGeneratingMessage: boolean
+		/**
+		 * Why Continue is unavailable in this session, when it is — the
+		 * connection cannot resume a partial reply, or the mode does not offer
+		 * the verb. The quick Continue button is withheld while it is set;
+		 * MessageControls keeps the explained, disabled row.
+		 */
+		continueRefusal?: string
 		// Summarization mode
 		isSummarizationMode?: boolean
 		isSelected?: boolean
 		onStartSummarization?: (msg: SelectSessionMessage) => void
-		// The contributed menu-trigger set (19 §4) — passed through to
-		// MessageControls, fired with this message as the subject.
-		menuTriggers?: Array<{
-			function: string
-			name: string
-			icon?: string
-			specSlug: string
-		}>
-		// ⚠ Both of the two below are now FALLBACKS, not the primary route: when
+		/**
+		 * The `message` venue of `sessions:actions` (R-15, U5c) — passed
+		 * through to MessageControls, and read here for the quick row: the
+		 * primary set, one click away on the row itself. Off the widget
+		 * envelope (`ctx.actions.v1.message`) when a host provides one, the
+		 * prop otherwise.
+		 */
+		messageActions?: {
+			primary: Sockets.Sessions.Actions.Action[]
+			overflow: Sockets.Sessions.Actions.Action[]
+		}
+		/** The person opened a list showing newcomers (`sessions:actionsSeen`). */
+		onActionsSeen?: (keys: string[]) => void
+		// ⚠ Both of the two below are FALLBACKS, not the primary route: when
 		// a `WidgetHost` provides a ctx these fire through `ctx.action` instead
 		// (see `fireTrigger`/`fireBlockAction`). They stay for mounts with no
 		// host, and are the first two of the ~16 callbacks the PLAN 25 migration
 		// collapses onto the envelope.
-		onFireTrigger?: (fn: string, msg: SelectSessionMessage) => void
-		// Declared block actions inside a parts-native body (20 §6).
+		onFireTrigger?: (
+			action: Sockets.Sessions.Actions.Action,
+			msg: SelectSessionMessage
+		) => void
+		// Declared block actions inside a parts-native body (20 §6), with the
+		// block's stamped identity when it carries one (W-E).
 		onBlockAction?: (
 			fn: string,
 			msg: SelectSessionMessage,
-			payload?: Record<string, unknown>
+			payload?: Record<string, unknown>,
+			action?: string,
+			blockId?: string
 		) => void
 		// Snippets
+		/**
+		 * A caller's own "who is speaking" animation. The generating state
+		 * itself is drawn as `.sp-msg-status` beside the name; this renders in
+		 * the body while a reply has streamed nothing yet.
+		 */
 		GeneratingAnimationComponent?: Snippet<[]>
 		messageControls?: Snippet<[SelectSessionMessage]>
 	}
@@ -109,6 +141,7 @@
 		index,
 		session,
 		isLastMessage,
+		sceneName = null,
 		getMessageCharacter,
 		canControlMessage,
 		showSwipeControls,
@@ -131,10 +164,12 @@
 		editSessionMessage,
 		canRegenerateLastMessage,
 		hasGeneratingMessage,
+		continueRefusal = undefined,
 		isSummarizationMode = false,
 		isSelected = false,
 		onStartSummarization,
-		menuTriggers = [],
+		messageActions = undefined,
+		onActionsSeen = undefined,
 		onFireTrigger = undefined,
 		onBlockAction = undefined,
 		GeneratingAnimationComponent,
@@ -161,30 +196,67 @@
 	 * The two routes are the SAME call, not two spellings of a similar one:
 	 * `ctx.action` reaches `WidgetHost`'s `onAction`, which SessionLayout wires
 	 * to +page's `handleFrameAction`, which emits `sessions:triggerFunction`
-	 * with `{ sessionId, function, messageId, payload? }` — field for field what
-	 * `fireMenuTrigger`/`fireBlockAction` emit, so the same server handler and
-	 * the same permission check either way.
+	 * with `{ sessionId, function, action?, messageId, payload? }` — field
+	 * for field what `fireMenuTrigger`/`fireBlockAction` emit, so the same
+	 * server handler and the same permission check either way. ⏳ `WidgetHost`
+	 * (the layouts lane's) still calls `onAction` with three arguments, so
+	 * the identity a menu press hands `ctx.action` is dropped on that hop
+	 * and the server reads the fire as legacy (owner floor) until the lane
+	 * forwards the fourth.
 	 */
-	/** A contributed `kind: 'menu'` trigger fired from the options menu (19 §4). */
-	function fireTrigger(fn: string, m: SelectSessionMessage) {
-		if (ctx) ctx.action(fn, m.id)
-		else onFireTrigger?.(fn, m)
+	/**
+	 * A contributed action fired from the options menu or the quick row
+	 * (19 §4), its identity riding along (W1) so the server checks THAT
+	 * declaration and runs THAT spec.
+	 */
+	function fireTrigger(
+		action: Sockets.Sessions.Actions.Action,
+		m: SelectSessionMessage
+	) {
+		// ⏳ TEMPORARY (U5c review, W1/W4): the prop first, the envelope
+		// second — the reverse of `fireBlockAction` below. `WidgetHost` (the
+		// layouts lane's) forwards `ctx.action` with three arguments, so the
+		// identity would be dropped on that hop and the server would read a
+		// guest's press of a plugin's `act: participant` message action as
+		// legacy — owner floor — and refuse it. Remove this ordering once
+		// `WidgetHost` forwards `action`'s fourth argument; if it outlives
+		// that, the envelope route is merely unexercised on the real mount,
+		// which passes the prop.
+		if (onFireTrigger) onFireTrigger(action, m)
+		else if (ctx)
+			ctx.action(action.function, m.id, undefined, actionIdentity(action))
 	}
 
-	/** A declared block action inside a parts-native body (20 §6). */
+	/**
+	 * A declared block action inside a parts-native body (20 §6). `action`
+	 * is the identity the block was stamped with by the outlet that wrote it
+	 * (W-E) — carried, never chosen here — so the server checks THAT
+	 * declaration; a block with none fires legacy (the owner floor).
+	 */
 	function fireBlockAction(
 		fn: string,
 		m: SelectSessionMessage,
-		payload?: Record<string, unknown>
+		payload?: Record<string, unknown>,
+		action?: string,
+		blockId?: string
 	) {
-		if (ctx) ctx.action(fn, m.id, payload)
-		else onBlockAction?.(fn, m, payload)
+		// ⏳ TEMPORARY (U5d, the same shape as `fireTrigger` above): the
+		// prop first, the envelope second. `WidgetHost` (the layouts lane's)
+		// forwards `ctx.action` with three arguments, so a form's `action`
+		// AND `blockId` would be dropped on that hop and the server would
+		// read the press as legacy — refusing a guest answering a question
+		// put to their own character. Remove this ordering once `WidgetHost`
+		// forwards the fourth and fifth arguments; if it outlives that, the
+		// envelope route is merely unexercised on the real mount, which
+		// passes the prop.
+		if (onBlockAction) onBlockAction(fn, m, payload, action, blockId)
+		else if (ctx) ctx.action(fn, m.id, payload, action, blockId)
 	}
 
-	// Whether a menu trigger has a route at all: the gate MessageControls has
-	// always applied to the contributed section, restated here now that either
-	// source can supply one. Unchanged in practice — the real mount passes the
-	// prop AND sits inside a host.
+	// Whether a menu trigger has a route at all: the gate MessageControls
+	// applies to the contributed section, restated here now that either
+	// source can supply one. The real mount passes the prop AND sits inside a
+	// host.
 	const canFireTrigger = $derived(!!ctx || !!onFireTrigger)
 
 	/**
@@ -215,12 +287,15 @@
 	const narratorDisplayName = $derived(
 		msg.metadata?.narratorName || "Narrator"
 	)
-	const speakerDisplayName = $derived(
+	/** Who this message is from, as the header prints it. */
+	const displayName = $derived(
 		msg.isNarratorResponse
 			? narratorDisplayName
-			: character
-				? resolveCharacterName(character, "") || null
-				: null
+			: resolveCharacterName(character, "Unknown")
+	)
+	/** The disc a speaker with no picture gets: their initial. */
+	const avatarInitial = $derived(
+		displayName.trim().charAt(0).toUpperCase() || "?"
 	)
 	const isGreeting = $derived(!!msg.metadata?.isGreeting)
 	// Two independent classifications the style packs (sessionLayout skins) key
@@ -239,6 +314,8 @@
 				? "user"
 				: "assistant"
 	)
+	/** An envoy's line (U5g): named by reference, no character row behind it. */
+	const isEnvoy = $derived(messageEnvoySlug(msg) !== null)
 	const msgAuthor = $derived(
 		msg.isNarratorResponse
 			? "narrator"
@@ -246,13 +323,15 @@
 				? "persona"
 				: msg.characterId != null
 					? "character"
-					: "unknown"
+					: isEnvoy
+						? "envoy"
+						: "unknown"
 	)
 	const canControl = $derived(canControlMessage(msg))
 	const showSwipes = $derived(showSwipeControls(msg, isGreeting))
 	const canSwipeRightVal = $derived(canSwipeRight(msg, isGreeting))
 	// Native model thinking (from Ollama think: true, etc.) — `thinking` is
-	// written into sessionMessages.metadata at runtime (see generateResponse.ts)
+	// written into sessionMessages.metadata by the narrate spec's placeholder outlet
 	// but isn't part of the column's `$type<{...}>()` declaration in
 	// schema.ts, so it's genuinely absent from SelectSessionMessage's inferred
 	// type. `as any` here is the accurate escape hatch for that upstream gap.
@@ -303,6 +382,114 @@
 	// actually expresses that intent.
 	const canSaveEdit = $derived(isEditDirty && editContent.trim().length > 0)
 
+	/** A `date` column carries the day only; a time of day needs a timestamp. */
+	const DAY_ONLY = /^\d{4}-\d{2}-\d{2}$/
+
+	/**
+	 * The clock beside the name, in the reader's own locale. `createdAt` is a
+	 * day-precision `date` column on this row (20 §5), so a value with no time
+	 * of day in it reads `updatedAt`, which is a timestamp.
+	 */
+	const messageTime = $derived.by(() => {
+		const created: unknown = msg.createdAt
+		const stamp =
+			typeof created === "string" && DAY_ONLY.test(created)
+				? (msg.updatedAt ?? created)
+				: (created ?? msg.updatedAt)
+		if (!stamp) return ""
+		const at =
+			stamp instanceof Date ? stamp : new Date(stamp as string | number)
+		if (Number.isNaN(at.getTime())) return ""
+		return at.toLocaleTimeString([], {
+			hour: "numeric",
+			minute: "2-digit"
+		})
+	})
+
+	/**
+	 * What the ember dot beside the name says while a reply is being made:
+	 * the run's own status (R-19) — *Jasmine is thinking*, *Jasmine is
+	 * typing*, *loading the model* — resolved in the reader's language. The
+	 * retired stage enum is read as a fallback for one release (a row an
+	 * older server left mid-flight), and a row with neither says *working*
+	 * until its run's first status lands.
+	 */
+	const generatingStatus = $derived(
+		statusText(msg.generationStatus) ||
+			(msg.generationStage === "queued"
+				? t("queued")
+				: msg.generationStage === "loading"
+					? t("loading model")
+					: msg.generationStage === "generating"
+						? t("writing")
+						: t("working"))
+	)
+
+	// ── the quick actions ────────────────────────────────────────────────
+	// The message venue's PRIMARY set (R-15 `quick`, U5c), one click away on
+	// the row itself — core's verbs and a plugin's `quick` message action
+	// alike (S8) — each shown on exactly the messages the ⋮ menu offers it
+	// on and only while the menu would have it enabled, through the one verb
+	// table both read (`quickRowActions`). The menu keeps the full list,
+	// including the entries that are disabled and explained. Stop is the
+	// primary set's too, but it has its own pill below rather than an icon.
+	//
+	// The list arrives on the widget envelope when a host provides one, the
+	// prop otherwise; with neither, the floors alone.
+	const venueActions = $derived(
+		(ctx?.actions?.v1?.message as typeof messageActions | undefined) ??
+			messageActions
+	)
+	const quickActions = $derived(
+		quickRowActions(venueActions?.primary ?? [], {
+			msg,
+			isLastMessage,
+			canRegenerateLastMessage,
+			editing: !!editSessionMessage,
+			hasGeneratingMessage,
+			canControl,
+			continueRefusal,
+			canSwipe: canSwipeRightVal
+		})
+	)
+	const showQuickActions = $derived(
+		!isSummarizationMode && !isEditing && quickActions.length > 0
+	)
+
+	/**
+	 * A quick icon fires the same handler the menu's row does: core's verbs
+	 * to the page's handlers, a contributed action through `fireTrigger`
+	 * with this message as the subject.
+	 */
+	function fireQuick(e: Event, action: Sockets.Sessions.Actions.Action) {
+		if (action.specSlug !== "core") return fireTrigger(action, msg)
+		switch (action.key) {
+			case "retry":
+				return onRegenerateMessage(e, msg)
+			case "continue":
+				return onContinueMessage?.(e, msg)
+			case "edit":
+				return onEditMessage(e, msg)
+			case "branch":
+				return onBranchMessage?.(e, msg)
+			case "swipe":
+				return onSwipeRight(msg)
+			case "hide":
+				return onHideMessage(e, msg)
+			case "delete":
+				return onDeleteMessage(e, msg)
+		}
+	}
+
+	/** The swipe counter is drawn only where there is a history to count. */
+	const swipes = $derived(msg.metadata?.swipes)
+	const hasSwipeHistory = $derived(
+		swipes?.currentIdx !== null &&
+			swipes?.currentIdx !== undefined &&
+			!!swipes?.history &&
+			swipes.history.length > 1
+	)
+
 	function handleMessageUpdate(e?: Event) {
 		if (!canSaveEdit) return
 		onSaveEditMessage(editContent, e)
@@ -328,13 +515,15 @@
 </script>
 
 <!-- A <div>, not an <li>: SessionContainer already wraps each message in its own
-     <li> (the scene-bar row), so an <li> here nested a list item inside a list
-     item — invalid HTML that confuses assistive-tech list semantics. The
-     role="article" below is what actually carries the semantics. -->
+     <li> (the row that carries `--sp-scene`), so an <li> here nests a list item
+     inside a list item — invalid HTML that confuses assistive-tech list
+     semantics. The role="article" below is what carries the semantics.
+
+     The four cells are the style packs' contract: avatar, identity, controls,
+     content, plus the `data-msg-*` attributes a pack keys its look off. -->
 <div
 	id="message-{msg.id}"
-	class="sp-msg transition-colors duration-150"
-	class:opacity-50={!isSummarizationMode && msg.isHidden && !isEditing}
+	class="sp-msg"
 	data-msg-role={msgRole}
 	data-msg-author={msgAuthor}
 	data-msg-state={isEditing
@@ -344,144 +533,210 @@
 				? "selected"
 				: "dim"
 			: "normal"}
+	data-msg-generating={msg.isGenerating ? "" : undefined}
+	data-msg-hidden={msg.isHidden ? "" : undefined}
+	data-msg-greeting={isGreeting ? "" : undefined}
+	data-msg-newest={isLastMessage ? "" : undefined}
 	tabindex="-1"
 	role="article"
 	aria-label="Message {index +
-		1} of {messageCount} from {msg.isNarratorResponse
-		? narratorDisplayName
-		: resolveCharacterName(character, 'Unknown')}: {msg.content.slice(
-		0,
-		100
-	)}{msg.content.length > 100 ? '...' : ''}"
+		1} of {messageCount} from {displayName}: {msg.content.slice(0, 100)}{msg
+		.content.length > 100
+		? '...'
+		: ''}"
 >
-	<!-- `flex` rather than the default inline formatting context: the
-			     avatar button is inline-block, so in a block wrapper it sat on a
-			     text baseline and left ~6px of descender space underneath. That
-			     padded every character message's header to 70px against a
-			     narrator message's 64px, for no visible reason. -->
-	<span class="sp-msg-avatar shrink-0">
+	<span class="sp-msg-avatar">
 		{#if msg.isNarratorResponse}
 			<span
 				class="sp-msg-avatar-glyph"
 				title={narratorDisplayName}
 				aria-hidden="true"
 			>
-				<Icons.CloudSun size="1.5em" />
+				<Icons.CloudSun size="1.25em" />
 			</span>
 		{:else}
 			<!-- Avatar rendered directly (not the reusable Avatar component):
-				     Skeleton hard-sizes its avatar root, which fought the layout
-				     CSS. A plain img/glyph lets each style pack own size and shape. -->
+			     Skeleton hard-sizes its avatar root, which fought the layout
+			     CSS. A plain img/glyph lets each style pack own size and shape. -->
 			<button
 				class="sp-msg-avatar-btn"
 				onclick={() => onAvatarClick(character)}
-				title="View Avatar"
-				aria-label="View avatar"
+				aria-label="View {displayName}'s avatar"
 			>
 				{#if avatarSrc(character)}
 					<img
 						class="sp-msg-avatar-img"
 						src={avatarSrc(character)}
-						alt={resolveCharacterName(character, "Unknown")}
+						alt={displayName}
 					/>
 				{:else}
 					<span class="sp-msg-avatar-glyph" aria-hidden="true">
-						<Icons.UserRound size="1.5em" />
+						{avatarInitial}
 					</span>
 				{/if}
 			</button>
 		{/if}
 	</span>
-	<!-- msg-ctrl-row pins this line to exactly one control-height and
-				     centers its contents, so the name's optical center lands on
-				     the same y as the "..." button's. This replaces the two `mt-1`
-				     nudges that used to fake it for the adjacent icons only. -->
-	<div class="sp-msg-identity msg-ctrl-row min-w-0 gap-1">
+
+	<div class="sp-msg-identity">
 		{#if msg.isNarratorResponse}
-			<span
-				class="sp-msg-name funnel-display mx-0 min-w-0 truncate px-0 text-[1.1em] font-bold"
-				title={narratorDisplayName}
-			>
+			<span class="sp-msg-name" title={narratorDisplayName}>
 				{narratorDisplayName}
+			</span>
+		{:else if isEnvoy}
+			<!-- Nothing to open: an envoy has no character page. -->
+			<span class="sp-msg-name" title={displayName}>
+				{displayName}
 			</span>
 		{:else}
 			<button
-				class="sp-msg-name funnel-display mx-0 min-w-0 truncate px-0 text-[1.1em] font-bold hover:underline"
-				onclick={(e) => onCharacterNameClick(msg)}
-				title={resolveCharacterName(character, "Unknown")}
+				class="sp-msg-name"
+				onclick={() => onCharacterNameClick(msg)}
+				title={displayName}
 			>
-				{resolveCharacterName(character, "Unknown")}
+				{displayName}
 			</button>
 		{/if}
-		{#if isGreeting}
-			<span
-				class="text-muted inline-flex shrink-0 items-center text-xs opacity-50"
-				title="Greeting message"
-			>
-				<Icons.Handshake size={16} aria-hidden="true" />
+
+		<span class="sp-msg-badges">
+			{#if isGreeting}
+				<span
+					class="sp-msg-badge"
+					role="img"
+					aria-label="Greeting message"
+				>
+					<Icons.Handshake size={14} aria-hidden="true" />
+				</span>
+			{/if}
+			{#if msg.isHidden}
+				<span
+					class="sp-msg-badge"
+					role="img"
+					aria-label="Hidden from the model"
+				>
+					<Icons.Ghost size={14} aria-hidden="true" />
+				</span>
+			{/if}
+			{#if sceneName}
+				<!-- Colour comes from `--sp-scene` on the row this message
+				     sits in, so the badge and the pack's scene bar are the
+				     same colour by construction. -->
+				<span class="sp-msg-badge sp-msg-badge-scene">
+					<Icons.Film size={14} aria-hidden="true" />
+					<span class="sr-only">In scene:</span>
+					<span class="sp-msg-badge-text">{sceneName}</span>
+				</span>
+			{/if}
+			<!-- No wrapper element: EmbeddingStatusIcon renders nothing at
+			     all when status is hidden/none (the common case). Its own root
+			     already carries inline-flex/items-center/shrink-0. -->
+			<EmbeddingStatusIcon embeddingModel={msg.embeddingModel} />
+		</span>
+
+		{#if msg.isGenerating}
+			<span class="sp-msg-status">
+				<span class="sp-dot" aria-hidden="true"></span>
+				{generatingStatus}
 			</span>
-		{/if}
-		<!-- No wrapper element: EmbeddingStatusIcon renders nothing at
-					     all when status is hidden/none (the common case), and a
-					     wrapper would still consume a gap-1 for an empty span. Its
-					     own root already carries inline-flex/items-center/shrink-0. -->
-		<EmbeddingStatusIcon embeddingModel={msg.embeddingModel} />
-		{#if isEditing}
-			<!-- Carries the state in words, not just colour — the
-						     ring around the card is the fast visual cue, this
-						     is what makes it unambiguous (and announceable). -->
-			<span
-				class="preset-tonal-warning text-warning-800-200 inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[0.7rem] font-semibold tracking-wide uppercase"
-			>
-				<Icons.Pencil size={11} aria-hidden="true" />
-				Editing
-				{#if isEditDirty}
-					<span
-						class="bg-warning-500 h-1.5 w-1.5 rounded-full"
-						title="Unsaved changes"
-						aria-label="Unsaved changes"
-					></span>
-				{/if}
+		{:else if isEditing}
+			<span class="sp-msg-status">Editing</span>
+		{:else if msg.generationOutcome === "stopped"}
+			<!-- The explicit outcome (R-15): a reply somebody stopped, holding
+			     the partial text. Cleared by the next regenerate or continue on
+			     the row, and by a swipe onto another alternative — the stop
+			     belongs to the alternative that was streaming, so selecting a
+			     different one leaves the mark behind. -->
+			<span class="sp-msg-status" title="This reply was stopped before it finished">
+				Stopped
 			</span>
 		{/if}
 	</div>
 
-	{#if isEditing}
-		<div class="sp-msg-controls msg-ctrl-col">
-			<!-- msg-ctrl-btn-labeled, not msg-ctrl-btn: it is the same
-				     fixed box on mobile (so the header height contract in
-				     app.css holds) and only widens to fit the word on lg.
-				     Icon-only Save/Cancel gave the two most consequential
-				     buttons in the app the least identity. -->
-			<div class="msg-ctrl-row justify-end gap-2">
-				<button
-					class="btn msg-ctrl-btn-labeled preset-tonal-surface"
-					title="Cancel edit (Esc)"
-					aria-label="Cancel edit"
-					onclick={onCancelEditMessage}
+	<div class="sp-msg-controls">
+		{#if isEditing}
+			<button
+				class="sp-msg-quiet-btn"
+				title="Cancel edit (Esc)"
+				onclick={onCancelEditMessage}
+			>
+				Cancel
+			</button>
+			<button
+				class="btn btn-sm preset-filled-primary-500"
+				title={canSaveEdit
+					? "Save changes (Ctrl+Enter)"
+					: isEditDirty
+						? "A message can't be saved empty"
+						: "No changes to save"}
+				disabled={!canSaveEdit}
+				onclick={handleMessageUpdate}
+			>
+				Save
+			</button>
+		{:else}
+			{#if messageTime}
+				<span class="sp-msg-time">{messageTime}</span>
+			{/if}
+
+			{#if showSwipes}
+				<div class="sp-msg-swipes">
+					{#if hasSwipeHistory}
+						<button
+							class="sp-msg-icon-btn"
+							aria-label="Previous swipe"
+							onclick={() => onSwipeLeft(msg)}
+							disabled={!!editSessionMessage ||
+								!swipes!.currentIdx ||
+								swipes!.history.length <= 1 ||
+								msg.isGenerating ||
+								!canControl}
+						>
+							<Icons.ChevronLeft size={14} aria-hidden="true" />
+						</button>
+						<!-- tabular-nums + a min width so stepping 9/12 -> 10/12
+						     doesn't shove the arrows sideways. -->
+						<span class="sp-msg-swipe-count" aria-live="polite">
+							{(swipes!.currentIdx || 0) + 1} / {swipes!.history
+								.length}
+						</span>
+					{/if}
+					<button
+						class="sp-msg-icon-btn"
+						aria-label="Next swipe"
+						onclick={() => onSwipeRight(msg)}
+						disabled={!!editSessionMessage ||
+							!canSwipeRightVal ||
+							!canControl}
+					>
+						<Icons.ChevronRight size={14} aria-hidden="true" />
+					</button>
+				</div>
+			{/if}
+
+			{#if showQuickActions}
+				<!-- The icons fade in on hover and focus on a fine pointer and
+				     stand permanently on a coarse one — see messageLayouts.css,
+				     STYLE-GUIDE §9. -->
+				<div
+					class="sp-msg-actions"
+					role="group"
+					aria-label="Message actions"
 				>
-					<Icons.X aria-hidden="true" />
-					<span class="hidden text-sm lg:inline">Cancel</span>
-				</button>
-				<button
-					class="btn msg-ctrl-btn-labeled preset-filled-success-500"
-					title={canSaveEdit
-						? "Save changes (Ctrl+Enter)"
-						: isEditDirty
-							? "A message can't be saved empty"
-							: "No changes to save"}
-					aria-label="Save edit"
-					disabled={!canSaveEdit}
-					onclick={handleMessageUpdate}
-				>
-					<Icons.Save aria-hidden="true" />
-					<span class="hidden text-sm lg:inline">Save</span>
-				</button>
-			</div>
-		</div>
-	{:else}
-		<div class="sp-msg-controls msg-ctrl-col">
-			<div class="msg-ctrl-row flex-wrap justify-end gap-2">
+					{#each quickActions as { action } (actionIdentity(action))}
+						{@const Icon = actionIcon(action.icon)}
+						<button
+							class="sp-msg-icon-btn"
+							aria-label={action.name}
+							title={action.name}
+							onclick={(e) => fireQuick(e, action)}
+						>
+							<Icon size={14} aria-hidden="true" />
+						</button>
+					{/each}
+				</div>
+			{/if}
+
+			<div class="sp-msg-menu">
 				{#if messageControls}
 					{@render messageControls(msg)}
 				{:else}
@@ -492,6 +747,7 @@
 						{editSessionMessage}
 						{hasGeneratingMessage}
 						{canControl}
+						{continueRefusal}
 						{onEditMessage}
 						{onHideMessage}
 						{onDeleteMessage}
@@ -500,7 +756,10 @@
 						{onAbortMessage}
 						{onBranchMessage}
 						{onStartSummarization}
-						{menuTriggers}
+						messageActions={venueActions}
+						canSwipe={canSwipeRightVal}
+						onSwipeMessage={(_e, m) => onSwipeRight(m)}
+						{onActionsSeen}
 						onFireTrigger={canFireTrigger ? fireTrigger : undefined}
 						open={openMsgControlsMenu === msg.id}
 						onOpenChange={(isOpen) =>
@@ -508,148 +767,99 @@
 					/>
 				{/if}
 			</div>
-			{#if showSwipes}
-				<div class="msg-ctrl-row justify-end gap-2">
-					{#if msg.metadata?.swipes?.currentIdx !== null && msg.metadata?.swipes?.currentIdx !== undefined && msg.metadata?.swipes?.history && msg.metadata?.swipes.history.length > 1}
-						<button
-							class="btn msg-ctrl-btn hover:preset-tonal-success"
-							title="Swipe Left"
-							aria-label="Previous swipe"
-							onclick={() => onSwipeLeft(msg)}
-							disabled={!!editSessionMessage ||
-								!msg.metadata.swipes.currentIdx ||
-								msg.metadata.swipes.history.length <= 1 ||
-								msg.isGenerating ||
-								!canControl}
-						>
-							<Icons.ChevronLeft aria-hidden="true" />
-						</button>
-						<!-- tabular-nums + a min width so stepping 9/12 -> 10/12
-							     doesn't shove the arrows sideways. -->
-						<span
-							class="text-surface-700-300 min-w-[3.5ch] text-center text-sm tabular-nums select-none"
-							aria-live="polite"
-						>
-							{(msg.metadata.swipes.currentIdx || 0) + 1}/{msg
-								.metadata.swipes.history.length}
-						</span>
-					{/if}
-					<button
-						class="btn msg-ctrl-btn hover:preset-tonal-success"
-						title="Swipe Right"
-						aria-label="Next swipe"
-						onclick={() => onSwipeRight(msg)}
-						disabled={!!editSessionMessage ||
-							!canSwipeRightVal ||
-							!canControl}
-					>
-						<Icons.ChevronRight aria-hidden="true" />
-					</button>
-				</div>
-			{:else if isLastMessage}
-				<!-- Hold the swipe row's space on the last message only. That
-					     is the one place showSwipes still toggles (it follows
-					     canRegenerateLastMessage, so it flips off during
-					     generation and back on after), and reserving it there
-					     stops the message resizing under the reader. Reserving on
-					     every message instead would add a dead row to the whole
-					     backlog to fix a pop that can no longer happen there. -->
-				<div class="msg-ctrl-row" aria-hidden="true"></div>
+
+			{#if msg.isGenerating}
+				<button
+					class="sp-msg-stop preset-tonal-error"
+					onclick={(e) => onAbortMessage(e, msg)}
+				>
+					<Icons.Square size={14} aria-hidden="true" />
+					Stop
+				</button>
 			{/if}
-		</div>
-	{/if}
+		{/if}
+	</div>
 
 	<div class="sp-msg-content">
-		<!-- Extra instructions block (Narrator's optional per-trigger focus note).
-	     Suppressed when parts render: the section part carries it there. -->
-		{#if hasNarratorInstructions && !partsNative}
-			<div class="mx-2 mt-2">
-				<button
-					class="flex w-full items-center gap-2 py-2 text-sm opacity-70 transition-opacity hover:opacity-100"
-					onclick={toggleNarratorInstructions}
-					title={isNarratorInstructionsExpanded
-						? "Collapse extra instructions"
-						: "Expand extra instructions"}
-					aria-expanded={isNarratorInstructionsExpanded}
-					aria-controls="extra-instructions-{msg.id}"
-				>
-					<Icons.Target size={16} aria-hidden="true" />
-					<span>Extra Instructions</span>
-					<Icons.ChevronDown
-						size={16}
-						aria-hidden="true"
-						class={`transition-transform ${isNarratorInstructionsExpanded ? "rotate-180" : ""}`}
-					/>
-				</button>
-				<!-- grid 0fr -> 1fr is the only way to transition to/from an auto
-			     height in pure CSS. The inner overflow-hidden wrapper is
-			     required: the track collapses to 0 but the content keeps its
-			     intrinsic height, so without it the text spills out. Content
-			     stays mounted while collapsed (rather than the old {#if})
-			     because a transition needs both endpoints to exist — hence
-			     `inert`, since a 0fr track still contains focusable content. -->
-				<div
-					id="extra-instructions-{msg.id}"
-					class="grid transition-[grid-template-rows] duration-200 ease-out"
-					style:grid-template-rows={isNarratorInstructionsExpanded
-						? "1fr"
-						: "0fr"}
-					inert={!isNarratorInstructionsExpanded}
-				>
-					<div class="overflow-hidden">
-						<div
-							class="rendered-session-message-content pb-2 text-sm opacity-80"
+		<!-- The collapsibles a reply can carry: the Narrator's per-trigger
+		     focus note and the model's own thinking. Both are suppressed when
+		     parts render — the section and thinking parts carry them there. -->
+		{#if (hasNarratorInstructions || hasThinking) && !partsNative}
+			<div class="sp-msg-disclosures">
+				{#if hasNarratorInstructions}
+					<div class="sp-disclosure">
+						<button
+							class="sp-disclosure-toggle"
+							onclick={toggleNarratorInstructions}
+							aria-expanded={isNarratorInstructionsExpanded}
+							aria-controls="extra-instructions-{msg.id}"
 						>
-							{@html renderMarkdownWithQuotedText(
-								narratorInstructionsContent
-							)}
+							<Icons.Target size={14} aria-hidden="true" />
+							<span>Extra instructions</span>
+							<Icons.ChevronDown size={14} aria-hidden="true" />
+						</button>
+						<!-- grid 0fr -> 1fr is the only way to transition to/from an
+						     auto height in pure CSS. The inner overflow-hidden
+						     wrapper is required: the track collapses to 0 but the
+						     content keeps its intrinsic height, so without it the
+						     text spills out. Content stays mounted while collapsed
+						     because a transition needs both endpoints to exist —
+						     hence `inert`, since a 0fr track still contains
+						     focusable content. -->
+						<div
+							id="extra-instructions-{msg.id}"
+							class="sp-disclosure-track"
+							style:grid-template-rows={isNarratorInstructionsExpanded
+								? "1fr"
+								: "0fr"}
+							inert={!isNarratorInstructionsExpanded}
+						>
+							<div class="sp-disclosure-clip">
+								<div
+									class="sp-disclosure-panel rendered-session-message-content"
+								>
+									{@html renderMarkdownWithQuotedText(
+										narratorInstructionsContent
+									)}
+								</div>
+							</div>
 						</div>
 					</div>
-				</div>
-			</div>
-		{/if}
+				{/if}
 
-		<!-- Thinking block (native model thinking, e.g. Ollama think: true).
-	     Suppressed when parts render: the thinking part carries it there. -->
-		{#if hasThinking && !partsNative}
-			<div class="mx-2 mt-2">
-				<button
-					class="flex w-full items-center gap-2 py-2 text-sm opacity-70 transition-opacity hover:opacity-100"
-					onclick={toggleThinking}
-					title={isThinkingExpanded
-						? "Collapse thinking"
-						: "Expand thinking"}
-					aria-expanded={isThinkingExpanded}
-					aria-controls="thinking-{msg.id}"
-				>
-					<Icons.BrainCircuit size={16} aria-hidden="true" />
-					<span>Thinking</span>
-					<Icons.ChevronDown
-						size={16}
-						aria-hidden="true"
-						class={`transition-transform ${isThinkingExpanded ? "rotate-180" : ""}`}
-					/>
-				</button>
-				<!-- See the Extra Instructions block above for why this is a grid
-			     rather than an {#if}. -->
-				<div
-					id="thinking-{msg.id}"
-					class="grid transition-[grid-template-rows] duration-200 ease-out"
-					style:grid-template-rows={isThinkingExpanded
-						? "1fr"
-						: "0fr"}
-					inert={!isThinkingExpanded}
-				>
-					<div class="overflow-hidden">
-						<div
-							class="rendered-session-message-content pb-2 text-sm opacity-80"
+				{#if hasThinking}
+					<div class="sp-disclosure">
+						<button
+							class="sp-disclosure-toggle"
+							onclick={toggleThinking}
+							aria-expanded={isThinkingExpanded}
+							aria-controls="thinking-{msg.id}"
 						>
-							{@html renderMarkdownWithQuotedText(
-								thinkingContent
-							)}
+							<Icons.BrainCircuit size={14} aria-hidden="true" />
+							<span>Thinking</span>
+							<Icons.ChevronDown size={14} aria-hidden="true" />
+						</button>
+						<!-- See the block above for why this is a grid track. -->
+						<div
+							id="thinking-{msg.id}"
+							class="sp-disclosure-track"
+							style:grid-template-rows={isThinkingExpanded
+								? "1fr"
+								: "0fr"}
+							inert={!isThinkingExpanded}
+						>
+							<div class="sp-disclosure-clip">
+								<div
+									class="sp-disclosure-panel rendered-session-message-content"
+								>
+									{@html renderMarkdownWithQuotedText(
+										thinkingContent
+									)}
+								</div>
+							</div>
 						</div>
 					</div>
-				</div>
+				{/if}
 			</div>
 		{/if}
 
@@ -658,7 +868,7 @@
 	     Disabled while generating: during streaming the height changes on every
 	     token, and an animation would trail the text permanently instead of
 	     settling. The discrete swaps are what this is for — swiping between
-	     alternatives, entering/leaving edit, an error card replacing content. -->
+	     alternatives, entering/leaving edit, an error replacing content. -->
 		<div
 			use:animateHeight={{
 				enabled: !msg.isGenerating,
@@ -667,26 +877,27 @@
 		>
 			<div class="sp-msg-body flex h-fit text-left">
 				{#if msg.error}
-					{#if msg.content}
-						<div class="rendered-session-message-content mb-2">
-							{@html renderMarkdownWithQuotedText(msg.content)}
-						</div>
-					{/if}
-					<div
-						class="border-error-500 bg-error-500/10 flex w-full flex-col gap-2 rounded-lg border p-3"
-					>
-						<div class="text-error-700-300 flex items-center gap-2">
-							<Icons.AlertTriangle size={16} />
-							<span class="text-sm font-medium">
-								{msg.error.message}
-							</span>
-							{#if msg.error.code}
-								<span class="text-xs opacity-60">
-									({msg.error.code})
+					<div class="w-full">
+						{#if msg.content}
+							<div class="rendered-session-message-content mb-2">
+								{@html renderMarkdownWithQuotedText(
+									msg.content
+								)}
+							</div>
+						{/if}
+						<div class="sp-msg-error text-error-600-400">
+							<p class="flex items-start gap-1.5">
+								<Icons.AlertTriangle
+									size={14}
+									aria-hidden="true"
+									class="mt-0.5 shrink-0"
+								/>
+								<span>
+									{msg.error.message}{#if msg.error.code}
+										({msg.error.code}){/if}
 								</span>
-							{/if}
-						</div>
-						<!--
+							</p>
+							<!--
 						Presence IS permission. `error.connection` is connection
 						identity, and the server removes that key from every
 						payload a non-admin receives (connections/visibility.ts),
@@ -699,68 +910,35 @@
 						is where an administrator gets back the half it left out —
 						which connection, and what the service actually said.
 					-->
-						{#if msg.error.connection?.name || msg.error.connection?.detail}
-							<pre
-								class="text-error-700-300 max-h-40 overflow-auto rounded bg-black/10 p-2 font-mono text-xs whitespace-pre-wrap">{[
-									msg.error.connection.name,
-									msg.error.connection.model
-								]
-									.filter(Boolean)
-									.join(" · ")}{msg.error.connection.detail
-									? `${msg.error.connection.name ? "\n" : ""}${msg.error.connection.detail}`
-									: ""}</pre>
-						{/if}
-						<button
-							class="btn preset-filled-primary-500 btn-sm w-fit"
-							onclick={(e) => onRegenerateMessage(e, msg)}
-						>
-							<Icons.RotateCcw size={14} />
-							Retry
-						</button>
+							{#if msg.error.connection?.name || msg.error.connection?.detail}
+								<p class="sp-msg-error-detail">
+									{[
+										msg.error.connection.name,
+										msg.error.connection.model
+									]
+										.filter(Boolean)
+										.join(" · ")}{msg.error.connection
+										.detail
+										? `${msg.error.connection.name ? "\n" : ""}${msg.error.connection.detail}`
+										: ""}
+								</p>
+							{/if}
+							<button
+								class="sp-msg-retry"
+								onclick={(e) => onRegenerateMessage(e, msg)}
+							>
+								Retry
+							</button>
+						</div>
 					</div>
 				{:else if msg.content === "" && msg.isGenerating}
-					{#if msg.generationStage === "queued"}
-						<div class="flex items-center gap-2">
-							<div class="text-surface-700-300 text-sm">
-								Queued
-							</div>
-							<div
-								class="bg-surface-400-600 h-2 w-2 rounded-full"
-							></div>
-						</div>
-					{:else if msg.generationStage === "loading"}
-						<div class="flex items-center gap-2">
-							<div class="text-surface-700-300 text-sm">
-								Loading model…
-							</div>
-							<div
-								class="bg-surface-400-600 h-2 w-2 animate-pulse rounded-full"
-							></div>
-						</div>
-					{:else if GeneratingAnimationComponent}
+					{#if GeneratingAnimationComponent}
 						{@render GeneratingAnimationComponent()}
-					{:else}
-						<div class="flex items-center gap-2">
-							<div
-								class="text-surface-600-400 animate-pulse text-sm"
-							>
-								{speakerDisplayName
-									? `${speakerDisplayName} is typing...`
-									: "Typing..."}
-							</div>
-							<div
-								class="bg-primary-500 h-2 w-2 animate-bounce rounded-full"
-							></div>
-						</div>
 					{/if}
 				{:else if isEditing}
-					<!-- One surface, not three. This used to be a rounded-xl
-				     `bg-surface-100-900` panel nested in the rounded-lg message
-				     card, wrapping a bordered `input` textarea with a third
-				     background — three radii and three fills stacked inside
-				     each other. The panel now *is* the field: the textarea
-				     below drops its own border, radius and fill (see
-				     `edit-field`) and simply lays text on this one. -->
+					<!-- One surface: the panel IS the field. The textarea below
+					     drops its own border, radius and fill (see `edit-field`)
+					     and simply lays text on this one. -->
 					<div
 						class="edit-surface bg-surface-100-900 w-full rounded-lg px-2 pt-0.5 pb-1"
 					>
@@ -773,9 +951,8 @@
 							autofocus
 							textareaClasses="edit-field field-sizing-content w-full"
 						/>
-						<!-- Transient, unlike the session bar's — it only exists while
-					     an edit is open, so it can't become the permanent noise
-					     that hint was deliberately removed from below. -->
+						<!-- Transient: it exists only while an edit is open, so
+						     it can't become permanent noise. -->
 						<div
 							class="text-surface-600-400 flex flex-wrap items-center gap-x-3 gap-y-1 px-1 pt-1 text-xs"
 						>
@@ -808,8 +985,9 @@
 							parts={msg.parts!}
 							activeRevisions={msg.activeRevisions ?? { "0": 0 }}
 							onContentClick={handleContentClick}
-							onAction={(fn, payload) =>
-								fireBlockAction(fn, msg, payload)}
+							bodyText={msg.content ?? ""}
+							onAction={(fn, payload, action, blockId) =>
+								fireBlockAction(fn, msg, payload, action, blockId)}
 						/>
 					</div>
 				{:else}
@@ -873,8 +1051,8 @@
 		   box from its content. */
 		resize: none;
 
-		/* Without a cap, editing a long message grew the card unbounded and
-		   pushed Save/Cancel — which live in the header — off the top of the
+		/* Without a cap, editing a long message grows the card unbounded and
+		   pushes Save/Cancel — which live in the header — off the top of the
 		   viewport. */
 		max-height: 45vh;
 		overflow-y: auto;
@@ -884,7 +1062,7 @@
 			box-shadow: none;
 		}
 
-		/* Mouse focus needs no ring — the card's own ring already says which
+		/* Mouse focus needs no ring — the card's own outline already says which
 		   message is open. This is only for keyboard users tabbing back in
 		   from Cancel/Save, who would otherwise get no landing cue at all
 		   beyond the caret. color-mix keeps it palette-free. */

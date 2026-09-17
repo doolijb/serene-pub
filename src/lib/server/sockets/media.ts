@@ -63,9 +63,6 @@ async function attachmentLabels(rows: FileRow[]) {
 	const charIds = [
 		...new Set(rows.map((r) => r.characterId).filter(Boolean))
 	] as number[]
-	const personaIds = [
-		...new Set(rows.map((r) => r.personaId).filter(Boolean))
-	] as number[]
 	const sessionIds = [
 		...new Set(rows.map((r) => r.sessionId).filter(Boolean))
 	] as number[]
@@ -74,12 +71,6 @@ async function attachmentLabels(rows: FileRow[]) {
 		? await db.query.characters.findMany({
 				where: inArray(schema.characters.id, charIds),
 				columns: { id: true, name: true, nickname: true }
-			})
-		: []
-	const personas = personaIds.length
-		? await db.query.personas.findMany({
-				where: inArray(schema.personas.id, personaIds),
-				columns: { id: true, name: true }
 			})
 		: []
 	const sessions = sessionIds.length
@@ -92,7 +83,6 @@ async function attachmentLabels(rows: FileRow[]) {
 	const charName = new Map(
 		characters.map((c) => [c.id, c.nickname || c.name])
 	)
-	const personaName = new Map(personas.map((p) => [p.id, p.name]))
 	// The ROW, not its name: `sessions.name` is optional, so an unnamed live
 	// session has a null name and a deleted one has no row — and collapsing
 	// those two into one null is what made this bug. The placeholder matches
@@ -110,12 +100,6 @@ async function attachmentLabels(rows: FileRow[]) {
 				// this is the label an orphan gets — and it is the thing that
 				// makes orphans visible to the user at all.
 				name: charName.get(row.characterId) ?? null
-			}
-		if (row.personaId)
-			return {
-				type: "persona" as const,
-				id: row.personaId,
-				name: personaName.get(row.personaId) ?? null
 			}
 		if (row.sessionId)
 			return {
@@ -283,98 +267,113 @@ function mergeSkipped(
 		.sort((a, b) => b.files - a.files)
 }
 
+/**
+ * One user's media, as the manager panel lists it.
+ *
+ * Split out of the handler below so the five write cascades that re-send it
+ * can hand it to `emitToUser` as a thunk (socket-interest plan, ruling 4): ONE
+ * source of truth for the payload, and the file read plus the batched variant
+ * query behind it are paid only when some socket declared the key. A frame set
+ * from a character form, or a cull run from Settings, pays for no re-list.
+ * Skipping the emit alone would save nothing; those reads are the cost.
+ */
+async function buildMediaList(
+	userId: number,
+	params?: Sockets.Media.List.Params
+): Promise<Sockets.Media.List.Response> {
+	const sort = params?.sort ?? "newest"
+	// There is no derivative filter any more, and no id space to filter: a
+	// variant row carries no provenance at all, so a query for a user's
+	// files can never return one. That absence is what replaced the old
+	// `variant IS NULL` condition.
+	const orderBy =
+		sort === "oldest"
+			? [asc(schema.files.createdAt), asc(schema.files.id)]
+			: sort === "name"
+				? [asc(schema.files.filename), asc(schema.files.id)]
+				: [desc(schema.files.createdAt), desc(schema.files.id)]
+
+	const filters = [eq(schema.files.userId, userId)]
+	if (params?.kind) filters.push(eq(schema.files.kind, params.kind))
+
+	const rows = await db
+		.select()
+		.from(schema.files)
+		.where(and(...filters))
+		.orderBy(...orderBy)
+
+	// One batched variant query for the whole page — correct HERE and only
+	// here, because this panel's subject is disk rather than rendering.
+	const byFile = await listVariants(
+		db,
+		rows.map((r) => r.id)
+	)
+	const label = await attachmentLabels(rows)
+	// One more batched query, on the same principle as the labels above: a
+	// derived fact the panel cannot work out for itself, resolved for the
+	// whole page at once. Deliberately NOT a per-row lookup — this list is
+	// already unbounded and re-runs after every mutation.
+	const refs = await messageReferenceCounts()
+
+	const media: Sockets.ManagedMedia[] = rows.map((row) => {
+		const variants = byFile.get(row.id) ?? []
+		const attachedTo = label(row)
+		return {
+			...toClientMedia(row),
+			createdAt:
+				row.createdAt instanceof Date
+					? row.createdAt.toISOString()
+					: String(row.createdAt),
+			// Summed from the rows already loaded rather than through
+			// `storedBytesByFile`, which would be a second pass over the
+			// same data and could disagree with the list beside it.
+			storedBytes: variants.reduce((sum, v) => sum + v.bytes, 0),
+			// Field by field, never a spread: `path` lives on this row and
+			// nowhere else, so spreading one is the only way a payload
+			// could still leak the data-dir layout.
+			variants: variants.map((v) => ({
+				variant: v.variant,
+				mime: v.mime,
+				bytes: v.bytes,
+				isOriginal: v.isOriginal,
+				cache: v.cache,
+				fidelity: v.fidelity,
+				isDisplay: v.id === row.displayVariantId
+			})),
+			attachedTo,
+			// Named a parent that is gone — the only state the panel may
+			// read as "safe to reclaim". A file with no parent at all is a
+			// user-level upload and is emphatically not one.
+			orphaned: attachedTo !== null && attachedTo.name === null,
+			messageRefs: refs.get(row.id) ?? 0
+		}
+	})
+
+	// Size order is over STORED bytes, not display bytes. Once one file has
+	// three rows, "what showing it costs" and "what storing it costs" are
+	// different questions, and someone sorting by size in a panel with a
+	// cleanup section in it is asking the second. The sum only exists after
+	// the variant query above, so it is ordered here rather than in SQL.
+	if (sort === "largest" || sort === "smallest") {
+		const dir = sort === "largest" ? -1 : 1
+		media.sort(
+			(a, b) => dir * (a.storedBytes - b.storedBytes) || a.id - b.id
+		)
+	}
+
+	return {
+		media,
+		totalBytes: media.reduce((sum, m) => sum + m.storedBytes, 0)
+	}
+}
+
 export const mediaList: Handler<
 	Sockets.Media.List.Params,
 	Sockets.Media.List.Response
 > = {
 	event: "media:list",
 	handler: async (socket, params, emitToUser) => {
-		const userId = socket.user!.id
-
-		const sort = params?.sort ?? "newest"
-		// There is no derivative filter any more, and no id space to filter: a
-		// variant row carries no provenance at all, so a query for a user's
-		// files can never return one. That absence is what replaced the old
-		// `variant IS NULL` condition.
-		const orderBy =
-			sort === "oldest"
-				? [asc(schema.files.createdAt), asc(schema.files.id)]
-				: sort === "name"
-					? [asc(schema.files.filename), asc(schema.files.id)]
-					: [desc(schema.files.createdAt), desc(schema.files.id)]
-
-		const filters = [eq(schema.files.userId, userId)]
-		if (params?.kind) filters.push(eq(schema.files.kind, params.kind))
-
-		const rows = await db
-			.select()
-			.from(schema.files)
-			.where(and(...filters))
-			.orderBy(...orderBy)
-
-		// One batched variant query for the whole page — correct HERE and only
-		// here, because this panel's subject is disk rather than rendering.
-		const byFile = await listVariants(
-			db,
-			rows.map((r) => r.id)
-		)
-		const label = await attachmentLabels(rows)
-		// One more batched query, on the same principle as the labels above: a
-		// derived fact the panel cannot work out for itself, resolved for the
-		// whole page at once. Deliberately NOT a per-row lookup — this list is
-		// already unbounded and re-runs after every mutation.
-		const refs = await messageReferenceCounts()
-
-		const media: Sockets.ManagedMedia[] = rows.map((row) => {
-			const variants = byFile.get(row.id) ?? []
-			const attachedTo = label(row)
-			return {
-				...toClientMedia(row),
-				createdAt:
-					row.createdAt instanceof Date
-						? row.createdAt.toISOString()
-						: String(row.createdAt),
-				// Summed from the rows already loaded rather than through
-				// `storedBytesByFile`, which would be a second pass over the
-				// same data and could disagree with the list beside it.
-				storedBytes: variants.reduce((sum, v) => sum + v.bytes, 0),
-				// Field by field, never a spread: `path` lives on this row and
-				// nowhere else, so spreading one is the only way a payload
-				// could still leak the data-dir layout.
-				variants: variants.map((v) => ({
-					variant: v.variant,
-					mime: v.mime,
-					bytes: v.bytes,
-					isOriginal: v.isOriginal,
-					cache: v.cache,
-					fidelity: v.fidelity,
-					isDisplay: v.id === row.displayVariantId
-				})),
-				attachedTo,
-				// Named a parent that is gone — the only state the panel may
-				// read as "safe to reclaim". A file with no parent at all is a
-				// user-level upload and is emphatically not one.
-				orphaned: attachedTo !== null && attachedTo.name === null,
-				messageRefs: refs.get(row.id) ?? 0
-			}
-		})
-
-		// Size order is over STORED bytes, not display bytes. Once one file has
-		// three rows, "what showing it costs" and "what storing it costs" are
-		// different questions, and someone sorting by size in a panel with a
-		// cleanup section in it is asking the second. The sum only exists after
-		// the variant query above, so it is ordered here rather than in SQL.
-		if (sort === "largest" || sort === "smallest") {
-			const dir = sort === "largest" ? -1 : 1
-			media.sort(
-				(a, b) => dir * (a.storedBytes - b.storedBytes) || a.id - b.id
-			)
-		}
-
-		const res: Sockets.Media.List.Response = {
-			media,
-			totalBytes: media.reduce((sum, m) => sum + m.storedBytes, 0)
-		}
+		const res = await buildMediaList(socket.user!.id, params)
 		emitToUser("media:list", res)
 		return res
 	}
@@ -392,18 +391,33 @@ export const mediaList: Handler<
  * Emitted after the write, never before: the token on the wire has to be the
  * one the route will serve.
  */
-async function announceChanged(
+function announceChanged(
 	fileId: number,
 	emitToUser: (event: string, data: any) => void
 ) {
-	const row = await getMedia(db, fileId)
-	if (!row) return
-	emitToUser("media:changed", {
-		id: row.id,
-		uuid: row.uuid,
-		rev: row.rev,
-		frame: row.frame ?? null
-	} satisfies Sockets.Media.Changed.Response)
+	// LAZY (socket-interest plan, ruling 4): the row read exists only to build
+	// this announcement, so a bump made where no view is watching media pays
+	// for nothing. Skipping the emit alone would save nothing; the read is the
+	// cost.
+	return emitToUser("media:changed", async () => {
+		const row = await getMedia(db, fileId)
+		// A row that has gone between the write and this read has nothing to
+		// announce. `emitToUser`'s thunk form has no "skip" answer — unlike
+		// `broadcastHelpers`, a nullish payload there is a payload, not a
+		// skip — so the skip is spelled as a throw, which `emitToUser`
+		// catches and logs. Unreachable by construction: every caller has
+		// just written this very row.
+		if (!row)
+			throw new Error(
+				`media ${fileId} vanished before its media:changed announce`
+			)
+		return {
+			id: row.id,
+			uuid: row.uuid,
+			rev: row.rev,
+			frame: row.frame ?? null
+		} satisfies Sockets.Media.Changed.Response
+	})
 }
 
 export const mediaRegenerateThumbnail: Handler<
@@ -450,7 +464,8 @@ export const mediaRegenerateThumbnail: Handler<
 			regenerated: thumb?.variant === MediaVariant.THUMB && !!thumb.row
 		}
 		emitToUser("media:regenerateThumbnail", res)
-		await mediaList.handler(socket, {}, emitToUser)
+		// LAZY: see `buildMediaList`.
+		await emitToUser("media:list", () => buildMediaList(socket.user!.id))
 		return res
 	}
 }
@@ -550,7 +565,8 @@ export const mediaSetVisibility: Handler<
 			visibility: params.visibility
 		}
 		emitToUser("media:setVisibility", res)
-		await mediaList.handler(socket, {}, emitToUser)
+		// LAZY: see `buildMediaList`.
+		await emitToUser("media:list", () => buildMediaList(socket.user!.id))
 		return res
 	}
 }
@@ -634,7 +650,8 @@ export const mediaDelete: Handler<
 			messageRefs
 		}
 		emitToUser("media:delete", res)
-		await mediaList.handler(socket, {}, emitToUser)
+		// LAZY: see `buildMediaList`.
+		await emitToUser("media:list", () => buildMediaList(socket.user!.id))
 		return res
 	}
 }
@@ -703,7 +720,8 @@ export const mediaCullDerived: Handler<
 
 		const res: Sockets.Media.CullDerived.Response = { variants, bytes }
 		emitToUser("media:cullDerived", res)
-		await mediaList.handler(socket, {}, emitToUser)
+		// LAZY: see `buildMediaList`.
+		await emitToUser("media:list", () => buildMediaList(socket.user!.id))
 		return res
 	}
 }
@@ -812,7 +830,8 @@ export const mediaCullOriginals: Handler<
 			skipped: mergeSkipped(priced.skipped, refusals)
 		}
 		emitToUser("media:cullOriginals", res)
-		await mediaList.handler(socket, {}, emitToUser)
+		// LAZY: see `buildMediaList`.
+		await emitToUser("media:list", () => buildMediaList(socket.user!.id))
 		return res
 	}
 }

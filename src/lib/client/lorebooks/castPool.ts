@@ -12,7 +12,11 @@
  * "whose lore is this?" is answerable without a browser.
  */
 
-/** Which of the three a member is. The kind is read, never stored. */
+/**
+ * Which of the three a member is. The kind is read, never stored — and
+ * "persona" is not a different binding: it is a character binding whose card
+ * the reader has flagged as one of their own personas.
+ */
 export type CastKind = "character" | "persona" | "background"
 
 /** A cast row as the wire sends it, with whatever card it names resolved. */
@@ -29,9 +33,11 @@ export interface CastRow {
 	nodeState?: string | null
 	nodeVisibility?: string | null
 	characterId?: number | null
-	personaId?: number | null
-	character?: { nickname?: string | null; name?: string | null } | null
-	persona?: { name?: string | null } | null
+	character?: {
+		nickname?: string | null
+		name?: string | null
+		isPersona?: boolean | null
+	} | null
 }
 
 /** One row of the Cast list. */
@@ -44,7 +50,7 @@ export interface CastMember {
 	state: string
 	visibility: string
 	summary: string
-	/** Whether a character or persona card is attached. */
+	/** Whether a character card is attached. */
 	linked: boolean
 }
 
@@ -57,7 +63,6 @@ export interface AnchoredLore {
 function cardName(row: CastRow): string {
 	if (row.characterId)
 		return (row.character?.nickname || row.character?.name || "").trim()
-	if (row.personaId) return (row.persona?.name || "").trim()
 	return ""
 }
 
@@ -69,11 +74,11 @@ function cardName(row: CastRow): string {
  * heading nobody can see is a row nobody can click.
  */
 export function toCastMember(row: CastRow): CastMember {
-	const kind: CastKind = row.characterId
-		? "character"
-		: row.personaId
+	const kind: CastKind = !row.characterId
+		? "background"
+		: row.character?.isPersona
 			? "persona"
-			: "background"
+			: "character"
 	const name =
 		cardName(row) || (row.name ?? "").trim() || (row.binding ?? "").trim()
 	return {

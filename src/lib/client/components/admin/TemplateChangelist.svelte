@@ -6,10 +6,9 @@
 	 * change pages (Django's changelist → change-form flow), never an inline
 	 * editor.
 	 */
-	import { onDestroy, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { goto } from "$app/navigation"
-	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { requestWithInterest } from "$lib/client/sockets/interest.svelte"
 	import AdminList, {
 		type AdminColumn
 	} from "$lib/client/components/admin/AdminList.svelte"
@@ -26,8 +25,6 @@
 	}
 	let { kind, title, description, basePath, storageKey }: Props = $props()
 
-	const socket = useTypedSocket()
-
 	let view = $state<Sockets.Pipelines.Library.Response>({})
 	let loading = $state(true)
 
@@ -36,13 +33,13 @@
 		loading = false
 	}
 
-	onMount(() => {
-		socket.on("pipelines:library", handleLibrary)
-		socket.emit("pipelines:library", {})
-	})
-	onDestroy(() => {
-		socket.off("pipelines:library", handleLibrary)
-	})
+	/**
+	 * The rows this changelist renders, asked for and listened for in one.
+	 * BARE — the library is the instance's, not one session's. The app-wide
+	 * registry, not `adminInterest`: `pipelines:` is a MIXED family, most of
+	 * whose handlers answer every user, so this is an ordinary key.
+	 */
+	$effect(() => requestWithInterest("pipelines:library", {}, handleLibrary))
 
 	let rows = $derived(
 		(kind === "context"

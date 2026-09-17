@@ -15,7 +15,8 @@
  *
  * ## Base vs scoped
  *
- * Base sections (layout/session/channels/messages/props) are always present.
+ * Base sections (layout/session/channels/messages/props/settings/actions)
+ * are always present.
  * Scoped sections (persona/characters/lore/…) appear ONLY when the widget
  * declared the scope AND it was granted — the same deny-by-default a frame gets,
  * enforced here at projection so a native widget is no more privileged. Absence
@@ -29,6 +30,12 @@
  */
 import { getContext } from "svelte"
 import { formatChannel, parseChannel } from "@serene-pub/sdk"
+import { actionIdentity, parseActionIdentity } from "$lib/shared/actions/identity"
+import {
+	dispatchAction,
+	type CoreVerbHandlers,
+	type InvokeArgs
+} from "./invokeAction"
 import type { WidgetScope, WidgetTier } from "./types"
 
 export type Payload = Record<string, unknown>
@@ -77,6 +84,43 @@ export interface SessionV1 {
 
 export type MessageV1 = SurfaceMessage
 
+/**
+ * One action as a venue lists it (plans/29 R-15; U5c) — the wire shape of
+ * `sessions:actions`, transport-neutral here so a frame and a native widget
+ * read the same rows. `specSlug` is `core` for one of core's message verbs.
+ */
+export interface WidgetAction {
+	key: string
+	function: string
+	specSlug: string
+	name: string
+	description?: string
+	icon?: string
+	slash: string
+	quick: boolean
+	audience: { see: string[]; act: string[] }
+	venue: string
+	channel?: string
+	origin: "core" | "companion" | "attachment"
+	floor: boolean
+	canAct: boolean
+	itemGated: boolean
+	isNew: boolean
+}
+
+/**
+ * The session's actions per **venue**, each a primary set plus an overflow
+ * that lists every enabled action (F38). Keyed by venue kind (`composer`,
+ * `message`, `extra`, `widget`, …); a widget reads the venues it draws —
+ * `widget` for its own controls, `message` when it renders a message's menu
+ * — and invokes one through `invoke(key)`. Empty venues when the host has no
+ * list yet.
+ */
+export type ActionsV1 = Record<
+	string,
+	{ primary: WidgetAction[]; overflow: WidgetAction[] }
+>
+
 /** The transport-neutral data half — the versioned sections. */
 export interface WidgetData {
 	// base — always present
@@ -85,6 +129,8 @@ export interface WidgetData {
 	channels: { v1: string[] }
 	messages: { v1: MessageV1[] }
 	props: { v1: Payload }
+	/** The action model's venues (R-15, U5c) — base, so a widget need not declare a scope to offer a control. */
+	actions: { v1: ActionsV1 }
 	/**
 	 * This instance's effective settings (shared/widgets/settings.ts): every
 	 * field the widget declares, defaults filled in, with the user's deviations
@@ -138,8 +184,41 @@ export type WidgetEvent =
 	| { kind: string; payload?: Payload }
 
 export interface WidgetVerbs {
-	/** Fire-and-observe; state returns via the pushed/reactive sections. */
-	action(fn: string, messageId?: number, payload?: Payload): void
+	/**
+	 * Fire-and-observe; state returns via the pushed/reactive sections.
+	 *
+	 * `action` is the identity of the declaration being fired
+	 * (`<spec slug>#<key>`, U5c review W1) when one is in hand — `invoke`
+	 * always supplies it — so the server checks THAT action's audience and
+	 * enablement and runs THAT spec. A bare call naming only a function is
+	 * the legacy shape and gets the narrowest reading (owner floor, the
+	 * companion spec).
+	 */
+	action(
+		fn: string,
+		messageId?: number,
+		payload?: Payload,
+		action?: string,
+		/**
+		 * The form the press answers — a block's id within `messageId`
+		 * (R-15 *Forms*; U5d) — so the server reads the block off the row
+		 * and holds the press to its addressee. Absent on every other press.
+		 */
+		blockId?: string
+	): void
+	/**
+	 * Invoke an action from `actions.v1` by its **identity** (`<spec
+	 * slug>#<key>`) or, when only one action carries it, its bare **key**
+	 * (R-15 `invoke(id, args)`): the host resolves it to the declaration and
+	 * routes it — one of core's verbs to the host's real handler (a
+	 * `continue` is `sessionMessages:continue`, never a function fire), a
+	 * contributed one through `action` with its identity, the same audited
+	 * `sessions:triggerFunction` path a button takes. A key no venue lists,
+	 * or a bare key several actions share, throws: a widget cannot fire
+	 * something the session does not offer — or something ambiguous — and
+	 * believe it did.
+	 */
+	invoke(key: string, args?: InvokeArgs): void
 	/** Request/response; gated by declared scope. */
 	request<T = unknown>(kind: string, params?: Payload): Promise<T>
 	/** Host-rendered menu; resolves to the pick, or null if dismissed. */
@@ -179,6 +258,8 @@ export interface ProjectInput {
 	props?: Payload
 	/** The widget's effective settings; defaulted+overridden by the host. */
 	settings?: Payload
+	/** The session's action venues (`sessions:actions`), as the host holds them. */
+	actions?: ActionsV1
 	placement: PlacementInput
 	/** The effective granted scopes (declared − admin-denied). Default none. */
 	grants?: WidgetScope[]
@@ -409,7 +490,8 @@ export function projectWidgetData(input: ProjectInput): WidgetData {
 		channels: { v1: [...input.channels] },
 		messages: { v1: scopeMessages(input.messages, input.channels) },
 		props: { v1: { ...(input.props ?? {}) } },
-		settings: { v1: { ...(input.settings ?? {}) } }
+		settings: { v1: { ...(input.settings ?? {}) } },
+		actions: { v1: projectActions(input.actions) }
 	}
 
 	// Scoped sections — present iff granted AND source data supplied.
@@ -425,17 +507,118 @@ export function projectWidgetData(input: ProjectInput): WidgetData {
 	return data
 }
 
-/** Wrap the projected data with identity + verbs for a native consumer. */
+/**
+ * The `actions.v1` section: a detached copy of the host's venues, so a widget
+ * (or a frame, over the port) cannot reach into the host's list. Absent =
+ * no venues at all, which is what a host with no list yet honestly has.
+ */
+export function projectActions(actions: ActionsV1 | undefined): ActionsV1 {
+	const out: ActionsV1 = {}
+	for (const [kind, venue] of Object.entries(actions ?? {}))
+		out[kind] = {
+			primary: (venue?.primary ?? []).map((a) => ({ ...a })),
+			overflow: (venue?.overflow ?? []).map((a) => ({ ...a }))
+		}
+	return out
+}
+
+/**
+ * The action an identity names — `<spec slug>#<key>` — or, for a bare key,
+ * the one action carrying it (U5c review, S7). Undefined when nothing
+ * matches; a bare key several actions share (two specs contributing
+ * `summarize`, say) throws rather than picking one, because "the first
+ * venue's" is not an answer a widget author can reason about.
+ *
+ * One listing per venue means the same declaration may appear under several
+ * venues; those are one action, not an ambiguity.
+ */
+export function findAction(
+	actions: ActionsV1,
+	ref: string
+): WidgetAction | undefined {
+	const listed = Object.values(actions).flatMap((v) => [
+		...v.primary,
+		...v.overflow
+	])
+	const parsed = parseActionIdentity(ref)
+	if (parsed)
+		return listed.find(
+			(a) => a.specSlug === parsed.specSlug && a.key === parsed.key
+		)
+	const byKey = listed.filter((a) => a.key === ref)
+	const identities = new Set(byKey.map(actionIdentity))
+	if (identities.size > 1)
+		throw new Error(
+			`action key "${ref}" is carried by ${identities.size} actions here — name one: ${[...identities].join(", ")}`
+		)
+	return byKey[0]
+}
+
+/**
+ * The `invoke` verb, derived from `action`, the host's core-verb handlers
+ * and the projected venues — ONE implementation for both lanes, so a native
+ * widget's `invoke('roll')` and a frame's `{ t: "invoke", key: "roll" }`
+ * resolve the same reference to the same declaration through the same path
+ * (`dispatchAction`): core's verbs to `coreVerbs`, everything else through
+ * `action` with the identity riding along (U5c review, W4).
+ *
+ * A host that wires no `coreVerbs` still refuses `invoke('continue')`
+ * loudly rather than firing it as a function the server cannot serve.
+ */
+export function makeInvoke(
+	actions: () => ActionsV1,
+	action: WidgetVerbs["action"],
+	widgetId: string,
+	coreVerbs: CoreVerbHandlers = {}
+): WidgetVerbs["invoke"] {
+	return (ref, args) => {
+		const found = findAction(actions(), ref)
+		if (!found)
+			throw new Error(
+				`widget "${widgetId}" invoked action "${ref}", which no venue of this session lists`
+			)
+		dispatchAction(
+			found,
+			{
+				core: coreVerbs,
+				fire: (a, fireArgs) =>
+					action(
+						a.function,
+						fireArgs?.messageId,
+						fireArgs?.payload,
+						actionIdentity(a)
+					)
+			},
+			args
+		)
+	}
+}
+
+/**
+ * Wrap the projected data with identity + verbs for a native consumer.
+ *
+ * `invoke` is optional on the way in: a host supplying `action` gets the
+ * derived one (`makeInvoke`) over the projection it just made, so no host
+ * has to implement the key→function walk twice. `coreVerbs` are the host's
+ * handlers for core's verbs (U5c review, W4); a host that has none gets an
+ * `invoke` that refuses them by name.
+ */
 export function buildNativeContext(
 	input: ProjectInput,
 	widget: WidgetContext["widget"],
-	verbs: WidgetVerbs
+	verbs: Omit<WidgetVerbs, "invoke"> &
+		Partial<Pick<WidgetVerbs, "invoke">> & { coreVerbs?: CoreVerbHandlers }
 ): WidgetContext {
+	const data = projectWidgetData(input)
+	const { coreVerbs, ...rest } = verbs
 	return {
 		protocol: 1,
 		widget,
-		...projectWidgetData(input),
-		...verbs
+		...data,
+		...rest,
+		invoke:
+			verbs.invoke ??
+			makeInvoke(() => data.actions.v1, verbs.action, widget.id, coreVerbs)
 	}
 }
 

@@ -64,6 +64,7 @@ const tableName = (t: any): string =>
 	t?.[Symbol.for("drizzle:Name")] ?? t?._?.name ?? ""
 
 let connections: Record<number, any> = {}
+let connectionModels: Record<number, any> = {}
 let samplingConfigs: Record<number, any> = {}
 let connectionDefaults: Record<string, any> = {}
 
@@ -75,6 +76,10 @@ const db = {
 					const name = tableName(table)
 					if (name === "connections") {
 						const row = connections[lastWhereValue as number]
+						return row ? [row] : []
+					}
+					if (name === "connection_models") {
+						const row = connectionModels[lastWhereValue as number]
 						return row ? [row] : []
 					}
 					if (name === "sampling_configs") {
@@ -134,6 +139,27 @@ const refusedConnection = {
 	capabilities: { overrides: { "text->text": false } }
 }
 
+/**
+ * One model on each endpoint, because a selection is a PAIR and an endpoint on
+ * its own is an incomplete one. Numbered `10 * connectionId` so a reader can
+ * tell at a glance which endpoint a model belongs to.
+ */
+const modelOn = (connectionId: number) => ({
+	id: connectionId * 10,
+	connectionId,
+	model: `model-${connectionId}`,
+	name: `Model ${connectionId}`,
+	enabled: true,
+	missingSince: null,
+	capabilities: null
+})
+
+/** The pair for an endpoint, spread into a tier's candidate. */
+const pair = (connectionId: number) => ({
+	connectionId,
+	connectionModelId: modelOn(connectionId).id
+})
+
 const samplingA = { id: 10, name: "Creative", shape: "core:shape/text-gen@1" }
 const samplingB = { id: 11, name: "Precise", shape: "core:shape/text-gen@1" }
 
@@ -147,6 +173,11 @@ beforeEach(() => {
 		1: textConnection,
 		2: refusedConnection,
 		3: secondTextConnection
+	}
+	connectionModels = {
+		10: modelOn(1),
+		20: modelOn(2),
+		30: modelOn(3)
 	}
 	samplingConfigs = { 10: samplingA, 11: samplingB }
 	connectionDefaults = {}
@@ -169,7 +200,7 @@ describe("the chain and the executor's scopes agree about order", () => {
 		// RESOLUTION_TIERS is lowest-precedence-first, so the indices must
 		// decrease. Strictly: two tiers sharing a scope would resolve in
 		// whichever order the overrides array happened to be built in, which is
-		// exactly the D7 inversion — `sessions.connectionId` outranking a
+		// exactly the D7 inversion — a session's own column outranking a
 		// session-scope override because it was pushed first.
 		const positions = RESOLUTION_TIERS.map(scopeIndexForTier)
 		for (let i = 1; i < positions.length; i++)
@@ -191,6 +222,30 @@ describe("the chain and the executor's scopes agree about order", () => {
 			"pipelineConfig",
 			"sessionOverride"
 		])
+	})
+
+	it("a PAIR is two tiers, and a session is not one of them", async () => {
+		const { PAIR_TIERS } = await load()
+		// The 2026-09-15 ruling, pinned as data: "the session-level connection
+		// override is retired. Overrides are always by model, never by
+		// connection." Three tiers still walk SAMPLING — `sessions
+		// .sampling_config_id` stays — so the length of the list above is not
+		// what says this, and pinning it there would go green the moment
+		// somebody re-added an endpoint to the session tier.
+		expect([...PAIR_TIERS]).toEqual(["capabilityDefault", "pipelineConfig"])
+	})
+
+	it("no refusal can send anybody to a session to set a connection", async () => {
+		// The sentences are built from `WHERE_SET`, which is keyed by `PairTier`
+		// — so this is the type system's rule read back out at run time. It went
+		// unpinned before because there WAS a session entry and it was correct.
+		const mod = await load()
+		const res = await mod.resolveCapabilityTarget(db, {
+			capability: "text->text",
+			pipelineConfig: { connectionId: 404 }
+		})
+		if (res.ok) throw new Error("expected a refusal")
+		expect(res.problem.message).not.toMatch(/session/i)
 	})
 })
 
@@ -230,7 +285,7 @@ describe("nothing is chosen because it merely exists", () => {
 		const { resolveCapabilityTarget } = await load()
 		connectionDefaults["text->text"] = {
 			capability: "text->text",
-			connectionId: 1,
+			...pair(1),
 			samplingConfigId: 10
 		}
 
@@ -241,6 +296,9 @@ describe("nothing is chosen because it merely exists", () => {
 		expect(res.ok).toBe(true)
 		if (!res.ok) return
 		expect(res.connection.id).toBe(1)
+		// The identifier that goes on the wire is the MODEL's, merged onto the
+		// endpoint row — registering an endpoint alone resolves as unconfigured.
+		expect(res.connection.model).toBe("model-1")
 		expect(res.sampling?.id).toBe(10)
 		expect(res.connectionVia).toBe("capabilityDefault")
 	})
@@ -250,7 +308,7 @@ describe("precedence: later tier wins", () => {
 	beforeEach(() => {
 		connectionDefaults["text->text"] = {
 			capability: "text->text",
-			connectionId: 1,
+			...pair(1),
 			samplingConfigId: 10
 		}
 	})
@@ -259,12 +317,13 @@ describe("precedence: later tier wins", () => {
 		const { resolveCapabilityTarget } = await load()
 		const res = await resolveCapabilityTarget(db, {
 			capability: "text->text",
-			pipelineConfig: { connectionId: 3 }
+			pipelineConfig: pair(3)
 		})
 
 		expect(res.ok).toBe(true)
 		if (!res.ok) return
 		expect(res.connection.id).toBe(3)
+		expect(res.connection.model).toBe("model-3")
 		expect(res.connectionVia).toBe("pipelineConfig")
 		// The half the pipeline did NOT set still comes from below it — the two
 		// halves are walked independently, so naming a connection does not clear
@@ -273,20 +332,47 @@ describe("precedence: later tier wins", () => {
 		expect(res.samplingVia).toBe("capabilityDefault")
 	})
 
-	it("the session override outranks the pipeline config", async () => {
+	it("a session's sampling rides ON TOP of the pipeline config's pair", async () => {
+		// THE retirement, from the resolver's side (0130). The session used to
+		// be a whole candidate and it outranked everything: naming a sampling
+		// profile here also decided, by being the winning tier, which connection
+		// the run went to. Now the two halves come from two different tiers at
+		// once — which they could not before, because the session either won
+		// both or was not consulted at all.
 		const { resolveCapabilityTarget } = await load()
 		const res = await resolveCapabilityTarget(db, {
 			capability: "text->text",
-			pipelineConfig: { connectionId: 3, samplingConfigId: 10 },
-			sessionOverride: { connectionId: 1, samplingConfigId: 11 }
+			pipelineConfig: { ...pair(3), samplingConfigId: 10 },
+			sessionSampling: 11
 		})
 
 		expect(res.ok).toBe(true)
 		if (!res.ok) return
-		expect(res.connection.id).toBe(1)
-		expect(res.connectionVia).toBe("sessionOverride")
+		// The pipeline config's pair, unmoved by the session above it.
+		expect(res.connection.id).toBe(3)
+		expect(res.connection.model).toBe("model-3")
+		expect(res.connectionVia).toBe("pipelineConfig")
+		// And the session's sampling, which outranks the config's own.
 		expect(res.sampling?.id).toBe(11)
 		expect(res.samplingVia).toBe("sessionOverride")
+	})
+
+	it("a session that chooses no sampling leaves the tier below it alone", async () => {
+		const { resolveCapabilityTarget } = await load()
+		const res = await resolveCapabilityTarget(db, {
+			capability: "text->text",
+			pipelineConfig: { ...pair(3), samplingConfigId: 10 },
+			// What a session with nothing set hands over. `null` is "said
+			// nothing", never "said none" — the same reading every other tier
+			// gets, and reading it otherwise would make clearing a session's
+			// sampling override silently disable the config's too.
+			sessionSampling: null
+		})
+
+		expect(res.ok).toBe(true)
+		if (!res.ok) return
+		expect(res.sampling?.id).toBe(10)
+		expect(res.samplingVia).toBe("pipelineConfig")
 	})
 
 	it("a tier that says nothing does not clear the tier below it", async () => {
@@ -298,13 +384,129 @@ describe("precedence: later tier wins", () => {
 			// "this tier said none" — a slot cannot express the latter, and
 			// reading it that way would make clearing an override fatal.
 			pipelineConfig: { connectionId: null, samplingConfigId: null },
-			sessionOverride: null
+			sessionSampling: null
 		})
 
 		expect(res.ok).toBe(true)
 		if (!res.ok) return
 		expect(res.connection.id).toBe(1)
 		expect(res.connectionVia).toBe("capabilityDefault")
+	})
+})
+
+describe("the model half of the pair", () => {
+	beforeEach(() => {
+		connectionDefaults["text->text"] = {
+			capability: "text->text",
+			...pair(1),
+			samplingConfigId: 10
+		}
+	})
+
+	it("refuses a registration that names only an endpoint", async () => {
+		// Connections have no default model, so there is nothing to fall back
+		// to and nothing is guessed. The sentence carries the fix.
+		const { resolveCapabilityTarget } = await load()
+		connectionDefaults["text->text"] = {
+			capability: "text->text",
+			connectionId: 1,
+			connectionModelId: null,
+			samplingConfigId: 10
+		}
+
+		const res = await resolveCapabilityTarget(db, {
+			capability: "text->text"
+		})
+
+		expect(res.ok).toBe(false)
+		if (res.ok) return
+		expect(res.problem.kind).toBe("model")
+		expect(res.problem.via).toBe("capabilityDefault")
+		expect(res.problem.message).toMatch(/Pick a model on that connection/)
+	})
+
+	it("keeps the model when a higher tier re-states the SAME endpoint", async () => {
+		// A great deal of stored configuration names an endpoint and no model:
+		// a slot value authored before the split, the executor handing the
+		// instance default's own id down as tier 2, the legacy per-config
+		// override columns. The endpoint did not change, so both halves still
+		// name one connection and the choice below stands.
+		const { resolveCapabilityTarget } = await load()
+		const res = await resolveCapabilityTarget(db, {
+			capability: "text->text",
+			pipelineConfig: { connectionId: 1 }
+		})
+
+		expect(res.ok, JSON.stringify((res as any).problem)).toBe(true)
+		if (!res.ok) return
+		expect(res.connection.model).toBe("model-1")
+		expect(res.connectionVia).toBe("pipelineConfig")
+	})
+
+	it("clears it when a higher tier names a DIFFERENT endpoint", async () => {
+		// The hazard the reset exists for: a model row belongs to one endpoint,
+		// so carrying model-1 onto connection 3 would build a pair whose halves
+		// name two connections. Refused, with the fix, rather than run.
+		const { resolveCapabilityTarget } = await load()
+		const res = await resolveCapabilityTarget(db, {
+			capability: "text->text",
+			pipelineConfig: { connectionId: 3 }
+		})
+
+		expect(res.ok).toBe(false)
+		if (res.ok) return
+		expect(res.problem.kind).toBe("model")
+		expect(res.problem.via).toBe("pipelineConfig")
+	})
+
+	it("refuses a model that belongs to another connection", async () => {
+		const { resolveCapabilityTarget } = await load()
+		const res = await resolveCapabilityTarget(db, {
+			capability: "text->text",
+			pipelineConfig: { connectionId: 3, connectionModelId: 10 }
+		})
+
+		expect(res.ok).toBe(false)
+		if (res.ok) return
+		expect(res.problem.kind).toBe("model")
+		expect(res.problem.message).toMatch(/belongs to a different connection/)
+	})
+
+	it("refuses a model its host has stopped listing", async () => {
+		const { resolveCapabilityTarget } = await load()
+		connectionModels[10] = { ...modelOn(1), missingSince: new Date() }
+
+		const res = await resolveCapabilityTarget(db, {
+			capability: "text->text"
+		})
+
+		expect(res.ok).toBe(false)
+		if (res.ok) return
+		expect(res.problem.kind).toBe("model")
+		expect(res.problem.message).toMatch(/no longer listed by its host/)
+	})
+
+	it("judges the model BEFORE the capability, as `connections:setDefault` does", async () => {
+		// What a pair can DO is the model's answer layered over the endpoint's,
+		// so there is nothing to judge until the model is in hand — one host
+		// serves a vision checkpoint and a text-only one at the same base URL.
+		// A connection that cannot chat AND names no model therefore reports
+		// the missing half, which is also the half a person fixes first.
+		const { resolveCapabilityTarget } = await load()
+		connectionDefaults["text->text"] = {
+			capability: "text->text",
+			connectionId: 2,
+			connectionModelId: null,
+			samplingConfigId: null
+		}
+
+		const res = await resolveCapabilityTarget(db, {
+			capability: "text->text"
+		})
+
+		expect(res.ok).toBe(false)
+		if (res.ok) return
+		expect(res.problem.kind).toBe("model")
 	})
 })
 
@@ -335,6 +537,56 @@ describe("the five refusals", () => {
 			expect(res.problem.kind).toBe("cleared")
 			expect(res.problem.message).toContain("Admin → Defaults")
 		}
+	})
+
+	it("cleared says 'Chat' by default, and for a standard-genre session, but 'text generation' for any other genre — wording only", async () => {
+		const { resolveCapabilityTarget } = await load()
+		connectionDefaults["text->text"] = {
+			capability: "text->text",
+			connectionId: null,
+			samplingConfigId: 10
+		}
+
+		// No genre given at all (an admin-facing caller, e.g. Defaults itself):
+		// unaffected, still "Chat" — the transform's own label.
+		const noGenre = await resolveCapabilityTarget(db, { capability: "text->text" })
+		if (noGenre.ok) throw new Error("expected a refusal")
+		expect(noGenre.problem.message).toContain("No connection is set for Chat.")
+
+		// A session actually on the standard chat genre: "Chat" is the truth,
+		// not a misnomer, so it stays.
+		const standard = await resolveCapabilityTarget(db, {
+			capability: "text->text",
+			genreId: "core:genre/chat"
+		})
+		if (standard.ok) throw new Error("expected a refusal")
+		expect(standard.problem.message).toContain("No connection is set for Chat.")
+
+		// A session on any other genre: "Chat" would read as if it named the
+		// session's own genre, so the wording steps around it.
+		const other = await resolveCapabilityTarget(db, {
+			capability: "text->text",
+			genreId: "acme:genre/lodge"
+		})
+		if (other.ok) throw new Error("expected a refusal")
+		expect(other.problem.message).toContain(
+			"No connection is set for text generation."
+		)
+		expect(other.problem.message).not.toContain("Chat")
+		// Nothing else about the sentence moves.
+		expect(other.problem.message).toContain(
+			"Choose one in Admin → Defaults — a connection is never picked " +
+				"automatically, and deleting one releases every capability it held."
+		)
+
+		// A non-text capability's label already names what it does — no genre
+		// can make "Image generation" ambiguous, so it is left alone.
+		const image = await resolveCapabilityTarget(db, {
+			capability: "text->image",
+			genreId: "acme:genre/lodge"
+		})
+		if (image.ok) throw new Error("expected a refusal")
+		expect(image.problem.message).toContain("Image generation")
 	})
 
 	it("cleared does not DIAGNOSE a deletion, because a fresh install lands here", async () => {
@@ -371,22 +623,29 @@ describe("the five refusals", () => {
 		const { resolveCapabilityTarget } = await load()
 		const res = await resolveCapabilityTarget(db, {
 			capability: "text->text",
-			sessionOverride: { connectionId: 404 }
+			pipelineConfig: { connectionId: 404 }
 		})
 
 		expect(res.ok).toBe(false)
 		if (!res.ok) {
 			expect(res.problem.kind).toBe("missing")
-			expect(res.problem.via).toBe("sessionOverride")
+			expect(res.problem.via).toBe("pipelineConfig")
 			expect(res.problem.connectionId).toBe(404)
+			expect(res.problem.message).toContain(
+				"the pipeline's configuration"
+			)
 		}
 	})
 
 	it("incapable — a connection that was chosen but cannot do it", async () => {
 		const { resolveCapabilityTarget } = await load()
+		// A COMPLETE pair, because the model half is judged first — see the
+		// describe block below. An endpoint-only registration never reaches the
+		// capability guard, and asserting `incapable` against one would be
+		// asserting a refusal this resolver no longer produces for that input.
 		connectionDefaults["text->text"] = {
 			capability: "text->text",
-			connectionId: 2,
+			...pair(2),
 			samplingConfigId: null
 		}
 
@@ -438,7 +697,7 @@ describe("a missing sampling config is not a failure", () => {
 		const { resolveCapabilityTarget } = await load()
 		connectionDefaults["text->text"] = {
 			capability: "text->text",
-			connectionId: 1,
+			...pair(1),
 			samplingConfigId: null
 		}
 
@@ -460,7 +719,7 @@ describe("a missing sampling config is not a failure", () => {
 		const { resolveCapabilityTarget } = await load()
 		connectionDefaults["text->text"] = {
 			capability: "text->text",
-			connectionId: 1,
+			...pair(1),
 			samplingConfigId: 999
 		}
 

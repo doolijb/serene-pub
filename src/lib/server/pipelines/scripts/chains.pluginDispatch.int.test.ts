@@ -30,8 +30,8 @@ async function processType(opts: {
 	inPort: string
 }): Promise<string> {
 	const typeId = `${opts.namespace}:script:${opts.content}/${opts.operation}`
-	await db.insert(schema.pipelineTypeRegistry).values({
-		typeId,
+	await db.insert(schema.pipelineDefinitionRegistry).values({
+		definitionId: typeId,
 		version: 1,
 		kind: "script",
 		ownerPluginId: opts.ownerPluginId,
@@ -113,7 +113,7 @@ describe("the applier routes plugin-owned types through the dispatch port", () =
 		// folded — the value the plugin returned replaced the flowing value
 		expect(out.value).toBe("HELLO")
 		expect(out.applications).toHaveLength(1)
-		expect(out.applications[0]).toMatchObject({ result: "ok", typeId })
+		expect(out.applications[0]).toMatchObject({ result: "ok", scriptKind: typeId })
 
 		// routed with the right address + run identity + gated subject/extras
 		expect(seen).toHaveLength(1)
@@ -198,7 +198,7 @@ describe("a real plugin hook fires through the applier", () => {
 				backend: "quickjs",
 				enabled: true,
 				manifest: {
-					hookTypes: { "beta:script:text/transform@1": "shout" }
+					hookKinds: { "beta:script:text/transform@1": "shout" }
 				}
 			})
 			.returning()

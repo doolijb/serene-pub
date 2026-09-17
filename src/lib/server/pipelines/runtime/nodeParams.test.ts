@@ -27,7 +27,8 @@
 
 import { describe, it, expect } from "vitest"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
-import { roughTokens } from "@serene-pub/sdk"
+import { roughTokens, splitCandidates } from "@serene-pub/sdk"
+import { DEFAULT_GROUPS } from "$lib/server/pipelines/ranking/weights"
 
 const messages = [
 	{ id: 1, content: "the ashguard rode north" },
@@ -67,6 +68,9 @@ const ctx = {
 				: { available: false, reason: "no embedding model is loaded" }
 }
 
+/** The candidates proper — a lane's list opens with its band intent (R-7 P5). */
+const itemsOf = (list: unknown[]) => splitCandidates(list).items
+
 const worldLore = (params: Record<string, unknown>) =>
 	coreBindings()["core:query/world-lore@1"]!(
 		{ scope: { sessionId: 1 }, params },
@@ -81,16 +85,42 @@ describe("the lore binding reads the parameters it is handed", () => {
 		expect(deep.value.diagnostics.scanDepth).toBe(10)
 		expect(shallow.value.diagnostics.scanDepth).toBe(1)
 		// The one that only read the last message cannot have seen "ashguard".
-		expect(deep.value.hits.map((c: any) => c.id)).toEqual([1])
-		expect(shallow.value.hits).toEqual([])
+		expect(itemsOf(deep.value.hits).map((c: any) => c.id)).toEqual([1])
+		expect(itemsOf(shallow.value.hits)).toEqual([])
 	})
 
 	it("maxRecursionDepth turns recursion on", async () => {
 		const off = await worldLore({ scanDepth: 10 })
 		const on = await worldLore({ scanDepth: 10, maxRecursionDepth: 1 })
 
-		expect(off.value.hits.map((c: any) => c.id)).toEqual([1])
-		expect(on.value.hits.map((c: any) => c.id).sort()).toEqual([1, 2])
+		expect(itemsOf(off.value.hits).map((c: any) => c.id)).toEqual([1])
+		expect(itemsOf(on.value.hits).map((c: any) => c.id).sort()).toEqual([1, 2])
+	})
+
+	/**
+	 * The lane's own intent rides at the head of what it publishes (R-7 P5)
+	 * — its declared numbers when the params carry none, the params' when
+	 * they do — and it is there whether or not the scan found anything.
+	 */
+	it("publishes its band intent ahead of its hits, found or not", async () => {
+		const found = await worldLore({ scanDepth: 10 })
+		const nothing = await worldLore({ scanDepth: 1, share: 0.4, maxEntries: 3 })
+		expect(splitCandidates(found.value.main).intents).toEqual([
+			{
+				band: "worldLore",
+				intent: {
+					share: DEFAULT_GROUPS.share.worldLore,
+					maxEntries: DEFAULT_GROUPS.maxEntries.worldLore,
+					priority: "normal"
+				}
+			}
+		])
+		expect(nothing.value.hits).toEqual([
+			{
+				band: "worldLore",
+				intent: { share: 0.4, maxEntries: 3, priority: "normal" }
+			}
+		])
 	})
 
 	/**
@@ -570,6 +600,16 @@ describe("the ranker's allocation precedence reaches the selection", () => {
 		coreBindings()["core:task/rank-hybrid@1"]!(
 			{
 				candidates: [
+					// The floors are switched off, through the source's own
+					// declared address (R-7 P5) rather than around it: the
+					// conversation's band intent, as `session-history` would
+					// publish it. `minEntries.messages` is 6 by default and
+					// would reserve both idle messages before either precedence
+					// had anything to allocate — which is a promise that holds
+					// *identically* in both modes, so leaving it on would prove
+					// the flag does nothing by testing the one thing it was
+					// designed not to touch.
+					{ band: "messages", intent: { minEntries: 0 } },
 					{
 						id: "w_relevant",
 						source: "worldLore",
@@ -590,23 +630,7 @@ describe("the ranker's allocation precedence reaches the selection", () => {
 					}
 				],
 				budget: { remaining: 1000 },
-				params: {
-					// The floors are switched off, through the declared
-					// address rather than around it. `minEntries.messages` is
-					// 6 by default and would reserve both idle messages before
-					// either precedence had anything to allocate — which is a
-					// promise that holds *identically* in both modes, so
-					// leaving it on would prove the flag does nothing by
-					// testing the one thing it was designed not to touch.
-					minEntries: {
-						messages: 0,
-						worldLore: 0,
-						characterLore: 0,
-						history: 0,
-						relationships: 0
-					},
-					...params
-				}
+				params: { ...params }
 			},
 			{} as any
 		) as Promise<any>

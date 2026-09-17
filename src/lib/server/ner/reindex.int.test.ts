@@ -121,25 +121,41 @@ async function nerConnection(model: string) {
 			name: `Entities ${model}`,
 			type: CONNECTION_TYPE.LOCAL_ONNX_NER,
 			modality: "ner",
-			model,
 			extraJson: {},
 			capabilities: {}
 		} as any)
 		.returning()
-	await testDb.insert(schema.connectionModels).values({
-		connectionId: conn!.id,
-		model,
-		name: model,
-		isDefault: true
-	})
-	return conn!
+	const [m] = await testDb
+		.insert(schema.connectionModels)
+		.values({
+			connectionId: conn!.id,
+			model,
+			name: model
+		})
+		.returning()
+	return Object.assign(conn!, { modelId: m.id })
 }
 
-async function star(connectionId: number | null) {
+async function star(
+	connectionId: number | null,
+	connectionModelId?: number | null
+) {
 	await testDb.delete(schema.connectionDefaults)
-	await testDb
-		.insert(schema.connectionDefaults)
-		.values({ input: "text", output: "entities", connectionId })
+	let mid: number | null | undefined = connectionModelId
+	if (connectionId != null && mid === undefined) {
+		const [m] = await testDb
+			.select()
+			.from(schema.connectionModels)
+			.where(eq(schema.connectionModels.connectionId, connectionId))
+			.limit(1)
+		mid = m?.id ?? null
+	}
+	await testDb.insert(schema.connectionDefaults).values({
+		input: "text",
+		output: "entities",
+		connectionId,
+		connectionModelId: mid ?? null
+	})
 }
 
 const annotationsOf = async (entryId: number) =>

@@ -41,6 +41,7 @@ let userId: number
 let sessionId: number
 let messageId: number
 let connectionId: number
+let connectionModelId: number
 
 const fakeSocket = () =>
 	({
@@ -74,17 +75,22 @@ beforeAll(async () => {
 			name: "Chat-wire OpenAI",
 			type: CONNECTION_TYPE.OPENAI,
 			baseUrl: "https://api.example.com/v1",
-			model: "gpt-4o",
 			promptFormat: "openai"
 		})
 		.returning()
 	connectionId = connection.id
+	const [chatModel] = await db
+		.insert(schema.connectionModels)
+		.values({ connectionId, model: "gpt-4o", name: "gpt-4o" })
+		.returning()
+	connectionModelId = chatModel.id
 
 	const { setCapabilityDefault } = await import(
 		"$lib/server/connections/capabilityDefaults"
 	)
 	await setCapabilityDefault(db, "text->text", {
 		connectionId,
+		connectionModelId,
 		samplingConfigId: null
 	})
 
@@ -161,15 +167,19 @@ describe("a connection that CAN prefill is not refused for this reason", () => {
 				name: "llama.cpp",
 				type: CONNECTION_TYPE.LLAMACPP,
 				baseUrl: "http://localhost:8080",
-				model: "local",
 				promptFormat: "vicuna"
 			})
+			.returning()
+		const [llamaModel] = await db
+			.insert(schema.connectionModels)
+			.values({ connectionId: llama.id, model: "local", name: "local" })
 			.returning()
 		const { setCapabilityDefault } = await import(
 			"$lib/server/connections/capabilityDefaults"
 		)
 		await setCapabilityDefault(db, "text->text", {
 			connectionId: llama.id,
+			connectionModelId: llamaModel.id,
 			samplingConfigId: null
 		})
 
@@ -179,6 +189,7 @@ describe("a connection that CAN prefill is not refused for this reason", () => {
 		// Put the chat-wire connection back for anything that follows.
 		await setCapabilityDefault(db, "text->text", {
 			connectionId,
+			connectionModelId,
 			samplingConfigId: null
 		})
 	}, 60_000)

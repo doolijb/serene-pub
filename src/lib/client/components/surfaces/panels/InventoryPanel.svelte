@@ -16,6 +16,8 @@
 	import * as Icons from "@lucide/svelte"
 	import { useWidgetContext } from "$lib/shared/widgets/context"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import { declareInterest } from "$lib/client/sockets/interest.svelte"
+	import { interestKey } from "$lib/shared/sockets/interest"
 	import {
 		openSessionState,
 		sessionState
@@ -84,9 +86,24 @@
 		entryText = next
 	}
 
+	/**
+	 * This session's book, SCOPED to it — the reply carries the id on
+	 * `lorebook.id` (`SCOPED_EVENTS` reads that, falling through to
+	 * `lorebookId` on a not-found), so this panel is not handed every other
+	 * view's book read. No BARE key alongside it: a bare one matches every
+	 * book's reply, which on the server means the gate passing for all of them
+	 * while this widget is on screen.
+	 *
+	 * Still an effect keyed on the id, for the same reason it always was: the
+	 * session's book can change under the widget, and this releases the old
+	 * key as it takes the new one.
+	 */
 	$effect(() => {
-		socket.on("lorebooks:get", handleLorebook)
-		return () => socket.off("lorebooks:get", handleLorebook)
+		if (lorebookId == null) return
+		return declareInterest<"lorebooks:get">(
+			interestKey("lorebooks:get", lorebookId),
+			handleLorebook
+		)
 	})
 
 	function loadProse() {

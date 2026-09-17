@@ -92,10 +92,10 @@ beforeAll(async () => {
 	characterId = character.id
 
 	const [persona] = await db
-		.insert(schema.personas)
+		.insert(schema.characters)
 		.values({
 			userId,
-			isDefault: false,
+			isPersona: true,
 			name: "Rell",
 			description: "A cartographer looking for a way north."
 		})

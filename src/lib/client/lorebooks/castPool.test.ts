@@ -23,10 +23,12 @@ const carded = row({
 	aliases: ["the Blacksmith"],
 	nodeState: "active"
 })
+// A persona is a character binding whose card is flagged as one of the
+// reader's own personas — not a second kind of link.
 const personaRow = row({
 	id: 2,
-	personaId: 20,
-	persona: { name: "The Traveller" },
+	characterId: 20,
+	character: { name: "The Traveller", isPersona: true },
 	nodeState: "missing"
 })
 const background = row({
@@ -50,7 +52,7 @@ describe("toCastMember — one row, as the list reads it", () => {
 		).toBe("Sable")
 	})
 
-	it("names a persona row by its persona", () => {
+	it("names a persona row by its character card", () => {
 		expect(toCastMember(personaRow).name).toBe("The Traveller")
 	})
 

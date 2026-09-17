@@ -18,6 +18,8 @@ import {
 	postHistoryView,
 	promptView,
 	verdict,
+	lastStatusOf,
+	portrayalsLine,
 	wireView,
 	type InspectedRun,
 	type NodeRow,
@@ -60,18 +62,20 @@ describe("nodeRows", () => {
 		)
 	})
 
-	it("marks a provider node and names the model the receipt recorded", () => {
+	it("marks an oracle node and names the model the receipt recorded", () => {
 		const scene = rowOf(nodeRows(adventure.receipt), "scene")
-		expect(scene.isProvider).toBe(true)
+		expect(scene.isOracle).toBe(true)
 		expect(scene.model).toBe("hf.co/bartowski/MN-12B-Lyra-v4-GGUF:Q4_K_M")
-		expect(scene.typeId).toBe("core:provider/generate-text@1")
+		// A receipt from before the 2026-09-16 rename, read as written: the
+		// fixture says `provider` and `core:provider/…`, and so does the row.
+		expect(scene.definitionId).toBe("core:provider/generate-text@1")
 	})
 
 	it("leaves the model null when the receipt carries none", () => {
 		// What a non-admin gets: `connection` is removed at the egress, so the
 		// marker says a model was called and nothing about which.
 		const embed = rowOf(nodeRows(chatHalt.receipt), "semantic.arm.embed")
-		expect(embed.isProvider).toBe(true)
+		expect(embed.isOracle).toBe(true)
 		expect(embed.model).toBeNull()
 	})
 
@@ -203,6 +207,64 @@ describe("verdict", () => {
 			})
 		).toBe("Halted: no connection is configured.")
 	})
+
+	// The receipt's one status (R-19, R-21): what the run was doing when it
+	// died, inside the sentence — and never on a run that finished.
+	it("says what the run was doing when it was stopped, failed or halted", () => {
+		const stopped = {
+			...adventure,
+			outcome: "cancelled",
+			haltNodeKey: "generate",
+			haltReason: null,
+			receipt: {
+				...(adventure.receipt as Record<string, unknown>),
+				lastStatus: {
+					nodeKey: "generate",
+					text: {
+						i18n: { en: "{speaker} is typing" },
+						vars: { speaker: "Jasmine" }
+					}
+				}
+			}
+		}
+		expect(lastStatusOf(stopped)).toEqual({
+			nodeKey: "generate",
+			text: {
+				i18n: { en: "{speaker} is typing" },
+				vars: { speaker: "Jasmine" }
+			}
+		})
+		expect(verdict(stopped, { status: "Jasmine is typing" })).toBe(
+			"Stopped at generate on request while Jasmine is typing."
+		)
+		expect(
+			verdict(
+				{
+					...stopped,
+					outcome: "err",
+					haltReason: "the service fell over"
+				},
+				{ status: "Jasmine is typing" }
+			)
+		).toBe("Failed at generate while Jasmine is typing: the service fell over.")
+		expect(
+			verdict(
+				{
+					...stopped,
+					outcome: "halt",
+					haltReason: "the model returned nothing"
+				},
+				{ status: "Jasmine is typing" }
+			)
+		).toBe(
+			"Halted at generate while Jasmine is typing: the model returned nothing."
+		)
+		// Absent on a finished run, and on a receipt from before statuses.
+		expect(lastStatusOf(adventure)).toBeNull()
+		expect(verdict({ ...stopped, outcome: "ok" }, { status: "Jasmine is typing" })).toBe(
+			verdict({ ...stopped, outcome: "ok" })
+		)
+	})
 })
 
 /** A provider node carrying both an assembled payload and a recorded exchange. */
@@ -210,7 +272,7 @@ const nodeWithExchange = (): ReceiptNode => ({
 	nodeKey: "generate",
 	seq: 0,
 	kind: "provider",
-	typeId: "core:provider/generate-text@1",
+	typeId: "core:oracle/generate-text@1",
 	result: "ok",
 	request: {
 		compiledPrompt: {
@@ -256,6 +318,69 @@ const nodeWithExchange = (): ReceiptNode => ({
 			redacted: ["body.api_key"]
 		}
 	}
+})
+
+describe("portrayalsLine", () => {
+	/** The server's named list, as `pipelines:run` sends it beside the receipt. */
+	const withPortrayals = (
+		portrayals: InspectedRun["portrayals"]
+	): InspectedRun => ({
+		...adventure,
+		portrayals
+	})
+
+	it("reads 'Tom · AI · Elara · you', in the receipt's order", () => {
+		const chips = portrayalsLine(
+			withPortrayals([
+				{ ref: "character:12", name: "Tom", by: "ai" },
+				{
+					ref: "character:7",
+					name: "Elara",
+					by: "person",
+					person: { name: "Jody", you: true }
+				}
+			])
+		)
+		expect(chips.map((c) => `${c.name} · ${c.portrayedBy}`)).toEqual([
+			"Tom · AI",
+			"Elara · you"
+		])
+	})
+
+	it("names another member, and says nobody for a participant nobody portrays", () => {
+		const chips = portrayalsLine(
+			withPortrayals([
+				{
+					ref: "character:7",
+					name: "Elara",
+					by: "person",
+					person: { name: "Sam", you: false }
+				},
+				// The server never names a `none` line — the reference is
+				// all it sends, and all the chip shows.
+				{ ref: "character:99", name: "character:99", by: "none" },
+				{ ref: "envoy:mascot", name: "mascot", by: "ai" }
+			])
+		)
+		expect(chips.map((c) => c.portrayedBy)).toEqual(["Sam", "nobody", "AI"])
+		expect(chips[1]!.name).toBe("character:99")
+	})
+
+	it("keeps the roles off the line — they are on the receipt, not in the header", () => {
+		const chips = portrayalsLine(
+			withPortrayals([
+				{ ref: "owner", name: "owner", by: "person", person: { name: "Jody", you: true } },
+				{ ref: "run-owner", name: "run-owner", by: "person", person: { name: "Jody", you: true } },
+				{ ref: "character:12", name: "Tom", by: "ai" }
+			])
+		)
+		expect(chips.map((c) => c.ref)).toEqual(["character:12"])
+	})
+
+	it("is empty for a run that pinned nobody", () => {
+		expect(portrayalsLine(adventure)).toEqual([])
+		expect(portrayalsLine(withPortrayals([]))).toEqual([])
+	})
 })
 
 describe("wireView", () => {

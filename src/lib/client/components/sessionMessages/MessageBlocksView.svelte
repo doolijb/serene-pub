@@ -8,18 +8,51 @@
 	 * function key, and `onAction` carries it (with the entered values as the
 	 * payload) up to the page, which fires `sessions:triggerFunction` with the
 	 * message as subject — the same audited path as every contributed button.
+	 * The block's `action` — the identity of the declaration it fires,
+	 * stamped by the outlet that wrote it (U5c review, W-E) — rides along
+	 * verbatim, so the server holds the press to THAT declaration's audience;
+	 * a block carrying none is fired as the legacy shape and gets the owner
+	 * floor. This view never invents one.
+	 *
+	 * A **form** (R-15 *Forms*; U5d) is a `choices` or `form` block with an
+	 * `addressee`: its `id` rides the press as `blockId`, so the server reads
+	 * the block off the row and holds the press to the addressee — the person
+	 * portraying them may answer, nobody else; when the AI portrays them the
+	 * answer pipeline already answered. A choice's `choice` key is the
+	 * payload. The question is shown above the options unless the message
+	 * body already says it (`bodyText`), which is how the narrator's Ask
+	 * reads: the question once, then the buttons.
 	 */
 	import * as Icons from "@lucide/svelte"
 	import MessageBlocksView from "./MessageBlocksView.svelte"
 	import { renderMarkdownWithQuotedText } from "$lib/client/utils/markdownToHTML"
+	import { t } from "$lib/client/i18n/state.svelte"
 
 	interface Props {
 		blocks: any[]
-		onAction?: (fn: string, payload?: Record<string, unknown>) => void
+		onAction?: (
+			fn: string,
+			payload?: Record<string, unknown>,
+			action?: string,
+			blockId?: string
+		) => void
 		depth?: number
+		/** The message body, so a form's question is not shown twice. */
+		bodyText?: string
 	}
 
-	let { blocks, onAction, depth = 1 }: Props = $props()
+	let { blocks, onAction, depth = 1, bodyText }: Props = $props()
+
+	/** A form's question, when the body does not already carry it. */
+	const caption = (b: { question?: unknown }): string | null => {
+		if (typeof b?.question !== "string" || !b.question.trim()) return null
+		const q = b.question.trim()
+		return bodyText && bodyText.trim().includes(q) ? null : q
+	}
+
+	/** The block's id, when the host stamped one. */
+	const blockIdOf = (b: { id?: unknown }): string | undefined =>
+		typeof b?.id === "string" && b.id ? b.id : undefined
 
 	/** Form drafts, keyed by block index within this view. */
 	let formDrafts = $state<Record<number, Record<string, unknown>>>({})
@@ -35,8 +68,12 @@
 		for (const [key, decl] of Object.entries(block.fields ?? {}) as any)
 			if (decl?.default !== undefined) values[key] = decl.default
 		Object.assign(values, formDrafts[i] ?? {})
-		onAction(block.fn, values)
+		onAction(block.fn, values, identityOf(block), blockIdOf(block))
 	}
+
+	/** The block's stamped identity, when it carries a well-formed one. */
+	const identityOf = (b: { action?: unknown }): string | undefined =>
+		typeof b?.action === "string" && b.action ? b.action : undefined
 
 	const fieldLabel = (key: string, decl: any): string =>
 		typeof decl?.label === "string" ? decl.label : (decl?.label?.en ?? key)
@@ -110,21 +147,43 @@
 				alt={block.alt ?? "attachment"}
 			/>
 		{:else if block?.kind === "choices"}
-			<div class="flex flex-wrap gap-2">
-				{#each block.actions ?? [] as action}
-					<button
-						type="button"
-						class="btn btn-sm preset-tonal-primary"
-						disabled={!onAction}
-						onclick={() => onAction?.(action.fn, {})}
-					>
-						<Icons.Play size={14} aria-hidden="true" />
-						{action.label}
-					</button>
-				{/each}
+			<div
+				class="flex flex-col gap-1"
+				role="group"
+				aria-label={typeof block.question === "string" && block.question
+					? block.question
+					: t("Choices")}
+			>
+				{#if caption(block)}
+					<p class="text-sm italic opacity-80">{caption(block)}</p>
+				{/if}
+				<div class="flex flex-wrap gap-2">
+					{#each block.actions ?? [] as action}
+						<button
+							type="button"
+							class="btn btn-sm preset-tonal-primary"
+							disabled={!onAction}
+							onclick={() =>
+								onAction?.(
+									action.fn,
+									typeof action.choice === "string"
+										? { choice: action.choice }
+										: {},
+									identityOf(action),
+									blockIdOf(block)
+								)}
+						>
+							<Icons.Play size={14} aria-hidden="true" />
+							{action.label}
+						</button>
+					{/each}
+				</div>
 			</div>
 		{:else if block?.kind === "form"}
 			<div class="flex w-full max-w-sm flex-col gap-2 text-sm">
+				{#if caption(block)}
+					<p class="italic opacity-80">{caption(block)}</p>
+				{/if}
 				{#each Object.entries(block.fields ?? {}) as [key, decl]}
 					{@const d = decl as any}
 					<label class="flex flex-col gap-1">

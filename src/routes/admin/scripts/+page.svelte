@@ -10,10 +10,14 @@
 	 *
 	 * Admin-only, checked here and again in every handler.
 	 */
-	import { getContext, onDestroy, onMount } from "svelte"
+	import { getContext, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { goto } from "$app/navigation"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import {
+		declareInterest,
+		requestWithInterest
+	} from "$lib/client/sockets/interest.svelte"
 	import AdminList, {
 		type AdminColumn
 	} from "$lib/client/components/admin/AdminList.svelte"
@@ -24,7 +28,7 @@
 	const socket = useTypedSocket()
 
 	type Script = Sockets.Pipelines.Scripts.Script
-	type ScriptType = Sockets.Pipelines.Scripts.ScriptType
+	type ScriptKind = Sockets.Pipelines.Scripts.ScriptKind
 
 	let view = $state<Sockets.Pipelines.Scripts.Response>({})
 	let loading = $state(true)
@@ -151,9 +155,6 @@
 
 	/* --- socket wiring ------------------------------------------------ */
 
-	// Named so `off` can name them too. A bare `socket.off("pipelines:scripts")`
-	// removes EVERY listener for that event — including any other open
-	// page's, which then stops updating for the rest of the session.
 	function handlePipelinesScripts(res: Sockets.Pipelines.Scripts.Response) {
 		view = res
 		loading = false
@@ -206,34 +207,46 @@
 			goto("/")
 			return
 		}
-		socket.on("pipelines:scripts", handlePipelinesScripts)
-		socket.on("pipelines:scripts:error", handlePipelinesScriptsError)
-		socket.on("pipelines:exportScripts", handlePipelinesExportScripts)
-		socket.on(
-			"pipelines:exportScripts:error",
-			handlePipelinesExportScriptsError
-		)
-		socket.on("pipelines:importScripts", handlePipelinesImportScripts)
-		socket.on(
-			"pipelines:importScripts:error",
-			handlePipelinesImportScriptsError
-		)
-		socket.emit("pipelines:scripts", {})
 	})
 
-	onDestroy(() => {
-		socket.off("pipelines:scripts", handlePipelinesScripts)
-		socket.off("pipelines:scripts:error", handlePipelinesScriptsError)
-		socket.off("pipelines:exportScripts", handlePipelinesExportScripts)
-		socket.off(
-			"pipelines:exportScripts:error",
-			handlePipelinesExportScriptsError
-		)
-		socket.off("pipelines:importScripts", handlePipelinesImportScripts)
-		socket.off(
-			"pipelines:importScripts:error",
-			handlePipelinesImportScriptsError
-		)
+	/**
+	 * The list, asked for and listened for in one; export and import stand,
+	 * because their answers come back when the person presses the button —
+	 * and a download or an import report is not a reply to anything asked
+	 * here. All BARE: a script inventory is not one session's anything.
+	 *
+	 * The app-wide registry, not `adminInterest`: `pipelines:` is a MIXED
+	 * family — most of its handlers answer every user — so these are ordinary
+	 * keys, and the admin check here is the same one the redirect above makes.
+	 */
+	$effect(() => {
+		if (!userCtx.user?.isAdmin) return
+		const releases = [
+			declareInterest<"pipelines:scripts:error">(
+				"pipelines:scripts:error",
+				handlePipelinesScriptsError
+			),
+			declareInterest<"pipelines:exportScripts">(
+				"pipelines:exportScripts",
+				handlePipelinesExportScripts
+			),
+			declareInterest<"pipelines:exportScripts:error">(
+				"pipelines:exportScripts:error",
+				handlePipelinesExportScriptsError
+			),
+			declareInterest<"pipelines:importScripts">(
+				"pipelines:importScripts",
+				handlePipelinesImportScripts
+			),
+			declareInterest<"pipelines:importScripts:error">(
+				"pipelines:importScripts:error",
+				handlePipelinesImportScriptsError
+			),
+			requestWithInterest("pipelines:scripts", {}, handlePipelinesScripts)
+		]
+		return () => {
+			for (const release of releases) release()
+		}
 	})
 </script>
 

@@ -3,6 +3,11 @@
 	import { page } from "$app/state"
 	import { goto } from "$app/navigation"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import {
+		declareInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
+	import { interestKey } from "$lib/shared/sockets/interest"
 	import { announce } from "$lib/client/accessibility/state.svelte"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import { isKoboldCppManagedType } from "$lib/shared/utils/connectionServiceItems"
@@ -45,7 +50,6 @@
 	let name = $state("")
 	let type = $state(CONNECTION_TYPE.OLLAMA)
 	let baseUrl = $state("")
-	let model = $state("")
 	let apiKey = $state("")
 	let tokenCounter = $state(TokenCounterOptions.ESTIMATE)
 	let promptFormat = $state(PromptFormats.VICUNA)
@@ -76,7 +80,18 @@
 	let saving = $state(false)
 	let deleting = $state(false)
 
-	let availableModels: any[] = $state([])
+	/**
+	 * The endpoint's MODELS, read-only.
+	 *
+	 * An endpoint has no model of its own — a `connection_models` row is a
+	 * model, and a default is an (endpoint, model) PAIR registered per
+	 * capability on Admin → Defaults. So this page shows what the endpoint
+	 * offers and edits none of it: model editing lives in the Connections
+	 * sidebar, and a second editor on a smaller surface would be a second
+	 * place to set the same thing.
+	 */
+	let models = $state<Sockets.Connections.Models.ModelRow[]>([])
+	let modelsLoading = $state(true)
 	let testResult: { ok: boolean; error?: string } | null = $state(null)
 	let testing = $state(false)
 
@@ -176,7 +191,6 @@
 			name: name.trim(),
 			type,
 			baseUrl: baseUrl.trim(),
-			model: model.trim(),
 			tokenCounter,
 			promptFormat,
 			// NULL rather than "" for a blank one, so "never wrote a note" has
@@ -186,12 +200,6 @@
 			preset,
 			extraJson: apiKey.trim() ? { apiKey: apiKey.trim() } : {}
 		}
-	}
-
-	function fetchModels() {
-		socket.emit("connections:refreshModels", {
-			connection: buildConnection()
-		})
 	}
 
 	function testConnection() {
@@ -231,7 +239,6 @@
 		name = c.name
 		type = c.type
 		baseUrl = c.baseUrl || ""
-		model = c.model || ""
 		apiKey = (c.extraJson as any)?.apiKey || ""
 		tokenCounter = c.tokenCounter
 		promptFormat = c.promptFormat || PromptFormats.VICUNA
@@ -244,16 +251,13 @@
 		// defaults over a preset-derived set.
 		preset = (c as { preset?: string | null }).preset ?? null
 	}
-	function handleConnectionsRefreshModels(msg: any) {
-		availableModels = msg.models || []
-		if (msg.error) {
-			error = msg.error
-			announce(error)
-		} else {
-			announce(
-				`${availableModels.length} model${availableModels.length === 1 ? "" : "s"} found.`
-			)
-		}
+	function handleConnectionsModels(msg: Sockets.Connections.Models.Response) {
+		// `emitToUser` reaches every open tab for this user, not just the one
+		// that asked — the same guard the capability handlers carry.
+		if (msg.connectionId !== connectionId) return
+		modelsLoading = false
+		if (msg.error) return
+		models = msg.models ?? []
 	}
 	function handleConnectionsTest(msg: Sockets.Connections.Test.Response) {
 		testing = false
@@ -305,43 +309,65 @@
 		goto("/document-view/connections")
 	}
 
+	/**
+	 * The one SCOPED key on this page. `connections:get` extracts its scope
+	 * from `connection.id`, and this page opens exactly one endpoint — so
+	 * another tab loading a different one cannot refill this form underneath
+	 * the typing. Declared in its own effect with the id as a dependency,
+	 * because `useInterest` reads its key once and this one moves with the
+	 * route parameter.
+	 */
+	$effect(() =>
+		declareInterest<"connections:get">(
+			interestKey("connections:get", connectionId),
+			handleConnectionsGet
+		)
+	)
+	/**
+	 * Everything else BARE — none of these events is in `SCOPED_EVENTS` — and
+	 * STANDING: each answers a write this page makes more than once, and the
+	 * capability panel re-reads its column after a test and after a save.
+	 * Declared ABOVE the mount that asks, because effects run in creation order
+	 * and a request flushes the pending interest sync.
+	 */
+	useInterest<"connections:models">(
+		"connections:models",
+		handleConnectionsModels
+	)
+	useInterest<"connections:test">("connections:test", handleConnectionsTest)
+	useInterest<"connections:update">(
+		"connections:update",
+		handleConnectionsUpdate
+	)
+	useInterest<"connections:update:error">(
+		"connections:update:error",
+		handleConnectionsUpdateError
+	)
+	useInterest<"connections:delete">(
+		"connections:delete",
+		handleConnectionsDelete
+	)
+	useInterest<"connections:capabilities">(
+		"connections:capabilities",
+		handleCapabilities
+	)
+	useInterest<"connections:setCapability">(
+		"connections:setCapability",
+		handleCapabilities
+	)
+	useInterest<"connections:capabilities:error">(
+		"connections:capabilities:error",
+		handleCapabilitiesError
+	)
+	useInterest<"connections:setCapability:error">(
+		"connections:setCapability:error",
+		handleCapabilitiesError
+	)
+
 	onMount(() => {
-		socket.on("connections:get", handleConnectionsGet)
-		socket.on("connections:refreshModels", handleConnectionsRefreshModels)
-		socket.on("connections:test", handleConnectionsTest)
-		socket.on("connections:update", handleConnectionsUpdate)
-		socket.on("connections:update:error", handleConnectionsUpdateError)
-		socket.on("connections:delete", handleConnectionsDelete)
-		socket.on("connections:capabilities", handleCapabilities)
-		socket.on("connections:setCapability", handleCapabilities)
-		socket.on("connections:capabilities:error", handleCapabilitiesError)
-		socket.on("connections:setCapability:error", handleCapabilitiesError)
 		socket.emit("connections:get", { id: connectionId })
+		socket.emit("connections:models", { id: connectionId })
 		socket.emit("connections:capabilities", { id: connectionId })
-		return () => {
-			socket.off("connections:get", handleConnectionsGet)
-			socket.off(
-				"connections:refreshModels",
-				handleConnectionsRefreshModels
-			)
-			socket.off("connections:test", handleConnectionsTest)
-			socket.off("connections:update", handleConnectionsUpdate)
-			socket.off("connections:update:error", handleConnectionsUpdateError)
-			socket.off("connections:delete", handleConnectionsDelete)
-			// By named reference, like every off above it: a bare
-			// socket.off("connections:capabilities") would take down the
-			// first-registered listener for the event, whoever owns it.
-			socket.off("connections:capabilities", handleCapabilities)
-			socket.off("connections:setCapability", handleCapabilities)
-			socket.off(
-				"connections:capabilities:error",
-				handleCapabilitiesError
-			)
-			socket.off(
-				"connections:setCapability:error",
-				handleCapabilitiesError
-			)
-		}
 	})
 </script>
 
@@ -436,32 +462,36 @@
 		</div>
 
 		<div class="a11y-field">
-			<label for="a11y-conn-model">Model</label>
-			<input
-				id="a11y-conn-model"
-				type="text"
-				list="a11y-conn-model-list"
-				bind:value={model}
-				disabled={saving}
-			/>
-			<datalist id="a11y-conn-model-list">
-				{#each availableModels as m}
-					<option value={m.model || m.name || m.id}>
-						{m.name || m.model || m.id}
-					</option>
-				{/each}
-			</datalist>
+			<h2>Models</h2>
+			<p class="a11y-hint">
+				The models this endpoint offers. Read-only here — models are
+				added, renamed and switched off in the Connections panel, and
+				which model is used for what is set on the
+				<a href="/admin/defaults">Defaults page</a>
+				.
+			</p>
+			{#if modelsLoading}
+				<p>Loading…</p>
+			{:else if models.length === 0}
+				<p>No models listed for this connection yet.</p>
+			{:else}
+				<ul class="a11y-list">
+					{#each models as m (m.id)}
+						<li class="a11y-list-item">
+							{m.name}
+							{#if !m.enabled}
+								<strong>· off</strong>
+							{/if}
+							{#if m.missingSince}
+								<strong>· not listed</strong>
+							{/if}
+						</li>
+					{/each}
+				</ul>
+			{/if}
 		</div>
 
 		<div class="a11y-list-item-actions">
-			<button
-				type="button"
-				class="a11y-btn a11y-btn-secondary a11y-btn-small"
-				onclick={fetchModels}
-				disabled={saving}
-			>
-				Fetch Available Models
-			</button>
 			<button
 				type="button"
 				class="a11y-btn a11y-btn-secondary a11y-btn-small"

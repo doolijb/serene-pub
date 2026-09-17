@@ -10,10 +10,13 @@
 	 * server actually stored. A built-in row is read-only here (clone it to
 	 * change it), same rule as everywhere else.
 	 */
-	import { onDestroy, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { goto } from "$app/navigation"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import {
+		requestWithInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
 	import TemplateEditor from "$lib/client/components/templates/TemplateEditor.svelte"
 	import { getVariable } from "@serene-pub/sdk"
 	import { contextTemplateScope } from "$lib/shared/utils/contextConfigCards"
@@ -176,23 +179,26 @@
 		"pipelines:libraryDeleteTemplate"
 	] as const
 
-	onMount(() => {
-		socket.on("pipelines:library", handleLibrary)
-		socket.on("pipelines:previewTemplate", handlePreview)
-		for (const ev of WRITE_EVENTS) {
-			socket.on(ev as any, handleWrite)
-			socket.on(`${ev}:error` as any, handleError)
-		}
-		socket.emit("pipelines:library", {})
-	})
-	onDestroy(() => {
-		socket.off("pipelines:library", handleLibrary)
-		socket.off("pipelines:previewTemplate", handlePreview)
-		for (const ev of WRITE_EVENTS) {
-			socket.off(ev as any, handleWrite)
-			socket.off(`${ev}:error` as any, handleError)
-		}
-	})
+	/**
+	 * The preview and every write's answer stand: each comes back when the
+	 * person presses a button, not in reply to anything asked here. One
+	 * `useInterest` call per key — each is its own `$effect`, released with the
+	 * component. BARE: a template pool is not one session's anything.
+	 */
+	useInterest<"pipelines:previewTemplate">(
+		"pipelines:previewTemplate",
+		handlePreview
+	)
+	for (const ev of WRITE_EVENTS) {
+		useInterest<"pipelines:libraryUpdateTemplate">(ev, handleWrite)
+		useInterest<"pipelines:libraryUpdateTemplate:error">(
+			`${ev}:error`,
+			handleError
+		)
+	}
+
+	/** The library view, asked for and listened for in one. BARE, same reason. */
+	$effect(() => requestWithInterest("pipelines:library", {}, handleLibrary))
 
 	function save() {
 		// The pool control names the TARGET; `engine` above says where the

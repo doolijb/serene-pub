@@ -4,16 +4,22 @@
 	 * design: sessions belong to their users; the admin lever here is
 	 * visibility (which types/presets exist), exercised on the sibling pages.
 	 */
-	import { getContext, onDestroy, onMount } from "svelte"
+	import { getContext, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { goto } from "$app/navigation"
-	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { getInterestContext } from "$lib/client/sockets/interest.svelte"
 	import AdminList, {
 		type AdminColumn
 	} from "$lib/client/components/admin/AdminList.svelte"
 
 	const userCtx: { user: SelectUser } = getContext("userCtx")
-	const socket = useTypedSocket()
+	/**
+	 * The app-wide context, not `adminInterest`: `sessions:adminList` is an
+	 * admin-only HANDLER but `sessions:` is not a restricted interest family
+	 * (a non-admin reads their own sessions on it), so the key is an ordinary
+	 * one and the guard below is what keeps this page's request to admins.
+	 */
+	const interest = getInterestContext()
 
 	type Row = Sockets.SessionAdmin.SessionsList.Row
 	let rows: Row[] = $state([])
@@ -29,11 +35,17 @@
 			goto("/")
 			return
 		}
-		socket.on("sessions:adminList", onList)
-		socket.emit("sessions:adminList", {})
 	})
-	onDestroy(() => {
-		socket.off("sessions:adminList", onList)
+
+	/**
+	 * The inventory, asked for and listened for in one — BARE, since the list
+	 * spans every session and has none to be scoped to. Behind the same admin
+	 * check as the redirect above, so a non-admin declares nothing and sends
+	 * nothing while the redirect is in flight.
+	 */
+	$effect(() => {
+		if (!userCtx.user?.isAdmin) return
+		return interest.requestWithInterest("sessions:adminList", {}, onList)
 	})
 
 	const fmtDate = (iso: string | null) =>

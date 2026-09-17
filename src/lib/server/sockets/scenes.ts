@@ -67,90 +67,113 @@ async function filterCharacterIdsToLorebook(
 	return bindingIds.filter((id) => validIds.has(id))
 }
 
+/**
+ * The scene list for one session.
+ *
+ * Split out of the handler below so the two write cascades that re-send it
+ * (`scenes:create`, `scenes:delete`) can hand it to `emitToUser` as a thunk
+ * (socket-interest plan, ruling 4): ONE source of truth for the payload, and
+ * the scene read plus the whole history-entry ordering scan behind it are paid
+ * only when some socket declared the key. A scene written from a surface that
+ * shows no scene list — the summarize modal, the lorebook side — pays for
+ * neither. Skipping the emit alone would save nothing; these reads are the cost.
+ *
+ * The access check stays inside, so the cascade asks exactly what the handler
+ * asks. It refuses the same way too — a thunk that throws is caught and logged
+ * by `emitToUser`, where the handler's own reply would surface it as an error
+ * event.
+ */
+async function buildSceneList(
+	sessionId: number,
+	userId: number
+): Promise<Sockets.Scenes.List.Response> {
+	// Read access: any session participant (owner or guest) can view scenes —
+	// this fires on every session page load, so an owner-only check here
+	// locks guests out of the session entirely, not just scene management.
+	const sessionAccess = await checkSessionAccess(sessionId, userId)
+	if (!sessionAccess.hasAccess) {
+		throw new Error("Session not found or access denied.")
+	}
+
+	const scenes = await db.query.scenes.findMany({
+		where: eq(schema.scenes.sessionId, sessionId),
+		orderBy: (s, { asc }) => asc(s.id),
+		with: {
+			// The date and the completion flag are declared fields now,
+			// so the row carries `fields` and the projection below reads
+			// them out — see `toEntryRow`.
+			historyEntry: {
+				columns: { id: true, fields: true }
+			}
+		}
+	})
+
+	// Build nextEntry for each history entry (ordered by year, month, day, then id)
+	const lorebookId = scenes[0]?.lorebookId
+	let nextEntryMap = new Map<
+		number,
+		{
+			id: number
+			year: number
+			month: number | null
+			day: number | null
+		} | null
+	>()
+	if (lorebookId) {
+		// ⚠ The date sorts on jsonb members now, so the ordering is
+		// spelled in SQL rather than by column: `->>` yields text, and
+		// text order is not date order past nine. `NULLS FIRST` keeps the
+		// old column ordering, which Postgres gives ascending sorts by
+		// default and which this list depends on — an entry with only a
+		// year sorts before its own dated months.
+		const allEntries = (
+			await db
+				.select({
+					id: schema.lorebookEntries.id,
+					fields: schema.lorebookEntries.fields
+				})
+				.from(schema.lorebookEntries)
+				.where(inBookOfType(lorebookId, HISTORY_TYPE_ID))
+				.orderBy(
+					sql`(${schema.lorebookEntries.fields}->>'year')::int ASC NULLS FIRST`,
+					sql`(${schema.lorebookEntries.fields}->>'month')::int ASC NULLS FIRST`,
+					sql`(${schema.lorebookEntries.fields}->>'day')::int ASC NULLS FIRST`,
+					asc(schema.lorebookEntries.id)
+				)
+		).map((e) => ({ id: e.id, ...historyDateOf(e) }))
+		for (let i = 0; i < allEntries.length; i++) {
+			nextEntryMap.set(allEntries[i].id, allEntries[i + 1] ?? null)
+		}
+	}
+
+	const sceneList = (scenes as any[]).map((s) => ({
+		...s,
+		historyEntry: s.historyEntry
+			? {
+					id: s.historyEntry.id,
+					...historyDateOf(s.historyEntry),
+					isCompleted: s.historyEntry.fields?.isCompleted ?? false,
+					nextEntry: nextEntryMap.get(s.historyEntry.id) ?? null
+				}
+			: null
+	}))
+
+	return {
+		// Present so the interest scope can be derived — one builder, so every
+		// emit of this event carries it: the handler's own reply and the three
+		// write cascades alike.
+		sessionId,
+		sceneList: sceneList as unknown as Sockets.Scenes.List.SceneWithEntry[]
+	}
+}
+
 export const sceneListHandler: Handler<
 	Sockets.Scenes.List.Params,
 	Sockets.Scenes.List.Response
 > = {
 	event: "scenes:list",
 	handler: async (socket, params, emitToUser) => {
-		const userId = socket.user!.id
-
-		// Read access: any session participant (owner or guest) can view scenes —
-		// this fires on every session page load, so an owner-only check here
-		// locks guests out of the session entirely, not just scene management.
-		const sessionAccess = await checkSessionAccess(params.sessionId, userId)
-		if (!sessionAccess.hasAccess) {
-			throw new Error("Session not found or access denied.")
-		}
-
-		const scenes = await db.query.scenes.findMany({
-			where: eq(schema.scenes.sessionId, params.sessionId),
-			orderBy: (s, { asc }) => asc(s.id),
-			with: {
-				// The date and the completion flag are declared fields now,
-				// so the row carries `fields` and the projection below reads
-				// them out — see `toEntryRow`.
-				historyEntry: {
-					columns: { id: true, fields: true }
-				}
-			}
-		})
-
-		// Build nextEntry for each history entry (ordered by year, month, day, then id)
-		const lorebookId = scenes[0]?.lorebookId
-		let nextEntryMap = new Map<
-			number,
-			{
-				id: number
-				year: number
-				month: number | null
-				day: number | null
-			} | null
-		>()
-		if (lorebookId) {
-			// ⚠ The date sorts on jsonb members now, so the ordering is
-			// spelled in SQL rather than by column: `->>` yields text, and
-			// text order is not date order past nine. `NULLS FIRST` keeps the
-			// old column ordering, which Postgres gives ascending sorts by
-			// default and which this list depends on — an entry with only a
-			// year sorts before its own dated months.
-			const allEntries = (
-				await db
-					.select({
-						id: schema.lorebookEntries.id,
-						fields: schema.lorebookEntries.fields
-					})
-					.from(schema.lorebookEntries)
-					.where(inBookOfType(lorebookId, HISTORY_TYPE_ID))
-					.orderBy(
-						sql`(${schema.lorebookEntries.fields}->>'year')::int ASC NULLS FIRST`,
-						sql`(${schema.lorebookEntries.fields}->>'month')::int ASC NULLS FIRST`,
-						sql`(${schema.lorebookEntries.fields}->>'day')::int ASC NULLS FIRST`,
-						asc(schema.lorebookEntries.id)
-					)
-			).map((e) => ({ id: e.id, ...historyDateOf(e) }))
-			for (let i = 0; i < allEntries.length; i++) {
-				nextEntryMap.set(allEntries[i].id, allEntries[i + 1] ?? null)
-			}
-		}
-
-		const sceneList = (scenes as any[]).map((s) => ({
-			...s,
-			historyEntry: s.historyEntry
-				? {
-						id: s.historyEntry.id,
-						...historyDateOf(s.historyEntry),
-						isCompleted:
-							s.historyEntry.fields?.isCompleted ?? false,
-						nextEntry: nextEntryMap.get(s.historyEntry.id) ?? null
-					}
-				: null
-		}))
-
-		const res = {
-			sceneList:
-				sceneList as unknown as Sockets.Scenes.List.SceneWithEntry[]
-		}
+		const res = await buildSceneList(params.sessionId, socket.user!.id)
 		emitToUser("scenes:list", res)
 		return res
 	}
@@ -250,21 +273,23 @@ export const sceneCreateHandler: Handler<
 			})
 		}
 
-		// Refresh scene list for the session
+		// Refresh scene list and scened message IDs for the session.
+		//
+		// LAZY (socket-interest plan, ruling 4): both are pushes nobody asked
+		// for, and a scene can be created from surfaces that show neither —
+		// the summarize modal, the lorebook side — so the reads behind them
+		// are paid only where a view declared the key. One builder, one emit
+		// per event: a cascade that calls the list HANDLER instead sends the
+		// payload twice, since the handler emits it and the caller then emits
+		// what it returned.
 		if (emitToUser && newScene.sessionId) {
-			await sceneListHandler.handler(
-				socket,
-				{ sessionId: newScene.sessionId },
-				emitToUser
+			const sessionId = newScene.sessionId
+			await emitToUser("scenes:list", () =>
+				buildSceneList(sessionId, userId)
 			)
-
-			// Also refresh scened message IDs
-			const scenedRes = await scenedMessageIdsHandler.handler(
-				socket,
-				{ sessionId: newScene.sessionId },
-				emitToUser
+			await emitToUser("scenes:scenedMessageIds", () =>
+				buildScenedMessageIds(sessionId, userId)
 			)
-			emitToUser("scenes:scenedMessageIds", scenedRes)
 		}
 
 		const res = {
@@ -361,12 +386,11 @@ export const sceneUpdateHandler: Handler<
 			.from(schema.scenes)
 			.where(eq(schema.scenes.id, params.scene.id))
 
-		// Refresh scene list
+		// Refresh scene list — lazy, for the reasons `scenes:create` gives.
 		if (emitToUser && updated.sessionId) {
-			await sceneListHandler.handler(
-				socket,
-				{ sessionId: updated.sessionId },
-				emitToUser
+			const sessionId = updated.sessionId
+			await emitToUser("scenes:list", () =>
+				buildSceneList(sessionId, userId)
 			)
 		}
 
@@ -405,19 +429,47 @@ export const sceneDeleteHandler: Handler<
 
 		await db.delete(schema.scenes).where(eq(schema.scenes.id, params.id))
 
-		// Refresh scene list and scened message IDs
+		// Refresh scene list and scened message IDs — lazy, and once each,
+		// for the reasons `scenes:create` gives above.
 		if (emitToUser && sessionId) {
-			await sceneListHandler.handler(socket, { sessionId }, emitToUser)
-
-			const scenedRes = await scenedMessageIdsHandler.handler(
-				socket,
-				{ sessionId },
-				emitToUser
+			await emitToUser("scenes:list", () =>
+				buildSceneList(sessionId, userId)
 			)
-			emitToUser("scenes:scenedMessageIds", scenedRes)
+			await emitToUser("scenes:scenedMessageIds", () =>
+				buildScenedMessageIds(sessionId, userId)
+			)
 		}
 
 		return { success: "Scene deleted." }
+	}
+}
+
+/**
+ * Which messages of a session are already captured in a scene.
+ *
+ * Split out for the same reason as `buildSceneList` — the create and delete
+ * cascades hand it to `emitToUser` as a thunk, so the read is paid only where
+ * a session view is open to grey the captured messages out.
+ */
+async function buildScenedMessageIds(
+	sessionId: number,
+	userId: number
+): Promise<Sockets.Scenes.SenedMessageIds.Response> {
+	// Read access: any session participant (owner or guest) — see buildSceneList.
+	const sessionAccess = await checkSessionAccess(sessionId, userId)
+	if (!sessionAccess.hasAccess) {
+		throw new Error("Session not found or access denied.")
+	}
+
+	const scenes = await db.query.scenes.findMany({
+		where: eq(schema.scenes.sessionId, sessionId),
+		columns: { selectedMessageIds: true }
+	})
+
+	return {
+		// Present so the interest scope can be derived — see `buildSceneList`.
+		sessionId,
+		scenedMessageIds: scenes.flatMap((s) => s.selectedMessageIds ?? [])
 	}
 }
 
@@ -427,24 +479,10 @@ export const scenedMessageIdsHandler: Handler<
 > = {
 	event: "scenes:scenedMessageIds",
 	handler: async (socket, params, emitToUser) => {
-		const userId = socket.user!.id
-
-		// Read access: any session participant (owner or guest) — see sceneListHandler.
-		const sessionAccess = await checkSessionAccess(params.sessionId, userId)
-		if (!sessionAccess.hasAccess) {
-			throw new Error("Session not found or access denied.")
-		}
-
-		const scenes = await db.query.scenes.findMany({
-			where: eq(schema.scenes.sessionId, params.sessionId),
-			columns: { selectedMessageIds: true }
-		})
-
-		const scenedMessageIds = scenes.flatMap(
-			(s) => s.selectedMessageIds ?? []
+		const res = await buildScenedMessageIds(
+			params.sessionId,
+			socket.user!.id
 		)
-
-		const res = { scenedMessageIds }
 		emitToUser("scenes:scenedMessageIds", res)
 		return res
 	}
@@ -642,10 +680,14 @@ export const sceneCompileHandler: Handler<
 						batch: data.batch,
 						totalBatches: data.totalBatches
 					})
-					emitToUser(
-						"scenes:compile:progress",
-						data satisfies Sockets.Scenes.Compile.Progress
-					)
+					emitToUser("scenes:compile:progress", {
+						...data,
+						// Present so the interest scope can be derived: the
+						// compile is asked for one history entry, and only
+						// the view watching that entry should be told how
+						// far it has got. `:complete` already carried it.
+						historyEntryId: params.historyEntryId
+					} satisfies Sockets.Scenes.Compile.Progress)
 				}
 			})
 		} catch (err) {
@@ -897,23 +939,23 @@ export const sceneProcessHandler: Handler<
 				// mapping in sessions:summarize.
 				onNode: (e) => {
 					if (e.phase !== "start") return
-					if (e.typeId.startsWith("core:provider/summarize-batch"))
+					if (e.definitionId.startsWith("core:oracle/summarize-batch"))
 						progress({
 							phase: "drafting",
 							batch: ++batchesSeen,
 							totalBatches: batchesSeen
 						})
 					else if (
-						e.typeId.startsWith("core:provider/summarize-synth")
+						e.definitionId.startsWith("core:oracle/summarize-synth")
 					)
 						progress({
 							phase: "synthesizing",
 							batch: 1,
 							totalBatches: 1
 						})
-					else if (e.typeId.startsWith("core:provider/name-entry"))
+					else if (e.definitionId.startsWith("core:oracle/name-entry"))
 						progress({ phase: "naming", batch: 1, totalBatches: 1 })
-					else if (e.typeId.startsWith("core:provider/extract-cast"))
+					else if (e.definitionId.startsWith("core:oracle/extract-cast"))
 						progress({
 							phase: "extracting",
 							batch: 1,
@@ -945,7 +987,7 @@ export const sceneProcessHandler: Handler<
 				raw: content,
 				batchCount: receipt.nodes.filter((n: any) =>
 					String(n.typeId ?? "").startsWith(
-						"core:provider/summarize-batch"
+						"core:oracle/summarize-batch"
 					)
 				).length,
 				participantCharacters: castOut?.participants,
@@ -1029,7 +1071,7 @@ export const sceneProcessHandler: Handler<
 			senderBindingIds.add(
 				await resolveOrCreateBinding({
 					lorebookId: scene.lorebookId,
-					personaId
+					characterId: personaId
 				})
 			)
 		}

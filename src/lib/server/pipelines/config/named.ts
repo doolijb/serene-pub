@@ -151,12 +151,12 @@ async function refDefaults(
 
 	for (const d of decls) {
 		const key = addr(d.nodeKey, d.slot, d.path)
-		if (d.control === "prompts-ref" && d.nodeTypeId) {
-			const pool = promptPoolKeyFor(d.nodeTypeId, d.slot)
+		if (d.control === "prompts-ref" && d.nodeDefinitionId) {
+			const pool = promptPoolKeyFor(d.nodeDefinitionId, d.slot)
 			if (!prompts.has(pool))
 				prompts.set(
 					pool,
-					await defaultPromptFor(db, d.nodeTypeId, d.slot, {
+					await defaultPromptFor(db, d.nodeDefinitionId, d.slot, {
 						id: specId,
 						slug: specSlug
 					})
@@ -165,7 +165,7 @@ async function refDefaults(
 			if (id != null) out.set(key, id)
 			continue
 		}
-		if (d.control === "context-template-ref" && d.nodeTypeId) {
+		if (d.control === "context-template-ref" && d.nodeDefinitionId) {
 			// The engine is half the template pool now, so it is half this
 			// cache key too. Keyed on the node type alone, a node declaring
 			// another language would be handed whichever engine's row the first
@@ -176,11 +176,11 @@ async function refDefaults(
 			// The slot's FIRST accepted engine, not the union: a default is one
 			// row, and a slot that accepts two languages still ships one.
 			const engine = defaultEngineOf(d)
-			const pool = `${d.nodeTypeId}#${engine}`
+			const pool = `${d.nodeDefinitionId}#${engine}`
 			if (!templates.has(pool))
 				templates.set(
 					pool,
-					await defaultContextTemplateFor(db, d.nodeTypeId, engine)
+					await defaultContextTemplateFor(db, d.nodeDefinitionId, engine)
 				)
 			const id = templates.get(pool)
 			if (id != null) out.set(key, id)
@@ -394,7 +394,9 @@ export async function ensureDefaultConfig(
 		// all — the whole of `refs` above) and every author-preset value that
 		// differs from the declared one. `core:spec/generate-image` is the case
 		// to keep in mind: its default preset sets `render|settings|review` to
-		// `on` where the synthesized declaration says `off`, so that row is a
+		// `on` where the substrate's `settings` slot — projected from the
+		// definition's `reviewDefault` (R-9), which that oracle leaves unset —
+		// says `off`, so that row is a
 		// deviation and stays. Shipping a preset IS departing from the bare
 		// declaration; the row is how it says so.
 		.filter(({ d, value }) => isDeviation(d, value))

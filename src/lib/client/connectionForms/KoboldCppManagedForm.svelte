@@ -8,9 +8,7 @@
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
 	import Select from "$lib/client/components/inputs/Select.svelte"
-	import { onMount, onDestroy, getContext } from "svelte"
-	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
-	import { textModelOptions } from "$lib/client/components/koboldcppManager/modelKindView"
+	import { onMount, getContext } from "svelte"
 
 	interface ManagedConfig {
 		gpuLayers: number
@@ -72,7 +70,6 @@
 	const wireMode = connectionWireMode()
 	const showFormat = $derived(usesCompletionTemplate(wireMode.of(connection)))
 
-	const socket = useTypedSocket()
 	/**
 	 * The format picker's options, read from `completion_templates` instead of
 	 * the eight-entry constant that used to sit beside the table — so a template
@@ -91,34 +88,6 @@
 	)
 
 	let koboldCppFields: ExtraFieldData | undefined = $state()
-	let availableModels: Sockets.KoboldCPP.ListModels.ModelFile[] = $state([])
-	let isLoadingModels = $state(false)
-
-	// Named so the teardown below removes only this listener — a bare
-	// socket.off("koboldcpp:listModels") drops every handler for the event,
-	// including the KoboldCPP Manager sidebar's, which can be open at the same
-	// time as this form and uses the same list to decide which tab to land on.
-	function handleListModels(message: Sockets.KoboldCPP.ListModels.Response) {
-		isLoadingModels = false
-		availableModels = message.availableModels ?? []
-	}
-	socket.on("koboldcpp:listModels", handleListModels)
-
-	// Text-kind rows only, minus the trap of dropping a stored selection that
-	// has since been classified as an image model — see textModelOptions.
-	let modelSelect = $derived(
-		textModelOptions(availableModels, connection?.model)
-	)
-	// KoboldCPP identifies a managed model by its file name, so the name is
-	// both the stored value and the label.
-	let modelOptions = $derived(
-		modelSelect.options.map((m) => ({ value: m.name, label: m.name }))
-	)
-
-	function refreshModels() {
-		isLoadingModels = true
-		socket.emit("koboldcpp:listModels", {})
-	}
 
 	function extraJsonToExtraFields(extraJson: ExtraJson): ExtraFieldData {
 		return {
@@ -202,11 +171,6 @@
 		} else {
 			koboldCppFields = extraJsonToExtraFields(defaultExtraJson)
 		}
-		refreshModels()
-	})
-
-	onDestroy(() => {
-		socket.off("koboldcpp:listModels", handleListModels)
 	})
 </script>
 
@@ -226,47 +190,9 @@
 		</div>
 	{/if}
 
-	<div class="mt-4 flex flex-col gap-1">
-		<div class="flex items-center justify-between">
-			<!-- A span, not a label: the accessible name comes from the picker's
-			     own hidden label, and a <label for> in this header row would
-			     have to name an id the picker does not expose. -->
-			<span class="font-semibold">Model</span>
-			<button
-				type="button"
-				class="btn btn-sm preset-filled-surface-400-600"
-				onclick={refreshModels}
-				title="Refresh models"
-			>
-				<Icons.RefreshCw
-					size={14}
-					class={isLoadingModels ? "animate-spin" : ""}
-				/>
-			</button>
-		</div>
-		<Select
-			label="Model"
-			labelHidden
-			options={modelOptions}
-			bind:value={connection.model}
-			placeholder="Select a model…"
-			emptyMessage="No text models found."
-			clearable
-			disabled={!managerEnabled}
-		/>
-		{#if modelSelect.selectedIsImageModel}
-			<p class="text-warning-700-300 text-xs">
-				This is an image model — KoboldCPP can't answer chat with it,
-				and an image model needs its own connection. Pick a text model
-				here; make the image one from KoboldCPP Manager → Models →
-				Image, which creates the connection for it.
-			</p>
-		{/if}
-		<p class="text-muted-foreground text-xs">
-			Loaded automatically via KoboldCPP Manager's admin API the next time
-			this connection is used to generate.
-		</p>
-	</div>
+	<!-- No model picker and no Refresh here: the managed process's ggufs are
+	     synced into this connection's models on their own, and downloaded or
+	     removed in the KoboldCPP Manager. -->
 
 	{#if showFormat}
 		<Select

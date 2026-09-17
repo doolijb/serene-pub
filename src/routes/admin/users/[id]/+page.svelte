@@ -4,14 +4,15 @@
 	 * Users panel renders — pointed at this row. The list arrives over the
 	 * same admin-gated `users:list` the changelist uses.
 	 */
-	import { onDestroy, onMount } from "svelte"
 	import { goto } from "$app/navigation"
 	import { page } from "$app/state"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { getInterestContext } from "$lib/client/sockets/interest.svelte"
 	import UserForm from "$lib/client/components/userForms/UserForm.svelte"
 
 	const socket = useTypedSocket()
+	const interest = getInterestContext()
 
 	let clearingTotp = $state(false)
 
@@ -36,13 +37,14 @@
 		loading = false
 	}
 
-	onMount(() => {
-		socket.on("users:list", handleList)
-		socket.emit("users:list", {})
-	})
-	onDestroy(() => {
-		socket.off("users:list", handleList)
-	})
+	/**
+	 * The roster this form picks its row out of, asked for and listened for in
+	 * one. BARE — `users:list` has no `SCOPED_EVENTS` entry, so a key naming
+	 * the id would match nothing; the `find` below is the filter. STANDING,
+	 * because the server re-emits the list after every account write, which is
+	 * how this form shows what it just saved.
+	 */
+	$effect(() => interest.requestWithInterest("users:list", {}, handleList))
 
 	const done = () => goto("/admin/users")
 </script>

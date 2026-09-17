@@ -1,8 +1,9 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
 	import { Progress } from "@skeletonlabs/skeleton-svelte"
-	import { onDestroy, onMount } from "svelte"
+	import { onMount } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 
 	interface DownloadProgress {
 		modelName: string
@@ -69,10 +70,6 @@
 		socket.emit("ollama:clearDownloadHistory", {})
 	}
 
-	// Named so `off` can name them too. A bare `socket.off("ollamaPullProgress")`
-	// removes EVERY listener for that event — including other components
-	// listening for the same event — which then stops updating for the rest
-	// of the session.
 	function handleOllamaPullProgress(
 		message: Sockets.Ollama.PullProgress.Response
 	) {
@@ -95,30 +92,33 @@
 		}
 	}
 
+	/**
+	 * Three standing interests, all BARE. `ollama:pullProgress` is a PUSH — it
+	 * arrives for the whole life of a pull, minutes after anything was asked
+	 * for — so it is the plainest case there is for a standing key rather than
+	 * a one-shot; the other two are the replies that seed and clear the same
+	 * list.
+	 *
+	 * Declared above `onMount`, which is itself an effect: the keys have to be
+	 * held before the progress request leaves, and the typed `emit` flushes
+	 * the interest sync ahead of itself (plan ruling 3).
+	 */
+	useInterest<"ollama:pullProgress">(
+		"ollama:pullProgress",
+		handleOllamaPullProgress
+	)
+	useInterest<"ollama:getDownloadProgress">(
+		"ollama:getDownloadProgress",
+		handleOllamaGetDownloadProgress
+	)
+	useInterest<"ollama:clearDownloadHistory">(
+		"ollama:clearDownloadHistory",
+		handleOllamaClearDownloadHistory
+	)
+
 	onMount(() => {
-		socket.on("ollamaPullProgress", handleOllamaPullProgress)
-
-		socket.on("ollama:getDownloadProgress", handleOllamaGetDownloadProgress)
-
-		socket.on(
-			"ollama:clearDownloadHistory",
-			handleOllamaClearDownloadHistory
-		)
-
-		// Request current download progress from server after setting up listeners
+		// What the progress list starts from; the push above keeps it current.
 		socket.emit("ollama:getDownloadProgress", {})
-	})
-
-	onDestroy(() => {
-		socket.off("ollamaPullProgress", handleOllamaPullProgress)
-		socket.off(
-			"ollama:getDownloadProgress",
-			handleOllamaGetDownloadProgress
-		)
-		socket.off(
-			"ollama:clearDownloadHistory",
-			handleOllamaClearDownloadHistory
-		)
 	})
 </script>
 

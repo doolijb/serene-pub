@@ -3,6 +3,7 @@
 	import { goto } from "$app/navigation"
 	import Layout from "$lib/client/components/Layout.svelte"
 	import { loadSocketsClient } from "$lib/client/sockets/loadSockets.client"
+	import { requestWithInterest } from "$lib/client/sockets/interest.svelte"
 	import type { Snippet } from "svelte"
 	import { page } from "$app/state"
 	import * as Icons from "@lucide/svelte"
@@ -13,6 +14,7 @@
 	import AccessibleShell from "$lib/client/accessibility/AccessibleShell.svelte"
 	import PrereleaseWatermark from "$lib/client/components/PrereleaseWatermark.svelte"
 	import { appVersion } from "$lib/shared/constants/version"
+	import { docsHref } from "$lib/shared/utils/docsHref"
 	import AccessibleLoginForm from "$lib/client/accessibility/AccessibleLoginForm.svelte"
 	import {
 		accessibilityModeStore,
@@ -67,6 +69,24 @@
 	 */
 	const PUBLIC_ROUTES = ["/invite"]
 	const isPublicRoute = $derived(PUBLIC_ROUTES.includes(page.url.pathname))
+	/**
+	 * Documentation, which is readable with no realtime connection.
+	 *
+	 * Every other branch of the template below is gated on the socket, so
+	 * without this one the "Can't reach Serene Pub" panel's own link to the
+	 * hosting guide would re-render the panel. A doc page reads nothing but
+	 * build-time static output — no socket, no database, no user data — and
+	 * the browser can already fetch those chunks directly, so rendering one
+	 * here exposes nothing a request for the chunk would not.
+	 *
+	 * ⚠ Checked only inside the startup-failure branch, never before
+	 * `socketsInitialized` or `showLogin`: a working install must still get the
+	 * shell around its docs, and a logged-out visitor must still get the login
+	 * form.
+	 */
+	const isDocsRoute = $derived(
+		page.url.pathname === "/docs" || page.url.pathname.startsWith("/docs/")
+	)
 	// Startup failure of the realtime connection. Without this the template's
 	// `{#if socketsInitialized}{:else if showLogin}` chain had no third branch,
 	// so any failure here rendered a completely blank page — see the catch in
@@ -192,34 +212,42 @@
 	 * requests it was going to refuse anyway.
 	 */
 	async function setupRequired(): Promise<boolean> {
-		const { useTypedSocket } = await import(
-			"$lib/client/sockets/loadSockets.client"
-		)
-		const socket = useTypedSocket()
 		return await new Promise<boolean>((resolve) => {
+			// Two one-shot asks, each declared and sent by the interest
+			// registry — the module directly, not a context: this runs from an
+			// async startup function, outside any component's init scope. Both
+			// keys are released on the reply and on the timeout, so the gate's
+			// question leaves no key behind for the app that mounts after it.
+			// BARE: an account's setup state is not one session's anything.
+			let releaseState: (() => void) | null = null
+			let releaseStatus: (() => void) | null = null
+			function releaseAll() {
+				releaseState?.()
+				releaseStatus?.()
+			}
 			const timer = setTimeout(() => {
-				socket.off("account:setupState", onState)
-				socket.off("totp:status", onStatus)
+				releaseAll()
 				resolve(false)
 			}, 5000)
 			function done(v: boolean) {
 				clearTimeout(timer)
-				socket.off("account:setupState", onState)
-				socket.off("totp:status", onStatus)
+				releaseAll()
 				resolve(v)
 			}
 			function onState(res: Sockets.Account.SetupState.Response) {
 				if (res.pending.length) return done(true)
 				// No outstanding setup, but an *enrolled* factor may still be
 				// unverified for this session — a challenge rather than setup.
-				socket.emit("totp:status", {})
+				releaseStatus = requestWithInterest("totp:status", {}, onStatus)
 			}
 			function onStatus(res: Sockets.Totp.Status.Response) {
 				done(res.verificationRequired)
 			}
-			socket.on("account:setupState", onState)
-			socket.on("totp:status", onStatus)
-			socket.emit("account:setupState", {})
+			releaseState = requestWithInterest(
+				"account:setupState",
+				{},
+				onState
+			)
 		})
 	}
 
@@ -337,6 +365,8 @@
 	>
 		<p class="text-sm opacity-70">Connecting to Serene Pub…</p>
 	</div>
+{:else if startupError && isDocsRoute}
+	{@render children?.()}
 {:else if startupError}
 	<!-- Deliberately plain markup with inline colors: this renders before the
 	     app shell exists, and on a theme-load failure it still has to be
@@ -369,11 +399,14 @@
 				>
 					{retrying ? "Retrying…" : "Retry"}
 				</button>
+				<!-- The app's own copy of the guide, not GitHub's: this panel
+				     is what a self-hosted or offline install shows when it
+				     cannot start, and sending that reader to the internet — to
+				     whatever `main` says rather than to their own version — was
+				     the wrong half of the answer. -->
 				<a
 					class="rounded-lg px-4 py-2 text-sm font-medium underline"
-					href="https://github.com/doolijb/serene-pub/blob/main/docs/hosting.md"
-					target="_blank"
-					rel="noopener noreferrer"
+					href={docsHref("hosting")}
 				>
 					Hosting &amp; proxy setup
 				</a>

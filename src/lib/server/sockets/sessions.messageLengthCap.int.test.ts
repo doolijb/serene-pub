@@ -70,12 +70,12 @@ describe("sessionMessages:sendPersonaMessage — length cap (PGlite integration)
 			.values({ userId: user.id, isGroup: false })
 			.returning()
 		const [persona] = await testDb
-			.insert(schema.personas)
+			.insert(schema.characters)
 			.values({
 				userId: user.id,
 				name: "P",
 				description: "",
-				isDefault: false,
+				isPersona: true,
 				aliases: []
 			})
 			.returning()
@@ -104,12 +104,12 @@ describe("sessionMessages:sendPersonaMessage — length cap (PGlite integration)
 			.values({ userId: user.id, isGroup: false })
 			.returning()
 		const [persona] = await testDb
-			.insert(schema.personas)
+			.insert(schema.characters)
 			.values({
 				userId: user.id,
 				name: "P",
 				description: "",
-				isDefault: false,
+				isPersona: true,
 				aliases: []
 			})
 			.returning()
@@ -138,12 +138,12 @@ describe("sessionMessages:update — length cap (PGlite integration)", () => {
 			.values({ userId: user.id, isGroup: false })
 			.returning()
 		const [persona] = await testDb
-			.insert(schema.personas)
+			.insert(schema.characters)
 			.values({
 				userId: user.id,
 				name: "P",
 				description: "",
-				isDefault: false,
+				isPersona: true,
 				aliases: []
 			})
 			.returning()

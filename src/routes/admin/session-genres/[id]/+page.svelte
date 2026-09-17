@@ -6,17 +6,20 @@
 	 * session count. Every fact here is a SELECT made elsewhere; this page is
 	 * where they meet, with a link out along every edge.
 	 */
-	import { getContext, onDestroy, onMount } from "svelte"
+	import { getContext, onMount, untrack } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { goto } from "$app/navigation"
 	import { page } from "$app/state"
-	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { getAdminInterestContext } from "$lib/client/sockets/interest.svelte"
 	import AdminList, {
 		type AdminColumn
 	} from "$lib/client/components/admin/AdminList.svelte"
 
 	const userCtx: { user: SelectUser } = getContext("userCtx")
-	const socket = useTypedSocket()
+	// The admin-only half of the registry (plan ruling 6b): `sessionGenres:`
+	// is a RESTRICTED interest family, and this context exists only inside the
+	// admin tree, which already turns non-admins away.
+	const interest = getAdminInterestContext()
 	const genreId = $derived(decodeURIComponent(page.params.id ?? ""))
 
 	let detail = $state<Sockets.SessionAdmin.GenreDetail.Response | null>(null)
@@ -28,17 +31,37 @@
 	}
 
 	onMount(() => {
-		if (!userCtx.user?.isAdmin) {
-			goto("/")
-			return
-		}
-		socket.on("sessionGenres:detail", onDetail)
-		socket.on("sessionGenres:detail:error", onDetail)
-		socket.emit("sessionGenres:detail", { genreId })
+		if (!userCtx.user?.isAdmin) goto("/")
 	})
-	onDestroy(() => {
-		socket.off("sessionGenres:detail", onDetail)
-		socket.off("sessionGenres:detail:error", onDetail)
+
+	/**
+	 * This genre's detail, asked for and listened for in one, with its refusal
+	 * on the same handler — the not-found body is what the page renders.
+	 *
+	 * BARE: `sessionGenres:detail` has no `SCOPED_EVENTS` entry, so a key
+	 * naming the genre would match no payload at all; the id in the URL is the
+	 * only thing that decides which one was asked for.
+	 *
+	 * `genreId` is read untracked: the original asked once, on mount, and
+	 * re-pointing this page at another genre on a param change is a change
+	 * this conversion is not making.
+	 */
+	$effect(() => {
+		if (!userCtx.user?.isAdmin) return
+		const releases = [
+			interest.declareInterest<"sessionGenres:detail:error">(
+				"sessionGenres:detail:error",
+				onDetail
+			),
+			interest.requestWithInterest(
+				"sessionGenres:detail",
+				{ genreId: untrack(() => genreId) },
+				onDetail
+			)
+		]
+		return () => {
+			for (const release of releases) release()
+		}
 	})
 
 	type Slot = Sockets.SessionAdmin.GenreDetail.Slot

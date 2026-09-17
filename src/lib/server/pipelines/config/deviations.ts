@@ -28,7 +28,8 @@
  * A **reference** slot — `prompts`, `template`, `variables`, `connection`,
  * `sampling`, `scripts` — declares no author default at all: `declsForSlot`
  * emits `authorDefault` for `parameters`, for a `wire` slot's format, and for
- * the two synthesized `settings` controls, and for nothing else. So a ref row
+ * the substrate's `settings` slot (R-9: `enabled` from `optional`, `review`
+ * from the definition's `reviewDefault`), and for nothing else. So a ref row
  * has nothing to be equal to and nothing to fall back to if it went, and
  * `isDeviation` answers `true` for every one of them. That is not an exemption
  * bolted on: it is the same rule reading a declaration that offers no default.

@@ -15,18 +15,33 @@ function findMatchingTag(userId: number, rawName: string) {
 	})
 }
 
+/**
+ * Every tag this user has, in name order.
+ *
+ * The one query behind the `tags:list` request AND behind the three cascades
+ * that re-send the list after a write, so a refresh can never be a different
+ * read from the request's own — and so those cascades can hand it over LAZILY
+ * (socket-interest plan, ruling 4): a tag created from a character form with
+ * no tag manager open anywhere pays for no re-list. Skipping the emit alone
+ * would save nothing; the query is the cost.
+ */
+async function buildTagsList(
+	userId: number
+): Promise<Sockets.Tags.List.Response> {
+	const tagsList = await db.query.tags.findMany({
+		where: (t, { eq }) => eq(t.userId, userId),
+		orderBy: (t, { asc }) => asc(t.name)
+	})
+	return { tagsList }
+}
+
 export const tagsList: Handler<
 	Sockets.Tags.List.Params,
 	Sockets.Tags.List.Response
 > = {
 	event: "tags:list",
 	handler: async (socket, params, emitToUser) => {
-		const userId = socket.user!.id
-		const tagsList = await db.query.tags.findMany({
-			where: (t, { eq }) => eq(t.userId, userId),
-			orderBy: (t, { asc }) => asc(t.name)
-		})
-		const res: Sockets.Tags.List.Response = { tagsList }
+		const res = await buildTagsList(socket.user!.id)
 		emitToUser("tags:list", res)
 		return res
 	}
@@ -60,8 +75,8 @@ export const tagsCreate: Handler<
 			const res: Sockets.Tags.Create.Response = { tag }
 			emitToUser("tags:create", res)
 
-			// Also emit updated tags list
-			await tagsList.handler(socket, {}, emitToUser)
+			// Also emit updated tags list — LAZY (see `buildTagsList`).
+			await emitToUser("tags:list", () => buildTagsList(userId))
 			return res
 		} catch (error) {
 			console.error("Error creating tag:", error)
@@ -113,8 +128,8 @@ export const tagsUpdate: Handler<
 			const res: Sockets.Tags.Update.Response = { tag }
 			emitToUser("tags:update", res)
 
-			// Also emit updated tags list
-			await tagsList.handler(socket, {}, emitToUser)
+			// Also emit updated tags list — LAZY (see `buildTagsList`).
+			await emitToUser("tags:list", () => buildTagsList(userId))
 			return res
 		} catch (error) {
 			console.error("Error updating tag:", error)
@@ -159,8 +174,8 @@ export const tagsDelete: Handler<
 			}
 			emitToUser("tags:delete", res)
 
-			// Also emit updated tags list
-			await tagsList.handler(socket, {}, emitToUser)
+			// Also emit updated tags list — LAZY (see `buildTagsList`).
+			await emitToUser("tags:list", () => buildTagsList(userId))
 			return res
 		} catch (error) {
 			console.error("Error deleting tag:", error)
@@ -205,7 +220,8 @@ export const tagsGetRelatedData: Handler<
 						id: true,
 						name: true,
 						avatarMediaId: true,
-						userId: true
+						userId: true,
+						isPersona: true
 					},
 					with: {
 						avatarMedia: {
@@ -215,6 +231,10 @@ export const tagsGetRelatedData: Handler<
 				}
 			}
 		})
+		// There is no `persona_tags` — a persona is a character, so a persona
+		// wearing this tag is already in `characters` below, flagged by its
+		// own `isPersona`, rather than living in a second table or a second
+		// list here.
 		const characters = characterTagRows
 			.map((ct) => ct.character)
 			.filter(
@@ -222,34 +242,6 @@ export const tagsGetRelatedData: Handler<
 					c !== null && c.userId === userId
 			)
 			.map(({ userId: _userId, ...c }) => c)
-
-		// Get related personas (only from user's personas) — same "one"
-		// relation `where` limitation as above.
-		const personaTagRows = await db.query.personaTags.findMany({
-			where: (pt, { eq }) => eq(pt.tagId, params.tagId),
-			with: {
-				persona: {
-					columns: {
-						id: true,
-						name: true,
-						avatarMediaId: true,
-						userId: true
-					},
-					with: {
-						avatarMedia: {
-							columns: { uuid: true, rev: true, frame: true }
-						}
-					}
-				}
-			}
-		})
-		const personas = personaTagRows
-			.map((pt) => pt.persona)
-			.filter(
-				(p): p is NonNullable<typeof p> =>
-					p !== null && p.userId === userId
-			)
-			.map(({ userId: _userId, ...p }) => p)
 
 		// Get related lorebooks (only from user's lorebooks) — same "one"
 		// relation `where` limitation as above.
@@ -277,7 +269,6 @@ export const tagsGetRelatedData: Handler<
 			tagData: {
 				tag,
 				characters,
-				personas,
 				lorebooks
 			}
 		}

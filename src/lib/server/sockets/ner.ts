@@ -21,7 +21,39 @@ import { db } from "$lib/server/db"
 import type { Handler } from "$lib/shared/events"
 import { resolveNerTarget } from "$lib/server/ner/target"
 import { nerReannotateCost } from "$lib/server/ner/reindex"
-import { getLoadedNerModelId, getNerLoadError } from "$lib/server/ner"
+import {
+	getLoadedNerModelId,
+	getNerLastUsedAt,
+	getNerLoadError,
+	getNerTtlMinutes,
+	unloadNerModel
+} from "$lib/server/ner"
+
+/**
+ * The one question, plus the three residency facts an Unload button needs
+ * beside it.
+ *
+ * ⚠ `modelReady` and `loaded` are DIFFERENT and both are here. `modelReady` is
+ * star-compared — a model left resident from a previous star is not this
+ * connection being up. `loaded` is bare residency — that same model is still
+ * occupying memory and is still what Unload would free.
+ */
+async function buildNerStatus(): Promise<Sockets.Ner.Status.Response> {
+	const target = await resolveNerTarget(db)
+	const { rows } = await nerReannotateCost(db)
+	return {
+		starred: target !== null,
+		modelId: target?.modelId ?? null,
+		modelReady: target !== null && getLoadedNerModelId() === target.modelId,
+		loadError: getNerLoadError(),
+		annotatedRows: rows,
+		loaded: getLoadedNerModelId() !== null,
+		lastUsedAt: getNerLastUsedAt(),
+		// The starred connection's own window when there is one, and the value
+		// the lane is armed with otherwise — the order the loader applies them.
+		ttlMinutes: target?.ttlMinutes ?? getNerTtlMinutes()
+	}
+}
 
 export const nerStatus: Handler<
 	Sockets.Ner.Status.Params,
@@ -32,19 +64,29 @@ export const nerStatus: Handler<
 		// Connections are admin-only everywhere else, and this reports which one
 		// is starred and why it failed to load.
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
-		const target = await resolveNerTarget(db)
-		const { rows } = await nerReannotateCost(db)
-		const res: Sockets.Ner.Status.Response = {
-			starred: target !== null,
-			modelId: target?.modelId ?? null,
-			// Compared against the STAR rather than reported bare: a model left
-			// resident from a previous star is not this connection being up.
-			modelReady:
-				target !== null && getLoadedNerModelId() === target.modelId,
-			loadError: getNerLoadError(),
-			annotatedRows: rows
-		}
+		const res = await buildNerStatus()
 		emitToUser("ner:status", res)
+		return res
+	}
+}
+
+/**
+ * Free the entity model now.
+ *
+ * ⚠ The lane is NOT stopped. Annotation is unconditionally enabled and the
+ * broker loads on demand, exactly as it does after an idle timeout — a queue
+ * never owns model lifecycle. The next row that needs a model gets one.
+ */
+export const nerUnloadModel: Handler<
+	Sockets.Ner.UnloadModel.Params,
+	Sockets.Ner.UnloadModel.Response
+> = {
+	event: "ner:unloadModel",
+	handler: async (socket, _params, emitToUser) => {
+		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+		unloadNerModel("by request")
+		const res = await buildNerStatus()
+		emitToUser("ner:unloadModel", res)
 		return res
 	}
 }
@@ -59,4 +101,5 @@ export function registerNerHandlers(
 	) => void
 ) {
 	register(socket, nerStatus, emitToUser)
+	register(socket, nerUnloadModel, emitToUser)
 }

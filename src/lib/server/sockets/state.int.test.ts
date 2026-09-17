@@ -78,18 +78,57 @@ function declareSlots() {
 /** Every broadcast the handler fanned out, so the last claim can be asserted. */
 const broadcasts: { event: string; sessionId: number }[] = []
 
+/**
+ * An io whose every user room holds one socket that wants everything.
+ *
+ * `state:changed` is a GATED event, so `emitRedacted` asks `hasInterest` before
+ * it delivers and a room it cannot walk is a room with no interest in it. The
+ * room name doubles as the socket id here, which is enough for the gate's
+ * lookups and keeps this a fixture rather than a second implementation.
+ *
+ * The declared key is BARE, which means every scope: `state:changed` is scoped
+ * per session now, and a fixture pinned to one session id would answer for one
+ * of these tests and go silent on the next.
+ */
+function interestedIo() {
+	const wanting = (id: string) => ({
+		id,
+		user: { id: Number(id.slice("user_".length)) },
+		interest: new Set(["state:changed"])
+	})
+	return {
+		to: () => ({
+			emit: (event: string, data: any) =>
+				broadcasts.push({
+					event,
+					sessionId: data?.sessionId
+				})
+		}),
+		sockets: {
+			adapter: {
+				rooms: {
+					get: (room: string) =>
+						room.startsWith("user_")
+							? new Set([room])
+							: undefined
+				}
+			},
+			sockets: {
+				get: (id: string) => wanting(id),
+				// `broadcastToSessionUsers` asks whether ANY connected socket
+				// wants the event before it reads the session's roster — it
+				// cannot know whose rooms to walk until it has. This fixture's
+				// premise is that one of them wants everything.
+				values: () => [wanting("user_0")]
+			}
+		}
+	}
+}
+
 function fakeSocket(userId: number) {
 	return {
 		user: { id: userId },
-		io: {
-			to: () => ({
-				emit: (event: string, data: any) =>
-					broadcasts.push({
-						event,
-						sessionId: data?.sessionId
-					})
-			})
-		}
+		io: interestedIo()
 	} as any
 }
 

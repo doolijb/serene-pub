@@ -1,7 +1,11 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import { onMount, onDestroy, getContext } from "svelte"
+	import { onMount, getContext } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import {
+		declareInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 
@@ -116,10 +120,6 @@
 		socket.emit("koboldcpp:getLoadedConfig", {})
 	}
 
-	// Named so `off` can name them too. A bare `socket.off("koboldcpp:subprocessStatus")`
-	// removes EVERY listener for that event — including KoboldCppManagedStatusTab's
-	// and KoboldCppSidebar's, which listen for the same events and would stop
-	// updating for the rest of the session.
 	function handlePerf(message: Sockets.KoboldCPP.Perf.Response) {
 		isLoadingPerf = false
 		perf = message
@@ -196,46 +196,60 @@
 		}
 	}
 
-	onMount(() => {
-		socket.on("koboldcpp:perf", handlePerf)
-		socket.on("koboldcpp:perf:error", handlePerfError)
+	// Perf is read in both modes. BARE, like everything in `koboldcpp:` — the
+	// family has no interest scope — and standing, because Refresh re-asks.
+	//
+	// Declared ABOVE the mount that emits: effects run in creation order, so a
+	// declaration made after one would miss the sync its request flushes.
+	useInterest<"koboldcpp:perf">("koboldcpp:perf", handlePerf)
+	useInterest<"koboldcpp:perf:error">("koboldcpp:perf:error", handlePerfError)
 
-		if (isManaged) {
-			socket.emit("koboldcpp:getSubprocessStatus", {})
-
-			socket.on("koboldcpp:getLoadedConfig", handleGetLoadedConfig)
-			socket.on("koboldcpp:subprocessStatus", handleSubprocessStatus)
-			socket.on(
+	// The managed half is declared in an effect keyed on `isManaged` rather
+	// than once at mount, so a flip either way is honoured: turning the manager
+	// on mid-visit declares these keys (a one-shot registration at mount never
+	// would, and the subprocess card is on screen the moment the flag is true),
+	// and turning it off releases them rather than holding interest in pushes
+	// this tab has stopped rendering.
+	$effect(() => {
+		if (!isManaged) return
+		const releases = [
+			declareInterest<"koboldcpp:getLoadedConfig">(
+				"koboldcpp:getLoadedConfig",
+				handleGetLoadedConfig
+			),
+			declareInterest<"koboldcpp:subprocessStatus">(
+				"koboldcpp:subprocessStatus",
+				handleSubprocessStatus
+			),
+			declareInterest<"koboldcpp:getSubprocessStatus">(
 				"koboldcpp:getSubprocessStatus",
 				handleGetSubprocessStatus
-			)
-			socket.on("koboldcpp:startSubprocess", handleStartSubprocess)
-			socket.on(
+			),
+			declareInterest<"koboldcpp:startSubprocess">(
+				"koboldcpp:startSubprocess",
+				handleStartSubprocess
+			),
+			declareInterest<"koboldcpp:startSubprocess:error">(
 				"koboldcpp:startSubprocess:error",
 				handleStartSubprocessError
+			),
+			declareInterest<"koboldcpp:stopSubprocess">(
+				"koboldcpp:stopSubprocess",
+				handleStopSubprocess
+			),
+			declareInterest<"koboldcpp:unloadModel">(
+				"koboldcpp:unloadModel",
+				handleUnloadModel
 			)
-			socket.on("koboldcpp:stopSubprocess", handleStopSubprocess)
-			socket.on("koboldcpp:unloadModel", handleUnloadModel)
+		]
+		return () => {
+			for (const release of releases) release()
 		}
-
-		refreshPerf()
 	})
 
-	onDestroy(() => {
-		socket.off("koboldcpp:perf", handlePerf)
-		socket.off("koboldcpp:perf:error", handlePerfError)
-		// Unconditional: `isManaged` may have flipped since mount, and `off` on
-		// a handler that was never registered (or already removed) is a no-op.
-		socket.off("koboldcpp:getLoadedConfig", handleGetLoadedConfig)
-		socket.off("koboldcpp:subprocessStatus", handleSubprocessStatus)
-		socket.off("koboldcpp:getSubprocessStatus", handleGetSubprocessStatus)
-		socket.off("koboldcpp:startSubprocess", handleStartSubprocess)
-		socket.off(
-			"koboldcpp:startSubprocess:error",
-			handleStartSubprocessError
-		)
-		socket.off("koboldcpp:stopSubprocess", handleStopSubprocess)
-		socket.off("koboldcpp:unloadModel", handleUnloadModel)
+	onMount(() => {
+		if (isManaged) socket.emit("koboldcpp:getSubprocessStatus", {})
+		refreshPerf()
 	})
 </script>
 
@@ -378,7 +392,9 @@
 					     report. Reading the old flat shape threw on
 					     `undefined.toLocaleString()` the moment the tab opened. -->
 					{#if loadedText}
-						<div class="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+						<div
+							class="grid grid-cols-1 gap-x-3 gap-y-1 text-xs @lg/view:grid-cols-2"
+						>
 							<div class="flex justify-between gap-2">
 								<span class="text-surface-700-300">
 									Context
@@ -421,7 +437,7 @@
 						     knobs above, so it gets its own short row rather than
 						     being squeezed into a grid that would read as blanks. -->
 						<div
-							class="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 text-xs"
+							class="mt-1 grid grid-cols-1 gap-x-3 gap-y-1 text-xs @lg/view:grid-cols-2"
 						>
 							<div class="flex justify-between gap-2">
 								<span class="text-surface-700-300">
@@ -533,7 +549,7 @@
 			>
 				Generation Speed
 			</h4>
-			<div class="grid grid-cols-2 gap-3">
+			<div class="grid grid-cols-1 gap-3 @lg/view:grid-cols-2">
 				<div class="text-center">
 					<div class="text-2xl font-bold tabular-nums">
 						{formatSpeed(perf.avgGenSpeed)}

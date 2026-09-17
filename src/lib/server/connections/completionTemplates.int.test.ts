@@ -219,12 +219,21 @@ describe("the template rides on the connection", () => {
 			})
 			.returning()
 
+		// A PAIR, because that is what a selection is: the endpoint alone is
+		// incomplete and resolves as unconfigured. The model states no template
+		// of its own, so the endpoint's is what the pair carries.
+		const { ensureConnectionModel } = await import("./models")
+		const model = await ensureConnectionModel(db, conn.id, "wiring-7b")
+
 		const { resolveCapabilityTarget, TEXT_CAPABILITY } = await import(
 			"./capabilityTarget"
 		)
 		const target = await resolveCapabilityTarget(db, {
 			capability: TEXT_CAPABILITY,
-			pipelineConfig: { connectionId: conn.id }
+			pipelineConfig: {
+				connectionId: conn.id,
+				connectionModelId: model!.id
+			}
 		})
 		expect(target.ok, JSON.stringify((target as any).problem)).toBe(true)
 		if (!target.ok) return

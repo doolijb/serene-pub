@@ -52,6 +52,13 @@ export interface AuthenticatedSocket extends Socket {
 	 * SETUP_ALLOWED_EVENTS.
 	 */
 	pendingSetup: import("$lib/server/auth/setupGate").SetupStep[]
+	/**
+	 * The interest keys this client declared on `interest:sync` — the events it
+	 * actually wants (`$lib/shared/sockets/interest`). Set at connect and
+	 * cleared on disconnect by `sockets/interest.ts`; the reply helpers consult
+	 * it before emitting a gated event.
+	 */
+	interest?: Set<string>
 	io?: any // Add io property for socket server reference
 }
 

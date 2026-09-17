@@ -98,7 +98,7 @@ export interface ToolDeclaration {
  * A tool the model asked for, in the one shape the pipeline speaks.
  *
  * The same `{ tool, args }` `core:task/parse-tool-call@1` publishes, so
- * `core:provider/run-tool@1` and a loop's predicate take the native door and
+ * `core:oracle/run-tool@1` and a loop's predicate take the native door and
  * the prompt door without knowing which was used.
  */
 export interface ToolCall {

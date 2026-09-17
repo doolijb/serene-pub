@@ -60,6 +60,17 @@ export async function registerCoreServices() {
 		shutdown: async () => dailyBackup.stop()
 	})
 
+	// A `downloading` row in `local_models` is per-process state written to a
+	// durable column: this process's download map is empty at boot, so a row
+	// still saying `downloading` belongs to a run that ended. Nothing else can
+	// tell the difference later, which is why it is settled here.
+	const onnxDownloads = await import("$lib/server/sockets/localOnnxModels")
+	registerService({
+		id: "localOnnxModels",
+		label: "Local ONNX models",
+		reconcileOnBoot: () => onnxDownloads.reconcileOnnxDownloadsOnBoot()
+	})
+
 	const koboldcpp = await import("$lib/server/koboldcpp/subprocessManager")
 	registerService({
 		id: "koboldcpp",

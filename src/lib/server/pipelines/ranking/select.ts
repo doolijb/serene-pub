@@ -32,24 +32,27 @@
  * Note 2 above describes **share-first** allocation, which is what ships: the
  * shares split the budget into fixed bands, and candidates fill within their
  * own band. `SelectOptions.scoreLedAllocation` inverts that precedence to the
- * one design §7 argues for — *score allocates, floors guarantee, shares cap* —
+ * one design §7 argues for — *score allocates, minimums guarantee, shares cap* —
  * and it is **off by default** so the parity corpus measures the shipped path
  * unchanged.
  *
- * The pins and the floors are identical either way; only the scored fill and
+ * The pins and the minimums are identical either way; only the scored fill and
  * what the sweep is offered differ. See `select`.
  */
 
 import type {
+	BandKey,
 	MechanismWeights,
 	RankingParams,
-	SignalWeights,
-	RetrievalBand
+	ShareNormalisation,
+	SignalWeights
 } from "$lib/server/pipelines/ranking/weights"
 import {
 	allocateBudgets,
-	DEFAULT_MECHANISMS
+	DEFAULT_MECHANISMS,
+	signalsForBand
 } from "$lib/server/pipelines/ranking/weights"
+import type { BandPriority } from "@serene-pub/sdk"
 
 /** The signal values for one candidate. Missing signals are zero, not absent. */
 export interface Signals {
@@ -106,7 +109,8 @@ export interface Signals {
 
 export interface Candidate {
 	id: number | string
-	source: RetrievalBand
+	/** The band this competes in — one of the five, or a plugin source's own key. */
+	source: BandKey
 	/** Counted once, before selection. See note 1 above. */
 	tokens: number
 	signals: Signals
@@ -133,7 +137,7 @@ export interface Candidate {
 	 * Eligibility and scoring are separate on purpose, and the separation is
 	 * the point rather than the mechanism: a hard rule must not compete
 	 * numerically with a soft one and lose. Scoring an excluded candidate zero
-	 * leaves it a candidate — a floor, a pin or a sweep can still take it — and
+	 * leaves it a candidate — a minimum, a pin or a sweep can still take it — and
 	 * leaves the receipt saying "it scored badly", which is not what happened.
 	 *
 	 * ⚠ **Nothing downstream of the mechanisms produces this yet, and that is
@@ -168,15 +172,25 @@ export interface Candidate {
 export type SelectionReason =
 	| "reserved"
 	/**
-	 * Kept because its source's floor had not been met yet, ahead of the
+	 * Kept because its source's minimum had not been met yet, ahead of the
 	 * proportional split.
 	 *
-	 * Distinct from `reserved`, which is the user pinning one entry. A floor is
+	 * Distinct from `reserved`, which is the user pinning one entry. A minimum is
 	 * a promise about a *source* — "always keep six messages" — and reading
 	 * `reserved` on six messages nobody pinned would send somebody looking for
 	 * a pin that does not exist.
 	 */
 	| "reserved_minimum"
+	/**
+	 * Kept because its band's `priority` is `always` — every entry the window
+	 * can hold, ahead of the scored fill (R-7 P5, the source's own intent).
+	 *
+	 * Distinct from `reserved` (one entry somebody pinned) and from
+	 * `reserved_minimum` (a minimum, which is a count): this is a promise about
+	 * a whole source, and a reader who never ticked a pin and set no minimum is
+	 * owed the name of the control that did it.
+	 */
+	| "reserved_priority"
 	| "filled_scored"
 	| "filled_zero_score"
 	| "excluded_budget"
@@ -264,13 +278,16 @@ export interface GroupUsage {
 	allocated: number
 	used: number
 	entries: number
-	cap: number
+	/** The band's entry ceiling. Absent means none — `relationship-search` by default. */
+	cap?: number
+	/** The band's declared priority, so the receipt can say why an entry was kept ahead. */
+	priority: BandPriority
 }
 
 export interface Selection {
 	included: Decision[]
 	excluded: Decision[]
-	groups: Record<RetrievalBand, GroupUsage>
+	groups: Record<BandKey, GroupUsage>
 	totalTokens: number
 }
 
@@ -355,7 +372,7 @@ export interface SelectOptions {
 	availableTokens: number
 	params: RankingParams
 	/**
-	 * Invert the allocation precedence: **score allocates, floors guarantee,
+	 * Invert the allocation precedence: **score allocates, minimums guarantee,
 	 * shares cap** (design §7).
 	 *
 	 * Off by default, and deliberately a call option rather than a field on
@@ -379,7 +396,7 @@ export interface SelectOptions {
 	 *
 	 * Unchanged either way, because each is a promise made somewhere a user can
 	 * read it: pins are taken first and do not consume the entry cap, a zero
-	 * share leaves a source out (pinned or not), floors are met before any
+	 * share leaves a source out (pinned or not), minimums are met before any
 	 * share is worked out, and the tie-break is score then authored position.
 	 *
 	 * ⚠ **It is reachable now, and it was not.** For as long as this option
@@ -400,6 +417,25 @@ export interface SelectOptions {
 	 * it; what has not changed is which branch runs when nobody has.
 	 */
 	scoreLedAllocation?: boolean
+	/**
+	 * How the sources' shares are read when the window is divided — the
+	 * ranker's `shareNormalisation` (R-7 P5: the one thing about shares that is
+	 * cross-source). `relative` is the shipped default and the arithmetic this
+	 * has always run.
+	 */
+	shareNormalisation?: ShareNormalisation
+}
+
+/**
+ * The order two bands' candidates take when something other than score is
+ * asked — the sweep. `normal` everywhere returns 0 everywhere, so the shipped
+ * default sorts by score alone, as it always has.
+ */
+const PRIORITY_RANK: Record<BandPriority, number> = {
+	low: 0,
+	normal: 1,
+	high: 2,
+	always: 3
 }
 
 /**
@@ -415,7 +451,7 @@ export interface SelectOptions {
  * split arriving at a small number for its source but the user having
  * switched that source off entirely.
  *
- * The pins and the floors below run the same way whichever allocation
+ * The pins and the minimums below run the same way whichever allocation
  * precedence is in force; `opts.scoreLedAllocation` reaches only the scored
  * fill and the sweep.
  */
@@ -423,10 +459,17 @@ export function select(
 	candidates: readonly Candidate[],
 	opts: SelectOptions
 ): Selection {
-	const { params, availableTokens, scoreLedAllocation = false } = opts
+	const {
+		params,
+		availableTokens,
+		scoreLedAllocation = false,
+		shareNormalisation = "relative"
+	} = opts
 	const included: Decision[] = []
 	const excluded: Decision[] = []
 	const groups = emptyUsage(params)
+	const priorityOf = (band: BandKey): BandPriority =>
+		params.groups.priority?.[band] ?? "normal"
 
 	/**
 	 * ⚠ Two source vocabularies legitimately coexist — the budget groups are
@@ -434,7 +477,7 @@ export function select(
 	 * the index's own spelling (`message`, `historyEntry`, …), and neither side
 	 * can be renamed (see `VECTOR_SOURCE_ALIASES` in `bindings.ts`). The three
 	 * that are the same concept under two names are reconciled by
-	 * `BUDGET_GROUP_ALIASES` at the entry to `rank-hybrid`; what still arrives
+	 * `BUDGET_GROUP_ALIASES` (`weights.ts`) at the entry to `rank-hybrid`; what still arrives
 	 * here is a source with no group at *all* — a graph node, a character, a
 	 * persona — and it is dropped with a receipt rather than faulting on
 	 * `groups[source].used` three loops further down.
@@ -445,7 +488,7 @@ export function select(
 		 *
 		 * Eligibility is not a low score — see `Candidate.ineligible`. Taking
 		 * it out here means an excluded candidate is never ranked, never
-		 * counted toward a floor, never offered to the sweep, and never
+		 * counted toward a minimum, never offered to the sweep, and never
 		 * consumes a share; it leaves with the rule's own sentence instead of
 		 * a budget one.
 		 */
@@ -474,7 +517,7 @@ export function select(
 		c.presetScore ??
 		score(
 			c.signals,
-			params.signals[c.source],
+			signalsForBand(params.signals, c.source),
 			c.priority ?? 1,
 			params.mechanisms
 		)
@@ -498,31 +541,50 @@ export function select(
 	const rank = (cs: Candidate[]): Ranked[] =>
 		cs.map((c) => ({ candidate: c, value: scoreOf(c) })).sort(byRank)
 
-	const pinned = rank(budgeted.filter((c) => c.pinned))
-	const scored = rank(budgeted.filter((c) => !c.pinned))
+	/**
+	 * A band whose `priority` is `always` is taken the way a pin is — every
+	 * entry, ahead of the scored fill, window permitting — and its receipt
+	 * says so with its own reason. The pins proper still come first: an entry
+	 * somebody ticked outranks a source somebody raised.
+	 *
+	 * ⚠ Against the band's entry cap, unlike a pin (U3b review S1). A pin is
+	 * a promise about one entry; `always` is a promise about a band, and the
+	 * band's `maxEntries` says on its own label that it applies "whatever its
+	 * share" — a priority that stepped over it would make that sentence a
+	 * lie on the one path where a person raised both. So the band reserves
+	 * up to its cap, in score order, and the rest leave with the cap's own
+	 * reason rather than being offered to the scored pass, which would only
+	 * turn them away at the same line.
+	 */
+	const always = (c: Candidate) => !c.pinned && priorityOf(c.source) === "always"
+	const pinned = [
+		...rank(budgeted.filter((c) => c.pinned)),
+		...rank(budgeted.filter(always))
+	]
+	const scored = rank(budgeted.filter((c) => !c.pinned && !always(c)))
 
 	let reservedTokens = 0
 
 	/**
-	 * The floors, filled before the shares are worked out.
+	 * The minimums, filled before the shares are worked out.
 	 *
 	 * Score order within a source, so "keep six messages" keeps the six the
 	 * ranker liked and not six arbitrary ones. Across sources the walk is also
-	 * score order, which is what decides who loses when the floors cannot all
+	 * score order, which is what decides who loses when the minimums cannot all
 	 * be met: the weakest candidate of the weakest source, rather than whoever
 	 * happens to be last in the object.
 	 *
-	 * ⚠ The `availableTokens` check is not defensive coding. Floors are set per
+	 * ⚠ The `availableTokens` check is not defensive coding. Minimums are set per
 	 * source by somebody who cannot see the window they will be applied
 	 * against, and six messages plus twenty lore entries is a prompt no small
-	 * model will accept. A floor that cannot be afforded is dropped and said
-	 * so on the receipt; a floor that overflowed the window would be an
+	 * model will accept. A minimum that cannot be afforded is dropped and said
+	 * so on the receipt; a minimum that overflowed the window would be an
 	 * unsendable prompt, which is worse than a short one.
 	 */
-	const floors = params.groups.minEntries ?? {}
+	const minimums = params.groups.minEntries ?? {}
 	const guaranteed = new Set<Candidate>()
 	/**
-	 * Tokens taken off the top per source — pinned plus floor.
+	 * Tokens taken off the top per source — pinned plus minimum.
 	 *
 	 * The shares divide what is left over, so both kinds have to be subtracted
 	 * again when a group's spend is checked against its budget. Tracked rather
@@ -531,15 +593,15 @@ export function select(
 	 * question one caller ago is how the two drift apart.
 	 */
 	const reservedBySource = Object.fromEntries(
-		(Object.keys(groups) as RetrievalBand[]).map((s) => [s, 0])
-	) as Record<RetrievalBand, number>
-	/** Pins actually kept, per source — what the floor below is owed. */
+		(Object.keys(groups) as BandKey[]).map((s) => [s, 0])
+	) as Record<BandKey, number>
+	/** Pins actually kept, per source — what the minimum below is owed. */
 	const pinnedKept = Object.fromEntries(
-		(Object.keys(groups) as RetrievalBand[]).map((s) => [s, 0])
-	) as Record<RetrievalBand, number>
+		(Object.keys(groups) as BandKey[]).map((s) => [s, 0])
+	) as Record<BandKey, number>
 
 	/**
-	 * ⚠ The `availableTokens` check here is the floors' argument above, applied
+	 * ⚠ The `availableTokens` check here is the minimums' argument above, applied
 	 * to pins. A pin is set on an entry by somebody who cannot see
 	 * the window it will be applied against, and a constant entry longer than
 	 * the whole window is not an always-include that the budget rudely
@@ -547,7 +609,7 @@ export function select(
 	 * prompt missing an entry that says on the receipt why it is missing. The
 	 * pin is honoured as far as the window allows and no further.
 	 *
-	 * ⚠ No early break, unlike the floors: a floor is a promise about a source
+	 * ⚠ No early break, unlike the minimums: a minimum is a promise about a source
 	 * in an order, so skipping to a cheaper member reinterprets it. A pin is a
 	 * promise about one entry, made one ticked box at a time, and entry B is
 	 * owed nothing by entry A being oversized. Stopping here would drop small
@@ -574,9 +636,35 @@ export function select(
 			excluded.push({
 				candidate: c,
 				score: value,
-				reason: "excluded_pinned_group_disabled",
+				// A band on `always` with a zero share is a source switched
+				// off, and says so in the source's own words rather than a
+				// pin's: nobody ticked this entry.
+				reason: c.pinned
+					? "excluded_pinned_group_disabled"
+					: "excluded_group_disabled",
 				included: false,
-				why: `pinned, but ${c.source} has a zero share, which leaves the whole source out`
+				why: c.pinned
+					? `pinned, but ${c.source} has a zero share, which leaves the whole source out`
+					: `${c.source} is set to always be included, but its share is zero, which leaves the whole source out`
+			})
+			continue
+		}
+		// The band's ceiling, for `always` alone — see the docblock above.
+		// Ahead of the window check for the reason the share check is: over
+		// the cap is over the cap at every window size, and a window reason
+		// would send the reader off enlarging a context that was never the
+		// cause.
+		if (
+			!c.pinned &&
+			groups[c.source].cap !== undefined &&
+			groups[c.source].entries >= groups[c.source].cap!
+		) {
+			excluded.push({
+				candidate: c,
+				score: value,
+				reason: "excluded_budget",
+				included: false,
+				why: `${c.source} is set to always be included, but already has its maximum of ${groups[c.source].cap} entries`
 			})
 			continue
 		}
@@ -584,9 +672,11 @@ export function select(
 			excluded.push({
 				candidate: c,
 				score: value,
-				reason: "excluded_pinned_token_limit",
+				reason: c.pinned
+					? "excluded_pinned_token_limit"
+					: "excluded_token_limit",
 				included: false,
-				why: `pinned, but needs ${c.tokens} tokens and only ${Math.max(0, availableTokens - reservedTokens)} of the ${availableTokens}-token window were left`
+				why: `${c.pinned ? "pinned" : `${c.source} is set to always be included`}, but needs ${c.tokens} tokens and only ${Math.max(0, availableTokens - reservedTokens)} of the ${availableTokens}-token window were left`
 			})
 			continue
 		}
@@ -594,38 +684,56 @@ export function select(
 		reservedTokens += c.tokens
 		reservedBySource[c.source] += c.tokens
 		groups[c.source].used += c.tokens
-		included.push({
-			candidate: c,
-			score: value,
-			reason: "reserved",
-			included: true,
-			why: `pinned: always included, ${c.tokens} tokens`
-		})
+		if (c.pinned)
+			included.push({
+				candidate: c,
+				score: value,
+				reason: "reserved",
+				included: true,
+				why: `pinned: always included, ${c.tokens} tokens`
+			})
+		else {
+			// Counted as an entry, unlike a pin: a pin bypasses the band's cap
+			// by promise, while a band on `always` is the band itself — its
+			// usage line says how many it took, and the count is what the cap
+			// check above reads.
+			groups[c.source].entries++
+			included.push({
+				candidate: c,
+				score: value,
+				reason: "reserved_priority",
+				included: true,
+				why: `${c.source} is set to always be included, ${c.tokens} tokens`
+			})
+		}
 	}
 
 	/**
 	 * ⚠ `pinnedKept`, not `pinned.length`. The subtraction exists because a pin
-	 * already satisfies the floor its source is owed; a pin that was dropped
+	 * already satisfies the minimum its source is owed; a pin that was dropped
 	 * satisfies nothing, and counting it would let one oversized entry silently
-	 * cancel a floor slot the window had ample room for.
+	 * cancel a minimum slot the window had ample room for.
 	 */
 	const wanted = Object.fromEntries(
-		(Object.keys(groups) as RetrievalBand[]).map((s) => [
+		(Object.keys(groups) as BandKey[]).map((s) => [
 			s,
-			// Clamped to the cap: a floor above the ceiling is a contradiction
+			// Clamped to the cap: a minimum above the ceiling is a contradiction
 			// somebody typed, and honouring it would make `maxEntries` a lie
-			// on the one path where it matters.
-			Math.min(Math.max(0, floors[s] ?? 0), groups[s].cap) - pinnedKept[s]
+			// on the one path where it matters. No cap, no clamp.
+			Math.min(
+				Math.max(0, minimums[s] ?? 0),
+				groups[s].cap ?? Number.POSITIVE_INFINITY
+			) - pinnedKept[s]
 		])
-	) as Record<RetrievalBand, number>
+	) as Record<BandKey, number>
 
 	for (const { candidate, value } of scored) {
 		if (wanted[candidate.source] <= 0) continue
 		if (reservedTokens + candidate.tokens > availableTokens) {
-			// Not `continue`-with-a-cheaper-one: a floor is about *these*
+			// Not `continue`-with-a-cheaper-one: a minimum is about *these*
 			// entries in this order, and skipping to a worse one that happens
 			// to fit would quietly reinterpret "keep the best six" as "keep any
-			// six". The rest of this source's floor goes unmet, and the scored
+			// six". The rest of this source's minimum goes unmet, and the scored
 			// pass may still pick these up if a share can afford them.
 			wanted[candidate.source] = 0
 			continue
@@ -641,15 +749,15 @@ export function select(
 			score: value,
 			reason: "reserved_minimum",
 			included: true,
-			why: `kept to meet the floor of ${floors[candidate.source]} for ${candidate.source}, ${candidate.tokens} tokens`
+			why: `kept to meet the minimum of ${minimums[candidate.source]} for ${candidate.source}, ${candidate.tokens} tokens`
 		})
 	}
 
 	// Pinned content is spent before the split, so the shares divide what is
 	// actually left rather than what there was in principle.
 	const pool = Math.max(0, availableTokens - reservedTokens)
-	const budgets = allocateBudgets(params.groups, pool)
-	for (const source of Object.keys(budgets) as RetrievalBand[])
+	const budgets = allocateBudgets(params.groups, pool, shareNormalisation)
+	for (const source of Object.keys(budgets) as BandKey[])
 		groups[source].allocated = budgets[source]
 
 	/**
@@ -696,7 +804,7 @@ export function select(
 			continue
 		}
 
-		if (usage.entries >= usage.cap) {
+		if (usage.cap !== undefined && usage.entries >= usage.cap) {
 			excluded.push({
 				candidate,
 				score: value,
@@ -707,7 +815,7 @@ export function select(
 			continue
 		}
 
-		// Pinned and floor tokens came off the top, so they do not also come
+		// Pinned and minimum tokens came off the top, so they do not also come
 		// out of this group's share — `used` starts non-zero and subtracting
 		// them again is what keeps the comparison honest.
 		const spent = usage.used - reservedBySource[candidate.source]
@@ -796,7 +904,7 @@ export function select(
 	// yields to whatever no source could.
 	//
 	// ⚠ The summed version could exceed `availableTokens`, and did: the message
-	// floor used to raise `budgets.messages` after the proportional split
+	// minimum used to raise `budgets.messages` after the proportional split
 	// without taking the difference from anywhere, so on a 100-token window the
 	// budgets summed to 148 and the spill pass would happily fit a 148-token
 	// prompt into it. Two tests passed *because* of that overflow.
@@ -808,9 +916,23 @@ export function select(
 	const spentTotal = included.reduce((sum, d) => sum + d.candidate.tokens, 0)
 	const leftover = Math.max(0, availableTokens - spentTotal)
 
+	/**
+	 * The one place a band's `priority` short of `always` acts (R-7 P5). The
+	 * sweep walks the excluded list in the order it was built — score order,
+	 * since the scored pass is — and with every band `normal` that is the
+	 * whole order: `PRIORITY_RANK` ties everywhere and the stable sort leaves
+	 * it untouched, so the shipped default IS the score-ordered sweep. A band
+	 * on `high` is offered the leftovers before the others whatever its
+	 * candidates scored; `low` after them.
+	 */
+	const swept = [...excluded].sort(
+		(a, b) =>
+			PRIORITY_RANK[priorityOf(b.candidate.source)] -
+			PRIORITY_RANK[priorityOf(a.candidate.source)]
+	)
 	let spillRemaining = leftover
 	if (spillRemaining > 0) {
-		for (const decision of [...excluded]) {
+		for (const decision of swept) {
 			// ⚠ `excluded_pinned_token_limit` is absent here by arithmetic, not
 			// by policy: `reservedTokens` only grows and is never more than
 			// `spentTotal`, so a pin that did not fit when it was weighed
@@ -828,7 +950,7 @@ export function select(
 				continue
 			const c = decision.candidate
 			const usage = groups[c.source]
-			if (usage.entries >= usage.cap) continue
+			if (usage.cap !== undefined && usage.entries >= usage.cap) continue
 			if (c.tokens > spillRemaining) continue
 
 			spillRemaining -= c.tokens
@@ -853,19 +975,25 @@ export function select(
 	}
 }
 
-function emptyUsage(params: RankingParams): Record<RetrievalBand, GroupUsage> {
-	const sources = Object.keys(params.groups.share) as RetrievalBand[]
+function emptyUsage(params: RankingParams): Record<BandKey, GroupUsage> {
+	const sources = Object.keys(params.groups.share) as BandKey[]
 	return Object.fromEntries(
-		sources.map((s) => [
-			s,
-			{
-				allocated: 0,
-				used: 0,
-				entries: 0,
-				cap: params.groups.maxEntries[s] ?? 0
-			}
-		])
-	) as Record<RetrievalBand, GroupUsage>
+		sources.map((s) => {
+			const cap = params.groups.maxEntries[s]
+			return [
+				s,
+				{
+					allocated: 0,
+					used: 0,
+					entries: 0,
+					// Absent stays absent: no ceiling is a real state
+					// (`relationship-search` by default), not a cap of zero.
+					...(cap === undefined ? {} : { cap }),
+					priority: params.groups.priority?.[s] ?? "normal"
+				}
+			]
+		})
+	) as Record<BandKey, GroupUsage>
 }
 
 /**
@@ -883,7 +1011,9 @@ export function renderSelection(sel: Selection): string {
 		).length
 		lines.push(
 			`${source}: ${usage.used} of ${usage.allocated} tokens, ` +
-				`${usage.entries} of ${usage.cap} entries` +
+				(usage.cap === undefined
+					? `${usage.entries} entries`
+					: `${usage.entries} of ${usage.cap} entries`) +
 				(dropped ? `, ${dropped} dropped` : "")
 		)
 	}

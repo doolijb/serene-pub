@@ -2,7 +2,7 @@ import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
 import { user } from "./users"
-import { systemSettingsGet } from "./systemSettings"
+import { buildSystemSettingsGet } from "./systemSettings"
 import type { Handler } from "$lib/shared/events"
 import { normalizeSamplingRow, SAMPLING_SCHEMAS, S } from "@serene-pub/sdk"
 import { setCapabilityDefault } from "$lib/server/connections/capabilityDefaults"
@@ -12,7 +12,7 @@ import {
 } from "$lib/shared/constants/ConnectionTypes"
 import {
 	aggregateCombos,
-	type RegistryTypeRow
+	type RegistryDefinitionRow
 } from "$lib/shared/capabilities/combos"
 import { samplingShapeForCapability } from "$lib/shared/capabilities/samplingShape"
 
@@ -37,11 +37,11 @@ import { samplingShapeForCapability } from "$lib/shared/capabilities/samplingSha
 async function capabilitiesForShape(shape: string): Promise<string[]> {
 	const rows = (await db
 		.select({
-			typeId: schema.pipelineTypeRegistry.typeId,
-			version: schema.pipelineTypeRegistry.version,
-			slots: schema.pipelineTypeRegistry.slots
+			definitionId: schema.pipelineDefinitionRegistry.definitionId,
+			version: schema.pipelineDefinitionRegistry.version,
+			slots: schema.pipelineDefinitionRegistry.slots
 		})
-		.from(schema.pipelineTypeRegistry)) as RegistryTypeRow[]
+		.from(schema.pipelineDefinitionRegistry)) as RegistryDefinitionRow[]
 	return aggregateCombos(rows)
 		.filter((c) => samplingShapeForCapability(c.id) === shape)
 		.map((c) => c.id)
@@ -184,6 +184,55 @@ export async function updateSamplingConfig(
 	)
 }
 
+/**
+ * One sampling config, and the whole list, as functions — so the ten cascades in
+ * this file can be handed the BUILDER rather than the handler. Both events are
+ * gated, so a create, an edit or a delete made from anywhere but the admin
+ * sampling surfaces pays for no re-read. Skipping the emit alone would save
+ * nothing; the query is the cost.
+ *
+ * No admin check here — that belongs to the handlers, which are the surface a
+ * client can reach, and every cascade below has already made it.
+ */
+async function buildSamplingConfigsGet(
+	id: number
+): Promise<Sockets.SamplingConfigs.Get.Response> {
+	const sampling = await db.query.samplingConfigs.findFirst({
+		where: (w, { eq }) => eq(w.id, id)
+	})
+	if (!sampling) throw new Error("Sampling config not found")
+	return { sampling }
+}
+
+async function buildSamplingConfigsList(): Promise<Sockets.SamplingConfigs.List.Response> {
+	// Built-in presets first, then the user's own, each alphabetical.
+	//
+	// `desc` on a boolean puts true first. Ordered here rather than in each
+	// consumer because this one response feeds several: SamplingSidebar
+	// (which groups with its own immutable/mutable filters — those preserve
+	// input order, so this is what sorts within each group), EditSessionForm,
+	// and every per-task override selector in PromptsSidebar. Without it the
+	// list came back in whatever order Postgres happened to return, so the
+	// flat consumers interleaved presets with user configs.
+	const samplingConfigsList = await db.query.samplingConfigs.findMany({
+		columns: {
+			id: true,
+			name: true,
+			isImmutable: true,
+			// The stored config itself (0171). There are no typed sampler
+			// columns left to project, so the numbers the admin changelist
+			// compares presets by are resolved from these three by the
+			// consumer — and `shape` is what a picker filters on, so an
+			// image node is never offered a config full of text samplers.
+			shape: true,
+			values: true,
+			enabled: true
+		},
+		orderBy: (w, { asc, desc }) => [desc(w.isImmutable), asc(w.name)]
+	})
+	return { samplingConfigsList }
+}
+
 export const samplingConfigsGet: Handler<
 	Sockets.SamplingConfigs.Get.Params,
 	Sockets.SamplingConfigs.Get.Response
@@ -200,16 +249,15 @@ export const samplingConfigsGet: Handler<
 			)
 		}
 
-		const sampling = await db.query.samplingConfigs.findFirst({
-			where: (w, { eq }) => eq(w.id, params.id)
-		})
-		if (!sampling) {
+		let res: Sockets.SamplingConfigs.Get.Response
+		try {
+			res = await buildSamplingConfigsGet(params.id)
+		} catch (error) {
 			emitToUser("samplingConfigs:get:error", {
 				error: "Sampling config not found"
 			})
-			throw new Error("Sampling config not found")
+			throw error
 		}
-		const res: Sockets.SamplingConfigs.Get.Response = { sampling }
 		emitToUser("samplingConfigs:get", res)
 		return res
 	}
@@ -231,34 +279,7 @@ export const samplingConfigsListHandler: Handler<
 			)
 		}
 
-		// Built-in presets first, then the user's own, each alphabetical.
-		//
-		// `desc` on a boolean puts true first. Ordered here rather than in each
-		// consumer because this one response feeds several: SamplingSidebar
-		// (which groups with its own immutable/mutable filters — those preserve
-		// input order, so this is what sorts within each group), EditSessionForm,
-		// and every per-task override selector in PromptsSidebar. Without it the
-		// list came back in whatever order Postgres happened to return, so the
-		// flat consumers interleaved presets with user configs.
-		const samplingConfigsList = await db.query.samplingConfigs.findMany({
-			columns: {
-				id: true,
-				name: true,
-				isImmutable: true,
-				// The stored config itself (0171). There are no typed sampler
-				// columns left to project, so the numbers the admin changelist
-				// compares presets by are resolved from these three by the
-				// consumer — and `shape` is what a picker filters on, so an
-				// image node is never offered a config full of text samplers.
-				shape: true,
-				values: true,
-				enabled: true
-			},
-			orderBy: (w, { asc, desc }) => [desc(w.isImmutable), asc(w.name)]
-		})
-		const res: Sockets.SamplingConfigs.List.Response = {
-			samplingConfigsList
-		}
+		const res = await buildSamplingConfigsList()
 		emitToUser("samplingConfigs:list", res)
 		return res
 	}
@@ -323,17 +344,16 @@ export const samplingConfigsSetUserActive: Handler<
 
 		await user(socket, {}, emitToUser)
 		if (params.id) {
-			await samplingConfigsGet.handler(
-				socket,
-				{ id: params.id },
-				emitToUser
+			// Lazy — see `buildSamplingConfigsGet`.
+			await emitToUser("samplingConfigs:get", () =>
+				buildSamplingConfigsGet(params.id!)
 			)
 		}
 
 		// Push updated system settings so clients reflect the new default
 		// sampling config immediately (this is a system-wide default, not a
 		// per-user setting — see the comment above).
-		await systemSettingsGet.handler(socket, {}, emitToUser)
+		await emitToUser("systemSettings:get", () => buildSystemSettingsGet())
 
 		const updatedUser = await db.query.users.findFirst({
 			where: (u, { eq }) => eq(u.id, socket.user!.id)
@@ -440,12 +460,12 @@ export const samplingConfigsCreate: Handler<
 		// (SamplingSidebar.svelte's handleSetDefault); create doing it too
 		// was a bug, not a UX dependency. samplingConfigsGet still pushes the
 		// new row so the client can show it for editing.
-		await samplingConfigsGet.handler(
-			socket,
-			{ id: sampling.id },
-			emitToUser
+		// Lazy — see `buildSamplingConfigsGet`.
+		await emitToUser("samplingConfigs:get", () =>
+			buildSamplingConfigsGet(sampling.id)
 		)
-		await samplingConfigsListHandler.handler(socket, {}, emitToUser)
+		// Lazy — see `buildSamplingConfigsList`.
+		await emitToUser("samplingConfigs:list", () => buildSamplingConfigsList())
 
 		const res: Sockets.SamplingConfigs.Create.Response = { sampling }
 		emitToUser("samplingConfigs:create", res)
@@ -511,14 +531,17 @@ export const samplingConfigsDelete: Handler<
 		await db
 			.delete(schema.samplingConfigs)
 			.where(eq(schema.samplingConfigs.id, params.id))
-		await samplingConfigsListHandler.handler(socket, {}, emitToUser)
+		// Lazy — see `buildSamplingConfigsList`.
+		await emitToUser("samplingConfigs:list", () => buildSamplingConfigsList())
 		// `ON DELETE SET NULL` just cleared those registrations, so every
 		// client's copy of `capabilityDefaults` still points at a row that no
 		// longer exists and the sampling sidebar would keep drawing the star on
 		// nothing. This is the push that used to ride along on the fallback
 		// setUserActive call the deletion above removed — minus the fallback.
 		if (registeredAgainst.length)
-			await systemSettingsGet.handler(socket, {}, emitToUser)
+			await emitToUser("systemSettings:get", () =>
+				buildSystemSettingsGet()
+			)
 
 		const res: Sockets.SamplingConfigs.Delete.Response = {
 			success: "Sampling config deleted successfully"
@@ -634,8 +657,21 @@ export const samplingConfigsUpdate: Handler<
 			throw new Error(error)
 		}
 
-		await samplingConfigsListHandler.handler(socket, {}, emitToUser)
-		await samplingConfigsGet.handler(socket, { id }, emitToUser)
+		// Lazy — see `buildSamplingConfigsList`.
+		await emitToUser("samplingConfigs:list", () => buildSamplingConfigsList())
+		// ⚠ Stated here, rather than left to the `samplingConfigs:get` cascade
+		// below, which states it only by accident: for an id that does not
+		// exist, that push's builder throws "Sampling config not found" on its
+		// way past, and that throw — not any check in this handler — is what
+		// refuses the request. A thunk's rejection is logged rather than raised
+		// (`evaluate` in sockets/index), and a push nobody declared interest in
+		// never runs at all, so a refusal riding on one is not a refusal.
+		// Placed exactly where the cascade sits, so the list above still goes
+		// out first.
+		if (!currentSamplingConfig)
+			throw new Error("Sampling config not found")
+		// Lazy — see `buildSamplingConfigsGet`.
+		await emitToUser("samplingConfigs:get", () => buildSamplingConfigsGet(id))
 		await user(socket, {}, emitToUser)
 
 		const res: Sockets.SamplingConfigs.Update.Response = {

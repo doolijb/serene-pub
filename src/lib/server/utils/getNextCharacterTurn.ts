@@ -135,7 +135,7 @@ function getNextCharacterTurnUserSplit({
 	messages
 }: {
 	activeCharacters: ActiveCharacter[]
-	validSessionPersonas: (SelectSessionPersona & { persona: SelectPersona })[]
+	validSessionPersonas: (SelectSessionPersona & { persona: SelectCharacter })[]
 	messages: SelectSessionMessage[]
 }): number | null {
 	type UserGroup = {
@@ -235,7 +235,7 @@ export function getNextCharacterTurn(
 			character: SelectCharacter | null
 		})[]
 		sessionPersonas: (SelectSessionPersona & {
-			persona: SelectPersona | null
+			persona: SelectCharacter | null
 		})[]
 	},
 	groupReplyStrategy?: string | null
@@ -263,7 +263,7 @@ export function getNextCharacterTurn(
 			cc.character !== null && !cc.removedAt
 	)
 	const validSessionPersonas = session.sessionPersonas.filter(
-		(cp): cp is typeof cp & { persona: SelectPersona } =>
+		(cp): cp is typeof cp & { persona: SelectCharacter } =>
 			cp.persona !== null && !cp.removedAt
 	)
 	if (!validSessionCharacters.length || !validSessionPersonas.length) {
@@ -309,4 +309,47 @@ export function getNextCharacterTurn(
 		characterIds,
 		messages
 	})
+}
+
+/**
+ * Which seated **envoy** is due (plans/29 R-18; U5g), or null.
+ *
+ * Envoys are not in the character rotation above — an envoy has no persona
+ * to alternate with and a guide session has no characters at all — so the
+ * rule is the simpler one a user/assistant exchange has: an envoy is due
+ * when the newest message is not a reply (the person just spoke, or nobody
+ * has yet), and the envoy that goes is the one whose last reply is furthest
+ * back, first by seat position for those that never replied. An envoy's
+ * reply is recognised by the reference its row carries (`metadata.speaker`,
+ * `envoy:<slug>`), which is the row's only identity.
+ *
+ * `envoys` is the caller's to filter: this never picks an `on-action` envoy
+ * because the caller never offers one (R-21 (6)).
+ */
+export function nextEnvoyTurn(
+	envoys: ReadonlyArray<{ slug: string; position: number }>,
+	messages: ReadonlyArray<{
+		role: string
+		isHidden?: boolean | null
+		metadata?: unknown
+	}>
+): string | null {
+	if (!envoys.length) return null
+	const visible = messages.filter((m) => !m.isHidden)
+	const newest = visible[visible.length - 1]
+	if (newest && newest.role !== "user") return null
+	const lastReplyAt = new Map<string, number>()
+	visible.forEach((m, i) => {
+		const ref = (m.metadata as { speaker?: unknown } | undefined)?.speaker
+		if (typeof ref === "string" && ref.startsWith("envoy:"))
+			lastReplyAt.set(ref.slice("envoy:".length), i)
+	})
+	const ordered = [...envoys].sort((a, b) => a.position - b.position)
+	const never = ordered.find((e) => !lastReplyAt.has(e.slug))
+	if (never) return never.slug
+	return ordered.reduce((oldest, e) =>
+		(lastReplyAt.get(e.slug) ?? -1) < (lastReplyAt.get(oldest.slug) ?? -1)
+			? e
+			: oldest
+	).slug
 }

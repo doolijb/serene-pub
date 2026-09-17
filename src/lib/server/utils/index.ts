@@ -1,6 +1,5 @@
 import os from "os"
 import path from "path"
-import envPaths from "env-paths"
 import { db } from "$lib/server/db"
 import { and, eq, inArray, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
@@ -13,15 +12,10 @@ import {
 	reorderMedia
 } from "$lib/server/media"
 
-export function getAppDataDir() {
-	const envDataDir = process.env.SERENE_PUB_DATA_DIR
-	if (envDataDir) {
-		return envDataDir
-	}
-
-	const paths = envPaths("SerenePub", { suffix: "" })
-	return paths.data
-}
+// Re-exported, not defined here: importing this barrel opens a database, and
+// the callers that need only a path must not have to. See `./appDataDir`.
+export { getAppDataDir } from "./appDataDir"
+import { getAppDataDir } from "./appDataDir"
 
 /**
  * True when running inside the bundled Android app wrapper (NodeService.kt sets
@@ -106,6 +100,10 @@ export function getPersonaDataDir({
 // truth, and the file is named after its own hash.
 // ---------------------------------------------------------------------------
 
+// ⚠ There is no persona half of any helper below. A persona IS a character, so
+// the character helper is the only one — a second one against a "persona" would
+// be the same function over the same table, drifting.
+
 export async function handleCharacterAvatarUpload({
 	character,
 	avatarFile
@@ -126,25 +124,6 @@ export async function handleCharacterAvatarUpload({
 		.update(schema.characters)
 		.set({ avatarMediaId: created.file.id })
 		.where(eq(schema.characters.id, character.id))
-	return created
-}
-
-export async function handlePersonaAvatarUpload({
-	persona,
-	avatarFile
-}: {
-	persona: { id: number; userId: number; avatarMediaId?: number | null }
-	avatarFile: Buffer
-}) {
-	const created = await createMedia(db, {
-		userId: persona.userId,
-		personaId: persona.id,
-		bytes: avatarFile
-	})
-	await db
-		.update(schema.personas)
-		.set({ avatarMediaId: created.file.id })
-		.where(eq(schema.personas.id, persona.id))
 	return created
 }
 
@@ -234,25 +213,6 @@ export async function uploadCharacterGalleryImage({
 	})
 }
 
-/** Mirrors uploadCharacterGalleryImage. */
-export async function uploadPersonaGalleryImage({
-	personaId,
-	userId,
-	imageFile
-}: {
-	personaId: number
-	userId: number
-	imageFile: Buffer
-}) {
-	const existing = await mediaFor(db, { personaId })
-	return createMedia(db, {
-		userId,
-		personaId,
-		bytes: imageFile,
-		position: existing.length
-	})
-}
-
 /**
  * A character's gallery.
  *
@@ -275,15 +235,6 @@ export async function listCharacterGallery({
 	return clientMediaFor(db, { characterId })
 }
 
-export async function listPersonaGallery({
-	personaId
-}: {
-	personaId: number
-	userId?: number
-}) {
-	return clientMediaFor(db, { personaId })
-}
-
 export async function deleteCharacterGalleryImage({
 	characterId,
 	mediaId
@@ -297,20 +248,6 @@ export async function deleteCharacterGalleryImage({
 	// The deleted image may have been the avatar. Nothing to clear by hand:
 	// `characters.avatarMediaId` is a real FK with `ON DELETE SET NULL` (0109),
 	// so this nulls the pointer in the same statement.
-	await deleteFile(db, mediaId)
-}
-
-export async function deletePersonaGalleryImage({
-	personaId,
-	mediaId
-}: {
-	personaId: number
-	userId?: number
-	mediaId: number
-}) {
-	const row = await getMedia(db, mediaId)
-	if (!row || row.personaId !== personaId) return
-	// Same as above: `personas.avatarMediaId`'s FK nulls itself on delete.
 	await deleteFile(db, mediaId)
 }
 
@@ -329,12 +266,3 @@ export async function reorderCharacterGalleryImages({
 	await reorderMedia(db, { characterId }, mediaIds)
 }
 
-export async function reorderPersonaGalleryImages({
-	personaId,
-	mediaIds
-}: {
-	personaId: number
-	mediaIds: number[]
-}) {
-	await reorderMedia(db, { personaId }, mediaIds)
-}

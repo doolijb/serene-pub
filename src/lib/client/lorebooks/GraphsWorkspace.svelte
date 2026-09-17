@@ -3,6 +3,11 @@
 	import { getContext, onDestroy, onMount } from "svelte"
 	import { SvelteSet } from "svelte/reactivity"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import {
+		declareInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
+	import { interestKey } from "$lib/shared/sockets/interest"
 	import PanelToolbar from "$lib/client/components/panels/PanelToolbar.svelte"
 	import PipelineConfigOptions from "$lib/client/components/pipelines/PipelineConfigOptions.svelte"
 	import EmbeddingStatusIcon from "$lib/client/components/EmbeddingStatusIcon.svelte"
@@ -563,22 +568,79 @@
 			)
 	}
 
-	onMount(() => {
-		socket.on("narrativeGraph:list", handleList)
-		socket.on("narrativeGraph:updateNode", handleUpdateNode)
-		socket.on("narrativeGraph:deleteNode", handleDeleteNode)
-		socket.on(
-			"narrativeGraph:checkNodeMergeReferences",
-			handleCheckMergeReferences
+	/**
+	 * Four reads name the book this canvas is drawing, so they are SCOPED to
+	 * it: the graph itself, the entries behind the nodes, the scenes behind
+	 * the edges, and the embedding badge each of them wears. Effects rather
+	 * than `useInterest` because a key built from a prop is a key that can
+	 * move, and `useInterest` keeps the one it was first given. Declared above
+	 * `onMount` so all of them exist before the reads below go out (effects
+	 * run in creation order, and `onMount` is one of them).
+	 */
+	$effect(() =>
+		declareInterest<"narrativeGraph:list">(
+			interestKey("narrativeGraph:list", lorebookId),
+			handleList
 		)
-		socket.on("narrativeGraph:updateRelationship", handleUpdateRelationship)
-		socket.on("narrativeGraph:deleteRelationship", handleDeleteRelationship)
-		socket.on("narrativeGraph:createRelationship", handleCreateRelationship)
-		socket.on("narrativeGraph:mergeNode", handleMergeWrite)
-		socket.on("narrativeGraph:undoMerge", handleMergeWrite)
-		socket.on("entries:list", handleEntriesList)
-		socket.on("scenes:listByLorebook", handleScenesList)
-		socket.on("vectorization:itemUpdated", handleVectorized)
+	)
+	$effect(() =>
+		declareInterest<"entries:list">(
+			interestKey("entries:list", lorebookId),
+			handleEntriesList
+		)
+	)
+	$effect(() =>
+		declareInterest<"scenes:listByLorebook">(
+			interestKey("scenes:listByLorebook", lorebookId),
+			handleScenesList
+		)
+	)
+	$effect(() =>
+		declareInterest<"vectorization:itemUpdated">(
+			interestKey("vectorization:itemUpdated", lorebookId),
+			handleVectorized
+		)
+	)
+
+	/**
+	 * The writes answer with the node or the edge alone and name no book, so
+	 * every one of them is BARE — none has an entry in `SCOPED_EVENTS`, and a
+	 * scoped key for an unscoped event matches nothing at all.
+	 */
+	useInterest<"narrativeGraph:updateNode">(
+		"narrativeGraph:updateNode",
+		handleUpdateNode
+	)
+	useInterest<"narrativeGraph:deleteNode">(
+		"narrativeGraph:deleteNode",
+		handleDeleteNode
+	)
+	useInterest<"narrativeGraph:checkNodeMergeReferences">(
+		"narrativeGraph:checkNodeMergeReferences",
+		handleCheckMergeReferences
+	)
+	useInterest<"narrativeGraph:updateRelationship">(
+		"narrativeGraph:updateRelationship",
+		handleUpdateRelationship
+	)
+	useInterest<"narrativeGraph:deleteRelationship">(
+		"narrativeGraph:deleteRelationship",
+		handleDeleteRelationship
+	)
+	useInterest<"narrativeGraph:createRelationship">(
+		"narrativeGraph:createRelationship",
+		handleCreateRelationship
+	)
+	useInterest<"narrativeGraph:mergeNode">(
+		"narrativeGraph:mergeNode",
+		handleMergeWrite
+	)
+	useInterest<"narrativeGraph:undoMerge">(
+		"narrativeGraph:undoMerge",
+		handleMergeWrite
+	)
+
+	onMount(() => {
 		for (const typeId of ENTRY_KINDS)
 			socket.emit("entries:list", { lorebookId, typeId })
 		socket.emit("scenes:listByLorebook", { lorebookId })
@@ -587,30 +649,6 @@
 
 	onDestroy(() => {
 		hasUnsavedChanges = false
-		socket.off("narrativeGraph:list", handleList)
-		socket.off("narrativeGraph:updateNode", handleUpdateNode)
-		socket.off("narrativeGraph:deleteNode", handleDeleteNode)
-		socket.off(
-			"narrativeGraph:checkNodeMergeReferences",
-			handleCheckMergeReferences
-		)
-		socket.off(
-			"narrativeGraph:updateRelationship",
-			handleUpdateRelationship
-		)
-		socket.off(
-			"narrativeGraph:deleteRelationship",
-			handleDeleteRelationship
-		)
-		socket.off(
-			"narrativeGraph:createRelationship",
-			handleCreateRelationship
-		)
-		socket.off("narrativeGraph:mergeNode", handleMergeWrite)
-		socket.off("narrativeGraph:undoMerge", handleMergeWrite)
-		socket.off("entries:list", handleEntriesList)
-		socket.off("scenes:listByLorebook", handleScenesList)
-		socket.off("vectorization:itemUpdated", handleVectorized)
 	})
 </script>
 
@@ -1234,7 +1272,7 @@
 		? ungraphedHistoryEntryCount
 		: totalDirectHistoryEntryCount}
 	existingUnboundNodeCount={nodes.filter(
-		(n) => n.characterId == null && n.personaId == null && !n.parentNodeId
+		(n) => n.characterId == null && !n.parentNodeId
 	).length}
 	existingRelationshipCount={relationships.length}
 	{unresolvedCastSceneCount}

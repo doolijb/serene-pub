@@ -8,9 +8,9 @@
  *
  * ## One row per pool, not one bundle per pipeline
  *
- * The catalog is grouped by `(node type, slot)` because that is what a prompt
+ * The catalog is grouped by `(node definition, slot)` because that is what a prompt
  * is scoped to. Nothing here reads a spec to decide *whether* to seed: a pool
- * belongs to a node type, and a node type exists whether or not any published
+ * belongs to a node definition, and a node definition exists whether or not any published
  * pipeline currently uses it. A spec is read only to resolve `createdForSpec`
  * into a grouping id, and a row whose spec is absent still seeds — with no
  * origin, which is exactly what "written for no pipeline in particular" means.
@@ -40,7 +40,7 @@ import {
 } from "$lib/server/pipelines/entities/promptPool"
 
 export interface PromptSeedResult {
-	/** `<node type>#<slot>` — the pool, for a log line and for the tests. */
+	/** `<node definition>#<slot>` — the pool, for a log line and for the tests. */
 	pool: string
 	created: string[]
 	present: string[]
@@ -136,7 +136,7 @@ export async function seedPipelinePrompts(db: Db): Promise<PromptSeedResult[]> {
 			}
 
 			await db.insert(schema.pipelinePrompts).values({
-				nodeTypeId: poolKeyFor(prompt.nodeType),
+				nodeDefinitionId: poolKeyFor(prompt.nodeType),
 				slot: prompt.slot,
 				seedKey: prompt.seedKey,
 				name: prompt.name,
@@ -180,7 +180,7 @@ export async function seedPipelinePrompts(db: Db): Promise<PromptSeedResult[]> {
  */
 export async function defaultPromptFor(
 	db: Db,
-	nodeTypeId: string,
+	nodeDefinitionId: string,
 	slot: string,
 	/**
 	 * The pipeline asking, both halves. They do not substitute for each other:
@@ -200,7 +200,7 @@ export async function defaultPromptFor(
 		.from(schema.pipelinePrompts)
 		.where(
 			and(
-				eq(schema.pipelinePrompts.nodeTypeId, poolKeyFor(nodeTypeId)),
+				eq(schema.pipelinePrompts.nodeDefinitionId, poolKeyFor(nodeDefinitionId)),
 				eq(schema.pipelinePrompts.slot, slot)
 			)
 		)

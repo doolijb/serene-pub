@@ -18,7 +18,7 @@
  * **`LorebookEntry<typeId>`**, and the brand is not a phantom:
  *
  *   · `typeId` is a **real, non-null column** on `lorebook_entries` with a
- *     foreign key into `pipeline_type_registry`. Narrowing it narrows the
+ *     foreign key into `pipeline_definition_registry`. Narrowing it narrows the
  *     row's declared field half with it, so
  *     `LorebookEntry<"core:entry/character-lore">` and
  *     `LorebookEntry<"core:entry/world-lore">` are mutually unassignable in
@@ -69,7 +69,7 @@ export type EntryTypeId = (typeof ENTRY_TYPE_IDS)[number]
  * The version every core entry type is pinned at.
  *
  * `type_id` + `type_version` is a real foreign key into
- * `pipeline_type_registry`, so these are not free strings — a misspelling is a
+ * `pipeline_definition_registry`, so these are not free strings — a misspelling is a
  * constraint violation rather than a row no reader ever asks for. A `@2` is a
  * schema change, and a schema change comes with the code that knows about it.
  */

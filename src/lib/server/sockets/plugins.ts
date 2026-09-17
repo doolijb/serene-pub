@@ -140,13 +140,29 @@ async function listPayload(): Promise<Sockets.Plugins.List.Response> {
 	}
 }
 
-/** After any mutation: refresh the canonical list to the client. */
+/**
+ * After any mutation: refresh the canonical list to the client — lazily.
+ *
+ * `listPayload` reads every plugin row and asks the live manager which of them
+ * are warm; `plugins:list` is gated, so a mutation made from anywhere but
+ * /admin/extensions pays for neither. Skipping the emit alone would save
+ * nothing; the query is the cost.
+ *
+ * Still returns the rows it built, because six callers spread them into their
+ * own return value. That return is discarded by `register` — a write handler
+ * here answers ONLY through this push — so the empty array a closed gate yields
+ * reaches nothing but a direct-call test.
+ */
 async function emitList(
 	emitToUser: Emit
 ): Promise<Sockets.Plugins.PluginRow[]> {
-	const payload = await listPayload()
-	emitToUser("plugins:list", payload)
-	return payload.plugins
+	let plugins: Sockets.Plugins.PluginRow[] = []
+	await emitToUser("plugins:list", async () => {
+		const payload = await listPayload()
+		plugins = payload.plugins
+		return payload
+	})
+	return plugins
 }
 
 /** Best-effort: keep the live manager in step with the DB (only when on). */

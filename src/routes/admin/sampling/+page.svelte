@@ -5,16 +5,16 @@
 	 * glanceable numbers people compare presets by — temperature and the two
 	 * token budgets — beside identity.
 	 */
-	import { getContext, onDestroy, onMount } from "svelte"
+	import { getContext } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { goto } from "$app/navigation"
 	import { resolveSamplingValues } from "@serene-pub/sdk"
-	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { getInterestContext } from "$lib/client/sockets/interest.svelte"
 	import AdminList, {
 		type AdminColumn
 	} from "$lib/client/components/admin/AdminList.svelte"
 
-	const socket = useTypedSocket()
+	const interest = getInterestContext()
 	let systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
 
 	type Row = Partial<SelectSamplingConfig>
@@ -26,13 +26,19 @@
 		loading = false
 	}
 
-	onMount(() => {
-		socket.on("samplingConfigs:list", handleList)
-		socket.emit("samplingConfigs:list", {})
-	})
-	onDestroy(() => {
-		socket.off("samplingConfigs:list", handleList)
-	})
+	/**
+	 * The changelist, asked for and listened for in one. BARE — a sampling
+	 * config is the instance's, with nothing to scope it to — and STANDING,
+	 * because the server re-emits this list as a cascade after every write on
+	 * the change pages, which is how this list is right when one returns here.
+	 *
+	 * The app-wide interest context, not `adminInterest`: `samplingConfigs:`
+	 * is not a restricted interest family, and the admin gate is the one
+	 * `/admin/+layout.svelte` already makes.
+	 */
+	$effect(() =>
+		interest.requestWithInterest("samplingConfigs:list", {}, handleList)
+	)
 
 	/**
 	 * Every sampling config registered as a capability default, by row id.

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { makePluginHookDispatch, hookTypesOf } from "./hookDispatch"
+import { makePluginHookDispatch, hookKindsOf } from "./hookDispatch"
 import type { PluginHookRequest } from "$lib/server/pipelines/scripts/pluginDispatch"
 
 /**
@@ -51,16 +51,30 @@ const req = (over: Partial<PluginHookRequest> = {}): PluginHookRequest => ({
 	...over
 })
 
-describe("hookTypesOf", () => {
+describe("hookKindsOf", () => {
 	it("reads the map, tolerant of junk", () => {
 		expect(
-			hookTypesOf({ hookTypes: { "a:script:text/transform@1": "trim" } })
+			hookKindsOf({ hookKinds: { "a:script:text/transform@1": "trim" } })
 		).toEqual({ "a:script:text/transform@1": "trim" })
-		expect(hookTypesOf({})).toEqual({})
-		expect(hookTypesOf(null)).toEqual({})
-		expect(hookTypesOf("nope")).toEqual({})
+		expect(hookKindsOf({})).toEqual({})
+		expect(hookKindsOf(null)).toEqual({})
+		expect(hookKindsOf("nope")).toEqual({})
 		// non-string hook values are dropped
-		expect(hookTypesOf({ hookTypes: { x: 5, y: "ok" } })).toEqual({ y: "ok" })
+		expect(hookKindsOf({ hookKinds: { x: 5, y: "ok" } })).toEqual({ y: "ok" })
+	})
+
+	it("still reads the pre-rename `hookTypes` key, for one release (2026-09-16)", () => {
+		// A plugin packaged against the previous SDK keeps dispatching; the new
+		// key wins when both are present.
+		expect(
+			hookKindsOf({ hookTypes: { "a:script:text/transform@1": "trim" } })
+		).toEqual({ "a:script:text/transform@1": "trim" })
+		expect(
+			hookKindsOf({
+				hookKinds: { "a:script:text/transform@1": "new" },
+				hookTypes: { "a:script:text/transform@1": "old" }
+			})
+		).toEqual({ "a:script:text/transform@1": "new" })
 	})
 })
 
@@ -70,7 +84,7 @@ describe("makePluginHookDispatch", () => {
 			{
 				pluginId: "acme/tool",
 				manifest: {
-					hookTypes: { "acme:script:text/transform@1": "trim" }
+					hookKinds: { "acme:script:text/transform@1": "trim" }
 				}
 			}
 		])
@@ -114,7 +128,7 @@ describe("makePluginHookDispatch", () => {
 		const db = fakeDb([
 			{
 				pluginId: "acme/tool",
-				manifest: { hookTypes: { "acme:script:text/transform@1": "trim" } }
+				manifest: { hookKinds: { "acme:script:text/transform@1": "trim" } }
 			}
 		])
 		const { mgr } = fakeManager({
@@ -138,7 +152,7 @@ describe("makePluginHookDispatch", () => {
 	})
 
 	it("fails cleanly when no hook is declared for the type", async () => {
-		const db = fakeDb([{ pluginId: "acme/tool", manifest: { hookTypes: {} } }])
+		const db = fakeDb([{ pluginId: "acme/tool", manifest: { hookKinds: {} } }])
 		const { mgr, calls } = fakeManager({ ok: true, value: 1 })
 		const res = await makePluginHookDispatch(db, mgr).runHook(req())
 		expect(res.ok).toBe(false)
@@ -157,7 +171,7 @@ describe("makePluginHookDispatch", () => {
 					{
 						pluginId: "acme/tool",
 						manifest: {
-							hookTypes: { "acme:script:text/transform@1": "trim" }
+							hookKinds: { "acme:script:text/transform@1": "trim" }
 						}
 					}
 				])

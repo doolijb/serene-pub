@@ -82,12 +82,32 @@ describe("loadArranged — the verbatim blob, defensively", () => {
 		for (const junk of [undefined, null, 7, "nope"])
 			expect(loadArranged(junk)).toEqual({})
 	})
+
+	it("drops a retired widget id and keeps the zone's cells", () => {
+		// An arrangement captured when the composer was its own widget. Every
+		// reader of a saved arrangement comes through here, so dropping it once
+		// keeps an empty card out of the live render, the editor and the
+		// preset picture alike.
+		const out = loadArranged({
+			middle: {
+				cols: 18,
+				rows: 34,
+				items: [
+					pos("messages", 0, 0, 18, 31),
+					pos("composer", 0, 31, 18, 3)
+				]
+			}
+		})
+		expect(out.middle!.items).toEqual([pos("messages", 0, 0, 18, 31)])
+		expect(out.middle!.cols).toBe(18)
+		expect(out.middle!.rows).toBe(34)
+	})
 })
 
 describe("withGeometry — the saved cells laid over the editor's items", () => {
 	const items: GsItem[] = [
 		{ id: "messages", title: "Messages", place: "fill" },
-		{ id: "composer", title: "Composer", place: "bottom", h: 3 }
+		{ id: "world-state", title: "World State", place: "bottom", h: 3 }
 	]
 
 	it("overlays x/y/w/h for a saved item and leaves an unsaved one alone", () => {
@@ -112,14 +132,14 @@ describe("withGeometry — the saved cells laid over the editor's items", () => 
 			rows: 34,
 			items: [
 				{
-					...pos("composer", 0, 31, 18, 3),
+					...pos("world-state", 0, 31, 18, 3),
 					anchor: { bottom: true },
-					group: "g:composer+messages"
+					group: "g:world-state+messages"
 				}
 			]
 		})
 		expect(out[1].anchor).toEqual({ bottom: true })
-		expect(out[1].group).toBe("g:composer+messages")
+		expect(out[1].group).toBe("g:world-state+messages")
 	})
 
 	it("is a no-op without a saved zone", () => {
@@ -157,14 +177,14 @@ describe("frameCovers — is this zone a RESTORE or an edit?", () => {
 describe("seedPositions — default placement (nothing saved yet)", () => {
 	const chat: GsItem[] = [
 		{ id: "messages", title: "Messages", place: "fill" },
-		{ id: "composer", title: "Composer", place: "bottom", h: 3 }
+		{ id: "world-state", title: "World State", place: "bottom", h: 3 }
 	]
 
-	it("fills the middle above a bottom-docked composer, full width", () => {
+	it("fills the middle above a bottom-docked strip, full width", () => {
 		const out = seedPositions(chat, 18, 34)
 		expect(out).toEqual([
 			pos("messages", 0, 0, 18, 31),
-			pos("composer", 0, 31, 18, 3)
+			pos("world-state", 0, 31, 18, 3)
 		])
 		expect(overlaps(out[0], out[1])).toBe(false)
 	})
@@ -202,12 +222,12 @@ describe("seedPositions — a saved arrangement drawn in a SMALLER zone", () => 
 	const frame: GsLayout = {
 		cols: 18,
 		rows: 34,
-		items: [pos("messages", 0, 0, 18, 31), pos("composer", 0, 31, 18, 3)]
+		items: [pos("messages", 0, 0, 18, 31), pos("world-state", 0, 31, 18, 3)]
 	}
 	const items = withGeometry(
 		[
 			{ id: "messages", title: "Messages", place: "fill" },
-			{ id: "composer", title: "Composer", place: "bottom", h: 3 }
+			{ id: "world-state", title: "World State", place: "bottom", h: 3 }
 		],
 		frame
 	)
@@ -217,10 +237,10 @@ describe("seedPositions — a saved arrangement drawn in a SMALLER zone", () => 
 		expect(overlaps(out[0], out[1])).toBe(false)
 	})
 
-	it("keeps the order it was arranged in — composer still under messages", () => {
-		const [messages, composer] = seedPositions(items, 14, 15, frame)
-		expect(rowsOf(messages)[1]).toBeLessThan(rowsOf(composer)[0])
-		expect(composer.y + composer.h).toBe(15)
+	it("keeps the order it was arranged in — the strip still under messages", () => {
+		const [messages, strip] = seedPositions(items, 14, 15, frame)
+		expect(rowsOf(messages)[1]).toBeLessThan(rowsOf(strip)[0])
+		expect(strip.y + strip.h).toBe(15)
 	})
 
 	it("keeps every card inside the zone", () => {
@@ -262,13 +282,17 @@ describe("seedPositions — a saved arrangement drawn in a SMALLER zone", () => 
 		const mixed = withGeometry(
 			[
 				{ id: "messages", title: "Messages", place: "fill" },
-				{ id: "composer", title: "Composer", place: "bottom", h: 3 },
+				{ id: "world-state", title: "World State", place: "bottom", h: 3 },
 				{ id: "cast", title: "Cast", h: 3 }
 			],
 			frame
 		)
 		const out = seedPositions(mixed, 14, 15, frame)
-		expect(out.map((p) => p.id)).toEqual(["messages", "composer", "cast"])
+		expect(out.map((p) => p.id)).toEqual([
+			"messages",
+			"world-state",
+			"cast"
+		])
 		expect(out[2].h).toBeGreaterThan(0)
 	})
 })

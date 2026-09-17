@@ -10,12 +10,20 @@
  * subscribes to the member events — the seam exists so the first pipeline
  * that wants them binds by declaring, not by core growing a call site.
  */
+import { v4 as uuidv4 } from "uuid"
 import { runSpec } from "$lib/server/pipelines/runtime/runTurn"
 import {
 	lockedEventSpec,
 	presetEventSpec,
 	type PresetFallback
 } from "$lib/server/pipelines/entities/presetBindings"
+import {
+	admitDescendant,
+	type RunLineage
+} from "$lib/server/pipelines/runtime/lineage"
+import * as runRegistry from "$lib/server/pipelines/runtime/runRegistry"
+import { saveReceipt } from "$lib/server/pipelines/runtime/receipts"
+import type { SessionIo } from "$lib/server/pipelines/runtime/liveRow"
 import type { Receipt } from "@serene-pub/sdk"
 
 /**
@@ -56,6 +64,14 @@ export async function resolveSessionEventVerdict(
 	scope?: { sessionId?: number | null }
 ): Promise<SessionEventResolution> {
 	try {
+		// ⚠ R-6 (ruled 2026-09-15): a session's own choice resolves BEFORE its
+		// preset — built for the reply and the actions in
+		// `resolveFunctionVerdict` (`pipeline_function_bindings` at session
+		// scope), which consults this reader second. A lifecycle event has no
+		// per-session binding yet — nothing writes one and no screen offers it
+		// — so for an event the preset is the top layer. When a session gains
+		// a per-event override, it goes above this call, on the same terms and
+		// with the same eligibility check.
 		const verdict = await presetEventSpec(db, {
 			sessionId: scope?.sessionId,
 			genreId,
@@ -89,12 +105,26 @@ export interface SessionEventDispatch {
 	receipt: Receipt
 	/** Set when the preset's own choice could not answer — see the resolution. */
 	fallback?: PresetFallback
+	/**
+	 * The run was refused by a cycle cap before it started (01 §8; U5d).
+	 * The receipt is the refusal's — `outcome: 'halt'`, the cap in
+	 * `haltReason`, lineage filled — saved like any other so the tree's
+	 * reader sees where it stopped.
+	 */
+	refused?: string
 }
 
 /**
  * Run the pipeline serving (genre, event), if one does. The caller shapes
  * `input` for the event's input contract; the run gets the ordinary session
  * scope, receipt, and bindings — an event run is a run like any other.
+ *
+ * A dispatch made **by a run** — `form-addressed` from the run that wrote
+ * the form (U5d) — carries `lineage`, and this is where 01 §8's dynamic
+ * cycle guards hold: the child is refused past the per-root depth and
+ * descendant caps (`lineage.ts`), and the refusal is receipted rather than
+ * dropped. The child is registered as an `action` run under the run owner,
+ * so a stop on the parent reaches it, and its receipt names the parent.
  */
 export async function dispatchSessionEvent(
 	db: Db,
@@ -105,6 +135,11 @@ export async function dispatchSessionEvent(
 		event: string
 		input: unknown
 		signal?: AbortSignal
+		/** The dispatching run's lineage plus one — a child run. Absent for a person-less root. */
+		lineage?: RunLineage
+		/** Where a child's rows are announced — the parent's socket server, when it had one. */
+		io?: SessionIo
+		runId?: string
 	}
 ): Promise<SessionEventDispatch | null> {
 	const resolved = await resolveSessionEventVerdict(
@@ -115,23 +150,121 @@ export async function dispatchSessionEvent(
 		{ sessionId: opts.sessionId }
 	)
 	if (!resolved.spec) return null
-	const receipt = await runSpec({
-		db,
+	const runId = opts.runId ?? uuidv4()
+
+	if (opts.lineage) {
+		const cap = admitDescendant(opts.lineage)
+		if (cap) {
+			const receipt = await refusalReceipt(db, {
+				runId,
+				specId: resolved.spec,
+				sessionId: opts.sessionId,
+				userId: opts.userId,
+				lineage: opts.lineage,
+				reason: cap
+			})
+			return {
+				specSlug: resolved.spec,
+				receipt,
+				refused: cap,
+				...(resolved.fallback ? { fallback: resolved.fallback } : {})
+			}
+		}
+	}
+
+	// A child is a run somebody can watch and stop — registered like an
+	// action's, under the run owner; the parent's stop reaches it through
+	// its own handle.
+	const handle = opts.lineage
+		? runRegistry.start({
+				runId,
+				userId: opts.userId,
+				sessionId: opts.sessionId,
+				specId: resolved.spec,
+				kind: "action"
+			})
+		: null
+	const onParentAbort = () =>
+		runRegistry.cancelAs(
+			runId,
+			"system:parent-stopped",
+			"the run that dispatched this one was stopped"
+		)
+	if (handle) opts.signal?.addEventListener("abort", onParentAbort, { once: true })
+	try {
+		const receipt = await runSpec({
+			db,
+			sessionId: opts.sessionId,
+			userId: opts.userId,
+			specId: resolved.spec,
+			runId,
+			input: opts.input,
+			io: opts.io,
+			signal: handle ? handle.controller.signal : opts.signal,
+			...(handle ? { cancelSignal: () => runRegistry.cancellation(handle) } : {}),
+			lineage: opts.lineage,
+			// A run reached through a substitution says so on its own receipt.
+			// The explain surface reads it from there, which is where every other
+			// "why did the turn do that" answer already lives.
+			...(resolved.fallback
+				? { meta: { preset: { via: "fallback", ...resolved.fallback } } }
+				: {})
+		})
+		return {
+			specSlug: resolved.spec,
+			receipt,
+			...(resolved.fallback ? { fallback: resolved.fallback } : {})
+		}
+	} finally {
+		if (handle) {
+			opts.signal?.removeEventListener("abort", onParentAbort)
+			runRegistry.finish(runId)
+		}
+	}
+}
+
+/**
+ * The receipt a cap's refusal leaves (01 §8; U5d): a run that never started,
+ * written as one row so the inspector shows the tree ending on a sentence
+ * rather than on nothing. No nodes, no seed to replay — there was no run —
+ * and `triggerSource: 'event'`, since an event asked for it.
+ */
+async function refusalReceipt(
+	db: Db,
+	opts: {
+		runId: string
+		specId: string
+		sessionId: number
+		userId: number
+		lineage: RunLineage
+		reason: string
+	}
+): Promise<Receipt> {
+	const { loadPublished } = await import("$lib/server/pipelines/boot/bootstrap")
+	const doc = await loadPublished(db, opts.specId)
+	const now = Date.now()
+	const receipt: Receipt = {
+		runId: opts.runId,
+		specId: opts.specId,
+		specVersion: doc?.version ?? "0.0.0",
+		schemaVersion: 1,
+		seed: "",
+		triggerSource: "event",
+		parentRunId: opts.lineage.parentRunId,
+		rootRunId: opts.lineage.rootRunId,
+		depth: opts.lineage.depth,
+		startedAt: now,
+		endedAt: now,
+		outcome: "halt",
+		haltReason: opts.reason,
+		nodes: [],
+		emitted: [],
+		consumption: { tokens: 0, nodeExecutions: 0 }
+	}
+	await saveReceipt(db, receipt, {
 		sessionId: opts.sessionId,
 		userId: opts.userId,
-		specId: resolved.spec,
-		input: opts.input,
-		signal: opts.signal,
-		// A run reached through a substitution says so on its own receipt.
-		// The explain surface reads it from there, which is where every other
-		// "why did the turn do that" answer already lives.
-		...(resolved.fallback
-			? { meta: { preset: { via: "fallback", ...resolved.fallback } } }
-			: {})
+		artifacts: []
 	})
-	return {
-		specSlug: resolved.spec,
-		receipt,
-		...(resolved.fallback ? { fallback: resolved.fallback } : {})
-	}
+	return receipt
 }

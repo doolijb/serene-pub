@@ -191,6 +191,13 @@ describe("migration 0085 cleanup — merges pre-existing case-variant duplicates
 			.split("--> statement-breakpoint")
 			.map((s) => s.trim())
 			.filter(Boolean)
+			// ⚠ Same reason, one table further on: 0085 also deduped
+			// `persona_tags`, which no longer exists — a persona is a
+			// character, and its labels live in `character_tags`. The database
+			// this replays against has every migration applied, so those
+			// statements name a relation that is not there. The half under
+			// test is `character_tags`, which the migration treats identically.
+			.filter((statement) => !statement.includes('"persona_tags"'))
 		for (const statement of statements) {
 			await testDb.execute(sql.raw(statement))
 		}

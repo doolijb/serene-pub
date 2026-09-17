@@ -1,4 +1,4 @@
-import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+import { declareInterest } from "$lib/client/sockets/interest.svelte"
 import {
 	wireModeFor,
 	type WireMode
@@ -22,23 +22,30 @@ import {
  * beside the row rather than in it, and leaves both the baseline and the panel's
  * isolation intact.
  *
- * ## Module-scoped, one subscription
+ * ## Module-scoped, one declared interest
  *
  * Six forms need this and only one is mounted at a time, but the sidebar's own
- * note about nine pasted copies applies: a subscription per form is six handlers
- * racing over one event. Same shape as `completionTemplateOptions` next door —
- * the first caller starts it, everyone shares it.
+ * note about nine pasted copies applies: one declaration per form is six
+ * handlers racing over one event. Same shape as `completionTemplateOptions`
+ * next door — the first caller starts it, everyone shares it.
+ *
+ * A module cannot call `useInterest` (there is no component to scope the effect
+ * to), so this declares the key directly and keeps its release. Nothing calls
+ * that release — the store is as long-lived as the tab — but holding it is what
+ * makes ending the interest possible at all, which an anonymous `socket.on` is
+ * not.
  */
 
 /** Capabilities seen since load, by connection id. Reassigned, never mutated. */
 let live = $state<Record<number, unknown>>({})
 let started = false
+/** The one declaration's release, held rather than thrown away. */
+let release: (() => void) | null = null
 
-function subscribe() {
-	const socket = useTypedSocket()
-	socket.on(
+function start() {
+	release = declareInterest<"connections:setCapability">(
 		"connections:setCapability",
-		(res: Sockets.Connections.SetCapability.Response) => {
+		(res) => {
 			if (!res?.connectionId || res.error) return
 			live = { ...live, [res.connectionId]: res.capabilities }
 		}
@@ -63,7 +70,7 @@ const capabilitiesOf = (connection: {
 export function connectionWireMode() {
 	if (!started) {
 		started = true
-		subscribe()
+		start()
 	}
 	return {
 		of(

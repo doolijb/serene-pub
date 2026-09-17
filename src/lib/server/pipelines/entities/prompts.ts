@@ -53,8 +53,8 @@ export class PromptNotUsableError extends Error {}
 
 export interface PromptRecord {
 	id: number
-	/** The pool's first half — a node type id, version stripped. */
-	nodeTypeId: string
+	/** The pool's first half — a node definition id, version stripped. */
+	nodeDefinitionId: string
 	/** The pool's second half. See `promptPool.ts` for why both are needed. */
 	slot: string
 	/** Where it was authored. Grouping only, never a permission. */
@@ -81,7 +81,7 @@ export interface GroupedPrompt extends PromptRecord {
 
 const toRecord = (r: any): PromptRecord => ({
 	id: r.id,
-	nodeTypeId: r.nodeTypeId,
+	nodeDefinitionId: r.nodeDefinitionId,
 	slot: r.slot,
 	createdForSpecId: r.createdForSpecId ?? null,
 	name: r.name,
@@ -104,7 +104,7 @@ const toRecord = (r: any): PromptRecord => ({
  */
 export async function listPrompts(
 	db: Db,
-	nodeTypeId: string,
+	nodeDefinitionId: string,
 	slot: string,
 	forSpecId?: number
 ): Promise<GroupedPrompt[]> {
@@ -113,7 +113,7 @@ export async function listPrompts(
 		.from(schema.pipelinePrompts)
 		.where(
 			and(
-				eq(schema.pipelinePrompts.nodeTypeId, poolKeyFor(nodeTypeId)),
+				eq(schema.pipelinePrompts.nodeDefinitionId, poolKeyFor(nodeDefinitionId)),
 				eq(schema.pipelinePrompts.slot, slot)
 			)
 		)
@@ -210,7 +210,7 @@ export async function assertSelectable(
 				"list was loaded."
 		)
 
-	if (row.nodeTypeId !== decl.nodeTypeId || row.slot !== decl.slot)
+	if (row.nodeDefinitionId !== decl.nodeDefinitionId || row.slot !== decl.slot)
 		throw new PromptNotUsableError(
 			`'${row.name}' was written for a different kind of step, so the ` +
 				`fields '${decl.typeLabel}' reads would not be there. Prompts ` +
@@ -268,7 +268,7 @@ export async function resolvePromptFields(
 
 export interface CreatePromptInput {
 	/** The pool's first half. Normalized through `poolKeyFor` on the way in. */
-	nodeTypeId: string
+	nodeDefinitionId: string
 	/** The pool's second half — the slot name the node declared. */
 	slot: string
 	name: string
@@ -290,7 +290,7 @@ export async function createPrompt(
 	const [row] = await db
 		.insert(schema.pipelinePrompts)
 		.values({
-			nodeTypeId: poolKeyFor(input.nodeTypeId),
+			nodeDefinitionId: poolKeyFor(input.nodeDefinitionId),
 			slot: input.slot,
 			name: input.name,
 			fields: input.fields,
@@ -335,7 +335,7 @@ export async function duplicatePrompt(
 	if (!row) throw new PromptNotFoundError("That prompt no longer exists.")
 
 	return await createPrompt(db, {
-		nodeTypeId: row.nodeTypeId,
+		nodeDefinitionId: row.nodeDefinitionId,
 		slot: row.slot,
 		name,
 		fields: (row.fields ?? {}) as Record<string, string>,
@@ -382,7 +382,7 @@ export async function updatePrompt(
 			.from(schema.pipelinePrompts)
 			.where(
 				and(
-					eq(schema.pipelinePrompts.nodeTypeId, row.nodeTypeId),
+					eq(schema.pipelinePrompts.nodeDefinitionId, row.nodeDefinitionId),
 					eq(schema.pipelinePrompts.slot, row.slot),
 					eq(schema.pipelinePrompts.name, patch.name),
 					ne(schema.pipelinePrompts.id, promptId)

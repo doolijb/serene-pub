@@ -120,11 +120,22 @@ beforeAll(async () => {
 		.insert(schema.samplingConfigs)
 		.values({ name: "Graph sampling", isImmutable: false })
 		.returning()
+	// The MODEL half: a registration names a pair, and an endpoint on its own is
+	// incomplete — the build would refuse before it read a single scene.
+	const { ensureConnectionModel } = await import(
+		"$lib/server/connections/models"
+	)
+	const model = await ensureConnectionModel(
+		testDb as any,
+		connection.id,
+		"graph-7b"
+	)
 	const { setCapabilityDefault } = await import(
 		"$lib/server/connections/capabilityDefaults"
 	)
 	await setCapabilityDefault(testDb as any, "text->text", {
 		connectionId: connection.id,
+		connectionModelId: model!.id,
 		samplingConfigId: sampling.id
 	})
 }, 60_000)

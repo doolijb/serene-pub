@@ -3,6 +3,7 @@
 	import { onMount, onDestroy, getContext, untrack } from "svelte"
 	import { v4 as uuid } from "uuid"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { EditorState } from "@codemirror/state"
 	import {
@@ -182,9 +183,11 @@
 		socket.emit("customThemes:setInstanceTheme", { id: theme.id, enabled })
 	}
 
-	// Named so `off` can name them too. A bare `socket.off("customThemes:save")`
-	// removes EVERY listener for that event — including the theme manager's,
-	// which then stops updating for the rest of the session.
+	// Declared through the interest registry below, which counts subscribers
+	// per key: the theme manager and Layout want the same events at the same
+	// time and neither teardown can silence another's. The hazard that
+	// replaces is a bare `socket.off("customThemes:save")`, which removes
+	// EVERY listener for that event across the whole app.
 	function onGetCss(msg: Sockets.CustomThemes.GetCss.Response) {
 		if (msg.name !== (theme?.name ?? themeName)) return
 		isLoadingCss = false
@@ -236,6 +239,33 @@
 		})
 	}
 
+	/**
+	 * All seven BARE and STANDING. Bare because no `customThemes:` event is in
+	 * `SCOPED_EVENTS` — `onGetCss` filters by name itself, in the handler,
+	 * exactly as it did before, because CSS for every open theme arrives on
+	 * this one event. Standing because this editor stays open across save,
+	 * delete and instance-theme presses, each of which answers on its own key.
+	 */
+	useInterest<"customThemes:getCss">("customThemes:getCss", onGetCss)
+	useInterest<"customThemes:save">("customThemes:save", onSave)
+	useInterest<"customThemes:save:error">(
+		"customThemes:save:error",
+		onSaveError
+	)
+	useInterest<"customThemes:delete">("customThemes:delete", onDelete)
+	useInterest<"customThemes:delete:error">(
+		"customThemes:delete:error",
+		onDeleteError
+	)
+	useInterest<"customThemes:setInstanceTheme">(
+		"customThemes:setInstanceTheme",
+		onSetInstanceTheme
+	)
+	useInterest<"customThemes:setInstanceTheme:error">(
+		"customThemes:setInstanceTheme:error",
+		onSetInstanceThemeError
+	)
+
 	onMount(() => {
 		initEditor()
 
@@ -244,31 +274,10 @@
 			isLoadingCss = true
 			socket.emit("customThemes:getCss", { name: theme.name })
 		}
-
-		socket.on("customThemes:getCss", onGetCss)
-		socket.on("customThemes:save", onSave)
-		socket.on("customThemes:save:error", onSaveError)
-		socket.on("customThemes:delete", onDelete)
-		socket.on("customThemes:delete:error", onDeleteError)
-		socket.on("customThemes:setInstanceTheme", onSetInstanceTheme)
-		socket.on(
-			"customThemes:setInstanceTheme:error",
-			onSetInstanceThemeError
-		)
 	})
 
 	onDestroy(() => {
 		editorView?.destroy()
-		socket.off("customThemes:getCss", onGetCss)
-		socket.off("customThemes:save", onSave)
-		socket.off("customThemes:save:error", onSaveError)
-		socket.off("customThemes:delete", onDelete)
-		socket.off("customThemes:delete:error", onDeleteError)
-		socket.off("customThemes:setInstanceTheme", onSetInstanceTheme)
-		socket.off(
-			"customThemes:setInstanceTheme:error",
-			onSetInstanceThemeError
-		)
 	})
 </script>
 

@@ -187,16 +187,20 @@ beforeAll(async () => {
 const bindings = coreBindings()
 const host = () => createHost(db, { sessionId, userId })
 
-const ctxFor = (key: string, typeId: string) => ({
+const ctxFor = (key: string, definitionId: string) => ({
 	read: (table: string, q: unknown) =>
-		host().read!(table, q, { key, typeId, typeVersion: 1, kind: "query" }),
+		host().read!(table, q, { key, definitionId, definitionVersion: 1, kind: "query" }),
 	call: (payload: unknown) =>
-		host().call!(payload, {
-			key,
-			typeId,
-			typeVersion: 1,
-			kind: "provider"
-		}),
+		host().call!(
+			payload,
+			{
+				key,
+				definitionId,
+				definitionVersion: 1,
+				kind: "oracle"
+			},
+			{ dry: false }
+		),
 	signal: new AbortController().signal,
 	progress: () => {},
 	log: () => {},
@@ -214,9 +218,9 @@ describe("the embed provider", () => {
 	 * installs have no embedding model, and the host answers that by throwing.
 	 */
 	const embed = (params?: Record<string, unknown>) =>
-		bindings["core:provider/embed-text@1"]!(
+		bindings["core:oracle/embed-text@1"]!(
 			{ texts: ["tell me about the ashguard"], params },
-			ctxFor("embed", "core:provider/embed-text")
+			ctxFor("embed", "core:oracle/embed-text")
 		) as any
 
 	it("`off` returns no vectors without calling the model at all", async () => {
@@ -259,9 +263,9 @@ describe("the embed provider", () => {
 		// A Query may not reach a model (16 §1). Making the call a Provider also
 		// puts it in the budget and the receipt, which it would not be if
 		// retrieval quietly made it.
-		const result: any = await bindings["core:provider/embed-text@1"]!(
+		const result: any = await bindings["core:oracle/embed-text@1"]!(
 			{ text: "tell me about the ashguard" },
-			ctxFor("embed", "core:provider/embed-text")
+			ctxFor("embed", "core:oracle/embed-text")
 		)
 		expect(result.kind).toBe("ok")
 		expect(result.value.vector).toEqual([1, 0, 0])
@@ -274,10 +278,11 @@ describe("the embed provider", () => {
 				{ text: "x" },
 				{
 					key: "embed",
-					typeId: "core:provider/embed-text",
-					typeVersion: 1,
-					kind: "provider"
-				}
+					definitionId: "core:oracle/embed-text",
+					definitionVersion: 1,
+					kind: "oracle"
+				},
+				{ dry: false }
 			)
 		).rejects.toThrow(/no embedding model is loaded/)
 		modelReady = true
@@ -293,9 +298,15 @@ describe("the vector query", () => {
 	 * asked for entries, so a test that omits it measures the switch rather than
 	 * the mechanism. Its own test is `the mechanism's own switch` at the end of this file.
 	 */
+	// On the declared `vectors` port — a list, one query vector per window. The
+	// binding reads no singular alias (R-12 swept `input.vector`).
 	const runQuery = (vector: number[]) =>
 		bindings["core:query/vector-search@1"]!(
-			{ vector, scope: { sessionId }, params: { maxEntries: 50 } },
+			{
+				vectors: [vector],
+				scope: { sessionId },
+				params: { maxEntries: 50 }
+			},
 			ctxFor("vsearch", "core:query/vector-search")
 		) as any
 
@@ -764,7 +775,7 @@ describe("what the index returns and the lorebook read does not", () => {
 	const runQuery = (currentCharacterId: number | null) =>
 		bindings["core:query/vector-search@1"]!(
 			{
-				vector: [0, 1, 0],
+				vectors: [[0, 1, 0]],
 				scope: { sessionId, currentCharacterId },
 				params: { maxEntries: 50 }
 			},
@@ -867,7 +878,7 @@ describe("the text a hit carries", () => {
 	const runQuery = () =>
 		bindings["core:query/vector-search@1"]!(
 			{
-				vector: [0, 1, 0],
+				vectors: [[0, 1, 0]],
 				scope: { sessionId },
 				params: { maxEntries: 50 }
 			},

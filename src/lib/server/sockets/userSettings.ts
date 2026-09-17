@@ -125,6 +125,109 @@ export function getDefaultBackgrounds(): string[] {
 	return []
 }
 
+/**
+ * This user's settings, as one function, so every cascade that refreshes them —
+ * the eleven writes below, and one each in `promptConfigs`, `contextConfigs` and
+ * `narratorPromptConfigs` — can be handed the BUILDER rather than the handler.
+ *
+ * It reads the row (inserting defaults the first time), resolves the effective
+ * language and may resolve a media URL; `userSettings:get` is gated, so a write
+ * made from a surface that is not showing settings pays for none of it.
+ * Skipping the emit alone would save nothing; the queries are the cost.
+ *
+ * ⚠ Throws rather than emitting `userSettings:get:error` — that emit stays on
+ * the handler, which is the surface a client actually asked. A cascade's failure
+ * is `evaluate`'s to log, and must not push an error at a client whose own
+ * request succeeded.
+ */
+export async function buildUserSettingsGet(
+	userId: number
+): Promise<Sockets.UserSettings.Get.Response> {
+	if (!userId) {
+		throw new Error("User not authenticated")
+	}
+
+	let settings = await db.query.userSettings.findFirst({
+		where: (t, { eq }) => eq(t.userId, userId),
+		columns: {
+			id: false, // We don't need the ID in the response
+			userId: false // We don't need the userId in the response
+		}
+	})
+
+	// If no user settings found, create default ones
+	if (!settings) {
+		await db
+			.insert(schema.userSettings)
+			.values({
+				userId: userId,
+				theme: "lamplight",
+				darkMode: true,
+				showHomePageBanner: true,
+				enableEasyCharacterCreation: true,
+				showAllCharacterFields: false
+			})
+			.onConflictDoNothing()
+
+		// Fetch the newly created settings
+		settings = await db.query.userSettings.findFirst({
+			where: (t, { eq }) => eq(t.userId, userId),
+			columns: {
+				id: false,
+				userId: false
+			}
+		})
+	}
+
+	if (!settings) {
+		throw new Error("Failed to create user settings")
+	}
+
+	const res: Sockets.UserSettings.Get.Response = {
+		userSettings: {
+			activeContextConfigId: settings.activeContextConfigId,
+			activePromptConfigId: settings.activePromptConfigId,
+			activeNarratorPromptConfigId:
+				settings.activeNarratorPromptConfigId,
+			activeSummarizeWorldConfigId:
+				settings.activeSummarizeWorldConfigId,
+			activeSummarizeCharacterConfigId:
+				settings.activeSummarizeCharacterConfigId,
+			activeSummarizeSceneConfigId:
+				settings.activeSummarizeSceneConfigId,
+			theme: settings.theme || "lamplight",
+			darkMode:
+				settings.darkMode !== null ? settings.darkMode : true,
+			showHomePageBanner: settings.showHomePageBanner ?? true,
+			enableEasyCharacterCreation:
+				settings.enableEasyCharacterCreation,
+			showAllCharacterFields: settings.showAllCharacterFields,
+			// One field on the wire, two columns behind it (28): an
+			// uploaded background is a `/media/{id}` proxy, a shipped
+			// default is its static path. The client only ever
+			// interpolates this into a CSS url(), so it does not care
+			// which it got.
+			backgroundImagePath: settings.backgroundMediaId
+				? mediaIdUrl(settings.backgroundMediaId)
+				: resolveBackgroundImagePath(
+						settings.backgroundImagePath
+					),
+			backgroundOpacity: settings.backgroundOpacity ?? 75,
+			charaVaultIncludeNsfw:
+				settings.charaVaultIncludeNsfw ?? false,
+			// Two fields, not one (R5). `language` is what this user
+			// *chose* — null meaning "follow the instance default" — and
+			// the picker needs that distinction to show "Server default"
+			// as its own option. `effectiveLanguage` is the resolved
+			// answer everything that draws the interface reads.
+			language: settings.language ?? null,
+			effectiveLanguage: (await resolveUserLanguage(userId)).code
+		}
+	}
+
+	return res
+}
+
 export const userSettingsGet: Handler<
 	Sockets.UserSettings.Get.Params,
 	Sockets.UserSettings.Get.Response
@@ -132,92 +235,7 @@ export const userSettingsGet: Handler<
 	event: "userSettings:get",
 	handler: async (socket: AuthenticatedSocket, params, emitToUser) => {
 		try {
-			const userId = socket.user!.id
-			if (!userId) {
-				throw new Error("User not authenticated")
-			}
-
-			let settings = await db.query.userSettings.findFirst({
-				where: (t, { eq }) => eq(t.userId, userId),
-				columns: {
-					id: false, // We don't need the ID in the response
-					userId: false // We don't need the userId in the response
-				}
-			})
-
-			// If no user settings found, create default ones
-			if (!settings) {
-				await db
-					.insert(schema.userSettings)
-					.values({
-						userId: userId,
-						theme: "hamlindigo",
-						darkMode: true,
-						showHomePageBanner: true,
-						enableEasyPersonaCreation: true,
-						enableEasyCharacterCreation: true,
-						showAllCharacterFields: false
-					})
-					.onConflictDoNothing()
-
-				// Fetch the newly created settings
-				settings = await db.query.userSettings.findFirst({
-					where: (t, { eq }) => eq(t.userId, userId),
-					columns: {
-						id: false,
-						userId: false
-					}
-				})
-			}
-
-			if (!settings) {
-				throw new Error("Failed to create user settings")
-			}
-
-			const res: Sockets.UserSettings.Get.Response = {
-				userSettings: {
-					activeContextConfigId: settings.activeContextConfigId,
-					activePromptConfigId: settings.activePromptConfigId,
-					activeNarratorPromptConfigId:
-						settings.activeNarratorPromptConfigId,
-					activeSummarizeWorldConfigId:
-						settings.activeSummarizeWorldConfigId,
-					activeSummarizeCharacterConfigId:
-						settings.activeSummarizeCharacterConfigId,
-					activeSummarizeSceneConfigId:
-						settings.activeSummarizeSceneConfigId,
-					theme: settings.theme || "hamlindigo",
-					darkMode:
-						settings.darkMode !== null ? settings.darkMode : true,
-					showHomePageBanner: settings.showHomePageBanner ?? true,
-					enableEasyPersonaCreation:
-						settings.enableEasyPersonaCreation,
-					enableEasyCharacterCreation:
-						settings.enableEasyCharacterCreation,
-					showAllCharacterFields: settings.showAllCharacterFields,
-					// One field on the wire, two columns behind it (28): an
-					// uploaded background is a `/media/{id}` proxy, a shipped
-					// default is its static path. The client only ever
-					// interpolates this into a CSS url(), so it does not care
-					// which it got.
-					backgroundImagePath: settings.backgroundMediaId
-						? mediaIdUrl(settings.backgroundMediaId)
-						: resolveBackgroundImagePath(
-								settings.backgroundImagePath
-							),
-					backgroundOpacity: settings.backgroundOpacity ?? 75,
-					charaVaultIncludeNsfw:
-						settings.charaVaultIncludeNsfw ?? false,
-					// Two fields, not one (R5). `language` is what this user
-					// *chose* — null meaning "follow the instance default" — and
-					// the picker needs that distinction to show "Server default"
-					// as its own option. `effectiveLanguage` is the resolved
-					// answer everything that draws the interface reads.
-					language: settings.language ?? null,
-					effectiveLanguage: (await resolveUserLanguage(userId)).code
-				}
-			}
-
+			const res = await buildUserSettingsGet(socket.user!.id)
 			emitToUser("userSettings:get", res)
 			return res
 		} catch (error: any) {
@@ -255,7 +273,10 @@ export const userSettingsUpdateCharaVaultIncludeNsfw: Handler<
 					enabled: params.enabled
 				}
 			emitToUser("userSettings:updateCharaVaultIncludeNsfw", res)
-			await userSettingsGet.handler(socket, {}, emitToUser)
+			// Lazy — see `buildUserSettingsGet`.
+			await emitToUser("userSettings:get", () =>
+				buildUserSettingsGet(userId)
+			)
 			return res
 		} catch (error: any) {
 			console.error("Update CharaVault include-NSFW error:", error)
@@ -292,7 +313,10 @@ export const userSettingsUpdateShowHomePageBanner: Handler<
 					enabled: params.enabled
 				}
 			emitToUser("userSettings:updateShowHomePageBanner", res)
-			await userSettingsGet.handler(socket, {}, emitToUser) // Refresh user settings after update
+			// Lazy — see `buildUserSettingsGet`.
+			await emitToUser("userSettings:get", () =>
+				buildUserSettingsGet(userId)
+			)
 			return res
 		} catch (error: any) {
 			console.error("Update show home page banner error:", error)
@@ -304,42 +328,8 @@ export const userSettingsUpdateShowHomePageBanner: Handler<
 	}
 }
 
-export const userSettingsUpdateEasyPersonaCreation: Handler<
-	Sockets.UserSettings.UpdateEasyPersonaCreation.Params,
-	Sockets.UserSettings.UpdateEasyPersonaCreation.Response
-> = {
-	event: "userSettings:updateEasyPersonaCreation",
-	handler: async (socket: AuthenticatedSocket, params, emitToUser) => {
-		try {
-			const userId = socket.user!.id
-			if (!userId) {
-				throw new Error("User not authenticated")
-			}
-
-			await db
-				.update(schema.userSettings)
-				.set({
-					enableEasyPersonaCreation: params.enabled
-				})
-				.where(eq(schema.userSettings.userId, userId))
-
-			const res: Sockets.UserSettings.UpdateEasyPersonaCreation.Response =
-				{
-					success: true,
-					enabled: params.enabled
-				}
-			emitToUser("userSettings:updateEasyPersonaCreation", res)
-			await userSettingsGet.handler(socket, {}, emitToUser) // Refresh user settings after update
-			return res
-		} catch (error: any) {
-			console.error("Update easy persona creation error:", error)
-			emitToUser("userSettings:updateEasyPersonaCreation:error", {
-				error: "Failed to update easy persona creation setting"
-			})
-			throw error
-		}
-	}
-}
+// ⚠ There is no `updateEasyPersonaCreation`: a persona is a character, so the
+// one switch below governs both surfaces.
 
 export const userSettingsUpdateEasyCharacterCreation: Handler<
 	Sockets.UserSettings.UpdateEasyCharacterCreation.Params,
@@ -366,7 +356,10 @@ export const userSettingsUpdateEasyCharacterCreation: Handler<
 					enabled: params.enabled
 				}
 			emitToUser("userSettings:updateEasyCharacterCreation", res)
-			await userSettingsGet.handler(socket, {}, emitToUser) // Refresh user settings after update
+			// Lazy — see `buildUserSettingsGet`.
+			await emitToUser("userSettings:get", () =>
+				buildUserSettingsGet(userId)
+			)
 			return res
 		} catch (error: any) {
 			console.error("Update easy character creation error:", error)
@@ -403,7 +396,10 @@ export const userSettingsUpdateShowAllCharacterFields: Handler<
 					enabled: params.enabled
 				}
 			emitToUser("userSettings:updateShowAllCharacterFields", res)
-			await userSettingsGet.handler(socket, {}, emitToUser) // Refresh user settings after update
+			// Lazy — see `buildUserSettingsGet`.
+			await emitToUser("userSettings:get", () =>
+				buildUserSettingsGet(userId)
+			)
 			return res
 		} catch (error: any) {
 			console.error("Update show all character fields error:", error)
@@ -437,7 +433,10 @@ export const userSettingsUpdateTheme: Handler<
 				theme: params.theme
 			}
 			emitToUser("userSettings:updateTheme", res)
-			await userSettingsGet.handler(socket, {}, emitToUser) // Refresh user settings after update
+			// Lazy — see `buildUserSettingsGet`.
+			await emitToUser("userSettings:get", () =>
+				buildUserSettingsGet(userId)
+			)
 			return res
 		} catch (error: any) {
 			console.error("Update theme error:", error)
@@ -471,7 +470,10 @@ export const userSettingsUpdateDarkMode: Handler<
 				enabled: params.enabled
 			}
 			emitToUser("userSettings:updateDarkMode", res)
-			await userSettingsGet.handler(socket, {}, emitToUser) // Refresh user settings after update
+			// Lazy — see `buildUserSettingsGet`.
+			await emitToUser("userSettings:get", () =>
+				buildUserSettingsGet(userId)
+			)
 			return res
 		} catch (error: any) {
 			console.error("Update dark mode error:", error)
@@ -483,23 +485,31 @@ export const userSettingsUpdateDarkMode: Handler<
 	}
 }
 
+/**
+ * The background picker's two lists, split out so the upload and delete cascades
+ * below can be handed the BUILDER rather than the handler. `listUserBackgrounds`
+ * is a media read, and `userSettings:listBackgrounds` is gated — with the
+ * background picker closed it is not paid.
+ */
+async function buildUserSettingsListBackgrounds(
+	userId: number
+): Promise<Sockets.UserSettings.ListBackgrounds.Response> {
+	const defaults = getDefaultBackgrounds()
+	// Kept as URL strings rather than Media objects: a background is
+	// interpolated straight into a CSS `url(...)` and is never displayed as
+	// a gallery entry, so the id adds nothing a caller can use. They are
+	// `/media/{id}` proxies now — never a filesystem path.
+	const uploads = (await listUserBackgrounds({ userId })).map((m) => m.url)
+	return { defaults, uploads }
+}
+
 export const userSettingsListBackgrounds: Handler<
 	Sockets.UserSettings.ListBackgrounds.Params,
 	Sockets.UserSettings.ListBackgrounds.Response
 > = {
 	event: "userSettings:listBackgrounds",
 	handler: async (socket: AuthenticatedSocket, _params, emitToUser) => {
-		const userId = socket.user!.id
-		const defaults = getDefaultBackgrounds()
-		// Kept as URL strings rather than Media objects: a background is
-		// interpolated straight into a CSS `url(...)` and is never displayed as
-		// a gallery entry, so the id adds nothing a caller can use. They are
-		// `/media/{id}` proxies now — never a filesystem path.
-		const uploads = (await listUserBackgrounds({ userId })).map((m) => m.url)
-		const res: Sockets.UserSettings.ListBackgrounds.Response = {
-			defaults,
-			uploads
-		}
+		const res = await buildUserSettingsListBackgrounds(socket.user!.id)
 		emitToUser("userSettings:listBackgrounds", res)
 		return res
 	}
@@ -527,7 +537,10 @@ export const userSettingsUploadBackground: Handler<
 		}
 		emitToUser("userSettings:uploadBackground", res)
 		// Refresh list so client gets updated uploads
-		await userSettingsListBackgrounds.handler(socket, {}, emitToUser)
+		// Lazy — see `buildUserSettingsListBackgrounds`.
+		await emitToUser("userSettings:listBackgrounds", () =>
+			buildUserSettingsListBackgrounds(userId)
+		)
 		return res
 	}
 }
@@ -547,7 +560,10 @@ export const userSettingsDeleteBackground: Handler<
 		}
 		emitToUser("userSettings:deleteBackground", res)
 		// Refresh list
-		await userSettingsListBackgrounds.handler(socket, {}, emitToUser)
+		// Lazy — see `buildUserSettingsListBackgrounds`.
+		await emitToUser("userSettings:listBackgrounds", () =>
+			buildUserSettingsListBackgrounds(userId)
+		)
 		return res
 	}
 }
@@ -607,7 +623,8 @@ export const userSettingsUpdateBackground: Handler<
 			opacity: params.opacity
 		}
 		emitToUser("userSettings:updateBackground", res)
-		await userSettingsGet.handler(socket, {}, emitToUser)
+		// Lazy — see `buildUserSettingsGet`.
+		await emitToUser("userSettings:get", () => buildUserSettingsGet(userId))
 		return res
 	}
 }
@@ -652,7 +669,10 @@ export const userSettingsUpdateLanguage: Handler<
 				effectiveLanguage: (await resolveUserLanguage(userId)).code
 			}
 			emitToUser("userSettings:updateLanguage", res)
-			await userSettingsGet.handler(socket, {}, emitToUser)
+			// Lazy — see `buildUserSettingsGet`.
+			await emitToUser("userSettings:get", () =>
+				buildUserSettingsGet(userId)
+			)
 			return res
 		} catch (error: any) {
 			console.error("Update language error:", error)
@@ -677,7 +697,6 @@ export function registerUserSettingsHandlers(
 	register(socket, userSettingsGet, emitToUser)
 	register(socket, userSettingsUpdateCharaVaultIncludeNsfw, emitToUser)
 	register(socket, userSettingsUpdateShowHomePageBanner, emitToUser)
-	register(socket, userSettingsUpdateEasyPersonaCreation, emitToUser)
 	register(socket, userSettingsUpdateEasyCharacterCreation, emitToUser)
 	register(socket, userSettingsUpdateShowAllCharacterFields, emitToUser)
 	register(socket, userSettingsUpdateTheme, emitToUser)

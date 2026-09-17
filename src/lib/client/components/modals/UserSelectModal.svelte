@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
-	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import { requestWithInterest } from "$lib/client/sockets/interest.svelte"
 	import { onMount } from "svelte"
 	import { getContext } from "svelte"
 	import { resolveUserHandle } from "$lib/shared/utils/resolveCharacterName"
@@ -28,7 +28,6 @@
 		multiSelect = false
 	}: Props = $props()
 
-	const socket = useTypedSocket()
 	let userCtx: UserCtx = getContext("userCtx")
 	let users: SelectUser[] = $state([])
 	let search = $state("")
@@ -83,22 +82,21 @@
 		onclose()
 	}
 
-	// Named so `off` can name it too. A bare `socket.off("users:list")` removes
-	// EVERY listener for that event — including other components listening for
-	// the same event — which then stops updating for the rest of the session.
+	// Declared through the interest registry below, which counts subscribers
+	// per key and releases only this modal's. The hazard that replaces is a
+	// bare `socket.off("users:list")`, which removes EVERY listener for that
+	// event across the whole app.
 	function handleUsersList(msg: Sockets.Users.List.Response) {
 		users = msg.users || []
 	}
 
 	onMount(() => {
-		// Fetch all users
-		socket.emit("users:list", {})
-
-		socket.on("users:list", handleUsersList)
-
-		return () => {
-			socket.off("users:list", handleUsersList)
-		}
+		// BARE — `users:list` has no entry in `SCOPED_EVENTS`; this is the
+		// whole roster and the picker wants all of it. Declared and asked for
+		// in one call so the key is on the wire before the request, and held
+		// while the modal is open: the roster is a cascade target, so a user
+		// added elsewhere shows up here without reopening.
+		return requestWithInterest("users:list", {}, handleUsersList)
 	})
 
 	// Reset selection when modal opens

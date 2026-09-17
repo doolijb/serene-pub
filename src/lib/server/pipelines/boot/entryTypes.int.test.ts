@@ -15,9 +15,9 @@
 import { describe, it, expect, beforeAll } from "vitest"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import {
-	syncTypeRegistry,
-	readTypeRegistry,
-	typeContentHash
+	syncDefinitionRegistry,
+	readDefinitionRegistry,
+	definitionContentHash
 } from "$lib/server/pipelines/boot/registrySync"
 import { allEntryTypes, snapshotRegistry } from "@serene-pub/sdk"
 import type { RegistryEntry } from "@serene-pub/sdk"
@@ -46,25 +46,25 @@ const PINS = [
 const rowFor = async (typeId: string) => {
 	const [row] = await db
 		.select()
-		.from(schema.pipelineTypeRegistry)
-		.where(eq(schema.pipelineTypeRegistry.typeId, typeId))
+		.from(schema.pipelineDefinitionRegistry)
+		.where(eq(schema.pipelineDefinitionRegistry.definitionId, typeId))
 	return row as any
 }
 
 describe("core's entry types reach the registry", () => {
 	it("projects all three as rows of kind 'entry'", async () => {
-		const r = await syncTypeRegistry(db, allEntryTypes(), {
+		const r = await syncDefinitionRegistry(db, allEntryTypes(), {
 			release: "0.6.0"
 		})
 		expect(r.inserted.sort()).toEqual([...PINS].sort())
 
-		const rows = await db.select().from(schema.pipelineTypeRegistry)
+		const rows = await db.select().from(schema.pipelineDefinitionRegistry)
 		expect(rows.length).toBe(3)
 		for (const row of rows as any[]) expect(row.kind).toBe("entry")
 	})
 
 	it("is idempotent, so it rides the same unconditional boot step", async () => {
-		const again = await syncTypeRegistry(db, allEntryTypes(), {
+		const again = await syncDefinitionRegistry(db, allEntryTypes(), {
 			release: "0.6.0"
 		})
 		expect(again.inserted).toEqual([])
@@ -106,12 +106,12 @@ describe("core's entry types reach the registry", () => {
 	})
 
 	it("round-trips through the reader with the hash it was written with", async () => {
-		// ⚠ `readTypeRegistry` rebuilds a `RegistryEntry` field by field, so a
+		// ⚠ `readDefinitionRegistry` rebuilds a `RegistryEntry` field by field, so a
 		// projected field the reader forgets disappears silently — and for a
 		// *hashed* field that means the same row hashes differently depending
 		// on which direction it was travelling.
 		const readBack = new Map(
-			(await readTypeRegistry(db)).map((e) => [
+			(await readDefinitionRegistry(db)).map((e) => [
 				`${e.id}@${e.version}`,
 				e
 			])
@@ -124,8 +124,8 @@ describe("core's entry types reach the registry", () => {
 			expect(back, `${pin} did not come back`).toBeTruthy()
 			expect(back!.entryShape).toEqual(projected!.entryShape)
 			expect(back!.configSchema).toEqual(projected!.configSchema)
-			expect(typeContentHash(back!), pin).toBe(
-				typeContentHash(projected!)
+			expect(definitionContentHash(back!), pin).toBe(
+				definitionContentHash(projected!)
 			)
 		}
 	})
@@ -153,7 +153,7 @@ describe("core's entry types reach the registry", () => {
 			}
 		} as any
 
-		const r = await syncTypeRegistry(db, [reworded], {
+		const r = await syncDefinitionRegistry(db, [reworded], {
 			release: "0.6.0"
 		})
 		expect(r.updated).toEqual(["core:entry/world-lore@1"])
@@ -162,7 +162,7 @@ describe("core's entry types reach the registry", () => {
 
 		// Put the build's own wording back, so nothing after this reads a
 		// doctored row.
-		const restored = await syncTypeRegistry(db, [base], {
+		const restored = await syncDefinitionRegistry(db, [base], {
 			release: "0.6.0"
 		})
 		expect(restored.updated).toEqual(["core:entry/world-lore@1"])
@@ -183,7 +183,7 @@ describe("which half of a declaration is frozen", () => {
 			i18n: { name: { en: "Something else entirely" } },
 			description: "and a different explanation"
 		} as any
-		expect(typeContentHash(reworded)).toBe(typeContentHash(base))
+		expect(definitionContentHash(reworded)).toBe(definitionContentHash(base))
 	})
 
 	it("relabelling a declared field does not move it either", () => {
@@ -202,7 +202,7 @@ describe("which half of a declaration is frozen", () => {
 				}
 			}
 		}
-		expect(typeContentHash(reworded)).toBe(typeContentHash(base))
+		expect(definitionContentHash(reworded)).toBe(definitionContentHash(base))
 	})
 
 	it("changing a field role does move it — a field role is contract", () => {
@@ -217,7 +217,7 @@ describe("which half of a declaration is frozen", () => {
 				roles: { ...base.entryShape!.roles, priority: "weight" }
 			}
 		}
-		expect(typeContentHash(moved)).not.toBe(typeContentHash(base))
+		expect(definitionContentHash(moved)).not.toBe(definitionContentHash(base))
 	})
 
 	it("changing the declared fields schema moves it — a schema is a constraint", () => {
@@ -229,7 +229,7 @@ describe("which half of a declaration is frozen", () => {
 				priority: { ...base.configSchema!.priority!, max: 5 }
 			}
 		}
-		expect(typeContentHash(widened)).not.toBe(typeContentHash(base))
+		expect(definitionContentHash(widened)).not.toBe(definitionContentHash(base))
 	})
 
 	it("a node type hashes exactly as it did before entry types existed", () => {
@@ -243,8 +243,8 @@ describe("which half of a declaration is frozen", () => {
 			ports: { in: {}, out: {} },
 			slots: {}
 		}
-		expect(typeContentHash(node)).toBe(
-			typeContentHash({
+		expect(definitionContentHash(node)).toBe(
+			definitionContentHash({
 				...node,
 				entryShape: undefined,
 				configSchema: undefined

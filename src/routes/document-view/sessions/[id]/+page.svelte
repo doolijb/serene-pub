@@ -2,6 +2,11 @@
 	import { onMount, getContext } from "svelte"
 	import { page } from "$app/state"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import {
+		declareInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
+	import { interestKey } from "$lib/shared/sockets/interest"
 	import { announce } from "$lib/client/accessibility/state.svelte"
 
 	const PAGE_SIZE = 25
@@ -29,7 +34,11 @@
 	// status just goes silent with no cue to go check the message list.
 	let messageAnnouncement = $state("")
 
-	let personas: Sockets.Personas.List.Response["personaList"] = $state([])
+	let characters: Sockets.Characters.List.Response["characterList"] = $state(
+		[]
+	)
+	/** A persona is a character the user voices — one list, narrowed here. */
+	let personas = $derived(characters.filter((c) => c.isPersona))
 	let addPersonaId: number | "" = $state("")
 
 	let isGuest = $derived(!!session && session.userId !== userCtx.user?.id)
@@ -80,14 +89,14 @@
 		return msg.role === "system" ? "System" : "Unknown"
 	}
 
-	// Narrator/system messages aren't tied to any character or persona record,
-	// so there's nothing to view for those — only character/persona messages
-	// get a View link.
+	// Narrator/system messages aren't tied to any character record, so there's
+	// nothing to view for those — only character and persona messages get a
+	// View link, and both go to the same card: a persona IS a character.
 	function viewHref(msg: SelectSessionMessage): string | null {
 		if (msg.characterId)
 			return `/document-view/characters/${msg.characterId}/view`
 		if (msg.personaId)
-			return `/document-view/personas/${msg.personaId}/view`
+			return `/document-view/characters/${msg.personaId}/view`
 		return null
 	}
 
@@ -373,8 +382,8 @@
 		error = ""
 		load()
 	}
-	function handlePersonasList(msg: Sockets.Personas.List.Response) {
-		personas = msg.personaList || []
+	function handleCharactersList(msg: Sockets.Characters.List.Response) {
+		characters = msg.characterList || []
 	}
 	function handleSessionsGetResponseOrder(
 		msg: Sockets.Sessions.GetResponseOrder.Response
@@ -382,41 +391,102 @@
 		if (msg.sessionId === sessionId) sessionResponseOrder = msg
 	}
 
+	/**
+	 * The streamed reply, for THIS session only.
+	 *
+	 * `sessionMessage` is gated, so this declaration is what has the server
+	 * broadcast it at all, and the session is its **interest scope**, so
+	 * another tab's session does not stream through this page. An effect rather
+	 * than `useInterest` because the key moves with the route: `useInterest`
+	 * reads its key once, this releases the old one as it takes the new.
+	 */
+	$effect(() => {
+		if (!Number.isFinite(sessionId)) return
+		return declareInterest<"sessionMessage">(
+			interestKey("sessionMessage", sessionId),
+			handleSessionMessage
+		)
+	})
+
+	/**
+	 * This session's own `sessions:get`, SCOPED to the id in the route — the
+	 * reply to `load()` and to every re-read a handler asks for. An effect
+	 * rather than `useInterest` because the key moves with the route.
+	 *
+	 * The not-found reply arrives here too: it carries the requested id on
+	 * `sessionId`, so it has this scope even with no session in it. No bare key
+	 * is held for it — that one would match every other session's reply, and
+	 * would keep the server's gate open for every id.
+	 */
+	$effect(() => {
+		if (!Number.isFinite(sessionId)) return
+		return declareInterest<"sessions:get">(
+			interestKey("sessions:get", sessionId),
+			handleSessionsGet
+		)
+	})
+
+	/**
+	 * The bare ones: none of these events has a `SCOPED_EVENTS` entry, so a
+	 * scoped key would match nothing and the handlers' own id checks stay the
+	 * filter.
+	 *
+	 * `characters:list` is STANDING rather than a one-shot around its request:
+	 * the server re-emits it as a cascade after any character write, and this
+	 * page's "add persona" picker — the same list, narrowed to the flagged
+	 * rows — should show the new one.
+	 */
+	useInterest<"sessions:addPersona">(
+		"sessions:addPersona",
+		handleSessionsAddPersona
+	)
+	useInterest<"sessions:getResponseOrder">(
+		"sessions:getResponseOrder",
+		handleSessionsGetResponseOrder
+	)
+	useInterest<"characters:list">("characters:list", handleCharactersList)
+
+	/**
+	 * The five message writes this page reads, all BARE.
+	 *
+	 * ⚠ Not to be confused with the streamed `sessionMessage` above: these are
+	 * the `sessionMessages:*` write replies, whose payloads are message ROWS
+	 * with no session beside them, so none of them is in `SCOPED_EVENTS` and a
+	 * `#<id>` key would match no payload at all. Each handler's own check
+	 * against the rows this page is showing stays the filter.
+	 */
+	useInterest<"sessionMessages:delete">(
+		"sessionMessages:delete",
+		handleSessionMessagesDelete
+	)
+	useInterest<"sessionMessages:update">(
+		"sessionMessages:update",
+		handleSessionMessagesUpdate
+	)
+	useInterest<"sessionMessages:swipeLeft">(
+		"sessionMessages:swipeLeft",
+		handleSessionMessagesSwipeLeft
+	)
+	useInterest<"sessionMessages:swipeRight">(
+		"sessionMessages:swipeRight",
+		handleSessionMessagesSwipeRight
+	)
+	useInterest<"sessionMessages:cancel">(
+		"sessionMessages:cancel",
+		handleSessionMessagesCancel
+	)
+
 	onMount(() => {
-		socket.on("sessions:get", handleSessionsGet)
-		socket.on("sessionMessage", handleSessionMessage)
-		socket.on("sessionMessages:delete", handleSessionMessagesDelete)
-		socket.on("sessionMessages:update", handleSessionMessagesUpdate)
-		socket.on("sessionMessages:swipeLeft", handleSessionMessagesSwipeLeft)
-		socket.on("sessionMessages:swipeRight", handleSessionMessagesSwipeRight)
-		socket.on("sessionMessages:cancel", handleSessionMessagesCancel)
-		socket.on("sessions:addPersona", handleSessionsAddPersona)
-		socket.on("personas:list", handlePersonasList)
-		socket.on("sessions:getResponseOrder", handleSessionsGetResponseOrder)
-		socket.emit("personas:list", {})
+		// "sessionMessage", "sessions:get", "sessions:addPersona",
+		// "sessions:getResponseOrder", "characters:list" and every
+		// "sessionMessages:*" key are interests, declared above.
+		// The `sessions:*` and `characters:list` keys are already held
+		// (declared above, and effects run in declaration order); the typed
+		// `emit` puts their sync ahead of this request group on the same
+		// socket — plan ruling 3.
+		socket.emit("characters:list", {})
 		socket.emit("sessions:getResponseOrder", { sessionId })
 		load()
-		return () => {
-			socket.off("sessions:get", handleSessionsGet)
-			socket.off("sessionMessage", handleSessionMessage)
-			socket.off("sessionMessages:delete", handleSessionMessagesDelete)
-			socket.off("sessionMessages:update", handleSessionMessagesUpdate)
-			socket.off(
-				"sessionMessages:swipeLeft",
-				handleSessionMessagesSwipeLeft
-			)
-			socket.off(
-				"sessionMessages:swipeRight",
-				handleSessionMessagesSwipeRight
-			)
-			socket.off("sessionMessages:cancel", handleSessionMessagesCancel)
-			socket.off("sessions:addPersona", handleSessionsAddPersona)
-			socket.off("personas:list", handlePersonasList)
-			socket.off(
-				"sessions:getResponseOrder",
-				handleSessionsGetResponseOrder
-			)
-		}
 	})
 </script>
 

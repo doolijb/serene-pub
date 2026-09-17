@@ -52,7 +52,7 @@ import {
 } from "drizzle-orm"
 import type { AnyPgColumn } from "drizzle-orm/pg-core"
 import type { Handler } from "$lib/shared/events"
-import { lorebookBindingListHandler, syncLorebookBindings } from "./lorebooks"
+import { relistBindings, syncLorebookBindings } from "./lorebooks"
 import { autoEnqueueLorebook } from "$lib/server/embedding/vectorizationQueue"
 import { enqueueLorebookAnnotation } from "$lib/server/annotations/queue"
 import { bandOfType, entryDeclaration } from "$lib/server/entries/declarations"
@@ -345,16 +345,67 @@ async function afterWrite(
 	enqueueLorebookAnnotation(lorebookId, lorebookName)
 
 	if (!emitToUser) return
-	const bindingListResult = await lorebookBindingListHandler.handler(
-		socket,
-		{ lorebookId },
-		emitToUser
-	)
-	emitToUser("lorebookBindingList", bindingListResult)
+	// The cast, because `syncLorebookBindings` above can have minted a row
+	// for a `{{char:N}}` token this write introduced.
+	//
+	// One event, and it is the namespaced one. An un-namespaced
+	// `emitToUser("lorebookBindingList", …)` beside this call is a second
+	// copy of the same payload under a name nothing on the client listens
+	// for — every client hit of that word is a field name inside
+	// `lorebooks:bindingList`. One stood here; it is gone.
+	await relistBindings(socket, lorebookId, emitToUser)
 
-	// The list handler emits its own response; the return value is discarded
-	// deliberately, so there is exactly one `entries:list` on the wire per write.
-	await entryListHandler.handler(socket, { lorebookId, typeId }, emitToUser)
+	// Lazy for the same reason: exactly one `entries:list` per write, and
+	// none at all when no workspace is showing this type.
+	await relistEntries(socket, lorebookId, typeId, emitToUser)
+}
+
+/**
+ * One type's entries, for one book.
+ *
+ * Split out of the handler below so the four cascades that re-send this list
+ * (`afterWrite`'s three verbs, plus the reorder and the iterate) can hand it
+ * to `emitToUser` as a thunk: ONE source of truth for the payload, and the
+ * row read behind it is paid only when a workspace is actually showing this
+ * type (socket-interest plan, ruling 4).
+ *
+ * Ownership is re-checked here rather than trusted from the caller, in the
+ * same statement that finds the book — this file's rule for every read.
+ */
+async function buildEntriesList(
+	userId: number,
+	lorebookId: number,
+	typeId: EntryTypeId
+): Promise<Sockets.Entries.List.Response> {
+	const book = await findOwnedBook(lorebookId, userId)
+	if (!book) throw new Error("Lorebook not found.")
+
+	return {
+		lorebookId,
+		typeId,
+		entryList: await listEntryRows(lorebookId, typeId)
+	}
+}
+
+/**
+ * The list, re-sent to the caller after a write that changed it.
+ *
+ * The lazy counterpart of the handler below, and the ONE spelling of this
+ * event name for every cascade.
+ *
+ * ⚠ A build that THROWS is logged by `emitToUser` and emits nothing — right
+ * for a push the caller's own reply does not depend on, and reachable here
+ * only if the book vanished between the write and this refresh.
+ */
+function relistEntries(
+	socket: any,
+	lorebookId: number,
+	typeId: EntryTypeId,
+	emitToUser: (event: string, data: any) => void
+) {
+	return emitToUser("entries:list", () =>
+		buildEntriesList(socket.user!.id, lorebookId, typeId)
+	)
 }
 
 export const entryListHandler: Handler<
@@ -363,17 +414,11 @@ export const entryListHandler: Handler<
 > = {
 	event: "entries:list",
 	handler: async (socket, params, emitToUser) => {
-		const userId = socket.user!.id
-		const typeId = assertTypeId(params.typeId)
-
-		const book = await findOwnedBook(params.lorebookId, userId)
-		if (!book) throw new Error("Lorebook not found.")
-
-		const res = {
-			lorebookId: params.lorebookId,
-			typeId,
-			entryList: await listEntryRows(params.lorebookId, typeId)
-		}
+		const res = await buildEntriesList(
+			socket.user!.id,
+			params.lorebookId,
+			assertTypeId(params.typeId)
+		)
 		emitToUser("entries:list", res)
 		return res
 	}
@@ -587,7 +632,15 @@ export const deleteEntryHandler: Handler<
 			.delete(schema.lorebookEntries)
 			.where(entryOfType(params.id, typeId))
 
-		const res = { success: "Entry deleted successfully." }
+		// `lorebookId`/`entryId` are present so the interest scope can be
+		// derived: `{ success }` on its own named neither the row nor its
+		// book, so this reply could only ever reach a bare key — and a
+		// workspace could not tell whose delete it was.
+		const res: Sockets.Entries.Delete.Response = {
+			success: "Entry deleted successfully.",
+			lorebookId: existing.entry.lorebookId,
+			entryId: params.id
+		}
 		if (emitToUser) emitToUser("entries:delete", res)
 		await afterWrite(
 			socket,
@@ -642,11 +695,7 @@ export const updateEntryPositionsHandler: Handler<
 		const res = { success: "Entry positions updated successfully." }
 		if (emitToUser) {
 			emitToUser("entries:updatePositions", res)
-			await entryListHandler.handler(
-				socket,
-				{ lorebookId: params.lorebookId, typeId },
-				emitToUser
-			)
+			await relistEntries(socket, params.lorebookId, typeId, emitToUser)
 		}
 
 		return res
@@ -825,9 +874,10 @@ export const iterateNextEntryHandler: Handler<
 		const entry = toEntryRow(newRow)
 		if (emitToUser) {
 			emitToUser("entries:iterateNext", { entry })
-			await entryListHandler.handler(
+			await relistEntries(
 				socket,
-				{ lorebookId: existing.entry.lorebookId, typeId },
+				existing.entry.lorebookId,
+				typeId,
 				emitToUser
 			)
 		}

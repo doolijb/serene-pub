@@ -86,7 +86,7 @@ export function populateLorebookEntryBindings<T extends LorebookEntry>(
  * whether that character is even attached to this session. World lore has no
  * such binding and is never gated by this function.
  *
- * A binding with neither characterId nor personaId is a background/NPC
+ * A binding with no characterId is a background/NPC
  * row — its lore is visible only to the Narrator (currentCharacterId ===
  * null, i.e. no-perspective mode), since no specific character can know
  * about a background character's private knowledge, but the omniscient
@@ -110,10 +110,14 @@ export function isCharacterLoreEntryVisible(
 	if (!binding) return false
 
 	if (binding.characterId) {
-		return binding.characterId === currentCharacterId
-	} else if (binding.personaId) {
+		if (binding.characterId === currentCharacterId) return true
+		// ⚠ A binding on a character one of this session's users VOICES is
+		// visible for the WHOLE session, not just that character's own turn.
+		// Keeping only the perspective test above would cut every persona's
+		// private lore out of every prompt, because a persona is never the
+		// perspective a turn is generated from.
 		return (session.sessionPersonas || []).some(
-			(cp) => cp.persona.id === binding.personaId
+			(cp) => cp.persona?.id === binding.characterId
 		)
 	}
 	// Background/NPC binding — only the Narrator (no-perspective mode) can

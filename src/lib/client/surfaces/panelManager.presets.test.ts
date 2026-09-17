@@ -268,7 +268,7 @@ describe("SurfaceManager — an empty commit must not mask the preset base", () 
 				middle: {
 					cols: 18,
 					rows: 34,
-					items: [{ id: "composer", x: 0, y: 31, w: 18, h: 3 }]
+					items: [{ id: "world-state", x: 0, y: 31, w: 18, h: 3 }]
 				}
 			})
 		).toBe(false)
@@ -308,7 +308,7 @@ describe("SurfaceManager — an empty commit must not mask the preset base", () 
 			middle: {
 				cols: 18,
 				rows: 34,
-				items: [{ id: "composer", x: 0, y: 31, w: 18, h: 3 }]
+				items: [{ id: "world-state", x: 0, y: 31, w: 18, h: 3 }]
 			}
 		}
 		done(m, real)

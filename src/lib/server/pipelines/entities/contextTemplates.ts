@@ -18,7 +18,7 @@
  * The **engine is the pool's other half**, and it is not symmetry. A template is
  * a piece of writing in a language: a Jinja story string and a Handlebars one
  * both render the assemble node's context and are not interchangeable for a
- * second. Pooled on the node type alone, either was selectable into either
+ * second. Pooled on the node definition alone, either was selectable into either
  * slot — it stored cleanly, and then shipped its own unrendered markup to the
  * model as prose. There is deliberately **no cross-engine fallback** anywhere
  * in this file or in `defaultContextTemplateFor`: a slot whose language has no
@@ -62,7 +62,7 @@ export class ContextTemplateNotUsableError extends Error {}
 
 export interface ContextTemplateRecord {
 	id: number
-	nodeTypeId: string
+	nodeDefinitionId: string
 	createdForSpecId: number | null
 	name: string
 	source: string
@@ -91,7 +91,7 @@ export interface GroupedContextTemplate extends ContextTemplateRecord {
 
 const toRecord = (r: any): ContextTemplateRecord => ({
 	id: r.id,
-	nodeTypeId: r.nodeTypeId,
+	nodeDefinitionId: r.nodeDefinitionId,
 	createdForSpecId: r.createdForSpecId ?? null,
 	name: r.name,
 	source: r.source ?? "",
@@ -118,7 +118,7 @@ const toRecord = (r: any): ContextTemplateRecord => ({
  */
 export async function listContextTemplates(
 	db: Db,
-	nodeTypeId: string,
+	nodeDefinitionId: string,
 	engine: string | readonly string[],
 	forSpecId?: number
 ): Promise<GroupedContextTemplate[]> {
@@ -129,8 +129,8 @@ export async function listContextTemplates(
 		.where(
 			and(
 				eq(
-					schema.pipelineContextTemplates.nodeTypeId,
-					poolKeyFor(nodeTypeId)
+					schema.pipelineContextTemplates.nodeDefinitionId,
+					poolKeyFor(nodeDefinitionId)
 				),
 				inArray(schema.pipelineContextTemplates.engine, engines)
 			)
@@ -175,7 +175,7 @@ export async function listContextTemplates(
 /**
  * Check that a template may be selected for this node, and say why if not.
  *
- * Two hard rules, and they are the two halves of the pool key: the node type
+ * Two hard rules, and they are the two halves of the pool key: the node definition
  * must match, and the **engine** must be one the slot accepts. Everything else
  * about "does this fit" — whether the variables it names are supplied by this
  * version — is a warning, because a template referencing a variable a pipeline
@@ -196,7 +196,7 @@ export async function listContextTemplates(
  */
 export async function assertSelectable(
 	db: Db,
-	nodeTypeId: string,
+	nodeDefinitionId: string,
 	templateId: number,
 	engine: string | readonly string[]
 ): Promise<ContextTemplateRecord> {
@@ -213,7 +213,7 @@ export async function assertSelectable(
 				"since the list was loaded."
 		)
 
-	if (row.nodeTypeId !== poolKeyFor(nodeTypeId))
+	if (row.nodeDefinitionId !== poolKeyFor(nodeDefinitionId))
 		throw new ContextTemplateNotUsableError(
 			`'${row.name}' was written for a different kind of step, so the ` +
 				`values it renders would not be there. Duplicate it and adapt ` +
@@ -331,7 +331,7 @@ export async function resolveContextTemplate(
 }
 
 export interface CreateContextTemplateInput {
-	nodeTypeId: string
+	nodeDefinitionId: string
 	name: string
 	source: string
 	engine?: string | null
@@ -353,7 +353,7 @@ export async function createContextTemplate(
 	const [row] = await db
 		.insert(schema.pipelineContextTemplates)
 		.values({
-			nodeTypeId: poolKeyFor(input.nodeTypeId),
+			nodeDefinitionId: poolKeyFor(input.nodeDefinitionId),
 			name: input.name,
 			source: input.source,
 			// Normalized here rather than left to the column default, because
@@ -400,7 +400,7 @@ export async function duplicateContextTemplate(
 	// mine to edit" — changing what it is written in would hand someone a copy
 	// that no longer fits the slot they duplicated it from.
 	return await createContextTemplate(db, {
-		nodeTypeId: row.nodeTypeId,
+		nodeDefinitionId: row.nodeDefinitionId,
 		name,
 		source: row.source ?? "",
 		engine: row.engine ?? CORE_TEMPLATE_ENGINE,
@@ -479,8 +479,8 @@ export async function updateContextTemplate(
 			.where(
 				and(
 					eq(
-						schema.pipelineContextTemplates.nodeTypeId,
-						row.nodeTypeId
+						schema.pipelineContextTemplates.nodeDefinitionId,
+						row.nodeDefinitionId
 					),
 					eq(schema.pipelineContextTemplates.engine, nextEngine),
 					eq(schema.pipelineContextTemplates.name, nextName),
@@ -606,7 +606,7 @@ export async function deleteContextTemplate(
 }
 
 /**
- * The template a node type falls back to, by seed identity.
+ * The template a node definition falls back to, by seed identity.
  *
  * Per language, like everything else here: core ships a Handlebars row for the
  * assemble node and nothing in any other engine, so a jinja2 slot correctly
@@ -614,7 +614,7 @@ export async function deleteContextTemplate(
  */
 export async function shippedContextTemplate(
 	db: Db,
-	nodeTypeId: string,
+	nodeDefinitionId: string,
 	engine: string = CORE_TEMPLATE_ENGINE
 ) {
 	const [row] = await db
@@ -623,8 +623,8 @@ export async function shippedContextTemplate(
 		.where(
 			and(
 				eq(
-					schema.pipelineContextTemplates.nodeTypeId,
-					poolKeyFor(nodeTypeId)
+					schema.pipelineContextTemplates.nodeDefinitionId,
+					poolKeyFor(nodeDefinitionId)
 				),
 				eq(schema.pipelineContextTemplates.engine, engine),
 				eq(schema.pipelineContextTemplates.isImmutable, true),

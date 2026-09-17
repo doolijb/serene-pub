@@ -1,7 +1,5 @@
-import type {
-	TypedSocket,
-	SocketEventMap
-} from "$lib/client/sockets/typedSocket"
+import { requestWithInterest } from "$lib/client/sockets/interest.svelte"
+import type { SocketEventMap } from "$lib/client/sockets/typedSocket"
 import {
 	resolveSillyTavernDataRoot,
 	relativeToDataRoot,
@@ -63,25 +61,33 @@ export function resolvePickedFolder(
 }
 
 /**
- * One-shot request/response over the app's emit+listen socket pattern (no
- * per-call ack). Rejects on timeout instead of hanging forever — a lost
- * message, a server-side handler that throws before reaching its own
- * try/catch, or a dropped connection would otherwise leave the caller
- * waiting indefinitely with no feedback.
+ * One-shot request/response over the app's emit+listen pattern (no per-call
+ * ack): declares interest in the reply, sends the request, and releases that
+ * interest the moment the reply lands or the wait times out. Rejecting on
+ * timeout rather than hanging forever is what gives the caller feedback when a
+ * message is lost, a server-side handler throws before reaching its own
+ * try/catch, or the connection drops.
+ *
+ * The registry reaches the app's ONE socket itself, so neither this helper nor
+ * the exports below take a socket. A test drives them by putting its own
+ * socket in `socketInstance` (`setSocket`).
  */
 function requestOnce<K extends keyof SocketEventMap>(
-	socket: TypedSocket,
 	event: K,
 	params: SocketEventMap[K]["params"],
 	timeoutMs = 30_000
 ): Promise<SocketEventMap[K]["response"]> {
 	return new Promise((resolve, reject) => {
 		let settled = false
+		// Assigned before any reply can reach the handler below: the reply
+		// crosses the socket, so it cannot arrive during the synchronous emit
+		// inside `requestWithInterest`.
+		let release: (() => void) | undefined
 
 		const timer = setTimeout(() => {
 			if (settled) return
 			settled = true
-			socket.off(event, listener)
+			release?.()
 			reject(
 				new Error(
 					`Timed out waiting for a response (${String(event)}). The server may have hit an error — check the server logs.`
@@ -89,25 +95,26 @@ function requestOnce<K extends keyof SocketEventMap>(
 			)
 		}, timeoutMs)
 
-		const listener = (response: SocketEventMap[K]["response"]) => {
-			if (settled) return
-			settled = true
-			clearTimeout(timer)
-			socket.off(event, listener)
-			resolve(response)
-		}
-		socket.on(event, listener)
-		socket.emit(event, params)
+		release = requestWithInterest(
+			event,
+			params,
+			(response: SocketEventMap[K]["response"]) => {
+				if (settled) return
+				settled = true
+				clearTimeout(timer)
+				// Release on reply: this request wants one answer, and holding
+				// the key past it would keep the server emitting to a view
+				// that is done asking.
+				release?.()
+				resolve(response)
+			}
+		)
 	})
 }
 
 /** Starts a new import staging session, returning its id. */
-export async function startImportSession(socket: TypedSocket): Promise<string> {
-	const response = await requestOnce(
-		socket,
-		"import:sillytavern:startSession",
-		{}
-	)
+export async function startImportSession(): Promise<string> {
+	const response = await requestOnce("import:sillytavern:startSession", {})
 	if (!response.success || !response.importSessionId) {
 		throw new Error(response.error || "Failed to start import session")
 	}
@@ -179,7 +186,6 @@ export function concatenateBatch(batch: StageFilesPayload): {
  * layer has no per-call ack, so batches are sent strictly sequentially).
  */
 export async function stageFilesToServer(
-	socket: TypedSocket,
 	importSessionId: string,
 	pickedFiles: PickedFile[],
 	onProgress?: (staged: number, total: number) => void
@@ -192,7 +198,6 @@ export async function stageFilesToServer(
 	for await (const batch of batchFilesForUpload(pickedFiles)) {
 		const { manifest, blob } = concatenateBatch(batch)
 		const response = await requestOnce(
-			socket,
 			"import:sillytavern:stageFiles",
 			{ importSessionId, manifest, blob },
 			60_000

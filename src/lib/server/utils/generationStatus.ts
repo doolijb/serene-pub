@@ -7,7 +7,7 @@ import {
 	ComposedError,
 	type ConnectionIdentity
 } from "$lib/server/connections/visibility"
-import type { LLMQueueStatus } from "./llmQueue"
+import type { StatusText } from "@serene-pub/sdk"
 
 /**
  * What a failure says when its own words cannot be shown.
@@ -41,25 +41,44 @@ export function friendlyErrorFromUnknown(err: unknown): {
 	return { message, code: code ? String(code) : undefined }
 }
 
-export async function persistGenerationStage(
+/**
+ * The run's status onto the row it is filling (R-19), and the row announced.
+ *
+ * Replaces `persistGenerationStage` and the `queued · loading · generating`
+ * enum it wrote (2026-09-16, U5h): what the row shows while it generates is
+ * now the status the pipeline's nodes set — *{speaker} is thinking*,
+ * *{speaker} is typing* — and the queue's two waits said in the same voice
+ * (`runStatus.ts`). A locale map with its variables filled; the client
+ * resolves the language.
+ *
+ * Fenced on the row still generating and, where the caller holds one, on the
+ * queue item this run put on the row — a status landing after a Stop must
+ * not resurrect the row, and a superseded run's status must not label the
+ * run that replaced it. Through the run's `db`, like every other write the
+ * live row makes.
+ */
+export async function persistGenerationStatus(
+	runDb: Db,
 	generatingMessageId: number,
 	sessionId: number,
 	socketIo: any,
-	status: LLMQueueStatus
+	status: StatusText | null,
+	queueItemId?: string
 ) {
-	const stage =
-		status === "queued" || status === "loading" || status === "generating"
-			? status
-			: null
 	const [updated] = await updateLegacyWhere(
-		db,
+		runDb,
 		and(
 			eq(schema.sessionMessages.id, generatingMessageId),
-			eq(schema.sessionMessages.isGenerating, true)
+			eq(schema.sessionMessages.isGenerating, true),
+			...(queueItemId
+				? [eq(schema.sessionMessages.queueItemId, queueItemId)]
+				: [])
 		),
-		{ generationStage: stage }
+		{ generationStatus: status }
 	)
-	if (updated) {
+	// No socket server means nobody to tell — a run with no client behind it,
+	// a test — and the row is still the record.
+	if (updated && socketIo) {
 		await broadcastToSessionUsers(socketIo, sessionId, "sessionMessage", {
 			sessionMessage: updated
 		})
@@ -146,7 +165,7 @@ export async function persistGenerationErrorRow(
 		),
 		{
 			isGenerating: false,
-			generationStage: null,
+			generationStatus: null,
 			queueItemId: null,
 			error
 		}
@@ -155,7 +174,7 @@ export async function persistGenerationErrorRow(
 	// between what an administrator and a guest receive is made by the walk
 	// inside `broadcastToSessionUsers`, per recipient — which is the same rule,
 	// in the same place, as every other emit on the server.
-	if (updated)
+	if (updated && socketIo)
 		await broadcastToSessionUsers(socketIo, sessionId, "sessionMessage", {
 			sessionMessage: updated
 		})

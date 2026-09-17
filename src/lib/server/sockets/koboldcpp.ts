@@ -5,8 +5,8 @@ import * as schema from "$lib/server/db/schema"
 // import needed/available for it.
 import { eq, and, inArray } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
-import { connectionsList, connectionsSetDefault } from "./connections"
-import { systemSettingsGet } from "./systemSettings"
+import { buildConnectionsList, connectionsSetDefault } from "./connections"
+import { buildSystemSettingsGet } from "./systemSettings"
 import { getAppDataDir } from "$lib/server/db/drizzle.config"
 import koboldCppManagedAdapter from "$lib/server/connectionAdapters/KoboldCppManagedAdapter"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
@@ -60,9 +60,10 @@ import { resolveConnectionCapabilities } from "$lib/server/connections/resolve"
 import { setCapabilityDefault } from "$lib/server/connections/capabilityDefaults"
 import {
 	endpointIdsServingModel,
-	ensureDefaultModel,
+	ensureConnectionModel,
 	forgetModelEverywhere
 } from "$lib/server/connections/models"
+import { syncManyConnectionModels } from "$lib/server/connections/modelSync"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
 import { isAndroidWrapper } from "$lib/server/utils"
 
@@ -103,7 +104,7 @@ export const koboldCppSetBaseUrl: Handler<
 
 		const res: Sockets.KoboldCPP.SetBaseUrl.Response = { success: true }
 		emitToUser("koboldcpp:setBaseUrl", res)
-		await systemSettingsGet.handler(socket, {}, emitToUser)
+		await emitToUser("systemSettings:get", () => buildSystemSettingsGet())
 		return res
 	}
 }
@@ -133,7 +134,7 @@ export const koboldCppSetModelsDir: Handler<
 			.where(eq(schema.koboldCppSettings.id, 1))
 		const res: Sockets.KoboldCPP.SetModelsDir.Response = { success: true }
 		emitToUser("koboldcpp:setModelsDir", res)
-		await systemSettingsGet.handler(socket, {}, emitToUser)
+		await emitToUser("systemSettings:get", () => buildSystemSettingsGet())
 		return res
 	}
 }
@@ -240,6 +241,265 @@ export const koboldCppIsUpdateAvailableHandler: Handler<
 	}
 }
 
+/**
+ * The `koboldcpp:listModels` payload — every model file the configured
+ * directories hold, reconciled against `local_models`.
+ *
+ * One pure builder, shared by the own handler (which emits eagerly through it)
+ * and by `koboldcpp:setModelKind`'s cascade (`await
+ * emitToUser("koboldcpp:listModels", () => buildKoboldCppListModels())`), so the
+ * gate skips a reachability probe, a directory scan per configured models
+ * directory and a header sniff per unmeasured file when no open view holds the
+ * key. Skipping the emit alone would save nothing; that work is the cost.
+ *
+ * Takes no socket: the listing is the same for every admin, and only admins are
+ * answered. It also WRITES — stale rows are swept, new files tracked, a sniffed
+ * kind recorded — so a cascade that runs it is doing more than refreshing a
+ * view; a gate that closes on it defers that reconciliation to the next listing
+ * somebody actually asked for, which is where it has always come from.
+ */
+export async function buildKoboldCppListModels(): Promise<Sockets.KoboldCPP.ListModels.Response> {
+	const settings = (await db.query.koboldCppSettings.findFirst())!
+	const { koboldCppManagerBaseUrl: baseUrl } = settings
+
+	let currentModel: string | null = null
+	try {
+		const modelResp = await fetch(`${baseUrl}/api/v1/model`, {
+			signal: AbortSignal.timeout(5000)
+		})
+		if (modelResp.ok) {
+			const data = await modelResp.json()
+			currentModel = data.result || null
+		}
+	} catch {
+		// KoboldCPP offline — return empty gracefully
+	}
+
+	// Load DB records; exclude anything still downloading (or errored)
+	const dbModels = await db.query.localModels.findMany()
+	const dbByFilename = new Map(dbModels.map((m) => [m.filename, m]))
+	const incompleteFilenames = new Set(
+		dbModels.filter((m) => m.status !== "complete").map((m) => m.filename)
+	)
+
+	// Scan every models directory for loadable model files, skipping
+	// incomplete downloads. BOTH extensions — an image model may be either,
+	// and the stale sweep below deletes the row of anything the scan doesn't
+	// see, so a .gguf-only scan would silently forget every downloaded
+	// .safetensors while the file sat on disk.
+	//
+	// The union across directories is built IN FULL before that sweep, and
+	// that ordering is the whole reason this is one loop rather than a
+	// scan-and-sweep per directory: sweeping after the text directory would
+	// delete the row of every model living in the image one — silently, on
+	// the first listing after a second directory is set, and looking exactly
+	// like the models vanished.
+	const scanDirs = modelsDirsToScan(settings)
+	const discovered = new Map<
+		string,
+		{ dir: string; dirKind: Sockets.KoboldCPP.ModelKindFilter }
+	>()
+	// Nothing configured is not the same answer as an empty directory, so
+	// the sweep is off until at least one directory has actually answered.
+	let scannedEverything = scanDirs.length > 0
+	for (const { kind: dirKind, dir } of scanDirs) {
+		let entries: string[]
+		try {
+			entries = await fsPromises.readdir(dir)
+		} catch {
+			// Doesn't exist yet, or could not be read. Either way this
+			// listing does not know what is in there, and a sweep run on a
+			// partial answer deletes rows for models that are fine.
+			scannedEverything = false
+			continue
+		}
+		for (const name of entries) {
+			if (!isModelFilename(name)) continue
+			if (incompleteFilenames.has(name)) continue
+			// `filename` is UNIQUE, so the same basename in both directories
+			// is ONE row, described by whichever directory the scan saw
+			// last. Bounded to metadata: each connection still loads the
+			// copy in its own kind's directory, because resolveModelPath
+			// tries that one first.
+			discovered.set(name, { dir, dirKind })
+		}
+	}
+
+	// Forget complete records for files removed outside the app — the
+	// listing itself is always driven by the directory scan above, so this
+	// only prevents localModels from accumulating rows for files that no
+	// longer exist. Which is also why skipping it is cheap and running it on
+	// an incomplete scan is not: a row nobody sees, against every model the
+	// user owns disappearing from the Manager.
+	if (scannedEverything) {
+		const staleFilenames = dbModels
+			.filter(
+				(m) => m.status === "complete" && !discovered.has(m.filename)
+			)
+			.map((m) => m.filename)
+		if (staleFilenames.length > 0) {
+			await db
+				.delete(schema.localModels)
+				.where(inArray(schema.localModels.filename, staleFilenames))
+		}
+	}
+
+	const availableModels: Sockets.KoboldCPP.ListModels.ModelFile[] =
+		await Promise.all(
+			[...discovered.entries()].map(async ([name, found]) => {
+				const filePath = path.join(found.dir, name)
+				let size = 0
+				try {
+					const stat = await fsPromises.stat(filePath)
+					size = stat.size
+				} catch {}
+
+				let rec = dbByFilename.get(name)
+				if (!rec) {
+					// Placed directly into a models folder rather than
+					// downloaded through the UI — track it the same as a
+					// completed download so it behaves consistently
+					// everywhere else that reads this table.
+					//
+					// The folder it was found in is good evidence of what it
+					// is, and it is recorded as exactly that: "declared", a
+					// claim the header sniff below can promote or overrule.
+					// Not "assumed", which would be thrown away — the
+					// unknown-verdict branch below rewrites an assumed kind
+					// to "unknown", so a new-architecture image model in the
+					// image folder would sit Unverified forever.
+					const [tracked] = await db
+						.insert(schema.localModels)
+						.values({
+							filename: name,
+							modelName: name.replace(MODEL_EXTENSION_RE, ""),
+							sizeBytes: size,
+							status: "complete",
+							// `isModelFilename` gated the extension above,
+							// so this is never null. `undefined` would fall
+							// through to the column's own "gguf" default,
+							// which is the guess `format` exists to stop
+							// anything making.
+							format: formatForFilename(name) ?? undefined,
+							kind: found.dirKind,
+							kindSource: "declared",
+							modality: modalityForKind(found.dirKind)
+						})
+						.onConflictDoUpdate({
+							target: schema.localModels.filename,
+							set: { filename: name }
+						})
+						.returning()
+					rec = tracked
+				}
+
+				// Straight passthrough of two NOT NULL columns, so a tracked
+				// row always has an answer here. The fallback covers only
+				// the unreachable case where the insert above returned no
+				// row, and says "unknown" rather than "text": a record we
+				// could not read back is not evidence that the file is a
+				// text model.
+				let kind: Sockets.KoboldCPP.ModelKind = rec?.kind ?? "unknown"
+				let kindSource: Sockets.KoboldCPP.ModelKindSource =
+					rec?.kindSource ?? "assumed"
+				let kindReason: string | undefined
+
+				// Sniff when the row has never been measured ("assumed" —
+				// which is also every row the migration backfilled), when
+				// something only CLAIMED what this is (the download tab, or
+				// the folder above), when the last measurement failed, or
+				// when the bytes changed under a row that WAS measured.
+				// Never when a human has said what this is.
+				//
+				// "declared" is not optional in that list: without it the
+				// folder's claim is never revisited, and an LLM dropped into
+				// the image folder is offered as an image model forever.
+				const sizeChanged =
+					rec?.sizeBytes != null && rec.sizeBytes !== size
+				if (
+					kindSource !== "user" &&
+					(kindSource === "assumed" ||
+						kindSource === "declared" ||
+						kind === "unknown" ||
+						sizeChanged)
+				) {
+					const verdict = await classifyModelFile(filePath)
+					kindReason = verdict.reason
+					if (verdict.kind !== "unknown") {
+						// A measurement of the file we actually hold
+						// outranks anything guessed about it — including the
+						// folder it was sitting in.
+						kind = verdict.kind
+						kindSource = "detected"
+						await db
+							.update(schema.localModels)
+							.set({
+								kind,
+								kindSource,
+								modality: modalityForKind(kind)
+							})
+							.where(eq(schema.localModels.filename, name))
+					} else if (kindSource === "assumed" && kind !== "unknown") {
+						// Looked, couldn't tell. Say so rather than keep
+						// asserting the backfill's "text" — an unreadable
+						// file offered as a working text model fails at load
+						// time with nothing on screen. kindSource stays
+						// "assumed" so a file that was mid-copy resolves
+						// itself on the next listing; "detected" would be a
+						// lie about a read that produced no answer.
+						//
+						// "declared" deliberately does NOT land here: an
+						// indefinite read is not a reason to throw away the
+						// only evidence there is, which is where the file
+						// was put.
+						//
+						// `modality` goes with it, through the same
+						// projection every other write here uses, so the two
+						// columns cannot end up disagreeing. ⚠ That is only
+						// safe while `assumed` is the sole `kind_source`
+						// reaching this branch: a lane that starts writing a
+						// modality the sniff cannot see (`embeddings` on a
+						// BERT GGUF) must raise that row above `assumed`, or
+						// an unreadable moment here would erase it.
+						kind = "unknown"
+						await db
+							.update(schema.localModels)
+							.set({ kind, modality: modalityForKind(kind) })
+							.where(eq(schema.localModels.filename, name))
+					}
+				}
+
+				return {
+					kind,
+					kindSource,
+					kindReason,
+					// Where it actually is, which is evidence and not a
+					// verdict: a row whose kind disagrees with this is
+					// either a user override or a legacy flat install.
+					dirKind: found.dirKind,
+					name,
+					size,
+					...(rec
+						? {
+								modelName: rec.modelName,
+								modelUrl: rec.modelUrl ?? undefined,
+								description: rec.description ?? undefined,
+								quantization: rec.quantization ?? undefined,
+								sizeBytes: rec.sizeBytes ?? undefined
+							}
+						: {})
+				}
+			})
+		)
+
+	const res: Sockets.KoboldCPP.ListModels.Response = {
+		currentModel,
+		availableModels,
+		modelsDirSet: !!settings.koboldCppManagerModelsDir
+	}
+	return res
+}
+
 export const koboldCppListModelsHandler: Handler<
 	Sockets.KoboldCPP.ListModels.Params,
 	Sockets.KoboldCPP.ListModels.Response
@@ -247,251 +507,7 @@ export const koboldCppListModelsHandler: Handler<
 	event: "koboldcpp:listModels",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
-		const settings = (await db.query.koboldCppSettings.findFirst())!
-		const { koboldCppManagerBaseUrl: baseUrl } = settings
-
-		let currentModel: string | null = null
-		try {
-			const modelResp = await fetch(`${baseUrl}/api/v1/model`, {
-				signal: AbortSignal.timeout(5000)
-			})
-			if (modelResp.ok) {
-				const data = await modelResp.json()
-				currentModel = data.result || null
-			}
-		} catch {
-			// KoboldCPP offline — return empty gracefully
-		}
-
-		// Load DB records; exclude anything still downloading (or errored)
-		const dbModels = await db.query.localModels.findMany()
-		const dbByFilename = new Map(dbModels.map((m) => [m.filename, m]))
-		const incompleteFilenames = new Set(
-			dbModels
-				.filter((m) => m.status !== "complete")
-				.map((m) => m.filename)
-		)
-
-		// Scan every models directory for loadable model files, skipping
-		// incomplete downloads. BOTH extensions — an image model may be either,
-		// and the stale sweep below deletes the row of anything the scan doesn't
-		// see, so a .gguf-only scan would silently forget every downloaded
-		// .safetensors while the file sat on disk.
-		//
-		// The union across directories is built IN FULL before that sweep, and
-		// that ordering is the whole reason this is one loop rather than a
-		// scan-and-sweep per directory: sweeping after the text directory would
-		// delete the row of every model living in the image one — silently, on
-		// the first listing after a second directory is set, and looking exactly
-		// like the models vanished.
-		const scanDirs = modelsDirsToScan(settings)
-		const discovered = new Map<
-			string,
-			{ dir: string; dirKind: Sockets.KoboldCPP.ModelKindFilter }
-		>()
-		// Nothing configured is not the same answer as an empty directory, so
-		// the sweep is off until at least one directory has actually answered.
-		let scannedEverything = scanDirs.length > 0
-		for (const { kind: dirKind, dir } of scanDirs) {
-			let entries: string[]
-			try {
-				entries = await fsPromises.readdir(dir)
-			} catch {
-				// Doesn't exist yet, or could not be read. Either way this
-				// listing does not know what is in there, and a sweep run on a
-				// partial answer deletes rows for models that are fine.
-				scannedEverything = false
-				continue
-			}
-			for (const name of entries) {
-				if (!isModelFilename(name)) continue
-				if (incompleteFilenames.has(name)) continue
-				// `filename` is UNIQUE, so the same basename in both directories
-				// is ONE row, described by whichever directory the scan saw
-				// last. Bounded to metadata: each connection still loads the
-				// copy in its own kind's directory, because resolveModelPath
-				// tries that one first.
-				discovered.set(name, { dir, dirKind })
-			}
-		}
-
-		// Forget complete records for files removed outside the app — the
-		// listing itself is always driven by the directory scan above, so this
-		// only prevents localModels from accumulating rows for files that no
-		// longer exist. Which is also why skipping it is cheap and running it on
-		// an incomplete scan is not: a row nobody sees, against every model the
-		// user owns disappearing from the Manager.
-		if (scannedEverything) {
-			const staleFilenames = dbModels
-				.filter(
-					(m) =>
-						m.status === "complete" && !discovered.has(m.filename)
-				)
-				.map((m) => m.filename)
-			if (staleFilenames.length > 0) {
-				await db
-					.delete(schema.localModels)
-					.where(inArray(schema.localModels.filename, staleFilenames))
-			}
-		}
-
-		const availableModels: Sockets.KoboldCPP.ListModels.ModelFile[] =
-			await Promise.all(
-				[...discovered.entries()].map(async ([name, found]) => {
-					const filePath = path.join(found.dir, name)
-					let size = 0
-					try {
-						const stat = await fsPromises.stat(filePath)
-						size = stat.size
-					} catch {}
-
-					let rec = dbByFilename.get(name)
-					if (!rec) {
-						// Placed directly into a models folder rather than
-						// downloaded through the UI — track it the same as a
-						// completed download so it behaves consistently
-						// everywhere else that reads this table.
-						//
-						// The folder it was found in is good evidence of what it
-						// is, and it is recorded as exactly that: "declared", a
-						// claim the header sniff below can promote or overrule.
-						// Not "assumed", which would be thrown away — the
-						// unknown-verdict branch below rewrites an assumed kind
-						// to "unknown", so a new-architecture image model in the
-						// image folder would sit Unverified forever.
-						const [tracked] = await db
-							.insert(schema.localModels)
-							.values({
-								filename: name,
-								modelName: name.replace(MODEL_EXTENSION_RE, ""),
-								sizeBytes: size,
-								status: "complete",
-								// `isModelFilename` gated the extension above,
-								// so this is never null. `undefined` would fall
-								// through to the column's own "gguf" default,
-								// which is the guess `format` exists to stop
-								// anything making.
-								format: formatForFilename(name) ?? undefined,
-								kind: found.dirKind,
-								kindSource: "declared",
-								modality: modalityForKind(found.dirKind)
-							})
-							.onConflictDoUpdate({
-								target: schema.localModels.filename,
-								set: { filename: name }
-							})
-							.returning()
-						rec = tracked
-					}
-
-					// Straight passthrough of two NOT NULL columns, so a tracked
-					// row always has an answer here. The fallback covers only
-					// the unreachable case where the insert above returned no
-					// row, and says "unknown" rather than "text": a record we
-					// could not read back is not evidence that the file is a
-					// text model.
-					let kind: Sockets.KoboldCPP.ModelKind =
-						rec?.kind ?? "unknown"
-					let kindSource: Sockets.KoboldCPP.ModelKindSource =
-						rec?.kindSource ?? "assumed"
-					let kindReason: string | undefined
-
-					// Sniff when the row has never been measured ("assumed" —
-					// which is also every row the migration backfilled), when
-					// something only CLAIMED what this is (the download tab, or
-					// the folder above), when the last measurement failed, or
-					// when the bytes changed under a row that WAS measured.
-					// Never when a human has said what this is.
-					//
-					// "declared" is not optional in that list: without it the
-					// folder's claim is never revisited, and an LLM dropped into
-					// the image folder is offered as an image model forever.
-					const sizeChanged =
-						rec?.sizeBytes != null && rec.sizeBytes !== size
-					if (
-						kindSource !== "user" &&
-						(kindSource === "assumed" ||
-							kindSource === "declared" ||
-							kind === "unknown" ||
-							sizeChanged)
-					) {
-						const verdict = await classifyModelFile(filePath)
-						kindReason = verdict.reason
-						if (verdict.kind !== "unknown") {
-							// A measurement of the file we actually hold
-							// outranks anything guessed about it — including the
-							// folder it was sitting in.
-							kind = verdict.kind
-							kindSource = "detected"
-							await db
-								.update(schema.localModels)
-								.set({
-									kind,
-									kindSource,
-									modality: modalityForKind(kind)
-								})
-								.where(eq(schema.localModels.filename, name))
-						} else if (
-							kindSource === "assumed" &&
-							kind !== "unknown"
-						) {
-							// Looked, couldn't tell. Say so rather than keep
-							// asserting the backfill's "text" — an unreadable
-							// file offered as a working text model fails at load
-							// time with nothing on screen. kindSource stays
-							// "assumed" so a file that was mid-copy resolves
-							// itself on the next listing; "detected" would be a
-							// lie about a read that produced no answer.
-							//
-							// "declared" deliberately does NOT land here: an
-							// indefinite read is not a reason to throw away the
-							// only evidence there is, which is where the file
-							// was put.
-							//
-							// `modality` goes with it, through the same
-							// projection every other write here uses, so the two
-							// columns cannot end up disagreeing. ⚠ That is only
-							// safe while `assumed` is the sole `kind_source`
-							// reaching this branch: a lane that starts writing a
-							// modality the sniff cannot see (`embeddings` on a
-							// BERT GGUF) must raise that row above `assumed`, or
-							// an unreadable moment here would erase it.
-							kind = "unknown"
-							await db
-								.update(schema.localModels)
-								.set({ kind, modality: modalityForKind(kind) })
-								.where(eq(schema.localModels.filename, name))
-						}
-					}
-
-					return {
-						kind,
-						kindSource,
-						kindReason,
-						// Where it actually is, which is evidence and not a
-						// verdict: a row whose kind disagrees with this is
-						// either a user override or a legacy flat install.
-						dirKind: found.dirKind,
-						name,
-						size,
-						...(rec
-							? {
-									modelName: rec.modelName,
-									modelUrl: rec.modelUrl ?? undefined,
-									description: rec.description ?? undefined,
-									quantization: rec.quantization ?? undefined,
-									sizeBytes: rec.sizeBytes ?? undefined
-								}
-							: {})
-					}
-				})
-			)
-
-		const res: Sockets.KoboldCPP.ListModels.Response = {
-			currentModel,
-			availableModels,
-			modelsDirSet: !!settings.koboldCppManagerModelsDir
-		}
+		const res = await buildKoboldCppListModels()
 		emitToUser("koboldcpp:listModels", res)
 		return res
 	}
@@ -569,6 +585,7 @@ export const koboldCppConnectModelHandler: Handler<
 					where: (c, { eq }) => eq(c.id, servingText[0])
 				})
 			: undefined
+		let modelRow: { id: number } | undefined = undefined
 
 		if (!existingConnection) {
 			const connectionName = params.modelName
@@ -586,7 +603,6 @@ export const koboldCppConnectModelHandler: Handler<
 				// explicitly so this satisfies InsertConnection.
 				type: CONNECTION_TYPE.KOBOLDCPP_MANAGED,
 				name: connectionName,
-				model: params.modelName,
 				baseUrl,
 				extraJson: {
 					...koboldCppManagedAdapter.connectionDefaults.extraJson
@@ -607,27 +623,62 @@ export const koboldCppConnectModelHandler: Handler<
 				.insert(schema.connections)
 				.values(data)
 				.returning()
-			// The other half of the row this raw insert bypasses (0114): without
+			// The other half of the row this raw insert bypasses: without
 			// a model row the new endpoint resolves to no model at all, and the
 			// next send fails against a connection that looks configured.
-			// `ensureDefaultModel` writes the mirror too, so the column set
-			// above stays in step rather than becoming the only copy.
-			await ensureDefaultModel(db, newConnection.id, params.modelName)
+			// `ensureConnectionModel` ensures the ROW, never a default:
+			// connections have none.
+			modelRow =
+				(await ensureConnectionModel(
+					db,
+					newConnection.id,
+					params.modelName
+				)) ?? undefined
 			existingConnection = newConnection
 		}
 
-		// Explicitly `text->text`, and explicitly here rather than as a side
-		// effect of the insert above: "Use for chat" IS somebody choosing, which
-		// is exactly what the ruling requires and what the deleted auto-star in
+		// The row this flow is for, found never guessed: ensured above on a
+		// fresh endpoint, or named by an earlier run through the same flow.
+		const modelId =
+			modelRow?.id ??
+			(
+				await db
+					.select({ id: schema.connectionModels.id })
+					.from(schema.connectionModels)
+					.where(
+						and(
+							eq(
+								schema.connectionModels.connectionId,
+								existingConnection.id
+							),
+							eq(schema.connectionModels.model, params.modelName)
+						)
+					)
+					.limit(1)
+			)[0]?.id
+		if (modelId == null) {
+			const error = "That model is not on this connection."
+			emitToUser("koboldcpp:connectModel:error", { error })
+			throw new Error(error)
+		}
+
+		// Explicitly `text->text`, with the model named outright, and
+		// explicitly here rather than as a side effect of the insert above:
+		// "Use for chat" IS somebody choosing, which is exactly what the
+		// ruling requires and what the deleted auto-star in
 		// `connections:create` was not. The capability is named because the
 		// handler cannot derive it — this same managed KoboldCPP also serves
 		// `text->image` through its own connection row.
 		await connectionsSetDefault.handler(
 			socket,
-			{ capability: "text->text", id: existingConnection.id },
+			{
+				capability: "text->text",
+				id: existingConnection.id,
+				modelId
+			},
 			emitToUser
 		)
-		await connectionsList.handler(socket, {}, emitToUser)
+		await emitToUser("connections:list", () => buildConnectionsList())
 
 		// Model loading is deferred to generation time (see KoboldCppManagedAdapter.preflight) —
 		// setting a connection as default should not eagerly load/swap the koboldcpp model.
@@ -734,7 +785,6 @@ export const koboldCppConnectImageModelHandler: Handler<
 				// looking perfectly fine in the Connections list.
 				modality: "image-gen",
 				name: connectionName,
-				model: params.filename,
 				// Display only. The Manager's own settings are what
 				// dispatchImage and the thin adapter resolve a managed row's
 				// base URL from — this column is not authoritative for it.
@@ -757,21 +807,36 @@ export const koboldCppConnectImageModelHandler: Handler<
 				.values(data)
 				.returning()
 			// Same as connectModel's: the raw insert skips the model row, and an
-			// image endpoint with none renders nothing (0114).
-			await ensureDefaultModel(db, newConnection.id, params.filename)
+			// image endpoint with none renders nothing.
+			await ensureConnectionModel(db, newConnection.id, params.filename)
 			connection = newConnection
 		}
+
+		// The row this flow is for, named outright: connections have no
+		// default model to mean.
+		const [imageModel] = await db
+			.select({ id: schema.connectionModels.id })
+			.from(schema.connectionModels)
+			.where(
+				and(
+					eq(schema.connectionModels.connectionId, connection.id),
+					eq(schema.connectionModels.model, params.filename)
+				)
+			)
+			.limit(1)
+		if (!imageModel) return fail("That model is not on this connection.")
 
 		// The capability-keyed table only — `system_settings` has one default
 		// connection and it is the TEXT one.
 		await setCapabilityDefault(db, "text->image", {
-			connectionId: connection.id
+			connectionId: connection.id,
+			connectionModelId: imageModel.id
 		})
 
-		await connectionsList.handler(socket, {}, emitToUser)
+		await emitToUser("connections:list", () => buildConnectionsList())
 		// capabilityDefaults rides on systemSettings:get, which is where the
 		// sidebars read "which connection draws" from.
-		await systemSettingsGet.handler(socket, {}, emitToUser)
+		await emitToUser("systemSettings:get", () => buildSystemSettingsGet())
 
 		const res: Sockets.KoboldCPP.ConnectImageModel.Response = {
 			success: "Image model set as default"
@@ -918,7 +983,7 @@ async function fetchRecommendedYaml(): Promise<
 	}>
 > {
 	const resp = await fetch(
-		"https://raw.githubusercontent.com/doolijb/serene-pub-gguf-list/main/recommended.yaml"
+		"https://raw.githubusercontent.com/SerenePub/serene-pub-gguf-list/main/recommended.yaml"
 	)
 	if (!resp.ok) throw new Error(`YAML fetch failed: ${resp.status}`)
 	const text = await resp.text()
@@ -1212,13 +1277,26 @@ const MAX_PARALLEL_CHUNKS_PER_DOWNLOAD = 6
 // koboldCppGetDownloadProgressHandler became the sole recipient of model
 // download progress, silently cutting off any other connected admin. A
 // Set<EmitFn> fixes that but overcorrects: registerKoboldCppHandlers runs
-// once per *connection*, and emitToUser already broadcasts to every open
-// tab/connection for a user (io.to("user_"+userId).emit(...)) — so N tabs
-// for the same admin would mean N entries in the Set, each independently
-// re-broadcasting to all N sockets (N² transmissions per tick instead of
-// N). Keying by userId with a connection refcount collapses that back to
-// one broadcast per user regardless of how many tabs they have open, and
-// only unregisters once every one of their connections has disconnected.
+// once per *connection*, and emitToUser already reaches every open
+// tab/connection for a user — a room emit, or one emit per interested
+// socket in that room once the event is gated — so N tabs for the same
+// admin would mean N entries in the Set, each independently re-broadcasting
+// to all N sockets (N² transmissions per tick instead of N). Keying by
+// userId with a connection refcount collapses that back to one broadcast
+// per user regardless of how many tabs they have open, and only unregisters
+// once every one of their connections has disconnected.
+//
+// The slot keeps the FIRST socket's emitToUser for the whole life of that
+// refcount, and that is safe for one reason: the closure resolves its
+// recipients at emit time from `io` and the user id, never from the socket
+// that made it. The interest gate walks `user_<id>` for the sockets whose
+// interest set holds the key and emits to each by id, so a second tab that
+// declared koboldcpp:downloadProgress is served by the first tab's closure
+// — and goes on being served after that first tab disconnects, because the
+// closure never reads it. The one thing the originating socket still lends
+// is the redaction subject on the UNGATED path, and every socket in a user
+// room carries the same one. The same holds for binaryManager's and
+// subprocessManager's registries, which are this map's shape exactly.
 const downloadProgressEmitters = new Map<
 	number,
 	{
@@ -1840,6 +1918,27 @@ export const koboldCppDownloadModelHandler: Handler<
 							: {})
 					})
 					.where(eq(schema.localModels.filename, filename))
+				// A new gguf in the directory is a new model on every managed
+				// endpoint, so their rows follow the download rather than the
+				// next sidebar open. Best-effort: a sync failure is recorded
+				// on the endpoint, never surfaced as a download failure.
+				try {
+					await syncManyConnectionModels(db, {
+						types: [
+							CONNECTION_TYPE.KOBOLDCPP_MANAGED,
+							CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE
+						],
+						force: true
+					})
+					await emitToUser("connections:list", () =>
+						buildConnectionsList()
+					)
+				} catch (syncErr) {
+					console.error(
+						"[koboldcpp] post-download model sync:",
+						syncErr
+					)
+				}
 			} catch (err: any) {
 				// Whatever ended the download — cancel or a genuine chunk
 				// error — any request still marked in-flight at this point
@@ -1972,7 +2071,7 @@ export const koboldCppSetManagedMode: Handler<
 
 		const res: Sockets.KoboldCPP.SetManagedMode.Response = { success: true }
 		emitToUser("koboldcpp:setManagedMode", res)
-		await systemSettingsGet.handler(socket, {}, emitToUser)
+		await emitToUser("systemSettings:get", () => buildSystemSettingsGet())
 		return res
 	}
 }
@@ -1994,7 +2093,7 @@ export const koboldCppSetManagedPort: Handler<
 			.where(eq(schema.koboldCppSettings.id, 1))
 		const res: Sockets.KoboldCPP.SetManagedPort.Response = { success: true }
 		emitToUser("koboldcpp:setManagedPort", res)
-		await systemSettingsGet.handler(socket, {}, emitToUser)
+		await emitToUser("systemSettings:get", () => buildSystemSettingsGet())
 		return res
 	}
 }
@@ -2014,7 +2113,7 @@ export const koboldCppSetManagedBinaryDir: Handler<
 			success: true
 		}
 		emitToUser("koboldcpp:setManagedBinaryDir", res)
-		await systemSettingsGet.handler(socket, {}, emitToUser)
+		await emitToUser("systemSettings:get", () => buildSystemSettingsGet())
 		return res
 	}
 }
@@ -2036,7 +2135,7 @@ export const koboldCppSetManagedAdminPassword: Handler<
 			success: true
 		}
 		emitToUser("koboldcpp:setManagedAdminPassword", res)
-		await systemSettingsGet.handler(socket, {}, emitToUser)
+		await emitToUser("systemSettings:get", () => buildSystemSettingsGet())
 		return res
 	}
 }
@@ -2055,7 +2154,7 @@ export const koboldCppSetModelTtl: Handler<
 			.where(eq(schema.koboldCppSettings.id, 1))
 		const res: Sockets.KoboldCPP.SetModelTtl.Response = { success: true }
 		emitToUser("koboldcpp:setModelTtl", res)
-		await systemSettingsGet.handler(socket, {}, emitToUser)
+		await emitToUser("systemSettings:get", () => buildSystemSettingsGet())
 		return res
 	}
 }
@@ -2077,7 +2176,7 @@ export const koboldCppSetSubprocessTimeout: Handler<
 			success: true
 		}
 		emitToUser("koboldcpp:setSubprocessTimeout", res)
-		await systemSettingsGet.handler(socket, {}, emitToUser)
+		await emitToUser("systemSettings:get", () => buildSystemSettingsGet())
 		return res
 	}
 }
@@ -2221,7 +2320,9 @@ export const koboldCppDownloadBinary: Handler<
 						koboldCppManagerBaseUrl: `http://localhost:${port}`
 					})
 					.where(eq(schema.koboldCppSettings.id, 1))
-				await systemSettingsGet.handler(socket, {}, emitToUser)
+				await emitToUser("systemSettings:get", () =>
+					buildSystemSettingsGet()
+				)
 			} catch (err: any) {
 				console.error("[KoboldCPP binary download]", err.message)
 			}
@@ -2360,7 +2461,7 @@ export const koboldCppUpdateManagerEnabled: Handler<
 		const res: Sockets.SystemSettings.UpdateKoboldCppManagerEnabled.Response =
 			{ success: true, enabled: params.enabled }
 		emitToUser("systemSettings:updateKoboldCppManagerEnabled", res)
-		await systemSettingsGet.handler(socket, {}, emitToUser)
+		await emitToUser("systemSettings:get", () => buildSystemSettingsGet())
 		return res
 	}
 }
@@ -2414,10 +2515,10 @@ export const koboldCppDeleteModelHandler: Handler<
 			CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE
 		])
 
-		await connectionsList.handler(socket, {}, emitToUser)
+		await emitToUser("connections:list", () => buildConnectionsList())
 		// The text->image default may have just been released by the cascade
 		// above, and capabilityDefaults rides on systemSettings:get.
-		await systemSettingsGet.handler(socket, {}, emitToUser)
+		await emitToUser("systemSettings:get", () => buildSystemSettingsGet())
 
 		const res: Sockets.KoboldCPP.DeleteModel.Response = { success: true }
 		emitToUser("koboldcpp:deleteModel", res)
@@ -2466,7 +2567,12 @@ export const koboldCppSetModelKindHandler: Handler<
 
 		const res: Sockets.KoboldCPP.SetModelKind.Response = { success: true }
 		emitToUser("koboldcpp:setModelKind", res)
-		await koboldCppListModelsHandler.handler(socket, {}, emitToUser)
+		// The Models tab re-reads the listing to see the new label; the
+		// discarded return says this cascade is only ever that view being
+		// refreshed. See `buildKoboldCppListModels` for what it costs.
+		await emitToUser("koboldcpp:listModels", () =>
+			buildKoboldCppListModels()
+		)
 		return res
 	}
 }

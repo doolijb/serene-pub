@@ -4,6 +4,9 @@
  * already allowlist columns) — the response spread the full row, including
  * the raw embedding vector/embeddingModel/vectorizedAt. Fixed by adding the
  * same exclude-style `columns` restriction the :list handlers already use.
+ * personasGet no longer exists — a persona is a `characters` row with
+ * `isPersona: true`, so the second describe block below now covers the same
+ * regression through `charactersGet`.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
@@ -75,32 +78,32 @@ describe("characters:get — no embedding leak (PGlite integration)", () => {
 	})
 })
 
-describe("personas:get — no embedding leak (PGlite integration)", () => {
+describe("characters:get — no embedding leak for a persona character (PGlite integration)", () => {
 	test("response has no embedding/embeddingModel/vectorizedAt keys", async () => {
-		const { personasGet } = await import("./personas")
+		const { charactersGet } = await import("./characters")
 		const owner = await makeUser("embedding-leak-persona-owner")
 		const [persona] = await testDb
-			.insert(schema.personas)
+			.insert(schema.characters)
 			.values({
 				userId: owner.id,
 				name: "Vectorized Persona",
 				description: "x",
-				isDefault: false,
+				isPersona: true,
 				embedding: [0.4, 0.5, 0.6],
 				embeddingModel: "test-model"
 			})
 			.returning()
 
-		const res = await personasGet.handler(
+		const res = await charactersGet.handler(
 			fakeSocket(owner.id),
 			{ id: persona.id } as any,
 			noopEmit
 		)
 
-		expect(res.persona).toBeTruthy()
-		expect(res.persona).not.toHaveProperty("embedding")
-		expect(res.persona).not.toHaveProperty("embeddingModel")
-		expect(res.persona).not.toHaveProperty("vectorizedAt")
-		expect((res.persona as any).name).toBe("Vectorized Persona")
+		expect(res.character).toBeTruthy()
+		expect(res.character).not.toHaveProperty("embedding")
+		expect(res.character).not.toHaveProperty("embeddingModel")
+		expect(res.character).not.toHaveProperty("vectorizedAt")
+		expect((res.character as any).name).toBe("Vectorized Persona")
 	})
 })

@@ -342,7 +342,7 @@ export class SurfaceManager implements WidgetEventSource {
 	}
 
 	/**
-	 * The chat widget grid (PLAN 25) — the messages/composer widget config
+	 * The chat widget grid (PLAN 25) — the middle-zone widget config
 	 * SessionLayout edits. Same courier contract as zoneLayout: stored verbatim,
 	 * never interpreted here.
 	 */

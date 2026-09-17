@@ -4,13 +4,13 @@
 	import { usesCompletionTemplate } from "$lib/shared/connectionAdapters/wireMode"
 	import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 	import Select from "$lib/client/components/inputs/Select.svelte"
-	import { onMount, onDestroy } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { z } from "zod"
 
-	// Zod validation schema
+	// Zod validation schema. No model field: connections have no default
+	// model — models live in the Models section below.
 	const lmStudioConnectionSchema = z.object({
-		model: z.string().min(1, "Model is required"),
 		baseUrl: z
 			.string()
 			.url("Invalid URL format")
@@ -48,12 +48,6 @@
 	 * to the built-ins until the reply lands.
 	 */
 	const formatOptions = completionTemplateOptions()
-	let availableLMStudioModels: { model: string; name: string }[] = $state([])
-	// The picker takes { value, label }; LM Studio reports the id under `model`
-	// and the display name under `name`.
-	let modelOptions = $derived(
-		availableLMStudioModels.map((m) => ({ value: m.model, label: m.name }))
-	)
 	let testResult: {
 		ok: boolean
 		error?: string | null
@@ -75,12 +69,6 @@
 		raw: connection.extraJson?.raw ?? true
 	})
 
-	function handleRefreshModels() {
-		socket.emit("connections:refreshModels", {
-			connection
-		})
-	}
-
 	function handleTestConnection() {
 		if (!validateConnection()) return
 		testResult = null
@@ -91,7 +79,6 @@
 
 	function validateConnection(): boolean {
 		const data = {
-			model: connection.model || "",
 			baseUrl: connection.baseUrl || ""
 		}
 
@@ -112,72 +99,21 @@
 		}
 	}
 
-	const onConnectionsRefreshModels = (
-		msg: Sockets.Connections.RefreshModels.Response
-	) => {
-		if (msg.models) availableLMStudioModels = msg.models
-		if (!connection.model && msg.models.length > 0) {
-			connection.model = msg.models[0].model
-		}
-	}
-	socket.on("connections:refreshModels", onConnectionsRefreshModels)
-
-	// Named so `off` can name it too. A bare `socket.off("connections:test")`
-	// removes EVERY listener for that event — including the parent sidebar's,
-	// which then stops updating for the rest of the session.
+	// Standing interest in the test result, held by the registry for as long as
+	// this form is mounted and released with it. The registry keeps ONE raw
+	// listener for the event and fans it out, so the parent sidebar's own
+	// interest is untouched by this form coming and going.
 	const onConnectionsTest = (msg: Sockets.Connections.Test.Response) => {
 		testResult = msg
 	}
-	socket.on("connections:test", onConnectionsTest)
-
-	onMount(() => {
-		if (connection.baseUrl) {
-			handleRefreshModels()
-		}
-	})
-
-	onDestroy(() => {
-		socket.off("connections:refreshModels", onConnectionsRefreshModels)
-		socket.off("connections:test", onConnectionsTest)
-	})
+	useInterest<"connections:test">("connections:test", onConnectionsTest)
 </script>
 
 <div class="flex flex-col gap-4">
 	<div class="mt-2 flex flex-col gap-1">
-		<Select
-			label="Model"
-			options={modelOptions}
-			bind:value={connection.model}
-			placeholder="-- Select Model --"
-			emptyMessage="No models — try Refresh Models."
-			clearable
-			required
-			invalid={!!validationErrors.model}
-			describedBy={validationErrors.model ? "model-error" : undefined}
-			onValueChange={() => {
-				if (validationErrors.model) {
-					const { model, ...rest } = validationErrors
-					validationErrors = rest
-				}
-			}}
-		/>
-		{#if validationErrors.model}
-			<p
-				id="model-error"
-				class="text-error-500 mt-1 text-sm"
-				role="alert"
-			>
-				{validationErrors.model}
-			</p>
-		{/if}
+		<!-- No model picker here: connections have no default model. Models live
+		     in the Models section below; Refresh feeds that section's import list. -->
 		<div class="mt-4 flex gap-2">
-			<button
-				type="button"
-				class="btn btn-sm preset-tonal-primary w-full"
-				onclick={handleRefreshModels}
-			>
-				Refresh Models
-			</button>
 			<button
 				type="button"
 				class="btn preset-tonal-success btn-sm w-full"

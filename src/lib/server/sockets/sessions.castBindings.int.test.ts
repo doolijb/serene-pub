@@ -84,8 +84,8 @@ async function makeCharacter(userId: number, name = uniq("Maren")) {
 
 async function makePersona(userId: number, name = uniq("Reader")) {
 	const [persona] = await testDb
-		.insert(schema.personas)
-		.values({ userId, name, description: "", isDefault: false })
+		.insert(schema.characters)
+		.values({ userId, name, description: "", isPersona: true })
 		.returning()
 	return persona!
 }
@@ -128,12 +128,14 @@ describe("a session's cast reaches its lorebook without being asked", () => {
 		)
 
 		const bindings = await bindingsOf(lorebook.id)
-		expect(bindings.map((b) => b.characterId).filter(Boolean)).toEqual([
-			character.id
-		])
-		expect(bindings.map((b) => b.personaId).filter(Boolean)).toEqual([
-			persona.id
-		])
+		// A bound persona is a bound character now (0133) — both land on
+		// `characterId`, so there's no separate `personaId` column to check.
+		expect(
+			bindings
+				.map((b) => b.characterId)
+				.filter(Boolean)
+				.sort()
+		).toEqual([character.id, persona.id].sort())
 		// The name is the bound entity's, pulled through by the attach-time
 		// sync — a binding showing its raw {{char:N}} token is one nothing
 		// synced.
@@ -167,12 +169,14 @@ describe("a session's cast reaches its lorebook without being asked", () => {
 		)
 
 		const bindings = await bindingsOf(lorebook.id)
-		expect(bindings.map((b) => b.characterId).filter(Boolean)).toEqual([
-			character.id
-		])
-		expect(bindings.map((b) => b.personaId).filter(Boolean)).toEqual([
-			persona.id
-		])
+		// A bound persona is a bound character now (0133) — both land on
+		// `characterId`, so there's no separate `personaId` column to check.
+		expect(
+			bindings
+				.map((b) => b.characterId)
+				.filter(Boolean)
+				.sort()
+		).toEqual([character.id, persona.id].sort())
 	}, 60_000)
 
 	test("a member added after the book is attached is bound too", async () => {
@@ -235,7 +239,9 @@ describe("a session's cast reaches its lorebook without being asked", () => {
 		)
 
 		const bindings = await bindingsOf(lorebook.id)
-		expect(bindings.map((b) => b.personaId).filter(Boolean)).toEqual([
+		// A bound persona is a bound character now (0133) — it lands on
+		// `characterId`, not a separate `personaId` column.
+		expect(bindings.map((b) => b.characterId).filter(Boolean)).toEqual([
 			persona.id
 		])
 	}, 60_000)
@@ -339,7 +345,7 @@ describe("lorebooks:createBinding is a resolve, not an insert", () => {
 		const params = {
 			lorebookBinding: {
 				lorebookId: lorebook.id,
-				personaId: persona.id,
+				characterId: persona.id,
 				binding: ""
 			}
 		} as any
@@ -370,7 +376,6 @@ describe("lorebooks:createBinding is a resolve, not an insert", () => {
 				lorebookBinding: {
 					lorebookId: lorebook.id,
 					characterId: null,
-					personaId: null,
 					binding: "",
 					name: "A voice in the hall"
 				}
@@ -383,7 +388,6 @@ describe("lorebooks:createBinding is a resolve, not an insert", () => {
 				lorebookBinding: {
 					lorebookId: lorebook.id,
 					characterId: null,
-					personaId: null,
 					binding: "",
 					name: "Another voice"
 				}

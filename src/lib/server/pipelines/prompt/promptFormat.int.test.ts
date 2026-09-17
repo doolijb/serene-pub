@@ -110,8 +110,7 @@ const TEMPLATE = [
 const formatPipeline = () =>
 	compile(
 		spec("core:spec/prompt-format", { version: "1.0.0" })
-			.on("core:event/message-created@1")
-			.input("input", C.userMessage.v1())
+			.inlet("input", C.userMessage.v1())
 			.query("history", ($) =>
 				C.sessionHistory.v1({ scope: $.input.sessionScope })
 			)
@@ -141,7 +140,7 @@ const formatPipeline = () =>
 					connection: slot.connectionOf("generate")
 				})
 			)
-			.provider("generate", ($) =>
+			.oracle("generate", ($) =>
 				C.generateText.v1({ context: $.prompt.context })
 			)
 			.build()
@@ -162,12 +161,12 @@ beforeAll(async () => {
 		.returning()
 
 	const [persona] = await db
-		.insert(schema.personas)
+		.insert(schema.characters)
 		.values({
 			userId,
+			isPersona: true,
 			name: "Bob",
-			description: "A traveller.",
-			isDefault: false
+			description: "A traveller."
 		})
 		.returning()
 
@@ -205,7 +204,6 @@ beforeAll(async () => {
 			name: "Format Under Test",
 			type: "koboldcpp",
 			baseUrl: "http://localhost:5001",
-			model: "test",
 			promptFormat: PromptFormats.VICUNA,
 			tokenCounter: "estimate",
 			// Completion wire mode, hand-set. See the header: a prompt format has
@@ -217,7 +215,14 @@ beforeAll(async () => {
 		})
 		.returning()
 	connectionId = connection.id
-	await setCapabilityDefault(db, "text->text", { connectionId })
+	const [formatModel] = await db
+		.insert(schema.connectionModels)
+		.values({ connectionId, model: "test", name: "test" })
+		.returning()
+	await setCapabilityDefault(db, "text->text", {
+		connectionId,
+		connectionModelId: formatModel.id
+	})
 }, 60_000)
 
 /** Point the one registered connection at a format and render this session. */

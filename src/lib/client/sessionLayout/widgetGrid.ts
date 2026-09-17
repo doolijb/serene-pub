@@ -1,7 +1,7 @@
 /**
  * The widget-grid layout model (PLAN 25). One model for the whole chat
  * surface: three zones (left/middle/right), each a responsive CSS grid, and
- * EVERYTHING is a widget — including the chat messages and the composer.
+ * EVERYTHING is a widget — the conversation included.
  *
  * The engine is native CSS Grid: this module only turns a widget's declarative
  * constraints (anchor / grow / fixed / min-max cells) into the grid CSS the
@@ -9,9 +9,9 @@
  *
  * MVP scope (staging §13.1): the zone grid is a stack of widgets in row order
  * (each widget a row) with an infinite `auto-fill` cell grid across columns —
- * enough to prove the normal chat (messages GROW + composer FIXED bottom)
- * falls out of the model. Side-by-side placement, tab groups, pinning and the
- * drag editor are later increments and deliberately not here yet.
+ * enough to prove the normal chat (messages GROW into the whole middle) falls
+ * out of the model. Side-by-side placement, tab groups, pinning and the drag
+ * editor are later increments and deliberately not here yet.
  *
  * It is also where a widget's geometry becomes the `layout.v1` its ctx carries
  * (`placementOf` / `stackPlacements`) — the same cells the grid solves,
@@ -70,19 +70,37 @@ export const DEFAULT_CELL = 44
 
 /**
  * A measured pixel size → the nearest whole cell count (≥1). The inverse of
- * `trackFor`'s `{cells}` math — used to seed a drag-resize from a widget's
- * current on-screen size, since a "fixed"/"grow" widget has no cell count of
- * its own until the user starts resizing it.
+ * `trackFor`'s `{cells}` math, for the callers holding a measurement rather
+ * than a constraint: a "fixed"/"grow" widget has no cell count of its own, so a
+ * width the browser reported (a side zone's ladder width, `panelWidgets`) has
+ * to be read back into the model's own unit.
  */
 export function cellsFromPx(px: number, cell: number): number {
 	return Math.max(1, Math.round(px / cell))
 }
 
 /**
- * The normal chat, expressed purely as widgets: Messages GROW-anchored to the
- * top edges, the Composer FIXED-height anchored to the bottom. Both required.
- * This is the config a Chat genre ships — nothing here is special-cased in the
- * renderer.
+ * Widget ids that name nothing this build places. A saved blob, a preset or an
+ * arrangement may still carry one — all three are stored verbatim and nothing
+ * rewrites them — and every reader drops it, so a layout arranged under an
+ * older build opens on the widgets this build has.
+ *
+ * `composer` is one because the conversation is ONE widget: the log and the
+ * field are one thing to arrange, and the field's shape is a setting on
+ * `messages` (`CORE_WIDGETS`) rather than a widget beside it. Admitting the id
+ * would put an empty card under every restored chat.
+ */
+export const RETIRED_WIDGET_IDS: ReadonlySet<string> = new Set(["composer"])
+
+/** Is this a widget id no reader should place? */
+export function isRetiredWidget(id: string): boolean {
+	return RETIRED_WIDGET_IDS.has(id)
+}
+
+/**
+ * The normal chat, expressed purely as widgets: Messages GROW-anchored to all
+ * four edges, filling the middle, and required. This is the config a Chat genre
+ * ships — nothing here is special-cased in the renderer.
  */
 export function defaultChatLayout(): GridLayout {
 	return {
@@ -94,15 +112,12 @@ export function defaultChatLayout(): GridLayout {
 				zone: "middle",
 				order: 0,
 				size: { w: "grow", h: "grow" },
-				anchor: { top: true, left: true, right: true },
-				required: true
-			},
-			{
-				id: "composer",
-				zone: "middle",
-				order: 1,
-				size: { w: "grow", h: "fixed" },
-				anchor: { bottom: true, left: true, right: true },
+				anchor: {
+					top: true,
+					bottom: true,
+					left: true,
+					right: true
+				},
 				required: true
 			}
 		]
@@ -142,11 +157,11 @@ function isSizeSpec(x: unknown): x is SizeSpec {
 
 /**
  * Rehydrate a persisted chat grid, defensively. The genre's default is the
- * floor: required widgets (messages/composer) always survive, so a truncated or
- * hand-corrupted blob can never strand a session without its composer. A saved
- * widget only overrides the fields the editor writes (size/anchor/order/colSpan)
- * and only when they pass a shape check — anything malformed falls back to the
- * default for that field.
+ * floor: required widgets always survive, so a truncated or hand-corrupted blob
+ * can never strand a session without its conversation. A saved widget only
+ * overrides the fields the editor writes (size/anchor/order/colSpan) and only
+ * when they pass a shape check — anything malformed falls back to the default
+ * for that field.
  *
  * An id the default does not carry is ADMITTED rather than dropped: a preset's
  * own widget (the Adventure strip above the messages) and a plugin's panel both
@@ -154,7 +169,8 @@ function isSizeSpec(x: unknown): x is SizeSpec {
  * an id this function declines to place is a placement that silently disappears.
  * A newcomer must name a real zone and a usable size to be admitted; it never
  * inherits `required`, which is the default's guarantee and not a blob's to
- * claim. `saved` is `unknown` because the blob is stored verbatim server-side.
+ * claim. The one exception is a RETIRED id, which names nothing this build can
+ * render. `saved` is `unknown` because the blob is stored verbatim server-side.
  */
 export function loadChatLayout(saved: unknown): GridLayout {
 	const base = defaultChatLayout()
@@ -167,7 +183,8 @@ export function loadChatLayout(saved: unknown): GridLayout {
 	}
 	const savedById = new Map<string, Record<string, unknown>>()
 	for (const w of saved.widgets) {
-		if (isPlainObject(w) && typeof w.id === "string") savedById.set(w.id, w)
+		if (isPlainObject(w) && typeof w.id === "string" && !isRetiredWidget(w.id))
+			savedById.set(w.id, w)
 	}
 	const widgets = base.widgets.map((b): WidgetConfig => {
 		const s = savedById.get(b.id)
@@ -314,7 +331,7 @@ export function cellRowsOf(size: SizeSpec): number | null {
  * A widget OCCUPIES exactly one row here (that is what the stack is), so the
  * edges come out of its index — first touches the top, last the bottom — while
  * `box.rows` reports the cell floor its height spec reserves, or null when the
- * track grows. Conflating the two would make a 3-cell composer in a 2-widget
+ * track grows. Conflating the two would make a 3-cell strip in a 2-widget
  * stack claim the bottom edge from the middle of the zone.
  */
 export function stackPlacements(

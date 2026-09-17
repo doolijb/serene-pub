@@ -20,9 +20,11 @@
  * column. Asserting the rotation's answer before and after is the only check
  * that would survive somebody deciding to "fix" the null by filling it in.
  *
- * `generateResponse` is mocked: what happens after the row is written is the
- * pipeline's business and it needs a connection, a sampling config and a model.
- * The subject here is everything up to and including that row.
+ * `runReply` is mocked: the pipeline owns its row since 09-B B4 — the
+ * narrate-character spec's placeholder outlet writes it, which
+ * `replyRoad.int.test.ts` pins — and running it needs a connection, a sampling
+ * config and a model. The subject here is the trigger's first step: the speaker
+ * fact it resolves and hands to the run, and what it refuses.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
@@ -49,10 +51,10 @@ vi.mock("$lib/server/utils/resolveNarratorPromptConfig", () => ({
 }))
 
 const generated: any[] = []
-vi.mock("../utils/generateResponse", () => ({
-	generateResponse: async (args: any) => {
+vi.mock("../utils/runReply", () => ({
+	runReply: async (args: any) => {
 		generated.push(args)
-		return true
+		return { ok: true }
 	}
 }))
 
@@ -104,12 +106,12 @@ async function makeSession(tag: string) {
 	const vell = await insertCharacter(`Vell ${tag}`)
 
 	const [persona] = await testDb
-		.insert(schema.personas)
+		.insert(schema.characters)
 		.values({
 			userId: user.id,
 			name: `P ${tag}`,
 			description: "p",
-			isDefault: false
+			isPersona: true
 		})
 		.returning()
 
@@ -215,22 +217,18 @@ describe("a side-character turn is a participant, not a cast member", () => {
 		expect(res.error).toBeUndefined()
 		expect(res.success).toBe(true)
 
-		const rows = await messagesOf(f.session.id)
-		const written = rows.find((m: any) => m.isGenerating)!
-		expect(written, "no generating row was written").toBeTruthy()
-
-		// The perspective is recorded…
-		expect((written.metadata as any).narratorName).toBe(f.vell.name)
-		expect((written.metadata as any).speaker).toMatchObject({
+		// The trigger inserts nothing (R-17): the row is the pipeline's, and
+		// what the trigger hands the run is the speaker fact.
+		expect(
+			(await messagesOf(f.session.id)).some((m: any) => m.isGenerating)
+		).toBe(false)
+		const turn = generated.at(-1)?.turn
+		expect(generated.at(-1)?.sessionId).toBe(f.session.id)
+		expect(turn?.kind).toBe("narrate-character")
+		expect(turn?.speaker).toMatchObject({
 			name: f.vell.name,
 			characterId: f.vell.id
 		})
-
-		// …and the turn slot is not. ⚠ `characterId` stays null even though a
-		// real character was picked: it is the column every other reader of a
-		// message treats as "this character took their turn".
-		expect(written.characterId).toBeNull()
-		expect(written.isNarratorResponse).toBe(true)
 
 		// The rotation is exactly where it was — Bram is still owed his turn.
 		expect(
@@ -238,9 +236,6 @@ describe("a side-character turn is a participant, not a cast member", () => {
 			"the side-character turn moved the rotation"
 		).toBe(f.bram.id)
 		expect(await castOf(f.session.id)).toHaveLength(castBefore.length)
-
-		// And the turn genuinely ran.
-		expect(generated.at(-1)?.sessionId).toBe(f.session.id)
 	}, 60_000)
 
 	test("a free-form name produces a turn without joining the cast", async () => {
@@ -265,17 +260,13 @@ describe("a side-character turn is a participant, not a cast member", () => {
 		expect(res.error).toBeUndefined()
 		expect(res.success).toBe(true)
 
-		const written = (await messagesOf(f.session.id)).find(
-			(m: any) => m.isGenerating
-		)!
-		expect((written.metadata as any).speaker).toMatchObject({
+		expect(generated.at(-1)?.turn?.speaker).toMatchObject({
 			name: "The innkeeper",
 			characterId: null,
 			// Nothing in this lorebook is called that — the new-name fact, and
 			// the whole reason a script gets to see it.
 			known: false
 		})
-		expect(written.characterId).toBeNull()
 
 		// Nothing joined: not the cast, and not the character table either. A
 		// free-form speaker that quietly created a character row would be a
@@ -311,33 +302,32 @@ describe("a side-character turn is a participant, not a cast member", () => {
 			} as any,
 			noopEmit
 		)
-		const written = (await messagesOf(f.session.id)).find(
-			(m: any) => m.isGenerating
-		)!
 		// Matched case-insensitively, and through `aliases` — which must be
 		// unioned with `absorbedAliases`, since the binding sync REPLACES
 		// `aliases` wholesale and an absorbed identity lives only in the other.
-		expect((written.metadata as any).speaker.known).toBe(true)
+		expect(generated.at(-1)?.turn?.speaker?.known).toBe(true)
 	}, 60_000)
 
 	test("world narration is unchanged when no speaker is sent", async () => {
 		// The regression guard for the half that already worked. A `speaker`
-		// key absent means the narrator, and the row must look exactly as it
-		// always has — no `speaker` metadata at all.
+		// key absent means the narrator: the run is the narrate spec's, with no
+		// speaker fact at all.
 		const { triggerNarratorResponseHandler } = await import("./sessions")
 		const f = await makeSession("world")
 
 		const res = await triggerNarratorResponseHandler.handler(
 			fakeSocket(f.user.id),
-			{ sessionId: f.session.id } as any,
+			{
+				sessionId: f.session.id,
+				instructions: "focus on the rain"
+			} as any,
 			noopEmit
 		)
 		expect(res.success).toBe(true)
-		const written = (await messagesOf(f.session.id)).find(
-			(m: any) => m.isGenerating
-		)!
-		expect((written.metadata as any).narratorName).toBe("Narrator")
-		expect((written.metadata as any).speaker).toBeUndefined()
+		const turn = generated.at(-1)?.turn
+		expect(turn?.kind).toBe("narrate")
+		expect(turn?.speaker).toBeUndefined()
+		expect(turn?.instructions).toBe("focus on the rain")
 		expect(await whoIsNext(f.session.id)).toBe(f.bram.id)
 	}, 60_000)
 })
@@ -355,8 +345,9 @@ describe("the trigger's first step refuses what it cannot run", () => {
 			noopEmit
 		)
 		expect(res.error).toMatch(/Choose a character or type a name/)
-		// Refused before anything was written — a refusal that still left a
-		// generating row would wedge the session's trigger lock.
+		// Refused before anything ran — a refusal that still started a run
+		// would leave a generating row and wedge the session's trigger lock.
+		expect(generated.some((g) => g.sessionId === f.session.id)).toBe(false)
 		expect(
 			(await messagesOf(f.session.id)).some((m: any) => m.isGenerating)
 		).toBe(false)
@@ -400,6 +391,87 @@ describe("the trigger's first step refuses what it cannot run", () => {
 			(await messagesOf(mine.session.id)).some((m: any) => m.isGenerating)
 		).toBe(false)
 	}, 60_000)
+
+	test("their own presence in the session — a live persona is never seated as the speaker (U5b W6)", async () => {
+		// The picker never offers a presence (`listSideCharacterOptions`),
+		// so a request naming one did not come through the picker. Refused
+		// with a sentence rather than seated as nobody: the reply road's
+		// null seat stays as the belt, but a person should be told why.
+		const { triggerNarratorResponseHandler } = await import("./sessions")
+		const f = await makeSession("presence-speaker")
+		const res = await triggerNarratorResponseHandler.handler(
+			fakeSocket(f.user.id),
+			{
+				sessionId: f.session.id,
+				speaker: { characterId: f.persona.id, name: null }
+			} as any,
+			noopEmit
+		)
+		expect(res.error).toMatch(/somebody's presence in this session/)
+		expect(res.error).toMatch(/Pick another character, or type a name/)
+		expect(generated.some((g) => g.sessionId === f.session.id)).toBe(false)
+		expect(
+			(await messagesOf(f.session.id)).some((m: any) => m.isGenerating)
+		).toBe(false)
+
+		// Detached, the same character is a departed voice and may speak.
+		await testDb
+			.update(schema.sessionPersonas)
+			.set({ removedAt: new Date() })
+			.where(eq(schema.sessionPersonas.personaId, f.persona.id))
+		const after = await triggerNarratorResponseHandler.handler(
+			fakeSocket(f.user.id),
+			{
+				sessionId: f.session.id,
+				speaker: { characterId: f.persona.id, name: null }
+			} as any,
+			noopEmit
+		)
+		expect(after.error).toBeUndefined()
+		expect(generated.some((g) => g.sessionId === f.session.id)).toBe(true)
+	}, 60_000)
+
+	test("another member's (a guest's) presence is refused just the same", async () => {
+		// livePresenceIds does not care whose live voice a character is — a
+		// guest's own persona is exactly as much somebody's as the owner's.
+		// The owner can never even resolve a guest's character by id (the
+		// same ownership boundary "somebody else's character" above
+		// exercises), so this is refused before the presence check runs at
+		// all — the guard the presence rule backs up, holding on its own.
+		const { triggerNarratorResponseHandler } = await import("./sessions")
+		const { createTestUser } = await import("$lib/server/utils/testDb")
+		const f = await makeSession("guest-presence")
+		const guest = await createTestUser(testDb, "guest-presence-guest")
+		await testDb
+			.insert(schema.sessionGuests)
+			.values({ sessionId: f.session.id, userId: guest.id })
+		const [guestPersona] = await testDb
+			.insert(schema.characters)
+			.values({
+				userId: guest.id,
+				name: "Guest persona",
+				description: "g",
+				isPersona: true
+			})
+			.returning()
+		await testDb
+			.insert(schema.sessionPersonas)
+			.values({ sessionId: f.session.id, personaId: guestPersona.id })
+
+		const res = await triggerNarratorResponseHandler.handler(
+			fakeSocket(f.user.id),
+			{
+				sessionId: f.session.id,
+				speaker: { characterId: guestPersona.id, name: null }
+			} as any,
+			noopEmit
+		)
+		expect(res.error).toMatch(/not available for this session/)
+		expect(generated.some((g) => g.sessionId === f.session.id)).toBe(false)
+		expect(
+			(await messagesOf(f.session.id)).some((m: any) => m.isGenerating)
+		).toBe(false)
+	}, 60_000)
 })
 
 describe("the dropdown offers the people it should", () => {
@@ -419,6 +491,34 @@ describe("the dropdown offers the people it should", () => {
 		// two routes to one voice with different rotation consequences.
 		expect(ids).not.toContain(f.alice.id)
 		expect(ids).not.toContain(f.bram.id)
+	}, 60_000)
+
+	test("and minus their own presence in the session — a persona is never a side character (W3)", async () => {
+		// Since the library merge a persona is one of "their own characters";
+		// the live `session_personas` row is what says the model may not be
+		// seated as it. Detached, it is offerable like a departed cast member.
+		const { sessionsSideCharacterOptionsHandler } = await import(
+			"./sessions"
+		)
+		const f = await makeSession("options-presence")
+		const before = await sessionsSideCharacterOptionsHandler.handler(
+			fakeSocket(f.user.id),
+			{ sessionId: f.session.id },
+			noopEmit
+		)
+		expect(before.characters.map((c) => c.id)).not.toContain(f.persona.id)
+		expect(before.characters.map((c) => c.id)).toContain(f.vell.id)
+
+		await testDb
+			.update(schema.sessionPersonas)
+			.set({ removedAt: new Date() })
+			.where(eq(schema.sessionPersonas.personaId, f.persona.id))
+		const after = await sessionsSideCharacterOptionsHandler.handler(
+			fakeSocket(f.user.id),
+			{ sessionId: f.session.id },
+			noopEmit
+		)
+		expect(after.characters.map((c) => c.id)).toContain(f.persona.id)
 	}, 60_000)
 
 	test("somebody who left the party can come back for one scene", async () => {

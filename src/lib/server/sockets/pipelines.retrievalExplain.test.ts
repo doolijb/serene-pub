@@ -842,6 +842,40 @@ describe("explainRetrieval — the mechanism-level half no row can carry", () =>
 		expect(notes).not.toMatch(/World lore: available/)
 	})
 
+	it("does not file an empty multi-band scan under whichever band led the list", async () => {
+		// `lorebook-triggers` publishes one band intent per lore band ahead of
+		// its items (R-7 P5) — three, on one node, when the scan found
+		// nothing. `nodeSource`'s single-band fallback exists so a source with
+		// exactly one band still reads as its own band on an empty scan;
+		// taking the first of three instead would file this node's silence
+		// under "World lore" no matter which band actually had anything.
+		const out = await explain(
+			receipt({
+				nodes: [
+					{
+						nodeKey: "lore-triggers",
+						seq: 1,
+						output: {
+							main: [
+								{ band: "worldLore", intent: { share: 0.2 } },
+								{ band: "characterLore", intent: { share: 0.2 } },
+								{ band: "history", intent: { share: 0.2 } }
+							],
+							diagnostics: {
+								scanDepth: 10,
+								considered: 0,
+								matched: 0
+							}
+						}
+					}
+				]
+			})
+		)
+		const notes = out.notes.join("\n")
+		expect(notes).not.toMatch(/World lore/)
+		expect(notes).toContain("Lore Triggers: nothing to scan.")
+	})
+
 	/**
 	 * Eager indexing has to be visible, for the same reason and one layer down.
 	 *
@@ -1721,7 +1755,7 @@ describe("explainRetrieval — the stop sequences", () => {
 				{
 					nodeKey: "generate",
 					seq: 9,
-					typeId: "core:provider/generate-text@1",
+					typeId: "core:oracle/generate-text@1",
 					output: { text: "hi", stops }
 				}
 			]
@@ -1788,7 +1822,7 @@ describe("explainRetrieval — the prompt cache", () => {
 				{
 					nodeKey: "generate",
 					seq: 9,
-					typeId: "core:provider/generate-text@1",
+					typeId: "core:oracle/generate-text@1",
 					output: { text: "hi" },
 					...over
 				}
@@ -1848,7 +1882,7 @@ describe("explainRetrieval — the prompt cache", () => {
 					{
 						nodeKey: "agent.item.generate",
 						seq: 4,
-						typeId: "core:provider/generate-with-tools@1",
+						typeId: "core:oracle/generate-with-tools@1",
 						output: { text: "hi" },
 						tokensPrompt: 2048,
 						tokensCached: 1024

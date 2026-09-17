@@ -13,7 +13,7 @@
  *
  * ## The manifest binding
  *
- * `manifest.nodeTypes: { '<typeId>@<version>': exportedHookName }` — the
+ * `manifest.nodeDefinitions: { '<definitionId>@<version>': exportedHookName }` — the
  * mirror of `hookTypes` and read the same way: the stored manifest is the one
  * source of truth (F6), never a naming convention guessed from the id.
  *
@@ -41,12 +41,15 @@ import type { RuntimeManager } from "$lib/server/plugins/RuntimeManager"
 import type { HandlerRequires } from "@serene-pub/sdk"
 import { structuralCompat } from "$lib/server/pipelines/runtime/structuralCompat"
 
-/** Read `nodeTypes` off a stored manifest, tolerant of its json being anything. */
-export function nodeTypesOf(manifest: unknown): Record<string, string> {
-	const raw =
-		manifest && typeof manifest === "object"
-			? (manifest as any).nodeTypes
-			: undefined
+/**
+ * Read `nodeDefinitions` off a stored manifest, tolerant of its json being
+ * anything. ⏳ `nodeTypes` — the pre-rename key — is read when
+ * `nodeDefinitions` is absent, for plugins packaged against the previous SDK;
+ * drop after one release.
+ */
+export function nodeDefinitionsOf(manifest: unknown): Record<string, string> {
+	const m = manifest && typeof manifest === "object" ? (manifest as any) : undefined
+	const raw = m?.nodeDefinitions ?? m?.nodeTypes
 	if (!raw || typeof raw !== "object") return {}
 	const out: Record<string, string> = {}
 	for (const [pin, hook] of Object.entries(raw as Record<string, unknown>)) {
@@ -73,14 +76,12 @@ export function nodeTypesOf(manifest: unknown): Record<string, string> {
  * plugin binding a hook to **somebody else's** public type, where two
  * separately compiled artefacts meet and no `tsc` run saw both.
  *
- * Read off the same `nodeTypes` map rather than a parallel one, because a
+ * Read off the same `nodeDefinitions` map rather than a parallel one, because a
  * second map is a second thing that can name a different hook.
  */
 export function nodeReadsOf(manifest: unknown): Record<string, HandlerRequires> {
-	const raw =
-		manifest && typeof manifest === "object"
-			? (manifest as any).nodeTypes
-			: undefined
+	const m = manifest && typeof manifest === "object" ? (manifest as any) : undefined
+	const raw = m?.nodeDefinitions ?? m?.nodeTypes
 	if (!raw || typeof raw !== "object") return {}
 	const out: Record<string, HandlerRequires> = {}
 	for (const [pin, hook] of Object.entries(raw as Record<string, unknown>)) {
@@ -131,24 +132,24 @@ export async function pluginNodeBindings(
 
 	const rows = await db
 		.select({
-			typeId: schema.pipelineTypeRegistry.typeId,
-			version: schema.pipelineTypeRegistry.version,
-			kind: schema.pipelineTypeRegistry.kind,
-			ownerPluginId: schema.pipelineTypeRegistry.ownerPluginId,
+			definitionId: schema.pipelineDefinitionRegistry.definitionId,
+			version: schema.pipelineDefinitionRegistry.version,
+			kind: schema.pipelineDefinitionRegistry.kind,
+			ownerPluginId: schema.pipelineDefinitionRegistry.ownerPluginId,
 			// The declaration side of the structural check. Read from the
 			// **row**, never from a descriptor: F6 says core reads a plugin's
 			// contract from what it stored at install, and a
 			// `transport: 'process'` type has no in-process descriptor to read
 			// even if that rule allowed it.
-			ports: schema.pipelineTypeRegistry.ports,
-			slots: schema.pipelineTypeRegistry.slots
+			ports: schema.pipelineDefinitionRegistry.ports,
+			slots: schema.pipelineDefinitionRegistry.slots
 		})
-		.from(schema.pipelineTypeRegistry)
+		.from(schema.pipelineDefinitionRegistry)
 		.where(
 			and(
-				eq(schema.pipelineTypeRegistry.transport, "process"),
-				eq(schema.pipelineTypeRegistry.status, "live"),
-				isNotNull(schema.pipelineTypeRegistry.ownerPluginId)
+				eq(schema.pipelineDefinitionRegistry.transport, "process"),
+				eq(schema.pipelineDefinitionRegistry.status, "live"),
+				isNotNull(schema.pipelineDefinitionRegistry.ownerPluginId)
 			)
 		)
 	// `ownerPluginId` is nullable on the column and the `isNotNull` above is
@@ -182,14 +183,14 @@ export async function pluginNodeBindings(
 			o.id,
 			{
 				pluginId: o.pluginId,
-				nodeTypes: nodeTypesOf(o.manifest),
+				nodeDefinitions: nodeDefinitionsOf(o.manifest),
 				nodeReads: nodeReadsOf(o.manifest)
 			}
 		])
 	)
 
 	for (const row of nodeRows) {
-		const pin = `${row.typeId}@${row.version}`
+		const pin = `${row.definitionId}@${row.version}`
 		const owner = byOwner.get(row.ownerPluginId)
 		if (!owner) {
 			// The type outlived its plugin. A binding that *says so* beats an
@@ -200,12 +201,12 @@ export async function pluginNodeBindings(
 				)
 			continue
 		}
-		const hookName = owner.nodeTypes[pin]
+		const hookName = owner.nodeDefinitions[pin]
 		if (!hookName) {
 			bindings[pin] = async () =>
 				err(
 					`the extension '${owner.pluginId}' declares no hook for ${pin} — ` +
-						`its manifest's nodeTypes is the binding, and it has no entry`
+						`its manifest's nodeDefinitions is the binding, and it has no entry`
 				)
 			continue
 		}
@@ -224,7 +225,12 @@ export async function pluginNodeBindings(
 		if (reads) {
 			const verdict = structuralCompat(
 				reads,
-				{ typeId: row.typeId, version: row.version, ports: row.ports, slots: row.slots },
+				{
+					definitionId: row.definitionId,
+					version: row.version,
+					ports: row.ports,
+					slots: row.slots
+				},
 				`the extension '${owner.pluginId}' hook '${hookName}'`
 			)
 			if (!verdict.ok) {

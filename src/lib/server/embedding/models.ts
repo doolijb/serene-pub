@@ -1,4 +1,5 @@
 import type { DataType } from "@huggingface/transformers"
+import { recommendedEmbeddingSnapshot } from "$lib/server/localModels/onnxList"
 
 /**
  * Supported embedding models — three tiers covering speed, balance, and quality.
@@ -24,6 +25,41 @@ export interface EmbeddingModelDef {
 	 * versus ~300MB/~568MB quantized, for negligible retrieval-quality loss.
 	 */
 	dtype?: DataType
+
+	/* ── What the PUBLISHED list adds ────────────────────────────────────
+	 * Every field below is optional so that one shape serves both the
+	 * compiled fallback above and an entry fetched from the recommended list
+	 * (`$lib/server/localModels/onnxList`). A built-in entry simply publishes
+	 * fewer of them, and an absent key is the honest answer rather than a
+	 * default nothing measured. They ride onto the wire as
+	 * `LocalModelState.catalog`.
+	 */
+
+	/** Megabytes the list says the download is, for the dtype named above. */
+	sizeMb?: number
+	/** Tokens the checkpoint was trained to embed; longer input is truncated. */
+	maxInputTokens?: number
+	/**
+	 * How token states become one vector.
+	 *
+	 * ⚠ Descriptive, not a setting: `embedding/index.ts` pools with the mean and
+	 * cannot be switched per model without invalidating every stored vector. The
+	 * list excludes `last_token` entries for exactly that reason — see
+	 * `onnxList.ts`.
+	 */
+	pooling?: "mean" | "cls" | "last_token"
+	/** Text the model expects prepended before embedding, where it wants any. */
+	prefixes?: { query?: string; document?: string }
+	/** The list's own filter vocabulary: `english`, `long-input`, … */
+	tags?: string[]
+	/** SPDX id, or the vendor's licence name. */
+	license?: string
+	/** `YYYY-MM` or `YYYY`. */
+	released?: string
+	/** Prose, e.g. "Over 100 languages". */
+	languages?: string
+	/** Prose, e.g. "308M". */
+	parameterSize?: string
 }
 
 export const EMBEDDING_MODELS: EmbeddingModelDef[] = [
@@ -58,8 +94,25 @@ export const EMBEDDING_MODELS: EmbeddingModelDef[] = [
 	}
 ]
 
+/**
+ * The definition for an id, from the recommended list first and the built-in
+ * catalogue second.
+ *
+ * ⚠ Synchronous, and it stays synchronous: it is called from the LOAD path
+ * (`loadEmbeddingModel`) to read a `dtype`, where a network fetch has no
+ * business. `recommendedEmbeddingSnapshot()` is whatever the async list last
+ * resolved to in this process — empty before anything warmed it, which is when
+ * the built-in catalogue answers exactly as it did before the list existed.
+ *
+ * The list wins on a shared id because it is the richer entry: it publishes the
+ * `dtype`, the pooling and the input window that the compiled catalogue never
+ * carried.
+ */
 export function findModel(id: string): EmbeddingModelDef | undefined {
-	return EMBEDDING_MODELS.find((m) => m.id === id)
+	return (
+		recommendedEmbeddingSnapshot().find((m) => m.id === id) ??
+		EMBEDDING_MODELS.find((m) => m.id === id)
+	)
 }
 
 /**

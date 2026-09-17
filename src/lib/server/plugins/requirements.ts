@@ -7,6 +7,7 @@
  * install so a missing dependency is a refusal with names, not a runtime
  * surprise. Author-side types are advisory; this is the check that counts.
  */
+import { sessionEvents } from "@serene-pub/sdk"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 
@@ -37,7 +38,9 @@ export async function missingRequirements(
 	const publishedSlugs = new Set(active.map((r) => r.slug))
 	const publishedGenres = new Set(
 		active
-			.filter((r) => r.inputEvent === "session-created" && r.inputGenre)
+			.filter(
+				(r) => r.inputEvent === sessionEvents.sessionCreated && r.inputGenre
+			)
 			.map((r) => r.inputGenre)
 	)
 

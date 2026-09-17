@@ -54,6 +54,13 @@ let db: TestDb
  * The `system_settings` columns and the whole `vectorization_configs` table are
  * recreated verbatim from what 0094's baseline declared, because a fixture that
  * differed would test a schema no install ever had.
+ *
+ * ⚠ `connections.model` and `connection_models.is_default` come back too, and
+ * they belong to a LATER migration than the one under test: 0128 drops both
+ * when the per-connection default goes away. That is the honest cost of a
+ * hand-written inverse — 0127 writes an identifier into `connections.model` and
+ * reads `is_default` when it creates the model row, so without them the file
+ * that ships cannot be replayed at all.
  */
 async function regress(seed: {
 	vectorizationEnabled?: boolean
@@ -72,6 +79,12 @@ async function regress(seed: {
 		// get Postgres's auto-generated `…_fkey` instead and the drop would fail
 		// here while succeeding on every real install.
 		`ALTER TABLE "system_settings" ADD CONSTRAINT "system_settings_active_embedding_connection_id_connections_id_fk" FOREIGN KEY ("active_embedding_connection_id") REFERENCES "public"."connections"("id") ON DELETE set null ON UPDATE no action`,
+		`ALTER TABLE "connections" ADD COLUMN "model" text`,
+		`ALTER TABLE "connection_models" ADD COLUMN "is_default" boolean DEFAULT false NOT NULL`,
+		// By NAME, as 0114 spells it, because 0128 drops it by that name — and
+		// because the partial UNIQUE index is what 0127's `NOT EXISTS` guard is
+		// written against.
+		`CREATE UNIQUE INDEX "connection_models_one_default" ON "connection_models" USING btree ("connection_id") WHERE "connection_models"."is_default"`,
 		`CREATE TABLE "vectorization_configs" (
 			"id" integer PRIMARY KEY DEFAULT 1 NOT NULL,
 			"embedding_model_ttl_minutes" integer DEFAULT 5 NOT NULL,
@@ -169,20 +182,17 @@ describe("an API configuration", () => {
 		expect(conn).toMatchObject({
 			type: "openai-embeddings",
 			modality: "embeddings",
-			baseUrl: "http://localhost:1234/v1",
-			model: "text-embedding-3-small"
+			baseUrl: "http://localhost:1234/v1"
 		})
 		expect((conn.extraJson as any).dimensions).toBe(1536)
 
-		// The endpoint's default model exists as a row, so the pair resolves.
+		// The identifier lives on a MODEL row, which is the half a star has to
+		// name: an endpoint on its own is an incomplete registration.
 		const [model] = await db
 			.select()
 			.from(schema.connectionModels)
 			.where(eq(schema.connectionModels.connectionId, conn.id))
-		expect(model).toMatchObject({
-			model: "text-embedding-3-small",
-			isDefault: true
-		})
+		expect(model).toMatchObject({ model: "text-embedding-3-small" })
 
 		// Starred, with BOTH halves of the pair.
 		expect(await star()).toMatchObject({
@@ -280,9 +290,13 @@ describe("a local configuration", () => {
 		const [conn] = await embeddingConnections()
 		expect(conn).toMatchObject({
 			type: "local-onnx",
-			modality: "embeddings",
-			model: "Xenova/all-MiniLM-L6-v2"
+			modality: "embeddings"
 		})
+		const [model] = await db
+			.select()
+			.from(schema.connectionModels)
+			.where(eq(schema.connectionModels.connectionId, conn.id))
+		expect(model).toMatchObject({ model: "Xenova/all-MiniLM-L6-v2" })
 		// The TTL was the only knob on the singleton worth keeping, and it is a
 		// property of THIS connection now rather than of the instance.
 		expect((conn.extraJson as any).embeddingModelTtlMinutes).toBe(15)
@@ -321,7 +335,6 @@ describe("an install the old boot step already migrated", () => {
 				type: "openai-embeddings",
 				modality: "embeddings",
 				baseUrl: "http://localhost:1234/v1",
-				model: "text-embedding-3-small",
 				extraJson: {
 					apiKey: {
 						__enc: true,
@@ -345,12 +358,22 @@ describe("an install the old boot step already migrated", () => {
 				apiKeyAuthTag: e.authTag
 			}
 		})
+		// The identifier the boot step of that era left in `connections.model`,
+		// written through the column `regress` just restored — 0127 reads it
+		// from there to name the pair.
+		await db.execute(sql`
+			UPDATE connections SET model = 'text-embedding-3-small'
+			WHERE id = ${existing.id}
+		`)
 		await replay()
 
 		const conns = await embeddingConnections()
 		expect(conns).toHaveLength(1)
 		expect(conns[0].id).toBe(existing.id)
-		expect((await star())?.connectionId).toBe(existing.id)
+		const registered = await star()
+		expect(registered?.connectionId).toBe(existing.id)
+		// BOTH halves: an endpoint-only star resolves as unconfigured.
+		expect(registered?.connectionModelId).toBeTruthy()
 		// ⚠ The already-converted key is untouched, and no stale envelope is
 		// laid over it.
 		const extra = conns[0].extraJson as any
@@ -394,10 +417,12 @@ describe("what the migration removes", () => {
 })
 
 describe("the journal", () => {
-	it("runs at all: the index is above every applied one", () => {
+	it("runs at all: the journal rises in step with itself", () => {
 		// ⚠ A lower-numbered migration is SILENTLY SKIPPED on an install that
 		// has already applied a higher one. Drizzle compares `when`, so a file
-		// added with a stale timestamp never runs and nothing says so.
+		// whose timestamp sits below its index never runs and nothing says so.
+		// The checkable invariant is the whole journal's: `idx` and `when` rise
+		// together, so every file is newer than the one before it.
 		const journal = JSON.parse(
 			readFileSync("drizzle/meta/_journal.json", "utf8")
 		) as {
@@ -408,10 +433,13 @@ describe("the journal", () => {
 			mine,
 			`${TAG} has no journal entry, so it runs nowhere`
 		).toBeTruthy()
-		const others = journal.entries.filter((e) => e.tag !== TAG)
-		expect(mine!.idx).toBeGreaterThan(Math.max(...others.map((e) => e.idx)))
-		expect(mine!.when).toBeGreaterThan(
-			Math.max(...others.map((e) => e.when))
-		)
+		const byIdx = [...journal.entries].sort((a, b) => a.idx - b.idx)
+		for (let i = 1; i < byIdx.length; i++)
+			expect(
+				byIdx[i].when,
+				`${byIdx[i].tag} (idx ${byIdx[i].idx}) is stamped at or before ` +
+					`${byIdx[i - 1].tag} (idx ${byIdx[i - 1].idx}), so it is ` +
+					`skipped on any install that has already applied that one.`
+			).toBeGreaterThan(byIdx[i - 1].when)
 	})
 })

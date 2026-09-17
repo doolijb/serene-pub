@@ -35,33 +35,112 @@ declare global {
 	}
 
 	interface PanelsCtx {
+		/**
+		 * The view showing in the sidebar right now, or null when the sidebar
+		 * is collapsed. A *view* is what a rail item opens. "Panel" names only
+		 * a session widget (see docs/session-layout.md), so this sidebar
+		 * concept is called a view instead.
+		 */
+		activeView: string | null
+		/**
+		 * Every view that still has a tab, in the order the tabs were opened.
+		 *
+		 * Each one stays MOUNTED — hidden with the `hidden` attribute, never
+		 * unmounted — so its scroll position, filters and half-typed forms
+		 * survive switching away and back. Only `closeView` (the header's close
+		 * button) or eviction at the cap unmounts one.
+		 */
+		openViews: string[]
+		/**
+		 * The view grown to fill everything right of the rail, or null. It is
+		 * the SAME mounted instance as the sidebar's — the container grows, the
+		 * view is not rendered twice. Always either null or equal to
+		 * `activeView`. Set null to come back to the sidebar from anywhere with
+		 * context access, e.g. a view button that navigates to another page.
+		 */
+		fullPageView: string | null
+		/**
+		 * Open a view in the sidebar and make it active.
+		 *
+		 * `toggle` (default true) collapses the sidebar when the view asked for
+		 * is the one already showing; pass false for a deep link, which should
+		 * land on the view rather than toggling it shut. `fullPage` opens it
+		 * across the whole content area.
+		 */
+		openView: (
+			key: string,
+			opts?: { toggle?: boolean; fullPage?: boolean }
+		) => void
+		/**
+		 * Close a view's tab: its close gate is asked first, and returning
+		 * false from that gate refuses the close. Resolves to whether it
+		 * actually closed.
+		 */
+		closeView: (key: string) => Promise<boolean>
+		/**
+		 * Register the gate that decides whether a view may close — the
+		 * per-view generalisation of the old `onLeftPanelClose`. A view with
+		 * unsaved changes returns false (usually after showing its own confirm)
+		 * and keeps its tab. Every open view can hold one at once, which is why
+		 * it is keyed rather than one-per-side.
+		 */
+		registerViewCloseGate: (
+			key: string,
+			fn: (() => Promise<boolean> | undefined) | undefined
+		) => void
+		/**
+		 * ⏳ Compatibility with the two-sidebar shell these replaced. Assigning
+		 * null collapses the sidebar; assigning a key opens that view without
+		 * toggling.
+		 *
+		 * Reading answers WHERE THE SIDEBAR IS, not which nav a view was
+		 * registered under: there is one sidebar and it is on the left, so
+		 * `leftPanel` is the active view whenever that sidebar is on screen at
+		 * `lg` and not in full page, `rightPanel` is always null, and
+		 * `mobilePanel` is the active view below `lg`. Keyed on nav membership
+		 * instead, opening a `rightNav` view made `SessionLayout` reserve a
+		 * right margin for a sidebar sitting on the left.
+		 */
 		leftPanel: string | null
 		rightPanel: string | null
 		mobilePanel: string | null
+		/** The mobile "More" sheet — every rail item the bottom bar has no room for. */
 		isMobileMenuOpen: boolean
-		/** Which side's sidebar (if any) is expanded to cover the whole
-		 * viewport — set null to exit fullscreen from anywhere with context
-		 * access, e.g. a sidebar button that navigates to a different page. */
-		fullscreenPanel: "left" | "right" | null
 		/**
-		 * Let the centre column spend the space a closed sidebar is not using.
+		 * Let the page content spend the space a closed sidebar is not using.
 		 *
-		 * Distinct from `fullscreenPanel`, which is a *sidebar* covering
-		 * everything. This is the page content taking whatever the sidebars
-		 * leave: both closed and it has the window; one open and it takes the
-		 * other side's quarter; both open and it is exactly its normal half, so
-		 * turning this on can never take space away from a panel you opened.
+		 * ⏳ A leftover of the two-sidebar shell, where a closed sidebar still
+		 * held its quarter so the centre column would not move every time a
+		 * panel opened. The single-sidebar shell always gives the page whatever
+		 * the sidebar is not using, so nothing in the shell reads this any
+		 * more — but `SessionLayout` still does, to decide whether its side
+		 * zones get margins, so the flag and its localStorage key stay.
 		 *
 		 * Desktop only — the mobile layout is already one thing at a time.
 		 */
 		wideContent: boolean
+		/**
+		 * The rail's wide form: 208px, a label beside every icon and a name over
+		 * each group, against the 64px strip of icons alone. The rail's own
+		 * toggle writes it and it is persisted per browser under
+		 * `serene-pub:railWide`, so a settings switch or a keyboard shortcut can
+		 * drive the same flag.
+		 *
+		 * Desktop only — below `lg` the bottom bar is the rail and this is idle.
+		 */
+		railWide: boolean
+		/** Flip `railWide`. Which view is open is untouched. */
+		toggleRailWide: () => void
+		/** ⏳ `openView(key, { toggle })` under its old name. */
 		openPanel: (args: { key: string; toggle?: boolean }) => void
+		/**
+		 * ⏳ Close the active view if it belongs to the named side (and, for
+		 * "mobile", if the window is below `lg`); resolves true when there was
+		 * nothing of that side to close.
+		 */
 		closePanel: (args: {
 			panel: "left" | "right" | "mobile"
 		}) => Promise<boolean>
-		onLeftPanelClose?: () => Promise<boolean>
-		onRightPanelClose?: () => Promise<boolean>
-		onMobilePanelClose?: () => Promise<boolean>
 		leftNav: Record<
 			string,
 			| {
@@ -84,18 +163,32 @@ declare global {
 		>
 		digest: {
 			characterId?: number
-			personaId?: number
 			/** Open the character sidebar straight to its detail/view screen, not the edit form */
 			viewCharacterId?: number
-			/** Open the persona sidebar straight to its detail/view screen, not the edit form */
-			viewPersonaId?: number
 			sessionId?: number
 			sessionPersonaId?: number
 			sessionCharacterId?: number
+			/**
+			 * Open the Sessions view straight to the start-a-session screen,
+			 * with whatever the caller already knows filled in. An empty object
+			 * is the plain "start one" — the screen answers the rest itself.
+			 */
+			createSession?: {
+				characterId?: number
+				personaId?: number
+				genreId?: string
+				presetId?: number
+			}
 			tutorial?: boolean
 			/** Where the lorebook workspace should open — one address for the
 			 * book, the section, the entry and how it is presented. */
 			lore?: LoreRoute
+			/**
+			 * Open the Help view on one documentation page, and at one heading
+			 * inside it. The slug is the address — the docs are the one jump
+			 * kind whose rows are not integer-keyed.
+			 */
+			help?: { slug: string; anchor?: string }
 			/** Open the connections sidebar and select a specific connection */
 			connectionId?: number
 			/** Open the connections sidebar straight to one modality's section. */
@@ -133,9 +226,9 @@ declare global {
 		}
 		/**
 		 * The instance default connection and sampling config, per capability
-		 * (0175) — its own table now rather than a column pair per modality, so
-		 * it arrives beside `settings` rather than inside it. Since 0181 it is
-		 * the only place a default comes from; `settings` carries none.
+		 * (0175), lives in its own table rather than a column pair per
+		 * modality, so it arrives beside `settings` rather than inside it. It
+		 * is the only place a default comes from; `settings` carries none.
 		 *
 		 * ⚠ NOT optional, deliberately, and for the same reason as its twin on
 		 * `SystemSettings.Get.Response`: an optional field forces every reader

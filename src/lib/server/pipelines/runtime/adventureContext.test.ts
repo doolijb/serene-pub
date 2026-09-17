@@ -75,15 +75,15 @@ const ctx = {
 
 /** One agent's rendered instructions, as they would reach the model. */
 async function instructionsOf(
-	typeId: string,
+	definitionId: string,
 	prompts: Record<string, string>,
 	input: Record<string, unknown>
 ): Promise<string> {
-	const result: any = await bindings[typeId]!(
+	const result: any = await bindings[definitionId]!(
 		{ cast: CAST, prompts, ...input } as any,
 		ctx
 	)
-	expect(result.kind, `${typeId} did not build`).toBe("ok")
+	expect(result.kind, `${definitionId} did not build`).toBe("ok")
 	return String(result.value.templateContext.instructions)
 }
 
@@ -175,7 +175,7 @@ describe("a voice is given the same place and the same cast", () => {
 				"adventure-voice"
 			),
 			{
-				speaker: { name: "Verity", intent: "share what she knows" },
+				sideCharacter: { name: "Verity", intent: "share what she knows" },
 				state: STATE,
 				plan: PLAN
 			}
@@ -194,7 +194,7 @@ describe("a voice is given the same place and the same cast", () => {
 			{
 				cast: CAST,
 				prompts: { systemPrompt: "Be brief." },
-				speaker: { name: "Verity" }
+				sideCharacter: { name: "Verity" }
 			} as any,
 			ctx
 		)

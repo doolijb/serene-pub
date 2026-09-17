@@ -21,9 +21,9 @@
 	 * dismissed across tabs, reloads and reboots. Nothing here is remembered
 	 * client-side.
 	 */
-	import { onDestroy, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 
 	interface Props {
@@ -56,17 +56,27 @@
 		if (res?.error) toaster.error({ title: res.error })
 	}
 
-	onMount(() => {
-		socket.on("pipelines:configNotices", onNotices)
-		socket.on("pipelines:configNotices:error", showRefusal)
-		socket.on("pipelines:acknowledgeConfigNotices:error", showRefusal)
-	})
-
-	onDestroy(() => {
-		socket.off("pipelines:configNotices", onNotices)
-		socket.off("pipelines:configNotices:error", showRefusal)
-		socket.off("pipelines:acknowledgeConfigNotices:error", showRefusal)
-	})
+	/**
+	 * A STANDING interest, not a one-shot folded into the request below.
+	 *
+	 * `pipelines:configNotices` is also what the server cascades after an
+	 * acknowledge — the re-read is how a dismissed notice leaves the panel —
+	 * so the key has to be held while this component is mounted rather than
+	 * only around the request it makes itself. BARE: the event has no entry in
+	 * `SCOPED_EVENTS`, and `onNotices`'s own `res.configId !== configId` check
+	 * stays the filter.
+	 */
+	useInterest<"pipelines:configNotices">("pipelines:configNotices", onNotices)
+	// Never gated (plan ruling 2 — an error is not an output to skip), but the
+	// registry is the only listener path, so both refusals are declared here.
+	useInterest<"pipelines:configNotices:error">(
+		"pipelines:configNotices:error",
+		showRefusal
+	)
+	useInterest<"pipelines:acknowledgeConfigNotices:error">(
+		"pipelines:acknowledgeConfigNotices:error",
+		showRefusal
+	)
 
 	// Asked for per configuration, and re-asked when the picker moves: the
 	// notices belong to the configuration, not to the pipeline. Nothing this

@@ -147,11 +147,19 @@ beforeAll(async () => {
 	// every step in this run resolves its connection through the chain, and an
 	// unregistered `text->text` means the first one refuses rather than falling
 	// back to whatever happens to be saved.
+	// The MODEL half of the pair. A registration names both halves — an
+	// endpoint on its own is incomplete and every step refuses — and the merge
+	// is what puts the identifier on the row the adapter is handed.
+	const { ensureConnectionModel } = await import(
+		"$lib/server/connections/models"
+	)
+	const model = await ensureConnectionModel(db, connection.id, "fake-7b")
 	const { setCapabilityDefault } = await import(
 		"$lib/server/connections/capabilityDefaults"
 	)
 	await setCapabilityDefault(db, "text->text", {
 		connectionId: connection.id,
+		connectionModelId: model!.id,
 		samplingConfigId: sampling.id
 	})
 }, 120_000)
@@ -177,8 +185,8 @@ describe("a summarize run, stopped at the write", () => {
 			},
 			preview: { atNode: "save" },
 			onNode: (e) => {
-				if (e.phase === "start" && e.kind === "provider")
-					seen.push(e.typeId)
+				if (e.phase === "start" && e.kind === "oracle")
+					seen.push(e.definitionId)
 			},
 			skipReceipt: true
 		})
@@ -187,6 +195,15 @@ describe("a summarize run, stopped at the write", () => {
 		// outcome of this flow, and the socket keys on the node outputs.
 		expect(receipt.outcome).toBe("halt")
 		expect(receipt.haltNodeKey).toBe("save")
+
+		// Who portrays whom is pinned here too (U5a, W1): a summarize is a
+		// run in a session that reaches the model — parked at its write, not
+		// a pre-call preview — so it is answered like a reply. No speaker,
+		// so the cast, the owner and the run owner are what it asks about.
+		expect(receipt.portrayals).toEqual({
+			owner: { by: "person", userId: String(userId) },
+			"run-owner": { by: "person", userId: String(userId) }
+		})
 
 		const out = (key: string) =>
 			(receipt.nodes.find((n: any) => n.nodeKey === key) as any)?.output
@@ -205,9 +222,9 @@ describe("a summarize run, stopped at the write", () => {
 		// Every model step announced itself, in phase order — the executor's
 		// inherent node events, not a per-trigger wiring.
 		expect(seen).toEqual([
-			"core:provider/summarize-batch@1",
-			"core:provider/summarize-synth@1",
-			"core:provider/name-entry@1"
+			"core:oracle/summarize-batch@1",
+			"core:oracle/summarize-synth@1",
+			"core:oracle/name-entry@1"
 		])
 	})
 
@@ -253,7 +270,7 @@ describe("a summarize run, stopped at the write", () => {
 				eq(schema.pipelineNodes.specVersionId, spec.activeVersionId!)
 			)
 		const batchNode = (nodes as any[]).find(
-			(n) => n.typeId === "core:provider/summarize-batch"
+			(n) => n.definitionId === "core:oracle/summarize-batch"
 		)!
 		// The chain attaches as the selected configuration's own value — the
 		// only global home since the layer simplification (2026-08-24).
@@ -306,7 +323,7 @@ describe("a summarize run, stopped at the write", () => {
 		// outside, attributed to the drafting node.
 		const apps = (receipt.nodes as any[])
 			.filter((n: any) =>
-				n.typeId?.startsWith("core:provider/summarize-batch")
+				n.definitionId?.startsWith("core:oracle/summarize-batch")
 			)
 			.flatMap((n: any) => n.scripts ?? [])
 		expect(apps).toMatchObject([

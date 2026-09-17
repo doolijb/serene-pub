@@ -87,6 +87,14 @@ describe("the narrator's lore node after the change", () => {
 		// proves each one changes what a run retrieves.
 		expect([...paths].sort()).toEqual([
 			"admitThreshold",
+			// The three bands' intents (R-7 P5; U3b review W1), namespaced
+			// because one node declares three: `bandIntentFrom` reads each
+			// trio into one band intent the handler publishes, and
+			// `signalWiring.int.test.ts`'s narrate case proves a stored value
+			// reaches the ranker declared rather than defaulted.
+			"characterLoreMaxEntries",
+			"characterLorePriority",
+			"characterLoreShare",
 			// Added by 0099, and it is the same argument arriving from the
 			// other side: this one was READ before it was declared — the
 			// narrator's lore runs through `keywordQuery` too, where
@@ -94,11 +102,17 @@ describe("the narrator's lore node after the change", () => {
 			// a constant no panel could reach. `runtime/loreScanDepth.int.test.ts`
 			// is what proves a stored value reaches this lane.
 			"guaranteedMessages",
+			"historyMaxEntries",
+			"historyPriority",
+			"historyShare",
 			"lexicalScoring",
 			"maxRecursionDepth",
 			"scanDepth",
 			"titleWeight",
-			"trigramFolding"
+			"trigramFolding",
+			"worldLoreMaxEntries",
+			"worldLorePriority",
+			"worldLoreShare"
 		])
 	})
 })

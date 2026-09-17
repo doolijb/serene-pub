@@ -62,9 +62,11 @@ import { createHost } from "$lib/server/pipelines/runtime/host"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
 import { run } from "@serene-pub/sdk"
 import { respondSpec } from "$lib/server/pipelines/specs/respond"
+import { narrateSpec } from "$lib/server/pipelines/specs/narrate"
 import * as schema from "$lib/server/db/schema"
 import { worldLoreValues } from "$lib/server/pipelines/testing/fixtures"
 import {
+	DEFAULT_GROUPS,
 	DEFAULT_SIGNAL_WEIGHTS,
 	type SignalWeights,
 	type RetrievalBand
@@ -458,5 +460,176 @@ describe("every declared signal weight has a producer, and the reverse", () => {
 			for (const key of Object.keys(c.signals ?? {}))
 				if (!(WEIGHTS as string[]).includes(key)) stray.add(key)
 		expect([...stray].sort()).toEqual([])
+	}, 60_000)
+})
+
+/**
+ * The per-source half of the same guard (R-7 P5, 2026-09-16 — plans/30 U3b):
+ * **declared intent ≡ live intent ≡ the ranker's fallback**, all three read off
+ * the shipped code and a real turn.
+ *
+ * Each of the five retrieval definitions declares its band's `share`,
+ * `maxEntries` and `priority` (the conversation its `minEntries` too) and
+ * publishes them as a band intent; the ranker resolves its band table from
+ * the intents that reach it and falls back to `DEFAULT_GROUPS` for a core
+ * band nothing spoke for. Three sets that must be one set:
+ *
+ *   · **declared** — the definitions' own `default`s;
+ *   · **live** — the table the ranker actually resolved on this turn
+ *     (`rank.output.diagnostics.bands`), with every one of the five bands
+ *     reached by an intent (`declared` on the receipt);
+ *   · **fallback** — `DEFAULT_GROUPS`, which the migration's `shipped` table
+ *     and the handler-side defaults also spell.
+ *
+ * A source whose params a spec forgot to wire, a default moved on one side
+ * and not the other, or a band intent lost between a source and the ranker
+ * each show here as two of the three disagreeing.
+ */
+describe("every source's declared intent is what reaches the ranker", () => {
+	const SOURCES = {
+		messages: C.sessionHistory,
+		worldLore: C.worldLore,
+		characterLore: C.characterLore,
+		history: C.historyEntries,
+		relationships: C.relationshipSearch
+	} as const
+	const declared = (def: { descriptor: any }, field: string) =>
+		def.descriptor.slots?.params?.schema?.[field]?.default
+
+	it("every one of the five bands reaches the ranker as an intent — none runs on the fallback", () => {
+		const rank = node(receipt, "rank")
+		expect(rank?.result).toBe("ok")
+		expect([...rank.output.diagnostics.declared].sort()).toEqual(
+			Object.keys(SOURCES).sort()
+		)
+		expect(rank.output.diagnostics.defaulted).toEqual([])
+	}, 60_000)
+
+	it("the live band table is the declared one, member for member", () => {
+		const live = node(receipt, "rank").output.diagnostics.bands
+		for (const [band, def] of Object.entries(SOURCES)) {
+			expect(live.share[band], `${band} share`).toBe(declared(def, "share"))
+			expect(live.maxEntries[band], `${band} maxEntries`).toBe(
+				declared(def, "maxEntries")
+			)
+			expect(live.priority[band], `${band} priority`).toBe(
+				declared(def, "priority")
+			)
+		}
+		expect(live.minEntries.messages).toBe(declared(C.sessionHistory, "minEntries"))
+		// R6: no lore floor is declared, so none is live.
+		for (const band of ["worldLore", "characterLore", "history", "relationships"])
+			expect(live.minEntries[band]).toBe(0)
+	}, 60_000)
+
+	it("the ranker's fallback table is the same set again", () => {
+		for (const [band, def] of Object.entries(SOURCES)) {
+			expect(DEFAULT_GROUPS.share[band as RetrievalBand]).toBe(declared(def, "share"))
+			expect(DEFAULT_GROUPS.maxEntries[band as RetrievalBand]).toBe(
+				declared(def, "maxEntries")
+			)
+			expect(DEFAULT_GROUPS.priority[band as RetrievalBand]).toBe(
+				declared(def, "priority")
+			)
+		}
+		expect(DEFAULT_GROUPS.minEntries.messages).toBe(
+			declared(C.sessionHistory, "minEntries")
+		)
+	})
+
+	it("the ranker declares none of it — the maps are gone", () => {
+		const schema = (C.rankHybrid.descriptor.slots?.params?.schema ??
+			{}) as Record<string, unknown>
+		for (const gone of ["share", "maxEntries", "minEntries"])
+			expect(gone in schema, `${gone} is declared on the ranker again`).toBe(false)
+		// What stays is cross-source: mechanisms, signals, normalisation, precedence.
+		expect(
+			Object.keys(schema).filter((k) => !k.startsWith("signal")).sort()
+		).toEqual(["mechanismWeights", "scoreLedAllocation", "shareNormalisation"])
+	})
+})
+
+/**
+ * The same guard for a pipeline that scans through ONE node (U3b review W1).
+ *
+ * `narrate` has no lane per lore band: `lore` is `core:query/lorebook-triggers@1`
+ * and produces all three through one port. Before the review it declared no
+ * intent at all, so the narrator's three lore bands reached the ranker
+ * DEFAULTED — the same numbers, but nothing on that node could move them and
+ * a tuned share on its ranker had nowhere to migrate to. It declares one
+ * intent per band now (`worldLoreShare` …) and publishes three; this holds
+ * that they arrive declared, at the declared numbers, and that moving one
+ * moves the live table.
+ */
+describe("a one-node scan's three lore bands reach the ranker declared, not defaulted", () => {
+	const narrateTurn = async (loreParams: Record<string, unknown> = {}) => {
+		const { buildWorld } = await import("$lib/server/pipelines/config/world")
+		const world = await buildWorld(db, { sessionId })
+		for (const [path, value] of Object.entries(loreParams))
+			world.overrides.push({
+				nodeKey: "lore",
+				slot: "params",
+				path,
+				value,
+				scopeKind: "session"
+			} as any)
+		return (await run(narrateSpec(), {
+			world,
+			input: {
+				text: "I hear the order rides at dawn.",
+				sessionId,
+				characterId: null,
+				sessionScope: { sessionId, currentCharacterId: null }
+			},
+			seed: "seed:signal-wiring-narrate",
+			bindings: coreBindings(),
+			host: createHost(db, { sessionId, userId }),
+			preview: true
+		} as any)) as any
+	}
+	const scan = () =>
+		C.lorebookTriggers.descriptor.slots?.params?.schema as Record<string, any>
+
+	it("narrate's turn declares the conversation and all three lore bands; only the graph, which it has no source for, runs on the fallback", async () => {
+		const receipt = await narrateTurn()
+		const rank = node(receipt, "rank")
+		expect(rank?.result).toBe("ok")
+		expect([...rank.output.diagnostics.declared].sort()).toEqual([
+			"characterLore",
+			"history",
+			"messages",
+			"worldLore"
+		])
+		expect(rank.output.diagnostics.defaulted).toEqual(["relationships"])
+		// The three intents rode at the head of the scan's own port.
+		const { splitCandidates } = await import("@serene-pub/sdk")
+		expect(
+			splitCandidates(node(receipt, "lore").output.main).intents.map((i) => i.band)
+		).toEqual(["worldLore", "characterLore", "history"])
+	}, 60_000)
+
+	it("the live table is the scan node's declaration, band for band — the lanes' numbers", async () => {
+		const live = node(await narrateTurn(), "rank").output.diagnostics.bands
+		for (const band of ["worldLore", "characterLore", "history"]) {
+			expect(live.share[band], `${band} share`).toBe(scan()[`${band}Share`].default)
+			expect(live.maxEntries[band], `${band} maxEntries`).toBe(
+				scan()[`${band}MaxEntries`].default
+			)
+			expect(live.priority[band], `${band} priority`).toBe(
+				scan()[`${band}Priority`].default
+			)
+			expect(live.minEntries[band], `${band} floor (R6)`).toBe(0)
+		}
+	}, 60_000)
+
+	it("a share tuned on the scan node moves the live table", async () => {
+		const live = node(
+			await narrateTurn({ worldLoreShare: 0.4, historyMaxEntries: 3 }),
+			"rank"
+		).output.diagnostics.bands
+		expect(live.share.worldLore).toBe(0.4)
+		expect(live.maxEntries.history).toBe(3)
+		// The bands not touched keep their declaration.
+		expect(live.share.characterLore).toBe(scan().characterLoreShare.default)
 	}, 60_000)
 })

@@ -1,13 +1,13 @@
 /**
- * Round-12 audit fix (MEDIUM): syncLorebookBindingsForCharacter/
- * syncLorebookBindingsForPersona used to read the character/persona then
- * write every bound row with no lock — two near-simultaneous edits to the
- * same character could interleave so the earlier edit's read finishes
- * writing after the later edit's, leaving bound rows stale. Fixed by
- * wrapping each in a db.transaction acquiring a Postgres advisory lock
- * scoped to the characterId/personaId (2-argument form, salted separately
- * per entity kind so it can't collide with the existing lorebookId-keyed
- * locks elsewhere).
+ * Round-12 audit fix (MEDIUM): syncLorebookBindingsForCharacter (originally
+ * paired with a since-removed syncLorebookBindingsForPersona — 0133 folded
+ * personas into characters, so there is one function and one id space now)
+ * used to read the character then write every bound row with no lock — two
+ * near-simultaneous edits to the same character could interleave so the
+ * earlier edit's read finishes writing after the later edit's, leaving
+ * bound rows stale. Fixed by wrapping it in a db.transaction acquiring a
+ * Postgres advisory lock scoped to the characterId (2-argument form, salted
+ * so it can't collide with the existing lorebookId-keyed locks elsewhere).
  *
  * PGlite is a single-connection embedded Postgres — it fully serializes
  * every transaction regardless of locking, so it can't distinguish "blocked
@@ -134,31 +134,34 @@ describe("characterBindingSync — advisory lock (Round-12 audit fix, PGlite int
 		expect(rows[0].name).toBe("Concurrent Name")
 	})
 
-	test("syncLorebookBindingsForPersona uses a separate lock space from the character sync (different salt, no cross-kind collision)", async () => {
-		const {
-			syncLorebookBindingsForCharacter,
-			syncLorebookBindingsForPersona
-		} = await import("./characterBindingSync")
+	test("concurrent syncs for two different characters (one persona-flavored) don't collide, since the lock is scoped by characterId", async () => {
+		// `syncLorebookBindingsForPersona` is gone (0133): a persona is a
+		// character with `isPersona: true`, so both rows below go through the
+		// one `syncLorebookBindingsForCharacter` and its one lock salt now —
+		// what used to guard against a cross-KIND collision now guards
+		// against a cross-ROW one instead.
+		const { syncLorebookBindingsForCharacter } = await import(
+			"./characterBindingSync"
+		)
 		const user = await makeUser("bindingsync-lock-separate-user")
 		const [character] = await testDb
 			.insert(schema.characters)
 			.values({ userId: user.id, name: "Char Name", description: "" })
 			.returning()
 		const [persona] = await testDb
-			.insert(schema.personas)
+			.insert(schema.characters)
 			.values({
 				userId: user.id,
+				isPersona: true,
 				name: "Persona Name",
-				description: "",
-				isDefault: false
+				description: ""
 			})
 			.returning()
 
-		// Both should complete without error even when the persona and
-		// character happen to share the same numeric id space conceptually —
-		// the salt keeps their lock keys from colliding.
+		// Both should complete without error, and each converges on its own
+		// row rather than the other's.
 		await Promise.all([
-			syncLorebookBindingsForPersona(persona.id, testDb),
+			syncLorebookBindingsForCharacter(persona.id, testDb),
 			syncLorebookBindingsForCharacter(character.id, testDb)
 		])
 	})

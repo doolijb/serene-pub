@@ -33,7 +33,6 @@
 				binding.character?.name ||
 				binding.binding
 			)
-		if (binding.personaId) return binding.persona?.name || binding.binding
 		return binding.binding
 	}
 </script>

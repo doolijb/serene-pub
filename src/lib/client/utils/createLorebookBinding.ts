@@ -1,3 +1,7 @@
+import {
+	declareInterest,
+	requestWithInterest
+} from "$lib/client/sockets/interest.svelte"
 import type { TypedSocket } from "$lib/client/sockets/typedSocket"
 
 const REQUEST_TIMEOUT_MS = 15000
@@ -15,6 +19,23 @@ const REQUEST_TIMEOUT_MS = 15000
  * Correlates its own response via a generated `requestId` rather than
  * matching on `name`, since other clients viewing the same lorebook can
  * also be creating/broadcasting bindings concurrently.
+ *
+ * ## Interest
+ *
+ * Both halves go through the **interest registry**, and both are BARE: neither
+ * event has an entry in `SCOPED_EVENTS` (the reply names a binding, not a
+ * book), and a scoped key for an unscoped event matches nothing. The interest
+ * is held only for the length of one call — `cleanup` releases it down all
+ * three exits (reply, error, timeout), which is what keeps a promise that
+ * nobody is waiting on from leaving a subscriber behind.
+ *
+ * The error interest is declared BEFORE the request, because
+ * `requestWithInterest` flushes the interest sync and emits in the same breath:
+ * a key declared after it would reach the server behind the request it is
+ * meant to hear the failure of.
+ *
+ * `socket` is still taken — the callers hold one and pass it — but the registry
+ * owns the transport now, so nothing here listens on it directly.
  */
 export function resolveOrCreateBindingByName(
 	socket: TypedSocket,
@@ -26,17 +47,9 @@ export function resolveOrCreateBindingByName(
 
 		function cleanup() {
 			clearTimeout(timeout)
-			socket.off("lorebooks:resolveOrCreateBindingByName", handler)
-			socket.off(
-				"lorebooks:resolveOrCreateBindingByName:error",
-				errorHandler
-			)
+			releaseReply()
+			releaseError()
 		}
-
-		const timeout = setTimeout(() => {
-			cleanup()
-			reject(new Error(`Timed out resolving character "${name}".`))
-		}, REQUEST_TIMEOUT_MS)
 
 		function handler(
 			data: Sockets.Lorebooks.ResolveOrCreateBindingByName.Response
@@ -61,12 +74,28 @@ export function resolveOrCreateBindingByName(
 			)
 		}
 
-		socket.on("lorebooks:resolveOrCreateBindingByName", handler)
-		socket.on("lorebooks:resolveOrCreateBindingByName:error", errorHandler)
-		socket.emit("lorebooks:resolveOrCreateBindingByName", {
-			lorebookId,
-			name,
-			requestId
-		} satisfies Sockets.Lorebooks.ResolveOrCreateBindingByName.Params)
+		// Never gated (plan ruling 2 — an error is not an output to skip), but
+		// the registry is the only listener path.
+		const releaseError =
+			declareInterest<"lorebooks:resolveOrCreateBindingByName:error">(
+				"lorebooks:resolveOrCreateBindingByName:error",
+				errorHandler
+			)
+
+		const releaseReply =
+			requestWithInterest<"lorebooks:resolveOrCreateBindingByName">(
+				"lorebooks:resolveOrCreateBindingByName",
+				{
+					lorebookId,
+					name,
+					requestId
+				} satisfies Sockets.Lorebooks.ResolveOrCreateBindingByName.Params,
+				handler
+			)
+
+		const timeout = setTimeout(() => {
+			cleanup()
+			reject(new Error(`Timed out resolving character "${name}".`))
+		}, REQUEST_TIMEOUT_MS)
 	})
 }

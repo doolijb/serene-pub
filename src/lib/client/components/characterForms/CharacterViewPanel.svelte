@@ -1,11 +1,15 @@
 <script lang="ts">
 	import { avatarSrc } from "$lib/client/utils/media"
-	import { Avatar, Tabs } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
-	import { onDestroy, onMount, getContext } from "svelte"
+	import {
+		declareInterest,
+		requestWithInterest
+	} from "$lib/client/sockets/interest.svelte"
+	import { interestKey } from "$lib/shared/sockets/interest"
 	import EntityGalleryTab from "$lib/client/components/gallery/EntityGalleryTab.svelte"
 	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
+	import PanelTabStrip from "$lib/client/components/panels/PanelTabStrip.svelte"
 
 	// embedding/embeddingModel/vectorizedAt are deliberately excluded from
 	// the "characters:get" response (see charactersGet's `columns`
@@ -17,7 +21,12 @@
 
 	interface Props {
 		characterId: number
-		onBack: () => void
+		/**
+		 * Back to the list. Omitted when the list is already on screen beside
+		 * this panel (a view in desk mode), where a "back" that goes nowhere
+		 * visible is only a button to explain.
+		 */
+		onBack?: () => void
 		onEdit: () => void
 		onSession: () => void
 		onExport?: (character: ViewedCharacter) => void
@@ -30,10 +39,9 @@
 	let character = $state<ViewedCharacter | null>(null)
 	let isLoading = $state(true)
 
-	// Named so `off` can name it too. A bare `socket.off("characters:get")`
-	// removes EVERY listener for that event — including other components
-	// listening for the same event — which then stops updating for the rest
-	// of the session.
+	// The id check stays as belt and braces: the interest key below already
+	// narrows the fan-out to this character, and this says the same thing
+	// about the payload itself.
 	function handleCharactersGet(msg: Sockets.Characters.Get.Response) {
 		if (msg.character?.id === characterId) {
 			character = msg.character
@@ -41,24 +49,114 @@
 		}
 	}
 
-	onMount(() => {
-		socket.on("characters:get", handleCharactersGet)
+	/**
+	 * The character this panel is showing, declared as a SCOPED interest
+	 * (`characters:get#<id>`; the payload carries the id on `character.id`,
+	 * see `SCOPED_EVENTS`) and asked for in the same effect — so a panel
+	 * pointed at another character releases the old key as it takes the new
+	 * one, rather than keeping the first id `useInterest` would have read
+	 * once. The key is STANDING for as long as the panel lives, because
+	 * `characters:get` is a cascade target: a save elsewhere re-sends it and
+	 * this panel has to show the new row.
+	 */
+	$effect(() => {
+		const id = characterId
+		const release = declareInterest<"characters:get">(
+			interestKey("characters:get", id),
+			handleCharactersGet
+		)
 		socket.emit("characters:get", {
-			id: characterId
+			id
 		} satisfies Sockets.Characters.Get.Params)
+		return release
 	})
 
-	onDestroy(() => {
-		socket.off("characters:get", handleCharactersGet)
-	})
-
+	/**
+	 * The tag records themselves, not their names: `colorPreset` rides along on
+	 * the joined row, so a chip is coloured from the payload this panel already
+	 * holds rather than a second lookup against the tag list.
+	 */
 	let tags = $derived(
-		(character as any)?.characterTags
-			?.map((ct: any) => ct.tag?.name)
-			.filter(Boolean) ?? []
+		((character as any)?.characterTags ?? [])
+			.map((ct: any) => ct?.tag)
+			.filter(Boolean) as Array<{ name: string; colorPreset?: string }>
+	)
+
+	/** The chip preset a tag carries, or the neutral one an uncoloured tag gets. */
+	function tagColorPreset(tag: { colorPreset?: string }): string {
+		return (
+			tag.colorPreset ||
+			"bg-primary-500/20 text-primary-600 dark:text-primary-400"
+		)
+	}
+
+	/**
+	 * The folders this user has, so the character's `folderId` can be SHOWN as
+	 * the folder's name. BARE and standing: `characterFolders:list` is this
+	 * user's whole list with nothing to scope it to, and it is a cascade target
+	 * — a rename elsewhere has to land here too.
+	 */
+	let folders = $state<Sockets.CharacterFolders.List.Response["folders"]>([])
+	$effect(() =>
+		requestWithInterest(
+			"characterFolders:list",
+			{},
+			(msg: Sockets.CharacterFolders.List.Response) =>
+				(folders = msg.folders)
+		)
+	)
+
+	let folderName = $derived(
+		character?.folderId == null
+			? undefined
+			: folders.find((f) => f.id === character!.folderId)?.name
+	)
+
+	/**
+	 * How this LIBRARY treats the character — favourite, persona, default
+	 * persona, which folder — as one chip row under the name.
+	 *
+	 * None of it reaches the model, which is why it is here rather than in a
+	 * details card: a card would put library bookkeeping among the fields that
+	 * are actually the character. Absent entirely when none of it is true.
+	 */
+	let libraryChips = $derived(
+		[
+			character?.isFavorite
+				? { icon: Icons.Star, label: "Favorite" }
+				: undefined,
+			character?.isDefaultPersona
+				? { icon: Icons.UserRound, label: "Default persona" }
+				: character?.isPersona
+					? { icon: Icons.UserRound, label: "Persona" }
+					: undefined,
+			folderName ? { icon: Icons.Folder, label: folderName } : undefined
+		].filter(Boolean) as Array<{ icon: any; label: string }>
+	)
+
+	/**
+	 * Version and ownership on one quiet line. Both are facts about the card
+	 * rather than about the character, so they sit together under the name
+	 * instead of each claiming a row.
+	 */
+	let heroMeta = $derived(
+		[
+			character?.characterVersion
+				? `v${character.characterVersion}`
+				: undefined,
+			!character?.isOwner && character?.ownerName
+				? `Owned by ${character.ownerName}`
+				: undefined
+		].filter(Boolean) as string[]
 	)
 
 	let activeTab = $state("details")
+
+	/** The two halves of a character: what it says, and what it looks like. */
+	const VIEW_TABS = [
+		{ value: "details", label: "Details", icon: Icons.UserRound },
+		{ value: "gallery", label: "Gallery", icon: Icons.Images }
+	]
 </script>
 
 <div class="flex h-full flex-col gap-0 overflow-hidden">
@@ -111,203 +209,211 @@
 			<Icons.Loader2 size={24} class="text-surface-400 animate-spin" />
 		</div>
 	{:else if character}
-		<Tabs
-			value={activeTab}
-			onValueChange={(e) => (activeTab = e.value)}
-			class="flex min-h-0 flex-1 flex-col"
-		>
-			<Tabs.List class="flex shrink-0 gap-1">
-				<Tabs.Trigger value="details">
-					<Icons.User size={16} /> Details
-				</Tabs.Trigger>
-				<Tabs.Trigger value="gallery">
-					<Icons.Images size={16} /> Gallery
-				</Tabs.Trigger>
-			</Tabs.List>
+		<!-- Hero: the one place this panel says who it is showing, above the
+		     tabs so it holds for the gallery as well as the details. -->
+		<div class="flex shrink-0 items-start gap-3 pb-4">
+			{#if avatarSrc(character, { full: true })}
+				<img
+					src={avatarSrc(character, { full: true })}
+					alt=""
+					class="h-[88px] w-[88px] shrink-0 rounded-[14px] object-cover object-top"
+				/>
+			{:else}
+				<span
+					class="bg-surface-800 grid h-[88px] w-[88px] shrink-0 place-items-center rounded-[14px]"
+				>
+					<Icons.UsersRound
+						size={40}
+						class="text-surface-400"
+						aria-hidden="true"
+					/>
+				</span>
+			{/if}
+			<div class="min-w-0 flex-1">
+				<!-- The heading font without a heading element: PanelNavHeader
+				     above already owns this panel's heading, and a second one
+				     saying the same name would put two entries in the outline
+				     for one thing. -->
+				<p class="funnel-display truncate text-lg font-semibold">
+					{character.nickname || character.name}
+				</p>
+				{#if character.nickname && character.name !== character.nickname}
+					<p class="text-surface-400 truncate text-sm">
+						{character.name}
+					</p>
+				{/if}
+				{#if heroMeta.length}
+					<p class="text-surface-500 truncate text-xs">
+						{heroMeta.join(" · ")}
+					</p>
+				{/if}
+				{#if libraryChips.length}
+					<div class="mt-1.5 flex flex-wrap items-center gap-1">
+						{#each libraryChips as chip (chip.label)}
+							<span
+								class="bg-surface-800 text-surface-300 flex max-w-full items-center gap-1 rounded px-2 py-0.5 text-xs"
+							>
+								<chip.icon
+									size={12}
+									class="shrink-0"
+									aria-hidden="true"
+								/>
+								<span class="truncate">{chip.label}</span>
+							</span>
+						{/each}
+					</div>
+				{/if}
+				{#if tags.length > 0}
+					<div class="mt-1.5 flex flex-wrap gap-1">
+						{#each tags as tag}
+							<span
+								class="rounded px-2 py-0.5 text-xs {tagColorPreset(
+									tag
+								)}"
+							>
+								{tag.name}
+							</span>
+						{/each}
+					</div>
+				{/if}
+			</div>
+		</div>
+		<div class="flex min-h-0 flex-1 flex-col">
+			<!-- The same strip the character EDIT screen wears, so the two are
+			     one idiom rather than two that resemble each other. -->
+			<PanelTabStrip
+				bind:value={activeTab}
+				tabs={VIEW_TABS}
+				ariaLabel="Character"
+				panelIdPrefix="character-view"
+			/>
 
-			<Tabs.Content
-				value="details"
+			<!-- Both panels stay mounted and the inactive one is `hidden`,
+			     which is what the gallery needs: it subscribes on mount, and a
+			     panel torn down on every tab switch would drop and retake
+			     those keys. `hidden` alone hides it — nothing here sets a
+			     `display`, so the UA rule stands. -->
+			<div
+				id="character-view-details"
+				role="tabpanel"
+				aria-labelledby="character-view-details-tab"
+				hidden={activeTab !== "details"}
 				class="min-h-0 flex-1 overflow-y-auto"
 			>
-				<div class="flex flex-col gap-3">
-					<!-- Avatar + name -->
-					<div class="card preset-filled-surface-100-900 flex items-center gap-3 p-3">
-						<Avatar class="h-16 min-h-16 w-16 min-w-16">
-							<Avatar.Image
-								src={avatarSrc(character, { full: true }) || ""}
-								alt={character.nickname || character.name}
-								class="object-cover"
-							/>
-							<Avatar.Fallback>
-								<Icons.User size={32} />
-							</Avatar.Fallback>
-						</Avatar>
-						<div class="min-w-0 flex-1">
-							<p class="truncate text-lg font-bold">
-								{character.nickname || character.name}
-							</p>
-							{#if character.nickname && character.name !== character.nickname}
-								<p
-									class="text-surface-700-300 truncate text-sm"
-								>
-									{character.name}
-								</p>
-							{/if}
-							{#if character.characterVersion}
-								<p class="text-surface-600 text-xs">
-									v{character.characterVersion}
-								</p>
-							{/if}
-							{#if !character.isOwner && character.ownerName}
-								<p
-									class="text-surface-700-300 truncate text-xs"
-								>
-									Owned by {character.ownerName}
-								</p>
-							{/if}
-							{#if tags.length > 0}
-								<div class="mt-1.5 flex flex-wrap gap-1">
-									{#each tags as tag}
-										<span
-											class="preset-tonal-surface rounded px-2 py-0.5 text-xs"
-										>
-											{tag}
-										</span>
-									{/each}
-								</div>
-							{/if}
-						</div>
-					</div>
-
-					<!-- Description -->
+				<!-- One card per section, so a character sheet reads as a
+				     set of things rather than one column of prose. The panes
+				     are surface-950, which makes surface-900 the step a card
+				     is legible against. A section whose field is empty is not
+				     rendered at all: an empty card states a blank where the
+				     character simply has none. -->
+				<div class="flex flex-col gap-3 pt-3">
 					{#if character.description}
-						<section class="card preset-filled-surface-100-900 space-y-1 p-3">
-							<p
-								class="text-primary-700-300 flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase"
-							>
-								<Icons.FileText size={13} />
+						<section class="panel-card">
+							<p class="text-surface-500 mb-1.5 text-xs">
 								Description
 							</p>
 							<p
-								class="text-sm leading-relaxed whitespace-pre-wrap"
+								class="text-surface-200 text-sm leading-relaxed whitespace-pre-wrap"
 							>
 								{character.description}
 							</p>
 						</section>
 					{/if}
 
-					<!-- Personality -->
 					{#if character.personality}
-						<section class="card preset-filled-surface-100-900 space-y-1 p-3">
-							<p
-								class="text-primary-700-300 flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase"
-							>
-								<Icons.Sparkles size={13} />
+						<section class="panel-card">
+							<p class="text-surface-500 mb-1.5 text-xs">
 								Personality
 							</p>
 							<p
-								class="text-sm leading-relaxed whitespace-pre-wrap"
+								class="text-surface-200 text-sm leading-relaxed whitespace-pre-wrap"
 							>
 								{character.personality}
 							</p>
 						</section>
 					{/if}
 
-					<!-- Scenario -->
 					{#if character.scenario}
-						<section class="card preset-filled-surface-100-900 space-y-1 p-3">
-							<p
-								class="text-primary-700-300 flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase"
-							>
-								<Icons.Drama size={13} />
+						<section class="panel-card">
+							<p class="text-surface-500 mb-1.5 text-xs">
 								Scenario
 							</p>
 							<p
-								class="text-sm leading-relaxed whitespace-pre-wrap"
+								class="text-surface-200 text-sm leading-relaxed whitespace-pre-wrap"
 							>
 								{character.scenario}
 							</p>
 						</section>
 					{/if}
 
-					<!-- First message -->
 					{#if character.firstMessage}
-						<section class="card preset-filled-surface-100-900 space-y-1 p-3">
-							<p
-								class="text-primary-700-300 flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase"
-							>
-								<Icons.MessageSquare size={13} />
-								First Message
+						<section class="panel-card">
+							<p class="text-surface-500 mb-1.5 text-xs">
+								First message
 							</p>
 							<p
-								class="text-sm leading-relaxed whitespace-pre-wrap"
+								class="text-surface-200 text-sm leading-relaxed whitespace-pre-wrap"
 							>
 								{character.firstMessage}
 							</p>
 						</section>
 					{/if}
 
-					<!-- Alternate greetings -->
 					{#if character.alternateGreetings?.length}
-						<section class="card preset-filled-surface-100-900 space-y-1.5 p-3">
-							<p
-								class="text-primary-700-300 flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase"
-							>
-								<Icons.MessagesSquare size={13} />
-								Alternate Greetings ({character
+						<section class="panel-card">
+							<p class="text-surface-500 mb-1.5 text-xs">
+								Alternate greetings ({character
 									.alternateGreetings.length})
 							</p>
-							{#each character.alternateGreetings as greeting, i}
-								<details
-									class="preset-tonal-surface rounded p-2 text-sm"
-								>
-									<summary
-										class="cursor-pointer text-xs font-medium"
-									>
-										Greeting {i + 1}
-									</summary>
-									<p
-										class="mt-1 leading-relaxed whitespace-pre-wrap"
-									>
-										{greeting}
-									</p>
-								</details>
-							{/each}
+							<div class="flex flex-col gap-1.5">
+								{#each character.alternateGreetings as greeting, i}
+									<details>
+										<summary
+											class="text-surface-400 cursor-pointer text-xs"
+										>
+											Greeting {i + 1}
+										</summary>
+										<p
+											class="text-surface-200 mt-1 text-sm leading-relaxed whitespace-pre-wrap"
+										>
+											{greeting}
+										</p>
+									</details>
+								{/each}
+							</div>
 						</section>
 					{/if}
 
-					<!-- Creator notes -->
 					{#if character.creatorNotes}
-						<section class="card preset-filled-surface-100-900 space-y-1 p-3">
-							<p
-								class="text-primary-700-300 flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase"
-							>
-								<Icons.StickyNote size={13} />
-								Creator Notes
+						<section class="panel-card">
+							<p class="text-surface-500 mb-1.5 text-xs">
+								Creator notes
 							</p>
 							<p
-								class="text-sm leading-relaxed whitespace-pre-wrap"
+								class="text-surface-200 text-sm leading-relaxed whitespace-pre-wrap"
 							>
 								{character.creatorNotes}
 							</p>
 						</section>
 					{/if}
 				</div>
-			</Tabs.Content>
+			</div>
 
-			<Tabs.Content
-				value="gallery"
+			<div
+				id="character-view-gallery"
+				role="tabpanel"
+				aria-labelledby="character-view-gallery-tab"
+				hidden={activeTab !== "gallery"}
 				class="min-h-0 flex-1 overflow-y-auto"
 			>
 				<EntityGalleryTab
-					entityType="character"
 					entityId={character.id}
 					entityName={character.nickname || character.name}
 					isOwner={!!character.isOwner}
 					currentAvatarMediaId={character.avatarMediaId ?? null}
 				/>
-			</Tabs.Content>
-		</Tabs>
+			</div>
+		</div>
 	{:else}
 		<p class="text-surface-700-300 py-8 text-center text-sm">
 			Character not found.

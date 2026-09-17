@@ -1,13 +1,14 @@
 # Session layout
 
-Every session has a layout: the messages and composer in the middle, and any side panels — scene
-portraits, notes, a map, a plugin's own view — arranged around them. The layout editor lets you
+Every session has a layout: the conversation in the middle, and any side panels — scene
+portraits, notes, a map, a plugin's own view — arranged around it. The layout editor lets you
 arrange those panels, save the arrangement as a preset, and give each panel its own look.
 
 ## The panels Serene Pub ships
 
-Beside **Messages** and **Composer**, which are always in the middle, these are the panels
-built in. Add any of them from the tray on the **Move** tab.
+**Messages** is the conversation — the message log and the field you write into, one panel, always
+in the middle. Beside it, these are the panels built in. Add any of them from the tray on the
+**Move** tab.
 
 | Panel               | What it shows                                                                                                |
 | ------------------- | ------------------------------------------------------------------------------------------------------------ |
@@ -93,8 +94,11 @@ the editor anchored to that panel and **applies what you type as you type**, so 
 change; **Save** keeps it, **Cancel** or Escape puts the saved style back. **Clone** copies any style
 you can see into a private one you can edit. Built-in styles can be cloned but not edited or deleted.
 
-**Messages** and **Composer** wear the same card as every other panel; their built-in looks (for
-example *Clean*, *Bubbles*, *Novel*; *Classic*, *Minimal*, *Writer*) are just their built-in styles.
+**Messages** wears the same card as every other panel; its built-in looks (*Stage*, *Bubbles*,
+*Novel*, *Compact*, *Dreamlit Cameo*) are just its built-in styles. How the composer itself is
+drawn is not a style but a setting on the same panel — **Composer** (*classic*, *minimal* or
+*writer*) in its **Settings** section, alongside which end of the log it sits at and which parts of
+a message are shown.
 
 A style's CSS applies to that one panel only. Every selector you write is re-pointed at the panel's
 own box, so a style cannot reach the rest of the page or another panel — even another copy of the
@@ -107,15 +111,90 @@ written as `--name`. For a rule that should only apply in dark mode, start the s
 ## Actions in the composer
 
 Some genres contribute actions: things you press rather than type. An adventure session has
-**Look**, **Rest** and **Time passes**; a chat session has its narrator. They sit in a row across the
-top of the composer, above the message field, and are always visible, so an action a genre
-contributes never has to be found behind a tab first. A genre that contributes none grows no row and
-its composer is unchanged.
+**Look**, **Rest** and **Time passes**; a chat session has its narrator. They live behind one quiet
+word above the message field, **Actions**: click it and the chips open beneath it, wrapping to as
+many lines as they need, and fold away when focus leaves the row. The genre's quick actions come
+first as chips, then a **More** menu holding every other enabled action (with a **New** mark on any
+you have not met), then the turn controls. A genre that contributes none still shows the label for
+the turn controls; a session with nothing to offer grows no label at all. The **Show the Actions
+label** setting hides it. Every composer action is also a slash command — see [Slash
+commands](./sessions.md#slash-commands).
+
+## Actions for widgets
+
+A widget — native or a plugin frame — receives the session's actions on its data envelope as
+`actions.v1`, keyed by venue: each venue is `{ primary, overflow }`, every entry carrying its key,
+function, the spec that contributed it, label, icon, slash name, audience, whether the viewer may
+act, and whether it is new to them. A widget draws the venues it wants — its own controls from
+`widget`, a message's menu from `message` — and invokes one by its **identity**, `<spec
+slug>#<key>` (`acme:spec/roll#roll`, or `core#continue` for one of Serene Pub's own verbs), with
+`invoke(id, { messageId?, payload? })`; a bare key (`roll`) is accepted while only one action
+carries it. The host resolves it to the declaration and routes it: one of Serene Pub's message
+verbs — continue, regenerate, edit, stop, branch, swipe, hide, delete — to the same handler the
+message row uses, everything else through the audited fire that a chip takes, naming the
+declaration so the server checks *that* action's audience and runs *that* pipeline. A reference no
+venue lists, or a bare key several actions share, is refused rather than fired. A frame gets the
+same rows as `{ t: "actions" }` over its port and invokes with `{ t: "invoke", key, messageId?,
+payload? }`. A widget that ignores the section loses nothing; one that draws its own control
+gains a contributed action without a line of host code.
+
+One limit on a **frame**: the verbs that change a message — hide, regenerate, continue, delete,
+edit, swipe — need a person behind them. A frame may invoke one only while a person is
+*currently* in it: the browser's own activation flag is set — a real, recent click or key press
+somewhere — **and** the frame is the page's current focus, both at once. Activation inside the
+frame itself sets that flag on the whole page and moves the page's focus onto the frame, which is
+as close as the host can see into a sandboxed frame it cannot otherwise read. Where your browser
+does not yet support that check (Firefox, as of writing) the host falls back to the older rule:
+focus must have entered the frame within the last five seconds and not left again. An invoke on
+load, on a timer, or after focus has moved back to the page is refused with a warning in the
+console and nothing fires. Three of them ask first as well: delete opens the same confirmation
+the message row does, and regenerate and continue — both spend tokens — put a question to you
+before they run. Stop and branch are not gated, and a contributed action is judged by its own
+audience on the server, as it is from any chip.
+
+Be clear about what that gate is. It is a mitigation against a widget acting unprompted, not a
+permission check and not proof that you meant the action: it knows only that a person appears to
+be in the frame right now (or, on the fallback, entered it a moment ago). The authority is the
+server, which judges every message write against *your* permissions on that message exactly as
+it does for a click on the row — a frame acts with its viewer's permissions and never more, and a
+widget can do nothing through you that you could not do yourself. A click elsewhere on the page,
+even though it sets the same activation flag, does not count as being in the frame — the focus
+check is what tells the two apart.
+
+What is live today, and what is not yet:
+
+- **Live**: the contract itself (`actions.v1`, `invoke`, the routing of core's verbs and the
+  identity on the fire); a frame that is handed the venues gets them and its `invoke` works end to
+  end; the session-view frame (a genre's replacement for the whole log) is handed them by the page.
+- ⏳ **Panel frames and native widgets in the layout** — the session layout's own hosts
+  (`SessionLayout`, `WidgetHost`) do not yet pass the venues or the verb handlers down to a panel,
+  so a panel frame in a zone receives no `{ t: "actions" }` and a native widget's `ctx.actions.v1`
+  is empty; their `invoke` refuses everything by name. The panel wrapper is ready to hand both on
+  the moment the layouts lane threads them.
+
+## What the Messages panel offers
+
+Messages is the one panel with settings about the conversation itself:
+
+- **Composer** — how the field is drawn: *classic* (the card), *minimal* (a single-line pill) or
+  *writer* (a tall editor set in the prose face for long turns). Send, Preview and More are the
+  same in all three.
+- **Composer position** — *bottom* or *top*. The who-is-due line and any notices move with it.
+- **Message order** — *oldest first* (newest at the bottom, the default) or *newest first* (newest
+  at the top; new replies keep the top pinned and older messages load as you scroll down).
+- **Show messages** / **Show composer** — hide either half. A panel with only its composer shrinks
+  to the card; one with only its log is a reading pane.
+- Under **Behaviour**: **Show avatars**, **Show times**, **Show scenes and dates**, **Show who is
+  due next**, **Show the Actions label**.
+
+With a background image set in your theme settings, the conversation sits on one translucent
+panel over the image so the prose always has a ground, and your own turns and the composer stay
+opaque inside it.
 
 ## Move
 
 The **Move** tab replaces the session with three grids — **Left**, **Middle**, **Right** — drawn where
-the panels actually live. Messages and Composer stay in the middle.
+the panels actually live. Messages stays in the middle.
 
 - **Add** a panel from the tray by dragging it onto a zone, or tap it and then tap where it goes.
   Drag a panel back to the tray to remove it.

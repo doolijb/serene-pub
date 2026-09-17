@@ -38,8 +38,8 @@ let historyId: number
 
 const node = {
 	key: "lore",
-	typeId: "core:query/lorebook-triggers",
-	typeVersion: 1,
+	definitionId: "core:query/lorebook-triggers",
+	definitionVersion: 1,
 	kind: "query" as const
 }
 

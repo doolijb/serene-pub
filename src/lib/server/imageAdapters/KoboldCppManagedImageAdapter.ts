@@ -128,7 +128,9 @@ function managerBaseUrl(
  * Checkpoint dropdown — so failing an unconfigured connection would leave the
  * person with nothing to choose from and no way out of it.
  */
-async function testConnection(connection: SelectConnection): Promise<{
+async function testConnection(
+	connection: SelectConnection & { model?: string | null }
+): Promise<{
 	ok: boolean
 	error?: string
 	extra?: Record<string, unknown>
@@ -214,7 +216,7 @@ async function testConnection(connection: SelectConnection): Promise<{
  * the evidence for the decision is.
  */
 async function listModels(
-	connection: SelectConnection
+	connection: SelectConnection & { model?: string | null }
 ): Promise<{ models: string[]; error?: string }> {
 	try {
 		const rows = await db.query.localModels.findMany()

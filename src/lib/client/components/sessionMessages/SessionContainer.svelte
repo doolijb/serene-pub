@@ -2,6 +2,11 @@
 	import type { Snippet } from "svelte"
 	import { untrack } from "svelte"
 	import { softFade } from "$lib/client/utils/motion"
+	import {
+		conversationIndex,
+		orderedMessages,
+		type MessageOrder
+	} from "./messageOrder"
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	import * as Icons from "@lucide/svelte"
 
@@ -57,29 +62,39 @@
 		sessionMessagesContainer: HTMLDivElement | null
 		onScroll: (event: Event) => void
 
-		/** Scenes for this session — drives the scene bracket and history-entry divider UI */
+		/**
+		 * Which end the newest message is drawn at (the widget's `order`
+		 * setting). The list is reversed for `newest-first` rather than flipped
+		 * in CSS: the region is a `log`, and a reader follows the DOM.
+		 */
+		order?: MessageOrder
+		/**
+		 * Whether the scene titles, history-entry markers and each row's
+		 * `--sp-scene` colour are drawn (the widget's `showSceneMarkers`).
+		 */
+		showSceneMarkers?: boolean
+
+		/** Scenes for this session — drives the scene titles and history-entry markers */
 		sceneList?: Sockets.Scenes.List.SceneWithEntry[]
 
-		/** Called when user clicks a history-entry divider */
+		/** Called when user clicks a history-entry marker */
 		onHistoryEntryClick?: (info: {
 			historyEntryId: number
 			lorebookId: number
 		}) => void
-		/** Called when user clicks a scene chip */
+		/** Called when user clicks a scene title */
 		onSceneClick?: (info: {
 			sceneId: number
 			historyEntryId: number
 			lorebookId: number
 		}) => void
-		/** Called when user clicks "Start New Entry" after a completed entry with no successor */
+		/** Called when user clicks "Start a new entry" after a completed entry with no successor */
 		onNewHistoryEntry?: (info: { lorebookId: number }) => void
-		/** Called when user clicks the "attach lorebook" suggestion shown when no lorebook is set */
-		onAttachLorebook?: () => void
 
 		// Required props for MessageComponent
 		getMessageCharacter: (
 			msg: SelectSessionMessage
-		) => SelectCharacter | SelectPersona | undefined
+		) => SelectCharacter | undefined
 		canControlMessage: (msg: SelectSessionMessage) => boolean
 		showSwipeControls: (
 			msg: SelectSessionMessage,
@@ -115,7 +130,7 @@
 					isLastMessage: boolean
 					getMessageCharacter: (
 						msg: SelectSessionMessage
-					) => SelectCharacter | SelectPersona | undefined
+					) => SelectCharacter | undefined
 					canControlMessage: (msg: SelectSessionMessage) => boolean
 					showSwipeControls: (
 						msg: SelectSessionMessage,
@@ -158,17 +173,15 @@
 					editSessionMessage: SelectSessionMessage | undefined
 					canRegenerateLastMessage: boolean
 					hasGeneratingMessage: boolean
+					/**
+					 * The scene this message belongs to, read off the scene
+					 * map below — `null` for a message in none. The row it
+					 * renders in carries the scene's colour as `--sp-scene`.
+					 */
+					sceneName: string | null
 				}
 			]
 		>
-		/**
-		 * The composer, rendered below the scroll area. Optional: under the
-		 * widget-grid layout (PLAN 25) the composer is a SEPARATE sibling widget,
-		 * so this container renders the message list alone and the composer is
-		 * omitted here.
-		 */
-		ComposerComponent?: Snippet<[]>
-		NextCharacterComponent?: Snippet<[]>
 	}
 
 	let {
@@ -177,11 +190,12 @@
 		loadingOlderMessages,
 		sessionMessagesContainer = $bindable(),
 		onScroll,
+		order = "oldest-first",
+		showSceneMarkers = true,
 		sceneList = [],
 		onHistoryEntryClick,
 		onSceneClick,
 		onNewHistoryEntry,
-		onAttachLorebook,
 		getMessageCharacter,
 		canControlMessage,
 		showSwipeControls,
@@ -199,9 +213,7 @@
 		canRegenerateLastMessage,
 		hasGeneratingMessage,
 		isGuest,
-		MessageComponent,
-		ComposerComponent,
-		NextCharacterComponent
+		MessageComponent
 	}: Props = $props()
 
 	// ── Scene / history-entry annotation ──────────────────────────
@@ -233,8 +245,16 @@
 		void sceneList.length
 		void msgOrderKey
 
+		// An empty map is what "no scene markers" means everywhere below: no
+		// divider, no chip, no coloured bar, and none of the work to find them.
+		if (!showSceneMarkers) return new Map()
 		return untrack(buildMsgSceneMap)
 	})
+
+	/** The messages in the sequence this log draws them, `order` applied. */
+	let drawnMessages = $derived(
+		orderedMessages(session?.sessionMessages ?? [], order)
+	)
 
 	function buildMsgSceneMap(): Map<number, MsgSceneInfo> {
 		const map = new Map<number, MsgSceneInfo>()
@@ -374,14 +394,20 @@
 					</span>
 				</div>
 			{:else}
-				<!-- Loading indicator for older messages -->
-				{#if loadingOlderMessages}
-					<div class="text-muted py-2 text-center">
-						<div class="inline-flex items-center gap-2">
-							<Icons.Loader2 size={16} class="animate-spin" />
-							Loading older messages...
+				<!-- The older messages arrive at whichever end they are drawn
+				     at, so the indicator for them sits at that end too. -->
+				{#snippet olderMessagesLoading()}
+					{#if loadingOlderMessages}
+						<div class="text-muted py-2 text-center">
+							<div class="inline-flex items-center gap-2">
+								<Icons.Loader2 size={16} class="animate-spin" />
+								Loading older messages...
+							</div>
 						</div>
-					</div>
+					{/if}
+				{/snippet}
+				{#if order === "oldest-first"}
+					{@render olderMessagesLoading()}
 				{/if}
 
 				<ul
@@ -390,7 +416,12 @@
 					aria-label="Session conversation with {session
 						.sessionMessages.length} messages"
 				>
-					{#each session.sessionMessages as msg, index (msg.id)}
+					{#each drawnMessages as msg, row (msg.id)}
+						{@const index = conversationIndex(
+							row,
+							session.sessionMessages.length,
+							order
+						)}
 						{@const isLastMessage =
 							index === session.sessionMessages.length - 1}
 						{@const onMainChannel =
@@ -398,107 +429,92 @@
 						{@const si = msgSceneMap.get(msg.id)}
 						{@const color = si ? SCENE_COLORS[si.colorIndex] : null}
 
-						<!-- History-entry divider: shown once before the first scene message of each entry -->
+						<!-- History-entry marker: the date this stretch of the
+						     story is set on, once before the entry's first scene
+						     message. -->
 						{#if si?.isFirstOfEntry && si.historyEntry}
-							<li class="w-full" role="separator">
-								<div class="my-1 flex items-center gap-2">
-									<div
-										class="bg-surface-300-700 h-px flex-1"
-									></div>
-									{#if onHistoryEntryClick}
-										<button
-											class="flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-semibold tracking-widest uppercase transition-all duration-100 select-none"
-											style="color: hsl(var(--color-surface-400)); background: transparent;"
-											onmouseenter={(e) => {
-												const el =
-													e.currentTarget as HTMLElement
-												el.style.background =
-													"hsl(var(--color-surface-400))"
-												el.style.color = "white"
-											}}
-											onmouseleave={(e) => {
-												const el =
-													e.currentTarget as HTMLElement
-												el.style.background =
-													"transparent"
-												el.style.color =
-													"hsl(var(--color-surface-400))"
-											}}
-											onclick={() =>
-												onHistoryEntryClick!({
-													historyEntryId:
-														si.scene.historyEntryId,
-													lorebookId:
-														si.scene.lorebookId
-												})}
-											title="Open history entry in lorebook"
-										>
-											<Icons.Calendar size={11} />
-											{formatEntryDate(si.historyEntry)}
-										</button>
-									{:else}
-										<span
-											class="text-surface-400 flex items-center gap-1.5 px-2 py-0.5 text-xs font-semibold tracking-widest whitespace-nowrap uppercase"
-										>
-											<Icons.Calendar size={11} />
-											{formatEntryDate(si.historyEntry)}
-										</span>
-									{/if}
-									<div
-										class="bg-surface-300-700 h-px flex-1"
-									></div>
-								</div>
-							</li>
-						{/if}
-
-						<!-- Scene name chip: shown at the top of each scene group -->
-						{#if si?.isFirstInScene && color}
 							<li class="w-full" role="presentation">
-								<div class="mb-0.5 pl-3">
-									{#if onSceneClick}
-										<button
-											class="inline-flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-medium transition-all duration-100 select-none"
-											style="color: {color.text}; background: transparent;"
-											onmouseenter={(e) => {
-												const el =
-													e.currentTarget as HTMLElement
-												el.style.background = color.bar
-												el.style.color = "white"
-											}}
-											onmouseleave={(e) => {
-												const el =
-													e.currentTarget as HTMLElement
-												el.style.background =
-													"transparent"
-												el.style.color = color.text
-											}}
-											onclick={() =>
-												onSceneClick!({
-													sceneId: si.scene.id,
-													historyEntryId:
-														si.scene.historyEntryId,
-													lorebookId:
-														si.scene.lorebookId
-												})}
-											title="Open scene in lorebook"
-										>
-											<Icons.Film size={11} />
-											{si.scene.name ?? "Scene"}
-										</button>
-									{:else}
-										<span
-											class="inline-flex items-center gap-1.5 px-2 py-0.5 text-xs font-medium"
-											style="color: {color.text};"
-										>
-											<Icons.Film size={11} />
-											{si.scene.name ?? "Scene"}
-										</span>
-									{/if}
-								</div>
+								{#if onHistoryEntryClick}
+									<button
+										class="sp-history-marker"
+										onclick={() =>
+											onHistoryEntryClick!({
+												historyEntryId:
+													si.scene.historyEntryId,
+												lorebookId: si.scene.lorebookId
+											})}
+										title="Open history entry in lorebook"
+									>
+										<Icons.Calendar
+											size={12}
+											aria-hidden="true"
+										/>
+										{formatEntryDate(si.historyEntry)}
+									</button>
+								{:else}
+									<span class="sp-history-marker">
+										<Icons.Calendar
+											size={12}
+											aria-hidden="true"
+										/>
+										{formatEntryDate(si.historyEntry)}
+									</span>
+								{/if}
 							</li>
 						{/if}
 
-						<!-- Message row: optional scene bar on the left.
+						<!-- Scene title: the scene's name at the top of its
+						     group, in the scene's own colour. -->
+						{#if si?.isFirstInScene && color}
+							<li
+								class="w-full"
+								role="presentation"
+								style="--sp-scene: {color.text}"
+							>
+								{#if onSceneClick}
+									<button
+										class="sp-scene-title"
+										onclick={() =>
+											onSceneClick!({
+												sceneId: si.scene.id,
+												historyEntryId:
+													si.scene.historyEntryId,
+												lorebookId: si.scene.lorebookId
+											})}
+										title="Open scene in lorebook"
+									>
+										<Icons.Film
+											size={14}
+											aria-hidden="true"
+										/>
+										{si.scene.name ?? "Scene"}
+										{#if si.historyEntry && !si.historyEntry.isCompleted}
+											<span class="sp-scene-title-state">
+												open
+											</span>
+										{/if}
+									</button>
+								{:else}
+									<span class="sp-scene-title">
+										<Icons.Film
+											size={14}
+											aria-hidden="true"
+										/>
+										{si.scene.name ?? "Scene"}
+										{#if si.historyEntry && !si.historyEntry.isCompleted}
+											<span class="sp-scene-title-state">
+												open
+											</span>
+										{/if}
+									</span>
+								{/if}
+							</li>
+						{/if}
+
+						<!-- The message row. It carries the scene's colour as
+						     `--sp-scene`, which the style pack draws the scene's
+						     edge with and the message's own scene badge inherits.
+
 						     Opacity-only fade, no height/transform — autoscroll
 						     reads scrollHeight synchronously on insert, so an
 						     entering message has to contribute its full height
@@ -513,175 +529,101 @@
 						     collapsing <li> would leave that gap behind to snap
 						     shut at the end — a worse artifact than the fix. -->
 						<li
-							class="flex w-full items-stretch gap-2"
+							class="sp-msg-row"
 							class:hidden={!onMainChannel}
+							style={color
+								? `--sp-scene: ${color.text}`
+								: undefined}
+							data-scene={si ? si.scene.id : undefined}
 							in:softFade={{
 								suppressed:
 									loadingOlderMessages || !isLastMessage
 							}}
 							out:softFade
 						>
-							<!-- Scene left bar (inline-style color for cycle support) -->
-							{#if si && color}
-								<div
-									class="w-0.5 shrink-0 transition-opacity duration-150"
-									class:rounded-t-full={si.isFirstInScene}
-									class:rounded-b-full={si.isLastInScene}
-									style="background: {color.bar}; opacity: 0.5;"
-								></div>
-							{:else}
-								<div class="w-0.5 shrink-0"></div>
-							{/if}
-
-							<div class="min-w-0 flex-1">
-								{@render MessageComponent({
-									msg,
-									index,
-									session,
-									isLastMessage,
-									getMessageCharacter,
-									canControlMessage,
-									showSwipeControls,
-									canSwipeRight,
-									onSwipeLeft,
-									onSwipeRight,
-									onEditMessage,
-									onDeleteMessage,
-									onHideMessage,
-									onRegenerateMessage,
-									onContinueMessage,
-									onAbortMessage,
-									onBranchMessage,
-									editSessionMessage,
-									canRegenerateLastMessage,
-									hasGeneratingMessage
-								})}
-								{#if isLastMessage && NextCharacterComponent}
-									{@render NextCharacterComponent()}
-								{/if}
-							</div>
+							{@render MessageComponent({
+								msg,
+								index,
+								session,
+								isLastMessage,
+								sceneName: si
+									? (si.scene.name ?? "Scene")
+									: null,
+								getMessageCharacter,
+								canControlMessage,
+								showSwipeControls,
+								canSwipeRight,
+								onSwipeLeft,
+								onSwipeRight,
+								onEditMessage,
+								onDeleteMessage,
+								onHideMessage,
+								onRegenerateMessage,
+								onContinueMessage,
+								onAbortMessage,
+								onBranchMessage,
+								editSessionMessage,
+								canRegenerateLastMessage,
+								hasGeneratingMessage
+							})}
 						</li>
 
-						<!-- Completed-entry marker: shown after the last message of a completed history entry -->
+						<!-- Completed-entry marker: where this entry's story
+						     stops, and the way on to the next one. -->
 						{#if si?.isLastOfEntry && si.historyEntry?.isCompleted}
-							<li class="w-full" role="separator">
-								<div class="my-1 flex items-center gap-2">
-									<div
-										class="bg-surface-300-700 h-px flex-1"
-									></div>
-									{#if si.historyEntry.nextEntry}
-										{@const next =
-											si.historyEntry.nextEntry}
-										{#if onHistoryEntryClick}
-											<button
-												class="flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-semibold tracking-widest uppercase transition-all duration-100 select-none"
-												style="color: hsl(var(--color-surface-400)); background: transparent;"
-												onmouseenter={(e) => {
-													const el =
-														e.currentTarget as HTMLElement
-													el.style.background =
-														"hsl(var(--color-surface-400))"
-													el.style.color = "white"
-												}}
-												onmouseleave={(e) => {
-													const el =
-														e.currentTarget as HTMLElement
-													el.style.background =
-														"transparent"
-													el.style.color =
-														"hsl(var(--color-surface-400))"
-												}}
-												onclick={() =>
-													onHistoryEntryClick!({
-														historyEntryId: next.id,
-														lorebookId:
-															si.scene.lorebookId
-													})}
-												title="Open next history entry in lorebook"
-											>
-												<Icons.Calendar size={11} />
-												Next: {formatEntryDate(next)}
-											</button>
-										{:else}
-											<span
-												class="text-surface-400 flex items-center gap-1.5 px-2 py-0.5 text-xs font-semibold tracking-widest whitespace-nowrap uppercase"
-											>
-												<Icons.Calendar size={11} />
-												Next: {formatEntryDate(next)}
-											</span>
-										{/if}
-									{:else}
+							<li class="w-full" role="presentation">
+								{#if si.historyEntry.nextEntry}
+									{@const next = si.historyEntry.nextEntry}
+									{#if onHistoryEntryClick}
 										<button
-											class="flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-semibold tracking-widest uppercase transition-all duration-100 select-none"
-											style="color: hsl(var(--color-primary-500)); background: transparent;"
-											onmouseenter={(e) => {
-												const el =
-													e.currentTarget as HTMLElement
-												el.style.background =
-													"hsl(var(--color-primary-500))"
-												el.style.color = "white"
-											}}
-											onmouseleave={(e) => {
-												const el =
-													e.currentTarget as HTMLElement
-												el.style.background =
-													"transparent"
-												el.style.color =
-													"hsl(var(--color-primary-500))"
-											}}
+											class="sp-history-marker"
 											onclick={() =>
-												onNewHistoryEntry?.({
+												onHistoryEntryClick!({
+													historyEntryId: next.id,
 													lorebookId:
 														si.scene.lorebookId
 												})}
-											title="Start a new history entry"
+											title="Open next history entry in lorebook"
 										>
-											<Icons.CalendarPlus size={11} />
-											Start New Entry
+											<Icons.Calendar
+												size={12}
+												aria-hidden="true"
+											/>
+											Next: {formatEntryDate(next)}
 										</button>
+									{:else}
+										<span class="sp-history-marker">
+											<Icons.Calendar
+												size={12}
+												aria-hidden="true"
+											/>
+											Next: {formatEntryDate(next)}
+										</span>
 									{/if}
-									<div
-										class="bg-surface-300-700 h-px flex-1"
-									></div>
-								</div>
+								{:else}
+									<button
+										class="sp-history-marker sp-history-marker-new"
+										onclick={() =>
+											onNewHistoryEntry?.({
+												lorebookId: si.scene.lorebookId
+											})}
+										title="Start a new history entry"
+									>
+										<Icons.CalendarPlus
+											size={12}
+											aria-hidden="true"
+										/>
+										Start a new entry
+									</button>
+								{/if}
 							</li>
 						{/if}
 					{/each}
 				</ul>
-			{/if}
-
-			<!-- No-lorebook suggestion: shown after the first message when no lorebook is attached -->
-			{#if session && session.sessionMessages.length > 0 && !session.lorebookId}
-				<div class="my-2 flex items-center gap-2">
-					<div class="bg-surface-300-700 h-px flex-1"></div>
-					<button
-						class="flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-semibold tracking-widest uppercase transition-all duration-100 select-none"
-						style="color: hsl(var(--color-primary-500)); background: transparent;"
-						onmouseenter={(e) => {
-							const el = e.currentTarget as HTMLElement
-							el.style.background =
-								"hsl(var(--color-primary-500))"
-							el.style.color = "white"
-						}}
-						onmouseleave={(e) => {
-							const el = e.currentTarget as HTMLElement
-							el.style.background = "transparent"
-							el.style.color = "hsl(var(--color-primary-500))"
-						}}
-						onclick={() => onAttachLorebook?.()}
-						title="Attach a lorebook to track history entries and scenes"
-					>
-						<Icons.BookPlus size={11} />
-						Attach a Lorebook
-					</button>
-					<div class="bg-surface-300-700 h-px flex-1"></div>
-				</div>
+				{#if order === "newest-first"}
+					{@render olderMessagesLoading()}
+				{/if}
 			{/if}
 		</div>
 	</div>
-
-	<!-- Composer area (omitted when the composer is a separate widget, PLAN 25) -->
-	{#if ComposerComponent}
-		{@render ComposerComponent()}
-	{/if}
 </div>

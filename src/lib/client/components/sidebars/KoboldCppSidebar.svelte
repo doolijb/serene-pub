@@ -3,7 +3,7 @@
 	import PanelTabList from "$lib/client/components/panels/PanelTabList.svelte"
 	import PanelTab from "$lib/client/components/panels/PanelTab.svelte"
 	import PanelSectionTitle from "$lib/client/components/panels/PanelSectionTitle.svelte"
-	import { getContext, onMount, onDestroy } from "svelte"
+	import { getContext, onMount } from "svelte"
 	import { Tabs } from "@skeletonlabs/skeleton-svelte"
 	import type { ValueChangeDetails } from "@zag-js/tabs"
 	import KoboldCppModelsTab from "../koboldcppManager/KoboldCppModelsTab.svelte"
@@ -15,6 +15,7 @@
 	import KoboldCppBinaryVariantPicker from "../koboldcppManager/KoboldCppBinaryVariantPicker.svelte"
 	import { countTextModels } from "../koboldcppManager/modelKindView"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import KoboldCppUnsavedChangesModal from "../modals/KoboldCppUnsavedChangesModal.svelte"
 
@@ -90,6 +91,39 @@
 	let isExternal = $derived(managedMode === "external")
 	let isUnconfigured = $derived(managedMode === null)
 
+	// All BARE — nothing in `koboldcpp:` carries an interest scope — and all
+	// standing: the sidebar outlives every tab inside it, `subprocessStatus` is
+	// pushed whenever the process changes state, and the Models tab re-asks for
+	// `listModels` on each refresh. Declared here as well as in the tabs; the
+	// registry keeps one raw listener per event and fans each payload out.
+	//
+	// Declared ABOVE every effect that emits, because effects run in creation
+	// order: the external-mode auto-check below emits `koboldcpp:version` on
+	// its first run, and a declaration made after it would miss the sync that
+	// request flushes. The handlers are hoisted function declarations, so they
+	// are already defined here.
+	useInterest<"koboldcpp:listModels">(
+		"koboldcpp:listModels",
+		handleListModels
+	)
+	useInterest<"koboldcpp:version">("koboldcpp:version", handleVersion)
+	useInterest<"koboldcpp:version:error">(
+		"koboldcpp:version:error",
+		handleVersionError
+	)
+	useInterest<"koboldcpp:setBaseUrl">(
+		"koboldcpp:setBaseUrl",
+		handleSetBaseUrl
+	)
+	useInterest<"koboldcpp:setManagedMode">(
+		"koboldcpp:setManagedMode",
+		handleSetManagedMode
+	)
+	useInterest<"koboldcpp:subprocessStatus">(
+		"koboldcpp:subprocessStatus",
+		handleSubprocessStatus
+	)
+
 	function handleTabChange(e: ValueChangeDetails): void {
 		// A deliberate choice outranks the wizard's suggestion from here on.
 		didAutoOpenAvailable = true
@@ -160,11 +194,6 @@
 		}
 	})
 
-	// Named so `off` can name them too. A bare `socket.off("koboldcpp:listModels")`
-	// removes EVERY listener for that event — including KoboldCppModelsTab's,
-	// which reads the same list once it renders. `koboldcpp:subprocessStatus` has
-	// the same problem: KoboldCppManagedStatusTab and KoboldCppPerfTab both
-	// listen for it too.
 	function handleListModels(message: Sockets.KoboldCPP.ListModels.Response) {
 		// TEXT-kind rows only. The glow this feeds exists to say "the
 		// Models tab is a dead end, go download something" — counting
@@ -241,23 +270,7 @@
 		// Only KoboldCppModelsTab fetches this, and only once it has rendered —
 		// backwards for deciding which tab to render. Ask here too, but only
 		// during the wizard hand-off so the normal path is unchanged.
-		socket.on("koboldcpp:listModels", handleListModels)
 		if (panelsCtx?.digest?.tutorial) socket.emit("koboldcpp:listModels", {})
-
-		socket.on("koboldcpp:version", handleVersion)
-		socket.on("koboldcpp:version:error", handleVersionError)
-		socket.on("koboldcpp:setBaseUrl", handleSetBaseUrl)
-		socket.on("koboldcpp:setManagedMode", handleSetManagedMode)
-		socket.on("koboldcpp:subprocessStatus", handleSubprocessStatus)
-	})
-
-	onDestroy(() => {
-		socket.off("koboldcpp:listModels", handleListModels)
-		socket.off("koboldcpp:version", handleVersion)
-		socket.off("koboldcpp:version:error", handleVersionError)
-		socket.off("koboldcpp:setBaseUrl", handleSetBaseUrl)
-		socket.off("koboldcpp:setManagedMode", handleSetManagedMode)
-		socket.off("koboldcpp:subprocessStatus", handleSubprocessStatus)
 	})
 
 	function handleUnsavedChangesModalOnOpenChange(e: OpenChangeDetails) {

@@ -8,7 +8,9 @@
  * payload the node received** (`inferSchema`), which is the same field
  * language extensions declare settings in and the same renderer draws: one
  * schema strategy for review pauses, plugin settings, and arbitrary
- * extension forms.
+ * extension forms — narrowed to the definition's declared `review.fields`
+ * where it declares any (`reviewSchemaFor`, U5b review C1), so a write whose
+ * payload names a row never offers the row for editing.
  *
  * ## What v1 deliberately does not do
  *
@@ -23,7 +25,9 @@
 
 import { randomUUID } from "node:crypto"
 import {
-	inferSchema,
+	getDefinition,
+	reviewSchemaFor,
+	undeclaredReviewFields,
 	valuesForForm,
 	applyFormValues,
 	type Reviewer,
@@ -44,7 +48,7 @@ export interface PendingReview {
 	sessionId?: number
 	specId: string
 	nodeKey: string
-	typeId: string
+	definitionId: string
 	position: "on"
 	payload: unknown
 	schema: SettingsSchema
@@ -57,7 +61,7 @@ export interface PendingReviewView {
 	id: string
 	specId: string
 	nodeKey: string
-	typeId: string
+	definitionId: string
 	schema: SettingsSchema
 	values: Record<string, unknown>
 	requestedAt: number
@@ -90,7 +94,7 @@ const viewOf = (e: PendingReview): PendingReviewView => ({
 	id: e.id,
 	specId: e.specId,
 	nodeKey: e.nodeKey,
-	typeId: e.typeId,
+	definitionId: e.definitionId,
 	schema: e.schema,
 	values: e.values,
 	requestedAt: e.requestedAt
@@ -105,6 +109,9 @@ export function pendingReviewsFor(userId: number): PendingReviewView[] {
 }
 
 export class ReviewNotFoundError extends Error {}
+
+/** A decision named a field the definition does not let a reviewer edit. */
+export class ReviewFieldRefused extends Error {}
 
 /**
  * A person's decision, folded back into the run.
@@ -132,6 +139,19 @@ export class ReviewNotFoundError extends Error {}
  *     chose survives by construction — not by a check that could be missed.
  *  2. Supplying one anyway is refused outright, before anything is read. A
  *     write that is quietly dropped teaches nobody anything.
+ *
+ * ## Nor is a row's identity (U5b review C1)
+ *
+ * The same shape one construct over: a built-in write's `target` was an
+ * editable integer on the inferred form, and an edit folding a different id
+ * in re-aimed a delete the handler had judged for ANOTHER row. The form is
+ * built from the definition's declared `review.fields` now — `target`,
+ * `fromMessage`, `index` are never among them — so the schema an edit is
+ * applied through cannot write the id (the construction), and a submission
+ * naming an undeclared field is refused with a sentence while the run stays
+ * parked (the refusal). The host's commit re-judges the actor against the
+ * id it is about to write regardless; this is what keeps a reviewer from
+ * asking it to.
  */
 export function resolveReview(
 	id: string,
@@ -161,6 +181,23 @@ export function resolveReview(
 			"That review is no longer waiting — it may have been decided " +
 				"elsewhere, or the run that asked for it has ended."
 		)
+
+	// A field the definition does not offer for review is refused, not
+	// dropped — before the decision is built, while the run is still parked
+	// and still decidable. The schema below could not write it anyway; the
+	// sentence is so that nobody learns that by watching an edit vanish.
+	if (action === "edit") {
+		const undeclared = undeclaredReviewFields(
+			getDefinition(p.entry.definitionId),
+			values
+		)
+		if (undeclared.length)
+			throw new ReviewFieldRefused(
+				`This review cannot change ${undeclared.map((k) => `'${k}'`).join(", ")} — ` +
+					`which row the write is about was settled when it was asked for, and only ` +
+					`the fields the form showed may be edited here.`
+			)
+	}
 
 	// Built while the entry is still parked, because building it can fail:
 	// `applyFormValues` refuses an unparseable JSON field or a number that is
@@ -213,14 +250,21 @@ export function createReviewer(scope: {
 	signal?: AbortSignal
 }): Reviewer {
 	return async (req) => {
-		const schema = inferSchema(req.payload)
+		// The whole payload, or the definition's declared fields where it
+		// declares any (C1). A definition this process never loaded — a
+		// plugin's process-transport node — has no declaration to read and
+		// infers the whole payload, as before.
+		const schema = reviewSchemaFor(
+			getDefinition(req.definitionId),
+			req.payload
+		)
 		const entry: PendingReview = {
 			id: randomUUID(),
 			userId: scope.userId,
 			sessionId: scope.sessionId,
 			specId: scope.specId,
 			nodeKey: req.nodeKey,
-			typeId: req.typeId,
+			definitionId: req.definitionId,
 			position: req.position,
 			payload: req.payload,
 			schema,

@@ -55,12 +55,12 @@ beforeAll(async () => {
 		.returning()
 	characterId = character.id
 	const [persona] = await db
-		.insert(schema.personas)
+		.insert(schema.characters)
 		.values({
 			userId,
 			name: "Bram",
 			description: "A traveller.",
-			isDefault: false
+			isPersona: true
 		})
 		.returning()
 	personaId = persona.id
@@ -97,8 +97,8 @@ async function publishSpec(slug: string, event: string): Promise<number> {
 	await db.insert(schema.pipelineNodes).values({
 		specVersionId: version.id,
 		nodeKey: "write",
-		kind: "consumer",
-		typeId: "core:consumer/create-message",
+		kind: "outlet",
+		definitionId: "core:outlet/create-message",
 		position: 0
 	})
 	await db
@@ -132,8 +132,8 @@ async function presetBinding(
 		.update(schema.sessionPresets)
 		.set({
 			bindings: {
-				"session-created": { spec: "core:spec/create-chat" },
-				"message-respond": { spec: "core:spec/respond" },
+				"core:event/session-created@1": { spec: "core:spec/create-chat" },
+				"core:event/message-respond@1": { spec: "core:spec/respond" },
 				...bindings
 			}
 		})
@@ -163,10 +163,10 @@ describe("a binding that stopped resolving", () => {
 	test("the turn runs the genre's default and the receipt says so", async () => {
 		const versionId = await publishSpec(
 			"test:spec/create-plugin",
-			"session-created"
+			"core:event/session-created@1"
 		)
 		const presetId = await presetBinding("Plugin creation", {
-			"session-created": { spec: "test:spec/create-plugin" }
+			"core:event/session-created@1": { spec: "test:spec/create-plugin" }
 		})
 		const sessionId = await sessionOn(presetId, "fallback-create")
 		await setStatus(versionId, "retired")
@@ -176,7 +176,7 @@ describe("a binding that stopped resolving", () => {
 			"$lib/server/pipelines/runtime/sessionEvents"
 		)
 		expect(
-			await resolveSessionEventSpec(db as any, GENRE, "session-created", {
+			await resolveSessionEventSpec(db as any, GENRE, "core:event/session-created@1", {
 				sessionId
 			})
 		).toBe("core:spec/create-chat")
@@ -186,7 +186,7 @@ describe("a binding that stopped resolving", () => {
 			sessionId,
 			userId,
 			genreId: GENRE,
-			event: "session-created",
+			event: "core:event/session-created@1",
 			input: {
 				main: {},
 				sessionScope: { sessionId, userId },
@@ -204,7 +204,7 @@ describe("a binding that stopped resolving", () => {
 		expect(run?.receipt?.meta?.preset).toMatchObject({
 			via: "fallback",
 			preset: "Plugin creation",
-			event: "session-created",
+			event: "core:event/session-created@1",
 			bound: "test:spec/create-plugin"
 		})
 		expect(String(run?.receipt?.meta?.preset?.reason)).toMatch(
@@ -215,10 +215,10 @@ describe("a binding that stopped resolving", () => {
 	test("the boot reconcile records one notice, and republishing clears it", async () => {
 		const versionId = await publishSpec(
 			"test:spec/respond-plugin",
-			"message-respond"
+			"core:event/message-respond@1"
 		)
 		const presetId = await presetBinding("Plugin respond", {
-			"message-respond": { spec: "test:spec/respond-plugin" }
+			"core:event/message-respond@1": { spec: "test:spec/respond-plugin" }
 		})
 		await db
 			.update(schema.sessionPresets)
@@ -237,7 +237,7 @@ describe("a binding that stopped resolving", () => {
 			.where(eq(schema.sessionPresetNotices.presetId, presetId))) as any[]
 		expect(stale.length).toBe(1)
 		expect(stale[0]).toMatchObject({
-			event: "message-respond",
+			event: "core:event/message-respond@1",
 			boundSpec: "test:spec/respond-plugin"
 		})
 
@@ -272,10 +272,10 @@ describe("a binding that stopped resolving", () => {
 	test("the read handlers answer with the flag, never an error", async () => {
 		const versionId = await publishSpec(
 			"test:spec/respond-plugin-2",
-			"message-respond"
+			"core:event/message-respond@1"
 		)
 		const presetId = await presetBinding("Plugin respond two", {
-			"message-respond": { spec: "test:spec/respond-plugin-2" }
+			"core:event/message-respond@1": { spec: "test:spec/respond-plugin-2" }
 		})
 		const sessionId = await sessionOn(presetId, "fallback-read")
 		await setStatus(versionId, "retired")
@@ -291,7 +291,7 @@ describe("a binding that stopped resolving", () => {
 			"core:spec/respond"
 		)
 		expect(listed.presetFallbacks?.[0]).toMatchObject({
-			event: "message-respond",
+			event: "core:event/message-respond@1",
 			bound: "test:spec/respond-plugin-2"
 		})
 
@@ -304,7 +304,7 @@ describe("a binding that stopped resolving", () => {
 		)
 		expect(status.presetName).toBe("Plugin respond two")
 		expect(status.stale?.[0]).toMatchObject({
-			event: "message-respond",
+			event: "core:event/message-respond@1",
 			bound: "test:spec/respond-plugin-2",
 			fallbackSpec: "core:spec/respond"
 		})
@@ -313,10 +313,10 @@ describe("a binding that stopped resolving", () => {
 	test("the admin preset list carries the stale binding", async () => {
 		const versionId = await publishSpec(
 			"test:spec/respond-plugin-3",
-			"message-respond"
+			"core:event/message-respond@1"
 		)
 		const presetId = await presetBinding("Plugin respond three", {
-			"message-respond": { spec: "test:spec/respond-plugin-3" }
+			"core:event/message-respond@1": { spec: "test:spec/respond-plugin-3" }
 		})
 		await setStatus(versionId, "retired")
 		const { reconcilePresetBindings } = await import(
@@ -328,7 +328,7 @@ describe("a binding that stopped resolving", () => {
 		const listed = await sessionPresetsList.handler(admin(), {}, noop)
 		const row = listed.presets.find((p) => p.id === presetId)
 		expect(row?.staleBindings?.[0]).toMatchObject({
-			event: "message-respond",
+			event: "core:event/message-respond@1",
 			bound: "test:spec/respond-plugin-3"
 		})
 	}, 120_000)
@@ -350,13 +350,13 @@ describe("a binding that stopped resolving", () => {
 			{
 				id: created.preset!.id,
 				bindings: {
-					"session-created": { spec: "core:spec/create-chat" },
-					"message-respond": { spec: "core:spec/narrate" }
+					"core:event/session-created@1": { spec: "core:spec/create-chat" },
+					"core:event/message-respond@1": { spec: "core:spec/narrate" }
 				}
 			},
 			noop
 		)
-		expect(res.error).toMatch(/cannot bind to 'message-respond'/)
+		expect(res.error).toMatch(/cannot bind to 'core:event\/message-respond@1'/)
 	}, 120_000)
 })
 
@@ -365,15 +365,15 @@ describe("the reconcile's shape", () => {
 	test("counts a notice per stale slot and leaves healthy presets alone", async () => {
 		const createVersion = await publishSpec(
 			"test:spec/create-plugin-b",
-			"session-created"
+			"core:event/session-created@1"
 		)
 		const respondVersion = await publishSpec(
 			"test:spec/respond-plugin-b",
-			"message-respond"
+			"core:event/message-respond@1"
 		)
 		const presetId = await presetBinding("Both stale", {
-			"session-created": { spec: "test:spec/create-plugin-b" },
-			"message-respond": { spec: "test:spec/respond-plugin-b" }
+			"core:event/session-created@1": { spec: "test:spec/create-plugin-b" },
+			"core:event/message-respond@1": { spec: "test:spec/respond-plugin-b" }
 		})
 		await setStatus(createVersion, "retired")
 		await setStatus(respondVersion, "retired")
@@ -387,8 +387,8 @@ describe("the reconcile's shape", () => {
 			.from(schema.sessionPresetNotices)
 			.where(eq(schema.sessionPresetNotices.presetId, presetId))) as any[]
 		expect(rows.map((r) => r.event).sort()).toEqual([
-			"message-respond",
-			"session-created"
+			"core:event/message-respond@1",
+			"core:event/session-created@1"
 		])
 
 		// The seeded floor binds nothing stale, so it collects nothing.

@@ -4,7 +4,7 @@
  * A **tool** is a named, read-only function a model may ask for by name, and
  * the three tasks around it are pure: `advertise-tools` says what exists,
  * `parse-tool-call` reads the model's answer back as data, and
- * `core:provider/run-tool@1` is the one node that actually runs one. This
+ * `core:oracle/run-tool@1` is the one node that actually runs one. This
  * module is what that node dispatches through.
  *
  * ## The resolution order, and why it is this way round

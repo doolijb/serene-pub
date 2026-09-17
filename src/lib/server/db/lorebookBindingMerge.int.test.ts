@@ -20,7 +20,7 @@ import { migrate } from "drizzle-orm/pglite/migrator"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
-import { eq } from "drizzle-orm"
+import { eq, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 
 const REAL_DRIZZLE = path.resolve(process.cwd(), "drizzle")
@@ -48,6 +48,76 @@ let bothPersonaId: number
 let bothPersonaOnlyId: number
 let bothBothIdsId: number
 let bothCharacterOnlyId: number
+let userId: number
+/** The character 0133 folds the "Reader" persona into, resolved after the full migration. */
+let personaCharacterId: number
+/** Same, for the "Listener" persona used by the both-ends scenario. */
+let otherPersonaCharacterId: number
+
+/**
+ * `schema.personas` no longer exists — 0133 dropped the table — but the
+ * "before" folder here stops at 124, where it's still physically present.
+ * Raw SQL is the only way left to seed the pre-merge shape it once had.
+ */
+async function insertLegacyPersona(opts: {
+	userId: number
+	name: string
+	description?: string
+	isDefault?: boolean
+}) {
+	const result = await db.execute(sql`
+		INSERT INTO "personas" ("user_id", "is_default", "name", "description")
+		VALUES (${opts.userId}, ${opts.isDefault ?? false}, ${opts.name}, ${opts.description ?? ""})
+		RETURNING "id"
+	`)
+	const rows = (result as any).rows ?? result
+	return rows[0] as { id: number }
+}
+
+/**
+ * `schema.characters` (the CURRENT, head-of-branch schema) declares
+ * `is_persona`/`is_default_persona`/`folder_id`, added by 0132 — a migration
+ * that, like 0125, is above `UNDER_TEST_IDX` and so hasn't run yet at seed
+ * time. Drizzle's insert always enumerates every column the TS schema
+ * declares (`DEFAULT` for the ones a caller didn't set), so a typed
+ * `db.insert(schema.characters)` fails outright against this snapshot's
+ * physical table — not with a wrong value, but with "column does not exist".
+ * Raw SQL, naming only the columns that exist at 124, sidesteps it.
+ */
+async function insertLegacyCharacter(opts: {
+	userId: number
+	name: string
+	description?: string
+}) {
+	const result = await db.execute(sql`
+		INSERT INTO "characters" ("user_id", "name", "description")
+		VALUES (${opts.userId}, ${opts.name}, ${opts.description ?? ""})
+		RETURNING "id"
+	`)
+	const rows = (result as any).rows ?? result
+	return rows[0] as { id: number }
+}
+
+/**
+ * Same reason: `schema.lorebookBindings` no longer has `persona_id` — 0133
+ * dropped it too — but at this snapshot in migration history the physical
+ * column is still there for a binding to carry.
+ */
+async function insertLegacyPersonaBinding(opts: {
+	lorebookId: number
+	personaId: number
+	characterId?: number | null
+	binding: string
+	name: string
+}) {
+	const result = await db.execute(sql`
+		INSERT INTO "lorebook_bindings" ("lorebook_id", "persona_id", "character_id", "binding", "name")
+		VALUES (${opts.lorebookId}, ${opts.personaId}, ${opts.characterId ?? null}, ${opts.binding}, ${opts.name})
+		RETURNING "id"
+	`)
+	const rows = (result as any).rows ?? result
+	return rows[0] as { id: number }
+}
 
 /** A copy of `drizzle/` with the migration under test struck from the journal. */
 async function folderWithoutMigrationUnderTest(): Promise<string> {
@@ -96,39 +166,46 @@ beforeAll(async () => {
 		END $$;
 	`)
 
-	// lorebook_entries.type_id is a real foreign key into the type registry,
-	// so the entries seeded below need it published first — the same
-	// precondition createTestDb states.
-	const { syncTypeRegistry } = await import(
-		"$lib/server/pipelines/boot/registrySync"
-	)
+	// lorebook_entries.type_id is a real foreign key into the definition
+	// registry, so the entries seeded below need their types published first —
+	// the same precondition createTestDb states. Written as raw rows against
+	// the table's name AT THIS JOURNAL CUT (`pipeline_type_registry`, before
+	// 0134 renamed it): the current sync targets the renamed table, which does
+	// not exist yet on a database migrated only this far.
 	const { allEntryTypes } = await import("@serene-pub/sdk")
 	await import("@serene-pub/core-catalog")
-	await syncTypeRegistry(db as any, allEntryTypes(), { release: "test" })
+	for (const t of allEntryTypes()) {
+		const bare = t.id.replace(/@\d+$/, "")
+		const version = Number(/@(\d+)$/.exec(t.id)?.[1] ?? 1)
+		await db.execute(
+			sql`insert into pipeline_type_registry (type_id, version, kind, ports, slots)
+				values (${bare}, ${version}, 'entry', '{}'::json, '{}'::json)
+				on conflict do nothing`
+		)
+	}
 
 	const [user] = await db
 		.insert(schema.users)
 		.values({ username: "binding-merge-user" })
 		.returning()
+	userId = user.id
 	const [lorebook] = await db
 		.insert(schema.lorebooks)
 		.values({ userId: user.id, name: "Book" })
 		.returning()
 	lorebookId = lorebook.id
-	const [character] = await db
-		.insert(schema.characters)
-		.values({ userId: user.id, name: "Maren", description: "" })
-		.returning()
+	const character = await insertLegacyCharacter({
+		userId: user.id,
+		name: "Maren",
+		description: ""
+	})
 	characterId = character.id
-	const [persona] = await db
-		.insert(schema.personas)
-		.values({
-			userId: user.id,
-			name: "Reader",
-			description: "",
-			isDefault: false
-		})
-		.returning()
+	const persona = await insertLegacyPersona({
+		userId: user.id,
+		name: "Reader",
+		description: "",
+		isDefault: false
+	})
 
 	// The duplicates the removed "Pull the cast from this session" produced:
 	// one lorebooks:createBinding per member, no existence check, pressed
@@ -156,23 +233,18 @@ beforeAll(async () => {
 	survivorId = survivor.id
 	duplicateId = duplicate.id
 
-	const [personaSurvivor, personaDuplicate] = await db
-		.insert(schema.lorebookBindings)
-		.values([
-			{
-				lorebookId,
-				personaId: persona.id,
-				binding: "{{char:3}}",
-				name: "Reader"
-			},
-			{
-				lorebookId,
-				personaId: persona.id,
-				binding: "{{char:4}}",
-				name: "Reader"
-			}
-		])
-		.returning()
+	const personaSurvivor = await insertLegacyPersonaBinding({
+		lorebookId,
+		personaId: persona.id,
+		binding: "{{char:3}}",
+		name: "Reader"
+	})
+	const personaDuplicate = await insertLegacyPersonaBinding({
+		lorebookId,
+		personaId: persona.id,
+		binding: "{{char:4}}",
+		name: "Reader"
+	})
 	personaSurvivorId = personaSurvivor.id
 	personaDuplicateId = personaDuplicate.id
 
@@ -281,44 +353,44 @@ beforeAll(async () => {
 		.values({ userId: user.id, name: "Both ends" })
 		.returning()
 	bothBookId = bookTwo.id
-	const [otherCharacter] = await db
-		.insert(schema.characters)
-		.values({ userId: user.id, name: "Kael", description: "" })
-		.returning()
+	const otherCharacter = await insertLegacyCharacter({
+		userId: user.id,
+		name: "Kael",
+		description: ""
+	})
 	bothCharacterId = otherCharacter.id
-	const [otherPersona] = await db
-		.insert(schema.personas)
-		.values({
-			userId: user.id,
-			name: "Listener",
-			description: "",
-			isDefault: false
-		})
-		.returning()
+	const otherPersona = await insertLegacyPersona({
+		userId: user.id,
+		name: "Listener",
+		description: "",
+		isDefault: false
+	})
 	bothPersonaId = otherPersona.id
-	const [personaOnly, bothIds, characterOnly] = await db
+	// Sequential, not a batch `.values([...])`: two of these three rows carry
+	// a legacy `persona_id` that only raw SQL can write, and the merge logic
+	// under test picks its survivor by id, so insertion order still has to
+	// produce personaOnly < bothIds < characterOnly.
+	const personaOnly = await insertLegacyPersonaBinding({
+		lorebookId: bothBookId,
+		personaId: otherPersona.id,
+		binding: "{{char:1}}",
+		name: "Listener"
+	})
+	const bothIds = await insertLegacyPersonaBinding({
+		lorebookId: bothBookId,
+		characterId: otherCharacter.id,
+		personaId: otherPersona.id,
+		binding: "{{char:2}}",
+		name: "Both"
+	})
+	const [characterOnly] = await db
 		.insert(schema.lorebookBindings)
-		.values([
-			{
-				lorebookId: bothBookId,
-				personaId: otherPersona.id,
-				binding: "{{char:1}}",
-				name: "Listener"
-			},
-			{
-				lorebookId: bothBookId,
-				characterId: otherCharacter.id,
-				personaId: otherPersona.id,
-				binding: "{{char:2}}",
-				name: "Both"
-			},
-			{
-				lorebookId: bothBookId,
-				characterId: otherCharacter.id,
-				binding: "{{char:3}}",
-				name: "Kael"
-			}
-		])
+		.values({
+			lorebookId: bothBookId,
+			characterId: otherCharacter.id,
+			binding: "{{char:3}}",
+			name: "Kael"
+		})
 		.returning()
 	bothPersonaOnlyId = personaOnly.id
 	bothBothIdsId = bothIds.id
@@ -326,6 +398,25 @@ beforeAll(async () => {
 
 	// Now the migration under test.
 	await migrate(db, { migrationsFolder: REAL_DRIZZLE })
+
+	// 0133 rides along in this same migrate() call (it's later in the real
+	// folder) and folds each seeded persona into a `characters` row with
+	// `isPersona: true`, repointing any binding that named it by `persona_id`
+	// onto that row's `character_id` before dropping the column outright.
+	const readerCharacter = await db.query.characters.findFirst({
+		where: (c, { and, eq }) =>
+			and(eq(c.userId, userId), eq(c.name, "Reader"), eq(c.isPersona, true))
+	})
+	personaCharacterId = readerCharacter!.id
+	const listenerCharacter = await db.query.characters.findFirst({
+		where: (c, { and, eq }) =>
+			and(
+				eq(c.userId, userId),
+				eq(c.name, "Listener"),
+				eq(c.isPersona, true)
+			)
+	})
+	otherPersonaCharacterId = listenerCharacter!.id
 }, 120_000)
 
 afterAll(async () => {
@@ -345,9 +436,12 @@ describe("0125 — duplicate lorebook bindings merge onto the oldest row", () =>
 	})
 
 	test("the persona's duplicate merges too", async () => {
+		// `persona_id` is gone by the time this reads back — 0133 folded it
+		// into `character_id` — so the merged group is now found the same way
+		// any character-bound group is: by the character it landed on.
 		const rows = await db.query.lorebookBindings.findMany({
-			where: (b, { and, eq, isNotNull }) =>
-				and(eq(b.lorebookId, lorebookId), isNotNull(b.personaId))
+			where: (b, { and, eq }) =>
+				and(eq(b.lorebookId, lorebookId), eq(b.characterId, personaCharacterId))
 		})
 		expect(rows.map((r) => r.id)).toEqual([personaSurvivorId])
 		expect(personaDuplicateId).not.toBe(personaSurvivorId)
@@ -417,8 +511,14 @@ describe("0125 — duplicate lorebook bindings merge onto the oldest row", () =>
 			bothCharacterOnlyId
 		])
 		expect(bothBothIdsId).not.toBe(bothPersonaOnlyId)
+		// `persona_id` is gone; the surviving persona row now carries the
+		// folded persona's `character_id` instead (see bothPersonaId, which
+		// is still that persona's *legacy* id, kept only for the assertions
+		// above).
 		expect(
-			rows.filter((r) => r.personaId === bothPersonaId).map((r) => r.id)
+			rows
+				.filter((r) => r.characterId === otherPersonaCharacterId)
+				.map((r) => r.id)
 		).toEqual([bothPersonaOnlyId])
 		expect(
 			rows

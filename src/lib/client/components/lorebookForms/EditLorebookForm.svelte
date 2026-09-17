@@ -2,6 +2,11 @@
 	import { onDestroy, onMount, tick } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import {
+		declareInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
+	import { interestKey } from "$lib/shared/sockets/interest"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { z } from "zod"
 	import type { SocketEventMap } from "$lib/client/sockets/typedSocket"
@@ -141,10 +146,6 @@
 		mode = "view"
 	}
 
-	// Named so `off` can name them too. A bare `socket.off("lorebooks:get")`
-	// removes EVERY listener for that event — including other components
-	// listening for the same event — which then stops updating for the rest
-	// of the session.
 	async function handleLorebooksGet(msg: Sockets.Lorebooks.Get.Response) {
 		if (msg.lorebook && msg.lorebook.id === lorebookId) {
 			editLorebook = { ...msg.lorebook }
@@ -180,11 +181,40 @@
 		tagsList = msg.tagsList || []
 	}
 
-	onMount(() => {
-		socket.on("lorebooks:get", handleLorebooksGet)
-		socket.on("lorebooks:update", handleLorebooksUpdate)
-		socket.on("tags:list", handleTagsList)
+	// BARE: the tag list is the whole of this user's tags, not one lorebook's
+	// rows, so it has no interest scope to narrow to. Standing, because
+	// `tags:list` is a cascade target — a tag created or renamed elsewhere
+	// re-sends it.
+	useInterest<"tags:list">("tags:list", handleTagsList)
 
+	/**
+	 * This book's row, SCOPED to it. The payload carries the id on
+	 * `lorebook.id`, and the NOT-FOUND reply carries it on `lorebookId`
+	 * instead, so `SCOPED_EVENTS` reads both and this key hears either — which
+	 * is why there is NO bare `lorebooks:get` alongside it. A bare key would
+	 * have matched every other book's reply too, and on the server it means
+	 * the gate passing for every id while this form is open.
+	 *
+	 * An effect rather than `useInterest` because the key moves: `lorebookId`
+	 * is a prop, and `useInterest` keeps the key it was first given. Declared
+	 * above `onMount` so the interest exists before its request goes out
+	 * (effects run in creation order, and `onMount` is one of them).
+	 */
+	$effect(() =>
+		declareInterest<"lorebooks:get">(
+			interestKey("lorebooks:get", lorebookId),
+			handleLorebooksGet
+		)
+	)
+
+	/**
+	 * BARE: `lorebooks:update` has no entry in `SCOPED_EVENTS`, so a `#<id>`
+	 * key would match no payload at all. `handleLorebooksUpdate`'s own
+	 * `msg.lorebook.id === lorebookId` check stays the filter.
+	 */
+	useInterest<"lorebooks:update">("lorebooks:update", handleLorebooksUpdate)
+
+	onMount(() => {
 		// Load tags list
 		socket.emit("tags:list", {})
 
@@ -194,9 +224,8 @@
 
 	onDestroy(() => {
 		hasUnsavedChanges = false
-		socket.off("lorebooks:get", handleLorebooksGet)
-		socket.off("lorebooks:update", handleLorebooksUpdate)
-		socket.off("tags:list", handleTagsList)
+		// No `socket.off` here at all: the interest registry releases this
+		// form's subscribers as its effects are destroyed.
 	})
 </script>
 

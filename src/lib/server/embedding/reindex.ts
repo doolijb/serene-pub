@@ -28,7 +28,11 @@
  */
 
 import { resolveEmbeddingTarget } from "./target"
-import { clearEmbeddedVectors, countEmbeddedRows } from "./vectors"
+import {
+	clearEmbeddedVectors,
+	countEmbeddedRows,
+	embeddedBreakdown
+} from "./vectors"
 import { unloadEmbeddingModel } from "./index"
 
 export interface EmbeddingStarChange {
@@ -63,8 +67,22 @@ export async function currentEmbeddingModelId(db: Db): Promise<string | null> {
  * made-up "roughly N minutes" on a screen whose entire job is to state the cost
  * accurately would be the one number on it that was invented.
  */
-export async function embeddingReindexCost(db: Db): Promise<{ rows: number }> {
-	return { rows: await countEmbeddedRows(db) }
+export async function embeddingReindexCost(
+	db: Db
+): Promise<Sockets.Vectorization.ReindexCost.Response> {
+	const [rows, breakdown] = await Promise.all([
+		countEmbeddedRows(db),
+		embeddedBreakdown(db)
+	])
+	// ⚠ `rows` stays the authority and is computed the same way it always was.
+	// The breakdown DECOMPOSES it — see `embeddedBreakdown` for why it cannot
+	// name a store the count does not include.
+	return {
+		rows,
+		byKind: breakdown.byKind,
+		lorebooks: breakdown.lorebooks,
+		sessions: breakdown.sessions
+	}
 }
 
 /**

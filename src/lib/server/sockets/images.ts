@@ -10,7 +10,7 @@ import { buildImageRequest } from "$lib/server/imageGen/buildRequest"
 import { S } from "@serene-pub/sdk"
 import { capabilityDefault } from "$lib/server/connections/capabilityDefaults"
 import {
-	defaultConnectionModel,
+	connectionModelById,
 	mergeEndpointModel
 } from "$lib/server/connections/models"
 import { CONNECTION_REFUSAL } from "$lib/server/connections/visibility"
@@ -68,7 +68,7 @@ const PROGRESS_THROTTLE_MS = 250
  * and a function call.
  */
 async function readyManagedTarget(
-	connection: SelectConnection,
+	connection: AdapterConnection,
 	decrypted: unknown,
 	signal: AbortSignal,
 	onProgress: (p: ImageGenProgress) => void
@@ -151,23 +151,37 @@ export const imagesGenerate: Handler<
 		})
 		if (!endpoint) return fail("Connection not found.")
 		/**
-		 * THE PAIR (0114), merged before anything reads a field off it.
+		 * THE PAIR, merged before anything reads a field off it.
 		 *
 		 * This is the FOURTH entry point into image generation and the only one
 		 * that does not go through `resolveCapabilityTarget` — it takes a
-		 * connection id straight from the client. So the merge has to happen
-		 * here, or `readyManagedTarget` below loads the ENDPOINT's legacy mirror
-		 * instead of the model, and the guard judges the endpoint instead of the
-		 * checkpoint.
-		 *
-		 * The default model, because this call names no model: the socket's
-		 * `connectionId` predates the split and means what every pre-0114
-		 * selection means. An endpoint with no models merges to itself, which is
-		 * exactly the row this used to load.
+		 * connection id straight from the client. The socket predates pairs,
+		 * so the model comes from the instance registration: the
+		 * `text->image` default naming THIS endpoint with an explicit model.
+		 * Anything else — no registration, another endpoint's, a model id
+		 * that is gone, off, or elsewhere — refuses with the fix attached
+		 * rather than guessing a row, because connections have no default
+		 * model to fall back to.
 		 */
+		const registration = await capabilityDefault(db, "text->image")
+		const candidate =
+			registration?.connectionId === endpoint.id &&
+			registration.connectionModelId != null
+				? await connectionModelById(db, registration.connectionModelId)
+				: undefined
+		const usable =
+			candidate != null &&
+			candidate.connectionId === endpoint.id &&
+			candidate.enabled
+				? candidate
+				: undefined
+		if (!usable)
+			return fail(
+				"Choose which image model this connection sends — open its Models and set one as the default for image generation."
+			)
 		const connection = mergeEndpointModel(
 			endpoint as SelectConnection,
-			await defaultConnectionModel(db, endpoint.id)
+			usable
 		)
 		// The same guard the three dispatchers use, for the same reason: this is
 		// the fourth way into image generation, and it was the last one still
@@ -285,6 +299,13 @@ export const imagesGenerate: Handler<
 		} catch (e) {
 			emitToUser("images:progress", {
 				runId,
+				// Present so the interest scope can be derived — the
+				// terminal frames carry the session the throttled
+				// `onProgress` above already puts on every frame it sends,
+				// so a tab reading another session is not shown this run
+				// ending either. Undefined for a render started outside a
+				// session, which is the bare scope.
+				sessionId: params.sessionId,
 				done: true,
 				error: e instanceof Error ? e.message : String(e)
 			} satisfies RunProgress)
@@ -298,6 +319,8 @@ export const imagesGenerate: Handler<
 		if (result.isAborted) {
 			emitToUser("images:progress", {
 				runId,
+				// Present so the interest scope can be derived — see above.
+				sessionId: params.sessionId,
 				done: true,
 				cancelled: true
 			} satisfies RunProgress)
@@ -368,6 +391,8 @@ export const imagesGenerate: Handler<
 
 		emitToUser("images:progress", {
 			runId,
+			// Present so the interest scope can be derived — see above.
+			sessionId: params.sessionId,
 			done: true,
 			percent: 100
 		} satisfies RunProgress)

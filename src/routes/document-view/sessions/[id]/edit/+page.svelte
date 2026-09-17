@@ -3,6 +3,12 @@
 	import { page } from "$app/state"
 	import { goto } from "$app/navigation"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import {
+		declareInterest,
+		requestWithInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
+	import { interestKey } from "$lib/shared/sockets/interest"
 	import { announce } from "$lib/client/accessibility/state.svelte"
 	import { GroupReplyStrategies } from "$lib/shared/constants/GroupReplyStrategies"
 
@@ -27,12 +33,12 @@
 	let characters: Sockets.Characters.List.Response["characterList"] = $state(
 		[]
 	)
-	let personas: Sockets.Personas.List.Response["personaList"] = $state([])
+	/** A persona is a character the user voices — one list, narrowed below. */
+	let personas = $derived(characters.filter((c) => c.isPersona))
 	let selectedCharacters: (Partial<SelectCharacter> & { id: number })[] =
 		$state([])
-	let selectedPersonas: (Partial<SelectPersona> & { id: number })[] = $state(
-		[]
-	)
+	let selectedPersonas: (Partial<SelectCharacter> & { id: number })[] =
+		$state([])
 	let addCharacterId: number | "" = $state("")
 	let addPersonaId: number | "" = $state("")
 
@@ -60,6 +66,18 @@
 				!(session?.sessionGuests || []).some((g) => g.userId === u.id)
 		)
 	)
+
+	/**
+	 * The roster the guest picker offers. BARE — `users:list` has no
+	 * `SCOPED_EVENTS` entry — and STANDING, because the server re-emits it
+	 * after every account write.
+	 *
+	 * Declared HERE rather than beside the other keys below so it is held
+	 * before the guarded request underneath it goes out: Svelte runs user
+	 * effects in creation order, and that one can emit in the very first flush
+	 * when the settings round-trip has already landed.
+	 */
+	useInterest<"users:list">("users:list", handleUsersList)
 
 	$effect(() => {
 		if (
@@ -228,39 +246,68 @@
 	function handleCharactersList(msg: Sockets.Characters.List.Response) {
 		characters = msg.characterList || []
 	}
-	function handlePersonasList(msg: Sockets.Personas.List.Response) {
-		personas = msg.personaList || []
-	}
 	function handleUsersList(msg: any) {
 		allUsers = msg.users || []
 	}
 
+	/**
+	 * This session's own `sessions:get`, SCOPED to the id in the route: the
+	 * reply to `load()` and to the re-reads the guest handlers ask for. An
+	 * effect rather than `useInterest` because the key moves with the route.
+	 *
+	 * The not-found reply arrives here too: it carries the requested id on
+	 * `sessionId`, so it has this scope even with no session in it. No bare key
+	 * is held for it — that one would match every other session's reply, and
+	 * would keep the server's gate open for every id.
+	 */
+	$effect(() => {
+		if (!Number.isFinite(sessionId)) return
+		return declareInterest<"sessions:get">(
+			interestKey("sessions:get", sessionId),
+			handleSessionsGet
+		)
+	})
+
+	/**
+	 * The rest, all BARE: no `SCOPED_EVENTS` entry, so a `#<id>` key would match
+	 * no payload at all. The two `:error` events are never gated (plan ruling 2)
+	 * but the registry is still the only listener path.
+	 */
+	useInterest<"sessions:update">("sessions:update", handleSessionsUpdate)
+	useInterest<"sessions:update:error">(
+		"sessions:update:error",
+		handleSessionsUpdateError
+	)
+	useInterest<"sessions:delete">("sessions:delete", handleSessionsDelete)
+	useInterest<"sessions:delete:error">(
+		"sessions:delete:error",
+		handleSessionsDeleteError
+	)
+	useInterest<"sessions:addGuest">(
+		"sessions:addGuest",
+		handleSessionsAddGuest
+	)
+	useInterest<"sessions:removeGuest">(
+		"sessions:removeGuest",
+		handleSessionsRemoveGuest
+	)
+
+	/**
+	 * Both cast pickers, off ONE list: a persona is a character carrying
+	 * `isPersona`. BARE — this is the user's whole list, with no one character
+	 * to scope it to — and STANDING, because the server re-emits it as a
+	 * cascade after any cast write and this form should offer the new row.
+	 */
+	$effect(() =>
+		requestWithInterest("characters:list", {}, handleCharactersList)
+	)
+
 	onMount(() => {
-		socket.on("sessions:get", handleSessionsGet)
-		socket.on("sessions:update", handleSessionsUpdate)
-		socket.on("sessions:update:error", handleSessionsUpdateError)
-		socket.on("sessions:delete", handleSessionsDelete)
-		socket.on("sessions:delete:error", handleSessionsDeleteError)
-		socket.on("sessions:addGuest", handleSessionsAddGuest)
-		socket.on("sessions:removeGuest", handleSessionsRemoveGuest)
-		socket.on("characters:list", handleCharactersList)
-		socket.on("personas:list", handlePersonasList)
-		socket.on("users:list", handleUsersList)
-		socket.emit("characters:list", {})
-		socket.emit("personas:list", {})
+		// Every listener on this page is an interest, declared above.
+		// The `sessions:get` key is already held; the typed `emit` inside
+		// `load()` puts its sync ahead of that request on the same socket
+		// (ruling 3).
 		load()
-		return () => {
-			socket.off("sessions:get", handleSessionsGet)
-			socket.off("sessions:update", handleSessionsUpdate)
-			socket.off("sessions:update:error", handleSessionsUpdateError)
-			socket.off("sessions:delete", handleSessionsDelete)
-			socket.off("sessions:delete:error", handleSessionsDeleteError)
-			socket.off("sessions:addGuest", handleSessionsAddGuest)
-			socket.off("sessions:removeGuest", handleSessionsRemoveGuest)
-			socket.off("characters:list", handleCharactersList)
-			socket.off("personas:list", handlePersonasList)
-			socket.off("users:list", handleUsersList)
-		}
 	})
 </script>
 

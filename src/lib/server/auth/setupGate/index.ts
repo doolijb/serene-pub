@@ -57,6 +57,12 @@ export async function pendingSetupSteps(userId: number): Promise<SetupStep[]> {
  * later is gated without knowing this list exists.
  */
 export const SETUP_ALLOWED_EVENTS = new Set([
+	// The setup screen is still a view, and a view that cannot declare what it
+	// wants gets nothing once its events are gated. `interest:sync` reads
+	// nothing and changes nothing but a per-socket Set of strings, so letting
+	// it through grants no access — it only lets a pending session receive the
+	// replies to the handful of events above.
+	"interest:sync",
 	"users:current",
 	"auth:logout",
 	"account:setupState",

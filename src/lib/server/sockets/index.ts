@@ -18,13 +18,14 @@
 
 import type { Handler } from "$lib/shared/events"
 import { registerConnectionHandlers } from "./connections"
+import { registerLocalOnnxModelHandlers } from "./localOnnxModels"
 import { registerConnectionDefaultsHandlers } from "./connectionDefaults"
 import { registerImageHandlers } from "./images"
 import { registerPluginHandlers } from "./plugins"
 import { registerSamplingConfigHandlers } from "./samplingConfigs"
 import { registerCompletionTemplateHandlers } from "./completionTemplates"
 import { registerCharacterHandlers } from "./characters"
-import { registerPersonaHandlers } from "./personas"
+import { registerCharacterFolderHandlers } from "./characterFolders"
 import { registerContextConfigHandlers } from "./contextConfigs"
 import { registerSessionHandlers } from "./sessions"
 import { registerPromptConfigHandlers } from "./promptConfigs"
@@ -63,13 +64,26 @@ import { registerBackupHandlers } from "./backups"
 import { registerTotpHandlers } from "./totp"
 import { registerAccountHandlers } from "./account"
 import { registerInviteHandlers } from "./invites"
+import { registerJumpHandlers } from "./jump"
 import { isBlockedDuringSetup } from "$lib/server/auth/setupGate"
 import { archivedWrite } from "./legacyArchive"
 import { redactConnections } from "$lib/server/connections/visibility"
+import { isGatedEvent, scopeOfPayload } from "$lib/shared/sockets/interest"
+import {
+	interestedSockets,
+	registerInterestHandlers,
+	socketsInUserRoom,
+	socketWantsAnyScope,
+	type InterestIo,
+	type InterestSocket
+} from "./interest"
 
 export function connectSockets(io: {
 	on: (arg0: string, arg1: (socket: any) => void) => void
 	to: (room: string) => any
+	// Read only by the interest gate, which needs to know who is in a user's
+	// room and what each of them declared. See `./interest.ts`.
+	sockets: InterestIo["sockets"]
 }) {
 	io.on("connect", (socket) => {
 		// authMiddleware (registered via io.use before connectSockets runs)
@@ -89,6 +103,14 @@ export function connectSockets(io: {
 		socket.io = io
 		socket.join("user_" + userId)
 
+		// The interest set appears in the same breath as the room membership,
+		// because the gate walks the room to find it: a socket that is in
+		// `user_<id>` and has no `interest` yet would make every walk answer
+		// for `undefined`. Empty means "wants nothing gated", which is the
+		// right answer for a client that has not synced yet — and phase 1 gates
+		// no events at all, so nothing is lost while it is.
+		socket.interest = new Set<string>()
+
 		// Helper to emit to this socket's own user room
 		//
 		// Connections are redacted HERE rather than in each handler, for the
@@ -102,20 +124,123 @@ export function connectSockets(io: {
 		// recipient. Demotion force-disconnects that user's sockets
 		// (`users.privilegeRevocation.int.test.ts`), so the flag cannot go
 		// stale under a live connection.
-		function emitToUser(event: string, data: any) {
-			io.to("user_" + userId).emit(
-				event,
-				redactConnections(data, socket.user)
+		//
+		// ## The interest gate, and the lazy form
+		//
+		// `data` may be a THUNK — `() => data | Promise<data>`. For a GATED
+		// event it runs only when some socket in the room declared the key, so
+		// the cascade's query is never paid for a reply nobody is listening
+		// for; skipping the emit alone would save nothing, the query is the
+		// cost. For everything else it behaves exactly as it always has: one
+		// room emit, one redaction, no gate — which is what keeps the migration
+		// free of a dark period, since `GATED_EVENTS` is empty until a family's
+		// last consumer has moved to the client registry.
+		//
+		// ⚠ Plain data on an ungated event stays SYNCHRONOUS and returns void,
+		// as every one of the ~874 existing call sites expects. Only a thunk
+		// makes this return a promise, and a thunk that rejects is caught and
+		// logged here rather than escaping as an unhandled rejection — the call
+		// sites do not await this.
+		function emitToUser(
+			event: string,
+			data: any | (() => any | Promise<any>)
+		): void | Promise<void> {
+			const room = "user_" + userId
+
+			if (!isGatedEvent(event)) {
+				if (typeof data !== "function") {
+					io.to(room).emit(
+						event,
+						redactConnections(data, socket.user)
+					)
+					return
+				}
+				return evaluate(event, data).then((box) => {
+					if (!box) return
+					io.to(room).emit(
+						event,
+						redactConnections(box.value, socket.user)
+					)
+				})
+			}
+
+			// Gated: per-socket delivery (ruling 5). No interested socket means
+			// no query and no emit at all.
+			//
+			// Redacted from the RECIPIENT's own `user` rather than from this
+			// closure's, even though every socket in a user room carries the
+			// same subject. The invariant the review card broke — a payload
+			// leaves the server redacted for whoever receives it — is one that
+			// should be readable at the emit, not inferred from the room's
+			// name. `withoutConnectionIdentity` returns the very same object
+			// when a payload names no connection, so the repeat costs one walk.
+			const deliver = (wanted: InterestSocket[], value: any) => {
+				for (const target of wanted)
+					io.to(target.id).emit(
+						event,
+						redactConnections(value, target.user)
+					)
+			}
+
+			// A scoped event is wanted per scope (`SCOPED_EVENTS`), and the
+			// scope is in the payload — so plain data can be asked the exact
+			// question straight away. An event with no entry there extracts
+			// null, which is the bare key: unchanged for every event gated
+			// before phase 3.
+			if (typeof data !== "function") {
+				const wanted = interestedSockets(
+					io,
+					userId,
+					event,
+					scopeOfPayload(event, data)
+				)
+				if (wanted.length === 0) return
+				deliver(wanted, data)
+				return
+			}
+
+			// A thunk's scope does not exist until the thunk has run, so the
+			// gate asks the weaker question first — does anybody in the room
+			// want ANY scope of this event — and skips the query when nobody
+			// does. The exact scope is read off the payload afterwards, so a
+			// socket watching another session is dropped at delivery rather
+			// than being served somebody else's rows.
+			if (
+				!socketsInUserRoom(io, userId).some((s) =>
+					socketWantsAnyScope(s, event)
+				)
 			)
+				return
+			return evaluate(event, data).then((box) => {
+				if (!box) return
+				// Walked again rather than snapshotted: the scope is only now
+				// knowable, and a socket that arrived or left while the query
+				// ran should be treated as it is now.
+				const wanted = interestedSockets(
+					io,
+					userId,
+					event,
+					scopeOfPayload(event, box.value)
+				)
+				if (wanted.length) deliver(wanted, box.value)
+			})
 		}
 
 		// Register all handlers by module
+		//
+		// Interest first: `interest:sync` is what every gated reply below
+		// consults, and a client sends it before the request it wants answered.
+		registerInterestHandlers(socket, emitToUser, register)
 		registerUserHandlers(socket, emitToUser, register)
 		registerUserSettingsHandlers(socket, emitToUser, register)
 		registerLanguageHandlers(socket, emitToUser, register)
 		registerSamplingConfigHandlers(socket, emitToUser, register)
 		registerCompletionTemplateHandlers(socket, emitToUser, register)
 		registerConnectionHandlers(socket, emitToUser, register)
+		// The files behind the two local ONNX endpoints: download, cancel,
+		// remove, add by Hub id. Its own module because every one of them is
+		// about this machine's disk rather than about a connection row.
+		registerLocalOnnxModelHandlers(socket, emitToUser, register)
 		registerConnectionDefaultsHandlers(socket, emitToUser, register)
 		registerImageHandlers(socket, emitToUser, register)
 		registerPluginHandlers(socket, emitToUser, register)
@@ -123,7 +248,7 @@ export function connectSockets(io: {
 		registerKoboldCppHandlers(socket, emitToUser, register)
 		registerSystemSettingsHandlers(socket, emitToUser, register)
 		registerCharacterHandlers(socket, emitToUser, register)
-		registerPersonaHandlers(socket, emitToUser, register)
+		registerCharacterFolderHandlers(socket, emitToUser, register)
 		registerCardSourceHandlers(socket, emitToUser, register)
 		registerContextConfigHandlers(socket, emitToUser, register)
 		registerPromptConfigHandlers(socket, emitToUser, register)
@@ -156,6 +281,7 @@ export function connectSockets(io: {
 		registerTotpHandlers(socket, emitToUser, register)
 		registerAccountHandlers(socket, emitToUser, register)
 		registerInviteHandlers(socket, emitToUser, register)
+		registerJumpHandlers(socket, emitToUser, register)
 		console.log(`Socket connected: ${socket.id} for user ${userId}`)
 	})
 }
@@ -190,6 +316,27 @@ export function connectSockets(io: {
  * - Consistent error handling with {event}:error pattern
  * - Type safety for parameters and responses via Socket namespace types
  */
+
+/**
+ * Run a lazy payload, boxed.
+ *
+ * Boxed rather than returned bare so a thunk that legitimately produces
+ * `undefined` or `null` is still emitted — `null` is a payload, a failure is
+ * not. A rejection is logged and swallowed: `emitToUser`'s call sites do not
+ * await it, so a throw here would surface as an unhandled rejection rather than
+ * as the missing emit it actually is.
+ */
+async function evaluate(
+	event: string,
+	thunk: () => any | Promise<any>
+): Promise<{ value: any } | null> {
+	try {
+		return { value: await thunk() }
+	} catch (error) {
+		console.error(`Error building the payload for ${event}:`, error)
+		return null
+	}
+}
 
 function register(
 	socket: any,
@@ -240,7 +387,9 @@ function register(
 		let specificErrorEmitted = false
 		const trackedEmitToUser = (event: string, data: any) => {
 			if (event === `${handler.event}:error`) specificErrorEmitted = true
-			emitToUser(event, data)
+			// Forwarded, not discarded: a handler that passes a thunk gets back
+			// the promise it may want to await before it returns.
+			return emitToUser(event, data)
 		}
 		try {
 			await handler.handler(socket, message, trackedEmitToUser)
@@ -249,6 +398,14 @@ function register(
 			if (specificErrorEmitted) return
 			const userId = socket.user?.id
 			if (userId) {
+				// ⚠ Deliberately the raw room emit rather than `emitToUser`, so
+				// the interest gate can never reach it (plan ruling 2: gate
+				// outputs, never failures). A client that declared interest in
+				// an event declared interest in being TOLD IT FAILED; a gate
+				// here would turn a request the client is waiting on into
+				// silence, which is the one failure mode a fire-and-forget
+				// command cannot recover from. The sentence is a constant and
+				// names nothing, so it needs no redaction either.
 				socket.io.to("user_" + userId).emit(`${handler.event}:error`, {
 					error: "An error occurred while processing your request."
 				})

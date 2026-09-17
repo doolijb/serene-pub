@@ -17,8 +17,7 @@
 import * as schema from "$lib/server/db/schema"
 import {
 	checkSessionAccess,
-	canViewCharacter,
-	canViewPersona
+	canViewCharacter
 } from "$lib/server/utils/sessionAccess"
 import { MediaVisibility } from "$lib/shared/constants/MediaVisibility"
 
@@ -42,11 +41,11 @@ export async function canViewMedia(
 		const access = await checkSessionAccess(file.sessionId, userId)
 		if (access.hasAccess) return true
 	}
+	// `canViewCharacter` checks BOTH member tables, so a file belonging to a
+	// character somebody VOICES is reachable by that session's participants
+	// too — one branch answers for the cast and the voices alike.
 	if (file.characterId) {
 		if (await canViewCharacter(file.characterId, userId)) return true
-	}
-	if (file.personaId) {
-		if (await canViewPersona(file.personaId, userId)) return true
 	}
 
 	// No entity parent means a personal blob (a background, a staged upload):

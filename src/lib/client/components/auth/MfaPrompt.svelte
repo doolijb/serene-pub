@@ -10,6 +10,7 @@
 	import { onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 
 	let { onDone }: { onDone: () => void } = $props()
 
@@ -39,14 +40,14 @@
 		input?.focus()
 	}
 
+	// Both keys bare and standing for as long as the prompt is on screen: a
+	// wrong code answers on the `:error` twin and the user tries again, so the
+	// interest has to outlive any single attempt.
+	useInterest<"totp:verify">("totp:verify", handleVerified)
+	useInterest<"totp:verify:error">("totp:verify:error", handleError)
+
 	onMount(() => {
-		socket.on("totp:verify", handleVerified)
-		socket.on("totp:verify:error", handleError)
 		input?.focus()
-		return () => {
-			socket.off("totp:verify", handleVerified)
-			socket.off("totp:verify:error", handleError)
-		}
 	})
 
 	function submit(event: Event) {

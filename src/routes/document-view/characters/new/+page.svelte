@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { onMount } from "svelte"
 	import { goto } from "$app/navigation"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { announce } from "$lib/client/accessibility/state.svelte"
 
 	const socket = useTypedSocket()
@@ -12,6 +12,7 @@
 	let personality = $state("")
 	let scenario = $state("")
 	let firstMessage = $state("")
+	let isPersona = $state(false)
 	let error = $state("")
 	let saving = $state(false)
 
@@ -36,7 +37,8 @@
 				description: description.trim(),
 				personality: personality.trim() || null,
 				scenario: scenario.trim() || null,
-				firstMessage: firstMessage.trim() || null
+				firstMessage: firstMessage.trim() || null,
+				isPersona
 			} as any
 		})
 	}
@@ -52,14 +54,19 @@
 		announce(error)
 	}
 
-	onMount(() => {
-		socket.on("characters:create", handleCharactersCreate)
-		socket.on("characters:create:error", handleCharactersCreateError)
-		return () => {
-			socket.off("characters:create", handleCharactersCreate)
-			socket.off("characters:create:error", handleCharactersCreateError)
-		}
-	})
+	/**
+	 * Both BARE: the create reply names the character it just made, so there is
+	 * no id to scope on before it arrives. The `:error` half is never gated
+	 * (plan ruling 2) but the registry is still the only listener path.
+	 */
+	useInterest<"characters:create">(
+		"characters:create",
+		handleCharactersCreate
+	)
+	useInterest<"characters:create:error">(
+		"characters:create:error",
+		handleCharactersCreateError
+	)
 </script>
 
 <svelte:head>
@@ -131,6 +138,21 @@
 			bind:value={firstMessage}
 			disabled={saving}
 		></textarea>
+	</div>
+	<div class="a11y-field">
+		<label for="a11y-char-persona">
+			<input
+				id="a11y-char-persona"
+				type="checkbox"
+				bind:checked={isPersona}
+				disabled={saving}
+			/>
+			Persona
+		</label>
+		<p class="a11y-hint">
+			A character you play. This is how you make a persona — there is no
+			separate kind of row.
+		</p>
 	</div>
 	<button type="submit" class="a11y-btn" disabled={saving}>
 		{saving ? "Creating…" : "Create Character"}

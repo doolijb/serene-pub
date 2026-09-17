@@ -79,6 +79,24 @@ const defaultFor = (capability: string) =>
 		where: byCapability(capability)
 	})
 
+/**
+ * A model on an endpoint, so a registration can name a PAIR.
+ *
+ * `connections:setDefault` REQUIRES the model half — connections have no
+ * default model, so "this endpoint, whichever model" is not a registration —
+ * and every call below therefore says which one.
+ */
+async function modelOn(connectionId: number) {
+	const { ensureConnectionModel } = await import(
+		"$lib/server/connections/models"
+	)
+	return (await ensureConnectionModel(
+		testDb as any,
+		connectionId,
+		`model-${connectionId}`
+	))!.id
+}
+
 describe("connections:create registers nothing", () => {
 	test("the FIRST connection ever saved does not become the chat default", async () => {
 		const { connectionsCreate } = await import("./connections")
@@ -124,13 +142,17 @@ describe("connections:setDefault is the only way in", () => {
 		const admin = await makeAdmin("nodefault-set")
 		const [conn] = await testDb.select().from(schema.connections)
 
+		const modelId = await modelOn(conn.id)
 		await connectionsSetDefault.handler(
 			fakeSocket(admin.id),
-			{ capability: "text->text", id: conn.id },
+			{ capability: "text->text", id: conn.id, modelId },
 			noopEmit as any
 		)
 
-		expect((await defaultFor("text->text"))?.connectionId).toBe(conn.id)
+		const registered = await defaultFor("text->text")
+		expect(registered?.connectionId).toBe(conn.id)
+		// BOTH halves land, because both are the registration.
+		expect(registered?.connectionModelId).toBe(modelId)
 		// An Ollama row can serve more than chat, and nothing here guessed which
 		// capabilities to claim on its behalf. `capability` is a required
 		// parameter for exactly this reason: the derivation most likely to be
@@ -162,10 +184,17 @@ describe("connections:setDefault is the only way in", () => {
 			})
 			.returning()
 
+		// A complete pair, so the refusal under test is the CAPABILITY one: the
+		// model half is validated first, and an endpoint-only registration is
+		// turned away before anything asks what the pair can do.
 		await expect(
 			connectionsSetDefault.handler(
 				fakeSocket(admin.id),
-				{ capability: "text->text", id: drawOnly.id },
+				{
+					capability: "text->text",
+					id: drawOnly.id,
+					modelId: await modelOn(drawOnly.id)
+				},
 				noopEmit as any
 			)
 		).rejects.toThrow(/cannot do/i)
@@ -197,7 +226,11 @@ describe("connections:setDefault is the only way in", () => {
 			.returning()
 		await connectionsSetDefault.handler(
 			fakeSocket(admin.id),
-			{ capability: "text->image", id: drawer.id },
+			{
+				capability: "text->image",
+				id: drawer.id,
+				modelId: await modelOn(drawer.id)
+			},
 			noopEmit as any
 		)
 
@@ -246,10 +279,11 @@ describe("deleting a connection releases what it held", () => {
 			})
 			.returning()
 
+		const victimModelId = await modelOn(victim.id)
 		for (const capability of ["text->text", "text->image"])
 			await connectionsSetDefault.handler(
 				fakeSocket(admin.id),
-				{ capability, id: victim.id },
+				{ capability, id: victim.id, modelId: victimModelId },
 				noopEmit as any
 			)
 		expect((await defaultFor("text->text"))?.connectionId).toBe(victim.id)

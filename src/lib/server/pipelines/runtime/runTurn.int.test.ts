@@ -29,9 +29,11 @@ let streamed: string[] = []
 
 /**
  * Fired inside the fake model's `generateText`, so a test can do something
- * while a turn is mid-provider — pressing Cancel, in the one below.
+ * while a turn is mid-provider — pressing Cancel, in the one below. Awaited
+ * there, so a hook that writes rows has them landed before the model
+ * "answers" and the run moves on to its write.
  */
-let whileGenerating: (() => void) | null = null
+let whileGenerating: (() => void | Promise<void>) | null = null
 
 /** Pinned to the real action, so a rename cannot pass here — fakeTextAdapter.ts. */
 class FakeAdapter implements FakeTextAdapter {
@@ -50,7 +52,7 @@ class FakeAdapter implements FakeTextAdapter {
 	}
 	abort() {}
 	async generateText() {
-		whileGenerating?.()
+		await whileGenerating?.()
 		return {
 			compiledPrompt: this.injected,
 			isAborted: false,
@@ -71,6 +73,35 @@ vi.mock("$lib/server/utils/resolveTaskConfig", () => ({
 		sampling: { id: 1 }
 	})
 }))
+// The reply dispatch consumes the run's own resolution now (R-8) and asks the
+// resolver only to load the pair — so the stand-in connection is supplied
+// where dispatch actually reads it. The real resolver answers first: a test
+// that registers a capability default of its own gets that connection (and
+// its stop guards), and only an instance with nothing registered falls back
+// to the stand-in.
+vi.mock("$lib/server/connections/capabilityTarget", async (importOriginal) => {
+	const real = await importOriginal<
+		typeof import("$lib/server/connections/capabilityTarget")
+	>()
+	return {
+		...real,
+		resolveCapabilityTarget: async (
+			db: Db,
+			req: Parameters<typeof real.resolveCapabilityTarget>[1]
+		) => {
+			const target = await real.resolveCapabilityTarget(db, req)
+			if (target.ok) return target
+			return {
+				ok: true,
+				capability: req.capability,
+				connection: { id: 1, type: "koboldcpp", promptFormat: "vicuna" },
+				sampling: { id: 1 },
+				connectionVia: "pipelineConfig",
+				samplingVia: "pipelineConfig"
+			}
+		}
+	}
+})
 vi.mock("$lib/server/utils/getUserConfigurations", () => ({
 	getUserConfigurations: async () => ({
 		sampling: { id: 1 },
@@ -114,12 +145,12 @@ beforeAll(async () => {
 	characterId = character.id
 
 	const [persona] = await db
-		.insert(schema.personas)
+		.insert(schema.characters)
 		.values({
 			userId,
+			isPersona: true,
 			name: "Bob",
-			description: "A traveller.",
-			isDefault: false
+			description: "A traveller."
 		})
 		.returning()
 
@@ -201,7 +232,7 @@ beforeAll(async () => {
 	)
 	const { declarations } = await import("$lib/server/pipelines/config/panel")
 	const template = await createContextTemplate(db, {
-		nodeTypeId: CONTEXT_TEMPLATE_NODE_TYPE,
+		nodeDefinitionId: CONTEXT_TEMPLATE_NODE_TYPE,
 		name: "Turn Template",
 		source: contextConfig.template!
 	})
@@ -213,12 +244,10 @@ beforeAll(async () => {
 	// By node type, not "the first template slot": every `template` slot is a
 	// reference now, so the history and lore queries have one too, and picking
 	// the first one silently configures the wrong node.
-	const decl = (
-		await declarations(db, respondSpec.activeVersionId!)
-	).find(
+	const decl = (await declarations(db, respondSpec.activeVersionId!)).find(
 		(d) =>
 			d.control === "context-template-ref" &&
-			d.nodeTypeId === CONTEXT_TEMPLATE_NODE_TYPE
+			d.nodeDefinitionId === CONTEXT_TEMPLATE_NODE_TYPE
 	)!
 	// The template pin lands as the selected configuration's own value —
 	// the only global home since the layer simplification (2026-08-24).
@@ -231,11 +260,7 @@ beforeAll(async () => {
 			RESPOND_SPEC_ID,
 			{}
 		)
-		const copy = await duplicateConfig(
-			db,
-			shipped!.configId,
-			"Turn host"
-		)
+		const copy = await duplicateConfig(db, shipped!.configId, "Turn host")
 		await selectConfig(db, respondSpec.id, "instance", 0, copy.id)
 		await db
 			.insert(schema.pipelineConfigValues)
@@ -373,8 +398,15 @@ describe("cancelling a turn", () => {
 			.where(eq(schema.sessionMessages.sessionId, sessionId))
 
 		const runId = "run:cancel-mid-flight"
-		const handle = runRegistry.start({ runId, userId, sessionId })
-		whileGenerating = () => runRegistry.cancel(runId, userId)
+		const handle = runRegistry.start({
+			runId,
+			userId,
+			sessionId,
+			kind: "reply"
+		})
+		whileGenerating = () => {
+			runRegistry.cancel(runId, userId)
+		}
 
 		let receipt: any
 		try {
@@ -395,15 +427,267 @@ describe("cancelling a turn", () => {
 		// is the whole claim, and it is a row, not a status.
 		expect(receipt.nodes.map((n: any) => n.nodeKey)).toContain("generate")
 		expect(receipt.nodes.map((n: any) => n.nodeKey)).not.toContain("save")
+		// The pipeline's own placeholder is the one row the turn added (09-B
+		// B4), and Stop finalised it: out of the generating state, no error —
+		// the run-level guarantee, kept by the host rather than by a node.
 		const after = await db
 			.select()
 			.from(schema.sessionMessages)
 			.where(eq(schema.sessionMessages.sessionId, sessionId))
-		expect(after).toHaveLength(before.length)
+		expect(after).toHaveLength(before.length + 1)
+		const placeholder = after.find(
+			(m) => !before.some((b) => b.id === m.id)
+		)!
+		expect(placeholder.isGenerating).toBe(false)
+		expect(placeholder.error).toBeNull()
 
 		expect(receipt.outcome).toBe("cancelled")
 		expect(receipt.cancelledBy).toBe(`user:${userId}`)
 		expect(receipt.haltReason).toBe("the run was cancelled")
+	})
+})
+
+/**
+ * Who portrays whom, resolved once at run start and pinned on the receipt
+ * (plans/29 R-21 (4); U5a).
+ *
+ * The claim is not that the map is right — `portrayals.int.test.ts` holds
+ * the table — but that the run **pins** it: computed before the first node,
+ * equal to what the resolver answers for the same inputs, unmoved by a
+ * membership change that lands while the model is still generating, and
+ * resolved only where it means something.
+ */
+describe("who portrays whom on a turn", () => {
+	it("pins the resolver's answer on the receipt, and the inlet carries the speaker as a reference", async () => {
+		const { resolvePortrayals, turnRefs } = await import(
+			"$lib/server/pipelines/runtime/portrayals"
+		)
+		const receipt: any = await turn({ seed: "turn:portrayals" })
+		const expected = await resolvePortrayals(db as any, {
+			sessionId,
+			runOwnerUserId: userId,
+			refs: await turnRefs(db as any, sessionId, `character:${characterId}`),
+			speaker: `character:${characterId}`
+		})
+		expect(receipt.portrayals).toEqual(expected)
+		expect(receipt.portrayals[`character:${characterId}`]).toEqual({
+			by: "ai"
+		})
+		expect(receipt.portrayals.owner).toEqual({
+			by: "person",
+			userId: String(userId)
+		})
+		expect(receipt.portrayals["run-owner"]).toEqual({
+			by: "person",
+			userId: String(userId)
+		})
+		// The inlet published the reference (R-18 (3)) beside the bare id,
+		// and the turn strategy carried it through.
+		const inlet = receipt.nodes.find((n: any) => n.nodeKey === "input")
+		expect(inlet.output.speaker).toBe(`character:${characterId}`)
+		expect(inlet.output.characterId).toBe(characterId)
+		const speaker = receipt.nodes.find((n: any) => n.nodeKey === "speaker")
+		expect(speaker.output.speaker).toBe(`character:${characterId}`)
+		expect(speaker.output.characterId).toBe(characterId)
+		// Stored with the receipt, as the blob is.
+		const [row] = await db
+			.select({ receipt: schema.pipelineRuns.receipt })
+			.from(schema.pipelineRuns)
+			.where(eq(schema.pipelineRuns.runId, receipt.runId))
+		expect((row!.receipt as any).portrayals).toEqual(expected)
+	})
+
+	it("a member joining mid-run does not change the pinned map", async () => {
+		const { resolvePortrayals, turnRefs } = await import(
+			"$lib/server/pipelines/runtime/portrayals"
+		)
+		// A guest who, while the model is generating, joins the session and
+		// attaches the cast character as their own persona — which would
+		// make `character:<id>` a person's portrayal on the NEXT resolution.
+		const [guest] = await db
+			.insert(schema.users)
+			.values({ username: "turn-mid-run-guest", isAdmin: false })
+			.returning()
+		const [theirs] = await db
+			.insert(schema.characters)
+			.values({
+				userId: guest.id,
+				name: "Alice",
+				description: "The guest's own Alice.",
+				isPersona: true
+			})
+			.returning()
+		// Their persona is a cast row too, so the pinned answer is `ai` and
+		// the mid-run answer would be `person`.
+		await db.insert(schema.sessionCharacters).values({
+			sessionId,
+			characterId: theirs.id,
+			isActive: false,
+			visibility: "visible"
+		})
+		/**
+		 * What the resolver would answer at the moment the join landed —
+		 * read from inside the oracle, after the rows are in. If anything
+		 * after run start re-resolved, this is what it would see, and it
+		 * disagrees with the pinned map on purpose.
+		 */
+		let seenMidRun: any = null
+		/** Did the save outlet start after the join had landed? */
+		let saveStartedAfterJoin = false
+		let receipt: any
+		try {
+			// Awaited inside the fake model's call: the rows are landed
+			// before the oracle "answers", so the run's write and its
+			// receipt both come after a membership the pinned map predates.
+			whileGenerating = async () => {
+				await db
+					.insert(schema.sessionGuests)
+					.values({ sessionId, userId: guest.id })
+				await db
+					.insert(schema.sessionPersonas)
+					.values({ sessionId, personaId: theirs.id })
+				seenMidRun = await resolvePortrayals(db as any, {
+					sessionId,
+					runOwnerUserId: userId,
+					refs: await turnRefs(
+						db as any,
+						sessionId,
+						`character:${characterId}`
+					),
+					speaker: `character:${characterId}`
+				})
+			}
+			receipt = await turn({
+				seed: "turn:portrayals-join",
+				onNode: (e: any) => {
+					if (e.nodeKey === "save" && e.phase === "start")
+						saveStartedAfterJoin = seenMidRun !== null
+				}
+			})
+		} finally {
+			whileGenerating = null
+		}
+		// The join really did land mid-run: the resolver saw it before the
+		// write began, and answered differently from what the run pinned.
+		expect(saveStartedAfterJoin).toBe(true)
+		expect(seenMidRun[`character:${theirs.id}`]).toEqual({
+			by: "person",
+			userId: String(guest.id)
+		})
+		expect(seenMidRun[`user:${guest.id}`]).toBeUndefined()
+		// Pinned before node 1: the guest is not a member of THIS run, so a
+		// re-resolution anywhere after the oracle would fail here.
+		expect(receipt.outcome).toBe("ok")
+		expect(receipt.portrayals[`character:${theirs.id}`]).toEqual({
+			by: "ai"
+		})
+		expect(receipt.portrayals).not.toEqual(seenMidRun)
+		// And the stored blob is the pinned one, not the mid-run one.
+		const [row] = await db
+			.select({ receipt: schema.pipelineRuns.receipt })
+			.from(schema.pipelineRuns)
+			.where(eq(schema.pipelineRuns.runId, receipt.runId))
+		expect((row!.receipt as any).portrayals[`character:${theirs.id}`]).toEqual(
+			{ by: "ai" }
+		)
+		// Leave the session as it was for the tests after this one.
+		await db
+			.delete(schema.sessionPersonas)
+			.where(eq(schema.sessionPersonas.personaId, theirs.id))
+		await db
+			.delete(schema.sessionCharacters)
+			.where(eq(schema.sessionCharacters.characterId, theirs.id))
+		await db
+			.delete(schema.sessionGuests)
+			.where(eq(schema.sessionGuests.userId, guest.id))
+	})
+
+	it("a guest's presence is asked about even when it is not in the cast (W4)", async () => {
+		const [guest] = await db
+			.insert(schema.users)
+			.values({ username: "turn-presence-guest", isAdmin: false })
+			.returning()
+		const [elara] = await db
+			.insert(schema.characters)
+			.values({
+				userId: guest.id,
+				name: "Elara",
+				description: "The guest's persona — in the session, not the cast.",
+				isPersona: true
+			})
+			.returning()
+		await db
+			.insert(schema.sessionGuests)
+			.values({ sessionId, userId: guest.id })
+		await db
+			.insert(schema.sessionPersonas)
+			.values({ sessionId, personaId: elara.id })
+		try {
+			const receipt: any = await turn({ seed: "turn:presence" })
+			expect(receipt.portrayals[`character:${elara.id}`]).toEqual({
+				by: "person",
+				userId: String(guest.id)
+			})
+		} finally {
+			await db
+				.delete(schema.sessionPersonas)
+				.where(eq(schema.sessionPersonas.personaId, elara.id))
+			await db
+				.delete(schema.sessionGuests)
+				.where(eq(schema.sessionGuests.userId, guest.id))
+		}
+	})
+
+	it("is resolved for a reply and for a review-gated run, and not for a pre-call preview (W1)", async () => {
+		// The token count / debug preview halts before any oracle: nobody
+		// speaks, nobody is portrayed, and the map is absent — not empty.
+		const preview: any = await turn({
+			seed: "turn:preview-portrayals",
+			preview: true,
+			skipReceipt: true
+		})
+		expect(preview.outcome).toBe("halt")
+		expect(preview.preview).toBeTruthy()
+		expect("portrayals" in preview).toBe(false)
+		// A run parked at its write (`{ atNode }` — the summarize road) still
+		// reached the model, and is answered like a reply.
+		const { runSpec } = await import(
+			"$lib/server/pipelines/runtime/runTurn"
+		)
+		const { RESPOND_SPEC_ID } = await import(
+			"$lib/server/pipelines/boot/bootstrap"
+		)
+		const gated: any = await runSpec({
+			db: db as any,
+			sessionId,
+			userId,
+			specId: RESPOND_SPEC_ID,
+			currentCharacterId: characterId,
+			speaker: `character:${characterId}`,
+			input: {
+				text: "Have you seen the ashguard?",
+				continuationPrefill: "",
+				sideCharacter: null,
+				speaker: `character:${characterId}`,
+				sessionId,
+				characterId,
+				sessionScope: { sessionId, currentCharacterId: characterId },
+				messageId: null,
+				fields: {}
+			},
+			seed: "turn:gated-portrayals",
+			preview: { atNode: "save" },
+			skipReceipt: true
+		})
+		expect(gated.outcome).toBe("halt")
+		expect(gated.haltNodeKey).toBe("save")
+		expect(gated.portrayals[`character:${characterId}`]).toEqual({
+			by: "ai"
+		})
+		expect(gated.portrayals.owner).toEqual({
+			by: "person",
+			userId: String(userId)
+		})
 	})
 })
 
@@ -417,7 +701,7 @@ describe("cancelling a turn", () => {
 describe("script chains on a turn", () => {
 	/** A hook node's key, read from the published rows by its type. */
 	async function hookNodeKey(
-		typeId = "core:consumer/create-message"
+		typeId = "core:outlet/update-message"
 	): Promise<{
 		specId: number
 		nodeKey: string
@@ -433,13 +717,16 @@ describe("script chains on a turn", () => {
 			.where(
 				eq(schema.pipelineNodes.specVersionId, spec.activeVersionId!)
 			)
-		const node = (nodes as any[]).find((n) => n.typeId === typeId)!
+		const node = (nodes as any[]).find((n) => n.definitionId === typeId)!
 		return { specId: spec.id, nodeKey: node.nodeKey }
 	}
 
 	async function attachChain(
 		ids: number[],
-		typeId = "core:consumer/create-message"
+		// The reply's write is the UPDATE that fills the placeholder (09-B
+		// B4); the create-message before it is the placeholder itself, with
+		// no text for a chain to see.
+		typeId = "core:outlet/update-message"
 	): Promise<void> {
 		// Chains attach as the selected configuration's own value — the only
 		// global home since the layer simplification (2026-08-24).
@@ -464,11 +751,7 @@ describe("script chains on a turn", () => {
 			.where(eq(schema.pipelineConfigs.id, configId))
 			.limit(1)
 		if ((cfg as any).isImmutable) {
-			const copy = await duplicateConfig(
-				db,
-				configId,
-				"Chain host"
-			)
+			const copy = await duplicateConfig(db, configId, "Chain host")
 			configId = copy.id
 			await selectConfig(db, specId, "instance", 0, configId)
 		}
@@ -497,7 +780,7 @@ describe("script chains on a turn", () => {
 
 	const receiptScripts = (receipt: any) =>
 		(receipt.nodes as any[])
-			.filter((n) => n.typeId?.startsWith("core:consumer/create-message"))
+			.filter((n) => n.definitionId?.startsWith("core:outlet/update-message"))
 			.flatMap((n) => n.scripts ?? [])
 
 	/**
@@ -507,7 +790,7 @@ describe("script chains on a turn", () => {
 	 */
 	const writtenText = (receipt: any): string =>
 		(receipt.nodes as any[]).find((n) =>
-			n.typeId?.startsWith("core:consumer/create-message")
+			n.definitionId?.startsWith("core:outlet/update-message")
 		)?.input?.text
 
 	it("a transform rewrites the reply before it is stored, and the receipt says so per link", async () => {
@@ -695,7 +978,7 @@ describe("script chains on a turn", () => {
 			// lorebook actually uses.
 			source: "return text.replace('the riders', 'the ashguard')"
 		})
-		await attachChain([expander.id], "core:input/user-message")
+		await attachChain([expander.id], "core:inlet/user-message")
 
 		const receipt: any = await turn({
 			preview: true,
@@ -724,7 +1007,7 @@ describe("script chains on a turn", () => {
 		expect(rendered).toContain("The Ashguard")
 
 		const apps = (receipt.nodes as any[])
-			.filter((n: any) => n.typeId?.startsWith("core:input/user-message"))
+			.filter((n: any) => n.definitionId?.startsWith("core:inlet/user-message"))
 			.flatMap((n: any) => n.scripts ?? [])
 		expect(apps).toMatchObject([
 			{ name: "Turn expander", result: "ok", changed: true }
@@ -762,11 +1045,19 @@ describe("script chains on a turn", () => {
 		// rather than `system_settings.default_connection_id`. `connectionStopsFor`
 		// reads it through the same resolver dispatch does, which is what keeps
 		// the guard attached to the connection the run actually uses.
+		// The MODEL half of the pair. A registration names both halves — an
+		// endpoint on its own is incomplete and the turn refuses before the
+		// guard is ever consulted.
+		const { ensureConnectionModel } = await import(
+			"$lib/server/connections/models"
+		)
+		const connModel = await ensureConnectionModel(db, conn.id, "turn-7b")
 		const { setCapabilityDefault } = await import(
 			"$lib/server/connections/capabilityDefaults"
 		)
 		await setCapabilityDefault(db, "text->text", {
-			connectionId: conn.id
+			connectionId: conn.id,
+			connectionModelId: connModel!.id
 		})
 
 		const { createScript, updateScript, attachConnectionScript } =
@@ -850,7 +1141,7 @@ describe("script chains on a turn", () => {
 		// Recorded on the context node — additive, never a message-list edit.
 		const apps = (receipt.nodes as any[])
 			.filter((n: any) =>
-				n.typeId?.startsWith("core:task/build-template-context")
+				n.definitionId?.startsWith("core:task/build-template-context")
 			)
 			.flatMap((n: any) => n.scripts ?? [])
 		expect(apps).toMatchObject([

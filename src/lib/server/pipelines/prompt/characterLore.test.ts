@@ -83,12 +83,11 @@ describe("populateLorebookEntryBindings — @@decorator stripping", () => {
 })
 
 describe("isCharacterLoreEntryVisible — narrator visibility (decision 3)", () => {
-	// A background/NPC binding: bound to neither a character nor a persona.
+	// A background/NPC binding: bound to no character (persona or otherwise).
 	const npcBinding = lorebookBinding({
 		id: 9,
 		lorebookId: 1,
-		characterId: null,
-		personaId: null
+		characterId: null
 	})
 
 	function sessionWithNpcLore() {

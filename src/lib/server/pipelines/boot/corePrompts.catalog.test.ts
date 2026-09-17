@@ -24,7 +24,7 @@
 import { describe, it, expect } from "vitest"
 import { CORE_PROMPTS, CORE_SPECS } from "@serene-pub/core-catalog"
 
-/** The pool a row lives in. Mirrors `pipeline_prompts (node_type_id, slot)`. */
+/** The pool a row lives in. Mirrors `pipeline_prompts (node_definition_id, slot)`. */
 const poolOf = (p: { nodeType: string; slot: string }) =>
 	`${p.nodeType}#${p.slot}`
 
@@ -51,7 +51,7 @@ describe("the shipped prompt catalog is seedable", () => {
 	})
 
 	/**
-	 * The DB's unique index is `(node_type_id, slot, name)`, so this is that
+	 * The DB's unique index is `(node_definition_id, slot, name)`, so this is that
 	 * constraint asserted a build earlier. It is NOT global: three pools each
 	 * hold a row called "Default Scene Summarization", because they are three
 	 * different prompts that used to travel as one bundle. Only a collision

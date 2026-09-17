@@ -63,7 +63,6 @@ async function migrated(
 			name: `fixture ${type} ${JSON.stringify(extraJson)}`,
 			type,
 			baseUrl: "http://localhost",
-			model: "m",
 			extraJson,
 			capabilities
 		})

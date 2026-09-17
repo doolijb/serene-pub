@@ -4,19 +4,19 @@
 	 * searchable, paginated, table or cards. New and Edit navigate to
 	 * dedicated change pages (`/admin/connections/new`, `/admin/connections/[id]`).
 	 */
-	import { getContext, onDestroy, onMount } from "svelte"
+	import { getContext } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { goto } from "$app/navigation"
 	import { capabilityLabel } from "@serene-pub/sdk"
-	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { getAdminInterestContext } from "$lib/client/sockets/interest.svelte"
 	import AdminList, {
 		type AdminColumn
 	} from "$lib/client/components/admin/AdminList.svelte"
 
-	const socket = useTypedSocket()
+	const interest = getAdminInterestContext()
 	let systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
 
-	type Row = Partial<SelectConnection>
+	type Row = Sockets.Connections.List.Row
 	let rows: Row[] = $state([])
 	let loading = $state(true)
 
@@ -25,13 +25,13 @@
 		loading = false
 	}
 
-	onMount(() => {
-		socket.on("connections:list", handleList)
-		socket.emit("connections:list", {})
-	})
-	onDestroy(() => {
-		socket.off("connections:list", handleList)
-	})
+	// The list interest and the request that fills it, in one: the sync naming
+	// `connections:list` leaves before the request, so the handler answering it
+	// already sees the key. Standing, because every write to a connection
+	// anywhere re-sends this list.
+	$effect(() =>
+		interest.requestWithInterest("connections:list", {}, handleList)
+	)
 
 	/**
 	 * Which capabilities this connection is registered for, as a badge.
@@ -56,11 +56,32 @@
 		return by
 	})
 
+	/**
+	 * The models a capability default names, by id.
+	 *
+	 * An endpoint has no default model of its own — a default is an (endpoint,
+	 * model) PAIR registered per capability — so the only model worth naming in
+	 * a one-line row is one something is registered on.
+	 */
+	let defaultModelIds = $derived.by(() => {
+		const ids = new Set<number>()
+		for (const row of Object.values(
+			systemSettingsCtx.capabilityDefaults ?? {}
+		)) {
+			if (row?.connectionModelId != null) ids.add(row.connectionModelId)
+		}
+		return ids
+	})
+
+	/** This endpoint's models that a capability default names. */
+	const registeredModels = (row: Row) =>
+		(row.models ?? []).filter((m) => defaultModelIds.has(m.id))
+
 	const columns: AdminColumn<Row>[] = [
 		{ key: "name", label: "Name", value: (r) => r.name },
 		{ key: "type", label: "Adapter", value: (r) => r.type },
 		{ key: "modality", label: "Modality", value: (r) => r.modality },
-		{ key: "model", label: "Model", value: (r) => r.model },
+		{ key: "models", label: "Models", value: (r) => r.models?.length ?? 0 },
 		{ key: "baseUrl", label: "Endpoint", value: (r) => r.baseUrl },
 		{ key: "actions", label: "", class: "w-px text-right" }
 	]
@@ -93,7 +114,9 @@
 	{columns}
 	{loading}
 	searchText={(r) =>
-		`${r.name ?? ""} ${r.type ?? ""} ${r.modality ?? ""} ${r.model ?? ""} ${r.baseUrl ?? ""} ${r.notes ?? ""}`}
+		`${r.name ?? ""} ${r.type ?? ""} ${r.modality ?? ""} ${(r.models ?? [])
+			.map((m) => `${m.name} ${m.model}`)
+			.join(" ")} ${r.baseUrl ?? ""} ${r.notes ?? ""}`}
 	searchPlaceholder="Search connections…"
 	defaultSort="name"
 	storageKey="serene-pub:adminView:connections"
@@ -117,8 +140,20 @@
 			>
 		{:else if col.key === "modality"}
 			<span class="text-surface-700-300 text-xs">{row.modality ?? "—"}</span>
-		{:else if col.key === "model"}
-			<span class="font-mono text-xs">{row.model ?? "—"}</span>
+		{:else if col.key === "models"}
+			{@const count = row.models?.length ?? 0}
+			{@const registered = registeredModels(row)}
+			<span class="text-surface-700-300 text-xs">
+				{count === 1 ? "1 model" : `${count} models`}
+			</span>
+			{#each registered as m (m.id)}
+				<span
+					class="preset-tonal-primary ml-1.5 rounded-full px-1.5 py-0.5 font-mono text-[0.68rem]"
+					title="Registered on Admin → Defaults"
+				>
+					{m.name}
+				</span>
+			{/each}
 		{:else if col.key === "baseUrl"}
 			<span class="text-surface-700-300 font-mono text-xs"
 				>{row.baseUrl ?? "—"}</span

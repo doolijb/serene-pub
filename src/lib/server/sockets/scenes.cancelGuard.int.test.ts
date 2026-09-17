@@ -125,11 +125,23 @@ describe("sceneCompileHandler — narrowed cancel guard (PGlite integration)", (
 				defaultPromptConfigId: promptConfig.id
 			} as any)
 		}
+		// The MODEL half: a registration names a pair, and an endpoint on its
+		// own is incomplete — the summarize would refuse before it ever reached
+		// the cancellation this test is about.
+		const { ensureConnectionModel } = await import(
+			"$lib/server/connections/models"
+		)
+		const model = await ensureConnectionModel(
+			testDb as any,
+			connection.id,
+			"cancel-7b"
+		)
 		const { setCapabilityDefault } = await import(
 			"$lib/server/connections/capabilityDefaults"
 		)
 		await setCapabilityDefault(testDb as any, "text->text", {
 			connectionId: connection.id,
+			connectionModelId: model!.id,
 			samplingConfigId: sampling.id
 		})
 

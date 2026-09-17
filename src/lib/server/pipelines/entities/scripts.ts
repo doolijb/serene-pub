@@ -18,7 +18,7 @@
  *
  * ## Types come from rows, not from the SDK map
  *
- * The page renders script *types* from `pipeline_type_registry` (kind =
+ * The page renders script *types* from `pipeline_definition_registry` (kind =
  * 'script'), the same F6 posture as the panel: a `transport: 'process'`
  * plugin's type has no in-process descriptor to consult, and a page that read
  * core's from the SDK and a plugin's from rows would be two pages.
@@ -26,7 +26,7 @@
 
 import { and, asc, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { parseScriptTypeId } from "@serene-pub/sdk"
+import { parseScriptKindId } from "@serene-pub/sdk"
 
 /** The script named nothing here. */
 export class ScriptNotFoundError extends Error {}
@@ -103,15 +103,15 @@ const en = (v: unknown): string =>
 async function scriptTypeRows(db: Db): Promise<any[]> {
 	const rows = await db
 		.select()
-		.from(schema.pipelineTypeRegistry)
-		.where(eq(schema.pipelineTypeRegistry.kind, "script"))
-		.orderBy(asc(schema.pipelineTypeRegistry.id))
+		.from(schema.pipelineDefinitionRegistry)
+		.where(eq(schema.pipelineDefinitionRegistry.kind, "script"))
+		.orderBy(asc(schema.pipelineDefinitionRegistry.id))
 	return (rows as any[]).filter((r) => r.status === "live")
 }
 
 function typeInfo(row: any, extras: string[]): ScriptTypeInfo {
-	const pinned = `${row.typeId}@${row.version}`
-	const parsed = parseScriptTypeId(pinned)
+	const pinned = `${row.definitionId}@${row.version}`
+	const parsed = parseScriptKindId(pinned)
 	const i18n = (row.i18n ?? {}) as Record<string, any>
 	return {
 		typeId: pinned,
@@ -140,7 +140,7 @@ function typeInfo(row: any, extras: string[]): ScriptTypeInfo {
  */
 async function hookExtras(db: Db): Promise<Map<string, Set<string>>> {
 	const out = new Map<string, Set<string>>()
-	const rows = await db.select().from(schema.pipelineTypeRegistry)
+	const rows = await db.select().from(schema.pipelineDefinitionRegistry)
 	for (const row of rows as any[]) {
 		const slots = (row.slots ?? {}) as Record<string, any>
 		for (const decl of Object.values(slots)) {
@@ -162,7 +162,7 @@ export async function scriptTypeInfos(db: Db): Promise<ScriptTypeInfo[]> {
 	return (await scriptTypeRows(db)).map((row) =>
 		typeInfo(
 			row,
-			[...(extras.get(`${row.typeId}@${row.version}`) ?? [])].sort()
+			[...(extras.get(`${row.definitionId}@${row.version}`) ?? [])].sort()
 		)
 	)
 }

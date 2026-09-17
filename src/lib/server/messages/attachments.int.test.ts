@@ -94,7 +94,7 @@ describe("the attach-image consumer", () => {
 					alt: "the map"
 				}
 			},
-			{ key: "attach", typeId: "core:consumer/attach-image" } as any
+			{ key: "attach", definitionId: "core:outlet/attach-image" } as any
 		)
 		expect(result.messageId).toBe(msg.id)
 
@@ -133,7 +133,7 @@ describe("the attach-image consumer", () => {
 				},
 				{
 					key: "attach",
-					typeId: "core:consumer/attach-image"
+					definitionId: "core:outlet/attach-image"
 				} as any
 			)
 		).rejects.toThrow(/scoped/)

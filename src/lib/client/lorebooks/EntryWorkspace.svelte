@@ -4,6 +4,8 @@
 	import { getContext, onDestroy, onMount } from "svelte"
 	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import { declareInterest } from "$lib/client/sockets/interest.svelte"
+	import { interestKey } from "$lib/shared/sockets/interest"
 	import { toaster } from "$lib/client/utils/toaster"
 	import CompileHistoryEntryModal from "$lib/client/components/modals/CompileHistoryEntryModal.svelte"
 	import DeleteLorebookEntryConfirmModal from "$lib/client/components/modals/DeleteLorebookEntryConfirmModal.svelte"
@@ -372,7 +374,6 @@
 				b.binding,
 				b.character?.nickname ||
 					b.character?.name ||
-					b.persona?.name ||
 					b.name ||
 					b.binding
 			)
@@ -643,8 +644,19 @@
 
 	const channels = new Map<string, ReturnType<typeof entryChannel>>()
 
-	// Named so `off` can name them too: a bare off() removes every listener
-	// for the event, including any other open lorebooks UI.
+	/**
+	 * The interest releases this workspace holds, dropped together on destroy.
+	 *
+	 * Declared imperatively in `onMount` rather than through `useInterest` or
+	 * an effect, because the scene half of them is CONDITIONAL — only a scope
+	 * that shows scenes listens for them — and because the workspace is
+	 * rendered inside a `{#key book.id}` block, so `lorebookId` never moves
+	 * under a key that was already taken.
+	 *
+	 * A plain array, not `$state`: nothing renders from it.
+	 */
+	let releases: Array<() => void> = []
+
 	function handleBindingList(msg: Sockets.Lorebooks.BindingList.Response) {
 		if (msg.lorebookId !== lorebookId) return
 		bindings = msg.lorebookBindingList as BindingWithRelations[]
@@ -760,7 +772,15 @@
 		// preview, names a scene's cast, and fills the character lore picker.
 		// An entry channel asks for it on open, so only a door with no channel
 		// of its own (Scenes) has to ask.
-		socket.on("lorebooks:bindingList", handleBindingList)
+		// A STANDING key, not a one-shot: every entry channel's write cascades
+		// a fresh cast list, so the workspace holds it whether or not it is the
+		// one asking below.
+		releases.push(
+			declareInterest<"lorebooks:bindingList">(
+				interestKey("lorebooks:bindingList", lorebookId),
+				handleBindingList
+			)
+		)
 		if (entryDoors.length === 0)
 			socket.emit("lorebooks:bindingList", { lorebookId })
 		if (entryDoors.length === 0 && !scenesInScope) loading = false
@@ -769,11 +789,34 @@
 			scenesInScope ||
 			poolDoors.some((d) => d.kind === HISTORY_TYPE_ID)
 		) {
-			socket.on("scenes:listByLorebook", handleScenesList)
-			socket.on("scenes:update", handleSceneUpdate)
-			socket.on("scenes:delete", handleSceneWritten)
-			socket.on("scenes:create", handleSceneWritten)
-			socket.on("scenes:process:error", handleSceneProcessError)
+			// Only the list names a book. The three writes answer with the
+			// scene alone and `scenes:process:error` names one this workspace
+			// has never heard of, so all four are BARE — none has an entry in
+			// `SCOPED_EVENTS`, and a scoped key for an unscoped event matches
+			// nothing at all. `scenes:delete` has no emitter anywhere; the
+			// listener stays so that gaining one is not also gaining a bug.
+			releases.push(
+				declareInterest<"scenes:listByLorebook">(
+					interestKey("scenes:listByLorebook", lorebookId),
+					handleScenesList
+				),
+				declareInterest<"scenes:update">(
+					"scenes:update",
+					handleSceneUpdate
+				),
+				declareInterest<"scenes:delete">(
+					"scenes:delete",
+					handleSceneWritten
+				),
+				declareInterest<"scenes:create">(
+					"scenes:create",
+					handleSceneWritten
+				),
+				declareInterest<"scenes:process:error">(
+					"scenes:process:error",
+					handleSceneProcessError
+				)
+			)
 			fetchScenes()
 		}
 	})
@@ -782,12 +825,8 @@
 		hasUnsavedChanges = false
 		retrievalReadout.close(socket)
 		for (const channel of channels.values()) channel.close()
-		socket.off("lorebooks:bindingList", handleBindingList)
-		socket.off("scenes:listByLorebook", handleScenesList)
-		socket.off("scenes:update", handleSceneUpdate)
-		socket.off("scenes:delete", handleSceneWritten)
-		socket.off("scenes:create", handleSceneWritten)
-		socket.off("scenes:process:error", handleSceneProcessError)
+		for (const release of releases) release()
+		releases = []
 	})
 </script>
 

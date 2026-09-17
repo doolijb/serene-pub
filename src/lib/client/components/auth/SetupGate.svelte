@@ -10,9 +10,10 @@
 	 * an account invite has neither a password nor an authenticator, and only
 	 * the password step can be satisfied first.
 	 */
-	import { onDestroy, onMount } from "svelte"
+	import { onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import QrCode from "./QrCode.svelte"
 
 	let { onDone }: { onDone: () => void } = $props()
@@ -74,20 +75,29 @@
 		"totp:enroll:confirm:error"
 	] as const
 
+	/**
+	 * Every key here is BARE and STANDING. Bare because none of these events
+	 * is in `SCOPED_EVENTS` — there is nothing but this account to scope on.
+	 * Standing because the gate walks a list: setting the password answers on
+	 * `account:setPassword` with the REMAINING steps, which then asks for the
+	 * two-factor half, so one declaration has to survive several round trips.
+	 */
+	useInterest<"account:setupState">("account:setupState", handleState)
+	useInterest<"account:setPassword">("account:setPassword", handlePassword)
+	useInterest<"totp:enroll:begin">("totp:enroll:begin", handleBegin)
+	useInterest<"totp:enroll:confirm">("totp:enroll:confirm", handleConfirmed)
+
+	/**
+	 * The four refusals, one `useInterest` per key so each gets its own effect
+	 * and releases with the component. Errors are never gated (plan ruling 2);
+	 * the registry is simply the only listener path now.
+	 */
+	for (const e of ERRORS) {
+		useInterest<"account:setupState:error">(e, handleError)
+	}
+
 	onMount(() => {
-		socket.on("account:setupState", handleState)
-		socket.on("account:setPassword", handlePassword)
-		socket.on("totp:enroll:begin", handleBegin)
-		socket.on("totp:enroll:confirm", handleConfirmed)
-		for (const e of ERRORS) socket.on(e, handleError)
 		socket.emit("account:setupState", {})
-	})
-	onDestroy(() => {
-		socket.off("account:setupState", handleState)
-		socket.off("account:setPassword", handlePassword)
-		socket.off("totp:enroll:begin", handleBegin)
-		socket.off("totp:enroll:confirm", handleConfirmed)
-		for (const e of ERRORS) socket.off(e, handleError)
 	})
 
 	function submitPassword(event: Event) {

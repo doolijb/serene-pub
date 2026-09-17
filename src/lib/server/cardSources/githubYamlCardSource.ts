@@ -15,7 +15,7 @@ import { TtlCache } from "./cache"
 import { getOrFetchImportedCardBytes } from "./importCache"
 
 const REPO_BASE =
-	"https://raw.githubusercontent.com/doolijb/serene-pub-chara-list/main"
+	"https://raw.githubusercontent.com/SerenePub/serene-pub-chara-list/main"
 const REPO_PATH_PREFIX = new URL(REPO_BASE).pathname + "/"
 
 // A segment-level string check is the primary guard and gives a clear
@@ -233,7 +233,7 @@ export const githubYamlCardSource: CardSource = {
 	label: "Serene Pub Community Library",
 	description:
 		"Curated cards contributed by the community and designed for Serene Pub, hosted as a free, open GitHub repository.",
-	url: "https://github.com/doolijb/serene-pub-chara-list",
+	url: "https://github.com/SerenePub/serene-pub-chara-list",
 	requiresAuthForBestResults: false,
 	supports(_kind: CardKind) {
 		return true

@@ -4,10 +4,14 @@
 	import { SvelteSet } from "svelte/reactivity"
 	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import {
+		declareInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
+	import { interestKey } from "$lib/shared/sockets/interest"
 	import { toaster } from "$lib/client/utils/toaster"
 	import EmptyState from "$lib/client/components/EmptyState.svelte"
 	import CharacterSelectModal from "$lib/client/components/modals/CharacterSelectModal.svelte"
-	import PersonaSelectModal from "$lib/client/components/modals/PersonaSelectModal.svelte"
 	import DeleteLorebookEntryConfirmModal from "$lib/client/components/modals/DeleteLorebookEntryConfirmModal.svelte"
 	import BindingSuggestionsPanel from "$lib/client/components/lorebookForms/BindingSuggestionsPanel.svelte"
 	import {
@@ -98,7 +102,6 @@
 	const newEdgeIds = new SvelteSet<number>()
 	let characterList: Sockets.Characters.List.Response["characterList"] =
 		$state([])
-	let personaList: Sockets.Personas.List.Response["personaList"] = $state([])
 	let loreEntries = $state<LoreRow[]>([])
 	let loading = $state(true)
 
@@ -110,7 +113,6 @@
 	/** Which member a picker is about to write to; null means it creates one. */
 	let linkTargetId = $state<number | null>(null)
 	let characterPickerOpen = $state(false)
-	let personaPickerOpen = $state(false)
 
 	let deleteTarget = $state<CastMember | null>(null)
 
@@ -346,7 +348,6 @@
 			lorebookBinding: {
 				lorebookId,
 				characterId: null,
-				personaId: null,
 				// The server derives the real tag from the new row's own id;
 				// this placeholder is ignored.
 				binding: "",
@@ -361,8 +362,7 @@
 			socket.emit("lorebooks:updateBinding", {
 				lorebookBinding: {
 					id: linkTargetId,
-					characterId: character.id,
-					personaId: null
+					characterId: character.id
 				}
 			} as Sockets.Lorebooks.UpdateBinding.Params)
 		} else {
@@ -370,30 +370,6 @@
 				lorebookBinding: {
 					lorebookId,
 					characterId: character.id,
-					personaId: null,
-					binding: ""
-				}
-			} satisfies Sockets.Lorebooks.CreateBinding.Params)
-		}
-		linkTargetId = null
-	}
-
-	function pickPersona(persona: { id: number }) {
-		personaPickerOpen = false
-		if (linkTargetId != null) {
-			socket.emit("lorebooks:updateBinding", {
-				lorebookBinding: {
-					id: linkTargetId,
-					personaId: persona.id,
-					characterId: null
-				}
-			} as Sockets.Lorebooks.UpdateBinding.Params)
-		} else {
-			socket.emit("lorebooks:createBinding", {
-				lorebookBinding: {
-					lorebookId,
-					personaId: persona.id,
-					characterId: null,
 					binding: ""
 				}
 			} satisfies Sockets.Lorebooks.CreateBinding.Params)
@@ -403,7 +379,7 @@
 
 	function unlink(id: number) {
 		socket.emit("lorebooks:updateBinding", {
-			lorebookBinding: { id, personaId: null, characterId: null }
+			lorebookBinding: { id, characterId: null }
 		} as Sockets.Lorebooks.UpdateBinding.Params)
 	}
 
@@ -412,10 +388,6 @@
 			(c) => !castRows.some((r) => r.characterId === c.id)
 		)
 	)
-	let unlinkedPersonas = $derived(
-		personaList.filter((p) => !castRows.some((r) => r.personaId === p.id))
-	)
-
 	let channel: ReturnType<typeof entryChannel> | null = null
 
 	// Named so `off` can name them too: a bare off() removes every listener for
@@ -430,9 +402,16 @@
 		characterList = msg.characterList || []
 	}
 
-	function handlePersonasList(msg: Sockets.Personas.List.Response) {
-		personaList = msg.personaList || []
-	}
+	/**
+	 * The cast pool this workspace picks from — ONE list, because a persona is
+	 * a character. BARE: it is the whole of this user's characters, not one
+	 * lorebook's rows, so it has no interest scope to narrow to — and
+	 * standing, because it is a cascade target: a character created or renamed
+	 * anywhere re-sends the list. The request that fills it first is in
+	 * `onMount` below; the typed `emit` puts the sync packet naming this key
+	 * ahead of it on the same socket.
+	 */
+	useInterest<"characters:list">("characters:list", handleCharactersList)
 
 	function handleCreateBinding(
 		msg: Sockets.Lorebooks.CreateBinding.Response
@@ -493,6 +472,87 @@
 		socket.emit("narrativeGraph:list", { lorebookId })
 	}
 
+	/**
+	 * The five reads that name this book, SCOPED to it. `lorebooks:bindingList`
+	 * is a STANDING key rather than a one-shot: it is a cascade target — every
+	 * binding write in this workspace answers with a fresh list — so it is held
+	 * for as long as the workspace is open, not just across the first request.
+	 *
+	 * Effects rather than `useInterest` because a key built from a prop is a
+	 * key that can move, and `useInterest` keeps the one it was first given.
+	 * Declared above `onMount` so all of them exist before the reads go out
+	 * (effects run in creation order, and `onMount` is one of them).
+	 */
+	$effect(() =>
+		declareInterest<"lorebooks:bindingList">(
+			interestKey("lorebooks:bindingList", lorebookId),
+			handleBindingList
+		)
+	)
+	$effect(() =>
+		declareInterest<"entries:list">(
+			interestKey("entries:list", lorebookId),
+			handleEntriesList
+		)
+	)
+	$effect(() =>
+		declareInterest<"bindingSuggestions:list">(
+			interestKey("bindingSuggestions:list", lorebookId),
+			handleSuggestions
+		)
+	)
+	$effect(() =>
+		declareInterest<"narrativeGraph:list">(
+			interestKey("narrativeGraph:list", lorebookId),
+			handleGraphList
+		)
+	)
+	$effect(() =>
+		declareInterest<"narrativeGraph:duplicateCandidates">(
+			interestKey("narrativeGraph:duplicateCandidates", lorebookId),
+			handleDuplicates
+		)
+	)
+
+	/**
+	 * The writes answer with the binding, node or edge alone and name no book,
+	 * so every one of them is BARE — none has an entry in `SCOPED_EVENTS`, and
+	 * a scoped key for an unscoped event matches nothing at all. Each answers
+	 * by re-reading through one of the scoped keys above.
+	 */
+	useInterest<"lorebooks:createBinding">(
+		"lorebooks:createBinding",
+		handleCreateBinding
+	)
+	useInterest<"lorebooks:updateBinding">(
+		"lorebooks:updateBinding",
+		handleUpdateBinding
+	)
+	useInterest<"narrativeGraph:deleteNode">(
+		"narrativeGraph:deleteNode",
+		handleDeleteNode
+	)
+	useInterest<"narrativeGraph:mergeNode">(
+		"narrativeGraph:mergeNode",
+		handleMergeWrite
+	)
+	useInterest<"narrativeGraph:undoMerge">(
+		"narrativeGraph:undoMerge",
+		handleMergeWrite
+	)
+	useInterest<"narrativeGraph:createRelationship">(
+		"narrativeGraph:createRelationship",
+		handleRelationshipWrite
+	)
+	useInterest<"narrativeGraph:updateRelationship">(
+		"narrativeGraph:updateRelationship",
+		handleRelationshipWrite
+	)
+	useInterest<"narrativeGraph:deleteRelationship">(
+		"narrativeGraph:deleteRelationship",
+		handleRelationshipWrite
+	)
+
 	onMount(() => {
 		channel = entryChannel(socket, {
 			lorebookId,
@@ -531,23 +591,7 @@
 			}
 		})
 		channel.open()
-		socket.on("lorebooks:bindingList", handleBindingList)
-		socket.on("characters:list", handleCharactersList)
-		socket.on("personas:list", handlePersonasList)
-		socket.on("lorebooks:createBinding", handleCreateBinding)
-		socket.on("lorebooks:updateBinding", handleUpdateBinding)
-		socket.on("narrativeGraph:deleteNode", handleDeleteNode)
-		socket.on("narrativeGraph:mergeNode", handleMergeWrite)
-		socket.on("narrativeGraph:undoMerge", handleMergeWrite)
-		socket.on("narrativeGraph:list", handleGraphList)
-		socket.on("narrativeGraph:createRelationship", handleRelationshipWrite)
-		socket.on("narrativeGraph:updateRelationship", handleRelationshipWrite)
-		socket.on("narrativeGraph:deleteRelationship", handleRelationshipWrite)
-		socket.on("narrativeGraph:duplicateCandidates", handleDuplicates)
-		socket.on("bindingSuggestions:list", handleSuggestions)
-		socket.on("entries:list", handleEntriesList)
 		socket.emit("characters:list", {})
-		socket.emit("personas:list", {})
 		socket.emit("lorebooks:bindingList", { lorebookId })
 		socket.emit("entries:list", { lorebookId, typeId: HISTORY_TYPE_ID })
 		socket.emit("narrativeGraph:duplicateCandidates", { lorebookId })
@@ -558,21 +602,8 @@
 	onDestroy(() => {
 		hasUnsavedChanges = false
 		channel?.close()
-		socket.off("lorebooks:bindingList", handleBindingList)
-		socket.off("characters:list", handleCharactersList)
-		socket.off("personas:list", handlePersonasList)
-		socket.off("lorebooks:createBinding", handleCreateBinding)
-		socket.off("lorebooks:updateBinding", handleUpdateBinding)
-		socket.off("narrativeGraph:deleteNode", handleDeleteNode)
-		socket.off("narrativeGraph:mergeNode", handleMergeWrite)
-		socket.off("narrativeGraph:undoMerge", handleMergeWrite)
-		socket.off("narrativeGraph:list", handleGraphList)
-		socket.off("narrativeGraph:createRelationship", handleRelationshipWrite)
-		socket.off("narrativeGraph:updateRelationship", handleRelationshipWrite)
-		socket.off("narrativeGraph:deleteRelationship", handleRelationshipWrite)
-		socket.off("narrativeGraph:duplicateCandidates", handleDuplicates)
-		socket.off("bindingSuggestions:list", handleSuggestions)
-		socket.off("entries:list", handleEntriesList)
+		// No `off` calls: every listener this workspace had is now an interest
+		// key, and the registry releases them as its effects are destroyed.
 	})
 </script>
 
@@ -605,17 +636,6 @@
 						}}
 					>
 						<Icons.User size={14} aria-hidden="true" /> From a character
-					</button>
-					<button
-						class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
-						type="button"
-						onclick={() => {
-							newMenuOpen = false
-							linkTargetId = null
-							personaPickerOpen = true
-						}}
-					>
-						<Icons.UserCog size={14} aria-hidden="true" /> From a persona
 					</button>
 					<button
 						class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
@@ -703,7 +723,7 @@
 					icon={Icons.Users}
 					message={search
 						? `Nobody in the cast matches "${search}".`
-						: "Nobody is in the cast yet. Add a character, a persona, or a background character, and the lore about them lives on their page."}
+						: "Nobody is in the cast yet. Add a character or a background character, and the lore about them lives on their page."}
 				/>
 			{:else}
 				{#each pool.members as member (member.id)}
@@ -875,10 +895,6 @@
 					linkTargetId = selectedMember!.id
 					characterPickerOpen = true
 				}}
-				onLinkPersona={() => {
-					linkTargetId = selectedMember!.id
-					personaPickerOpen = true
-				}}
 			/>
 
 			<CastRelationships
@@ -1046,12 +1062,4 @@
 	onSelect={pickCharacter}
 	onOpenChange={() => (characterPickerOpen = false)}
 	characters={unlinkedCharacters}
-/>
-
-<PersonaSelectModal
-	open={personaPickerOpen}
-	onSelect={pickPersona}
-	onOpenChange={() => (personaPickerOpen = false)}
-	personas={unlinkedPersonas}
-	returnFullPersona={true}
 />

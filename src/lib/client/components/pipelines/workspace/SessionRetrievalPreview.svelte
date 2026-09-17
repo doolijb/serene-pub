@@ -20,8 +20,8 @@
 	 * so "would" and "did" cannot disagree.
 	 */
 	import * as Icons from "@lucide/svelte"
-	import { onDestroy, onMount } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import RetrievalExplanation from "./RetrievalExplanation.svelte"
 
 	interface Props {
@@ -82,14 +82,22 @@
 		if (res?.error) refusal = res.error
 	}
 
-	onMount(() => {
-		socket.on("pipelines:previewRetrieval", onPreview)
-		socket.on("pipelines:previewRetrieval:error", showRefusal)
-	})
-	onDestroy(() => {
-		socket.off("pipelines:previewRetrieval", onPreview)
-		socket.off("pipelines:previewRetrieval:error", showRefusal)
-	})
+	/**
+	 * Both keys BARE and STANDING: the request is a button press (`ask` below),
+	 * not a mount, so the interest is held for the panel's life and the emit
+	 * stays where the press is. Neither event is in `SCOPED_EVENTS`, so
+	 * `onPreview`'s own `res.sessionId !== sessionId` check stays the filter.
+	 */
+	useInterest<"pipelines:previewRetrieval">(
+		"pipelines:previewRetrieval",
+		onPreview
+	)
+	// Never gated (plan ruling 2 — an error is not an output to skip), but the
+	// registry is the only listener path, so it is declared like the reply.
+	useInterest<"pipelines:previewRetrieval:error">(
+		"pipelines:previewRetrieval:error",
+		showRefusal
+	)
 
 	// A different conversation is a different question. Nothing on screen is
 	// true of it, and an answer left standing under a new heading would be a

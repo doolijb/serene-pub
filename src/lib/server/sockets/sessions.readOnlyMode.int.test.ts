@@ -62,7 +62,7 @@ describe("a session whose mode is not registered", () => {
 			.values({
 				userId: user.id,
 				isGroup: false,
-				genreId: "chariot.gone:input/vanished@1"
+				genreId: "chariot.gone:inlet/vanished@1"
 			} as any)
 			.returning()
 
@@ -97,12 +97,12 @@ describe("a session whose mode is not registered", () => {
 
 		const user = await createTestUser(testDb, "readonly-floor")
 		const [persona] = await testDb
-			.insert(schema.personas)
+			.insert(schema.characters)
 			.values({
 				userId: user.id,
 				name: "Floorwalker",
 				description: "Still here.",
-				isDefault: false
+				isPersona: true
 			})
 			.returning()
 		const [session] = await testDb

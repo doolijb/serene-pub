@@ -30,8 +30,8 @@ vi.mock("$lib/server/db", async () => {
 
 // The turn itself is not what this file is about; the handler under test calls
 // it on the way out and a real one would try to reach a model.
-vi.mock("../utils/generateResponse", () => ({
-	generateResponse: async () => undefined
+vi.mock("../utils/runReply", () => ({
+	runReply: async () => ({ ok: true })
 }))
 
 beforeAll(async () => {

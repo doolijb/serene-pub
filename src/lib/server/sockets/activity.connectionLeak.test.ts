@@ -67,6 +67,9 @@ function connect(userId: number, isAdmin: boolean) {
 	const handlers = new Map<string, (arg?: any) => void>()
 	const socket = {
 		user: { id: userId, isAdmin },
+		// `send()` in activity.ts reads this set as the interest gate before
+		// emitting `activity:update`; every client here wants it.
+		interest: new Set(["activity:update"]),
 		emit: (event: string, data: any) => emitted.push({ event, data }),
 		on: (event: string, fn: (arg?: any) => void) => {
 			handlers.set(event, fn)

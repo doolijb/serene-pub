@@ -6,10 +6,14 @@
 	 * so the two never drift. `compact` trims it for the sidebar's width rather
 	 * than forking the logic.
 	 */
-	import { onDestroy, onMount } from "svelte"
+	import { onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import {
+		requestWithInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
 	import QrCode from "$lib/client/components/auth/QrCode.svelte"
 
 	let {
@@ -93,19 +97,38 @@
 		"invites:revoke:error"
 	] as const
 
+	/**
+	 * The issue reply and the three refusals, BARE — nothing in either family
+	 * is in `SCOPED_EVENTS` — and standing, because this panel stays open
+	 * across repeated issues and revocations.
+	 *
+	 * `invites:` is RESTRICTED interest, so for a non-admin the registry
+	 * refuses these keys outright: nothing is listened for and nothing is sent
+	 * (plan ruling 6a). The panel is only reachable from the Users admin page
+	 * and the Users sidebar, so that costs nobody anything; the server's own
+	 * admin checks remain the boundary.
+	 */
+	useInterest<"invites:create">("invites:create", handleCreated)
+	for (const e of ERRORS) {
+		useInterest<"invites:list:error">(e, handleError)
+	}
+
 	onMount(() => {
-		socket.on("invites:list", handleList)
-		socket.on("invites:create", handleCreated)
-		socket.on("users:list", handleUsers)
-		for (const e of ERRORS) socket.on(e, handleError)
-		socket.emit("invites:list", {})
-		socket.emit("users:list", {})
-	})
-	onDestroy(() => {
-		socket.off("invites:list", handleList)
-		socket.off("invites:create", handleCreated)
-		socket.off("users:list", handleUsers)
-		for (const e of ERRORS) socket.off(e, handleError)
+		/**
+		 * Declare-then-emit in one call, so each key is on the wire ahead of
+		 * the request its reply answers. Both held for as long as the panel
+		 * is open rather than released on the first reply: `invites:list` is
+		 * re-sent as a cascade after an issue or a revoke, and `users:list`
+		 * after a user is added, which is how the account-invite picker and
+		 * the outstanding list stay current without asking again.
+		 */
+		const releases = [
+			requestWithInterest("invites:list", {}, handleList),
+			requestWithInterest("users:list", {}, handleUsers)
+		]
+		return () => {
+			for (const release of releases) release()
+		}
 	})
 
 	function create(kind: "register" | "account") {

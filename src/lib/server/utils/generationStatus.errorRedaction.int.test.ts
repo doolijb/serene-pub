@@ -63,15 +63,45 @@ async function makeUser(username: string, isAdmin = false) {
 	return user
 }
 
+/**
+ * An io that records what each user room received, and says somebody is
+ * watching.
+ *
+ * `sessionMessage` is a GATED event (socket-interest phase 3): the broadcast —
+ * and the two roster reads behind it — is skipped when no connected socket has
+ * declared interest in that session. This spy therefore stands in for a tab
+ * with the session open, for every user in it; the key is BARE, which means
+ * every scope, so one fixture serves every scenario below.
+ *
+ * Redaction is unaffected by any of this: `emitRedacted` decides it from the
+ * ADMIN ROSTER it reads out of the database, never from the socket.
+ */
 function makeIoSpy() {
 	const received: Record<string, any[]> = {}
+	const watcher = (id: string) => ({
+		id,
+		user: { id: Number(id.slice("user_".length)) },
+		interest: new Set(["sessionMessage"])
+	})
 	const io = {
 		to: (room: string) => ({
 			emit: (_event: string, data: any) => {
 				received[room] = received[room] ?? []
 				received[room].push(data)
 			}
-		})
+		}),
+		sockets: {
+			adapter: {
+				rooms: {
+					get: (room: string) =>
+						room.startsWith("user_") ? new Set([room]) : undefined
+				}
+			},
+			sockets: {
+				get: (id: string) => watcher(id),
+				values: () => [watcher("user_0")]
+			}
+		}
 	}
 	return { io, received }
 }

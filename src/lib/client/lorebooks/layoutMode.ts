@@ -2,16 +2,22 @@
  * Which layout the lorebook workspace draws, from the width of its own
  * container — never from the panel's fullscreen flag. Fullscreen is one way to
  * become wide; a wide dock is another, and both must land in the same place.
+ *
+ * The rule itself now lives in `$lib/client/shell/viewMode.svelte`, which every
+ * view shares. This module is the lorebook workspace's name for it: the floor
+ * is stated once for the whole app, so a second view cannot quietly pick a
+ * different idea of "wide enough" and leave two panels in the same sidebar
+ * disagreeing about it.
  */
+import {
+	DESK_MIN_PX,
+	modeForWidth,
+	type ViewMode
+} from "$lib/client/shell/viewMode.svelte"
 
-/**
- * The width at which three columns beside each other are each still usable.
- * A stated choice: ~220px of navigation, a list that can hold a title and its
- * keyword chips on one line, and an editor column wide enough to type in.
- */
-export const DESK_MIN_PX = 900
+export { DESK_MIN_PX }
 
-export type LoreLayoutMode = "desk" | "compact"
+export type LoreLayoutMode = ViewMode
 
 /**
  * An unmeasured container (0, the state every container is in for its first
@@ -19,5 +25,5 @@ export type LoreLayoutMode = "desk" | "compact"
  * while a desk layout in a narrow one is broken.
  */
 export function layoutModeFor(widthPx: number): LoreLayoutMode {
-	return widthPx >= DESK_MIN_PX ? "desk" : "compact"
+	return modeForWidth(widthPx)
 }

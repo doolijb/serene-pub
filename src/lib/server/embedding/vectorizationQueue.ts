@@ -94,7 +94,6 @@ export type VectorizationProgressEvent = {
 			| "narrativeNode"
 			| "narrativeRelationship"
 			| "character"
-			| "persona"
 		label: string
 	}
 	queued: number
@@ -334,8 +333,6 @@ const embeddingWork: LaneWorkSource = {
 				return pickNarrativeRelationship(modelId, undefined, ref.id)
 			case "character":
 				return pickCharacter(modelId, undefined, ref.id)
-			case "persona":
-				return pickPersona(modelId, undefined, ref.id)
 			default:
 				return null
 		}
@@ -626,41 +623,8 @@ export async function enqueueCharacterGroup(
 	return group
 }
 
-/**
- * Enqueue a persona at the front of the queue.
- */
-export async function enqueuePersonaGroup(
-	personaId: number,
-	name: string
-): Promise<PriorityGroup> {
-	const persona = await db.query.personas.findFirst({
-		where: eq(schema.personas.id, personaId),
-		columns: { userId: true }
-	})
-	const owner = persona
-		? await db.query.users.findFirst({
-				where: eq(schema.users.id, persona.userId),
-				columns: { username: true, displayName: true }
-			})
-		: null
-	const ownerDisplayName = owner?.displayName ?? owner?.username ?? "Unknown"
-
-	const group = embeddingLane.enqueueGroup(
-		{
-			label: name,
-			ownerDisplayName,
-			lorebookIds: [],
-			characterIds: [],
-			personaIds: [personaId]
-		},
-		(g) =>
-			g.personaIds.includes(personaId) &&
-			!g.sessionId &&
-			g.characterIds.length === 0
-	)
-	if (!embeddingLane.isPaused()) embeddingLane.start()
-	return group
-}
+// ⚠ There is no persona enqueue: a persona is a character, so
+// `enqueueCharacterGroup` above is the one standalone enqueue.
 
 export function moveQueueGroup(
 	groupId: string,
@@ -842,9 +806,11 @@ async function pickFromGroup(
 		if (char) return char
 	}
 
-	// 4. Personas
+	// 4. The characters this session's users voice. A separate list from the
+	// cast above over the same table — a row already picked as cast is
+	// embedded by the time this runs, so the staleness filter skips it.
 	if (group.personaIds.length > 0) {
-		const persona = await pickPersona(currentModel, group.personaIds)
+		const persona = await pickCharacter(currentModel, group.personaIds)
 		if (persona) return persona
 	}
 
@@ -862,7 +828,6 @@ async function pickGlobalNextItem(
 		(await pickNarrativeNode(currentModel)) ??
 		(await pickNarrativeRelationship(currentModel)) ??
 		(await pickCharacter(currentModel)) ??
-		(await pickPersona(currentModel)) ??
 		null
 	)
 }
@@ -1457,62 +1422,6 @@ async function pickCharacter(
 	})
 }
 
-async function pickPersona(
-	currentModel: string,
-	personaIds?: number[],
-	onlyId?: number
-): Promise<QueueItem | null> {
-	if (personaIds !== undefined && personaIds.length === 0) return null
-
-	const staleness = needsEmbedding(
-		schema.personas.embedding,
-		schema.personas.embeddingModel,
-		currentModel,
-		schema.personas.updatedAt,
-		schema.personas.vectorizedAt
-	)
-	const where = and(
-		personaIds && personaIds.length > 0
-			? inArray(schema.personas.id, personaIds)
-			: undefined,
-		onlyId ? eq(schema.personas.id, onlyId) : undefined,
-		staleness
-	)
-
-	const rows = await db
-		.select({
-			id: schema.personas.id,
-			name: schema.personas.name,
-			description: schema.personas.description,
-			updatedAtRaw: sql<string>`${schema.personas.updatedAt}::text`
-		})
-		.from(schema.personas)
-		.where(where)
-		.limit(1)
-
-	if (!rows.length) return null
-	const { id, name, description, updatedAtRaw } = rows[0]
-	const text = `${name}\n${description}`
-	return queueItem({
-		type: "persona",
-		label: `Persona: ${name}`,
-		id,
-		currentModel,
-		process: async () => {
-			const vector = await embed(truncateForEmbedding(text))
-			await writeEmbeddingIfFresh(
-				schema.personas,
-				schema.personas.id,
-				schema.personas.updatedAt,
-				id,
-				updatedAtRaw,
-				currentModel,
-				vector
-			)
-		}
-	})
-}
-
 // ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
@@ -1559,10 +1468,6 @@ export async function countUnembedded(currentModel?: string): Promise<number> {
 				schema.characters.embedding,
 				schema.characters.embeddingModel
 			)
-		),
-		db.$count(
-			schema.personas,
-			condition(schema.personas.embedding, schema.personas.embeddingModel)
 		)
 	])
 	return counts.reduce((sum, n) => sum + Number(n), 0)
@@ -1748,21 +1653,24 @@ export async function scopedMissingVectors(
 				.limit(room())
 		)
 
+	// The voiced characters, under the SAME source as the cast: one table, one
+	// picker, one item kind. A row in both lists is pushed twice and picked
+	// once — the second pick fails the staleness filter and answers null.
 	if (room() > 0 && personaIds.length > 0)
 		push(
-			"persona",
+			"character",
 			await db
-				.select({ id: schema.personas.id })
-				.from(schema.personas)
+				.select({ id: schema.characters.id })
+				.from(schema.characters)
 				.where(
 					and(
-						inArray(schema.personas.id, personaIds),
+						inArray(schema.characters.id, personaIds),
 						needsEmbedding(
-							schema.personas.embedding,
-							schema.personas.embeddingModel,
+							schema.characters.embedding,
+							schema.characters.embeddingModel,
 							currentModel,
-							schema.personas.updatedAt,
-							schema.personas.vectorizedAt
+							schema.characters.updatedAt,
+							schema.characters.vectorizedAt
 						)
 					)
 				)
@@ -1894,14 +1802,6 @@ export async function autoEnqueueCharacter(
 ) {
 	if (!(await isVectorizationEnabled())) return
 	await enqueueCharacterGroup(characterId, characterName)
-}
-
-export async function autoEnqueuePersona(
-	personaId: number,
-	personaName: string
-) {
-	if (!(await isVectorizationEnabled())) return
-	await enqueuePersonaGroup(personaId, personaName)
 }
 
 export async function autoEnqueueSession(sessionId: number) {

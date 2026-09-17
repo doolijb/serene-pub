@@ -152,9 +152,9 @@ export const EMPTY_VOCABULARY: AnnotationVocabulary = {
  * character rather than to an entry titled after her.
  *
  * An unbound binding — a background NPC the graph minted, naming no character
- * and no persona — contributes nothing here. There is no row for it to resolve
- * *to*: `EntityRef` names a character, a persona or an entry, and inventing a
- * fourth kind is a schema decision this seam should not make on its own. Its
+ * — contributes nothing here. There is no row for it to resolve
+ * *to*: `EntityRef` names a character or an entry, and inventing a
+ * third kind is a schema decision this seam should not make on its own. Its
  * name is still extracted, as an open-tier string, which is exactly plan Part
  * 2's *"references that don't resolve yet"*.
  */
@@ -168,7 +168,6 @@ export async function loadVocabulary(
 		db
 			.select({
 				characterId: schema.lorebookBindings.characterId,
-				personaId: schema.lorebookBindings.personaId,
 				name: schema.lorebookBindings.name,
 				aliases: schema.lorebookBindings.aliases,
 				absorbedAliases: schema.lorebookBindings.absorbedAliases
@@ -191,9 +190,7 @@ export async function loadVocabulary(
 		const ref =
 			binding.characterId != null
 				? ({ kind: "character", id: binding.characterId } as const)
-				: binding.personaId != null
-					? ({ kind: "persona", id: binding.personaId } as const)
-					: null
+				: null
 		if (!ref) continue
 		for (const name of bindingNames(binding)) names.push({ name, ref })
 	}
@@ -276,7 +273,6 @@ interface AnnotationValues {
 	normalized: string
 	tier: string
 	characterId: number | null
-	personaId: number | null
 	refEntryId: number | null
 	confidence: number
 	mentions: number
@@ -320,7 +316,6 @@ const valuesFor = (
 				normalized: "",
 				tier: "none",
 				characterId: null,
-				personaId: null,
 				refEntryId: null,
 				confidence: 0,
 				mentions: 0,
@@ -334,7 +329,6 @@ const valuesFor = (
 		normalized: e.text.toLowerCase().replace(/\s+/g, " ").trim(),
 		tier: e.tier,
 		characterId: e.ref?.kind === "character" ? e.ref.id : null,
-		personaId: e.ref?.kind === "persona" ? e.ref.id : null,
 		refEntryId: e.ref?.kind === "entry" ? e.ref.id : null,
 		confidence: e.confidence ?? CONFIDENCE[e.tier] ?? 0.5,
 		mentions: e.count,
@@ -375,7 +369,6 @@ async function writeAnnotations(
 					normalized: sql`excluded.normalized`,
 					tier: sql`excluded.tier`,
 					characterId: sql`excluded.character_id`,
-					personaId: sql`excluded.persona_id`,
 					refEntryId: sql`excluded.ref_entry_id`,
 					confidence: sql`excluded.confidence`,
 					mentions: sql`excluded.mentions`,

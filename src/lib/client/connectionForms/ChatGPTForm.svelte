@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { z } from "zod"
 
 	// Zod validation schema
@@ -8,7 +9,6 @@
 			.string()
 			.url("Invalid URL format")
 			.min(1, "Base URL is required"),
-		model: z.string().min(1, "Model is required"),
 		apiKey: z.string().min(1, "API key is required")
 	})
 
@@ -32,7 +32,6 @@
 	function validateConnection(): boolean {
 		const data = {
 			baseUrl: connection.baseUrl || "",
-			model: connection.model || "",
 			apiKey: connection.apiKey || ""
 		}
 
@@ -52,14 +51,11 @@
 			return false
 		}
 	}
-	$effect(() => {
-		function handleTest(msg: Sockets.Connections.Test.Response) {
-			testResult = { ok: msg.ok, error: msg.error ?? undefined }
-		}
-		socket.on("connections:test", handleTest)
-		return () => {
-			socket.off("connections:test", handleTest)
-		}
+	// Standing interest in the test result, released when this form unmounts.
+	// The registry keeps ONE raw listener per event and fans it out, so the
+	// parent sidebar's own interest is untouched by this form coming and going.
+	useInterest<"connections:test">("connections:test", (msg) => {
+		testResult = { ok: msg.ok, error: msg.error ?? undefined }
 	})
 </script>
 
@@ -92,34 +88,7 @@
 			</p>
 		{/if}
 	</div>
-	<div class="mt-2 flex flex-col gap-1">
-		<label class="font-semibold" for="model">Model</label>
-		<input
-			id="model"
-			type="text"
-			bind:value={connection.model}
-			class="input {validationErrors.model ? 'border-error-500' : ''}"
-			aria-invalid={validationErrors.model ? "true" : "false"}
-			aria-describedby={validationErrors.model
-				? "model-error"
-				: undefined}
-			oninput={() => {
-				if (validationErrors.model) {
-					const { model, ...rest } = validationErrors
-					validationErrors = rest
-				}
-			}}
-		/>
-		{#if validationErrors.model}
-			<p
-				id="model-error"
-				class="text-error-500 mt-1 text-sm"
-				role="alert"
-			>
-				{validationErrors.model}
-			</p>
-		{/if}
-	</div>
+	<!-- Model input removed: models live in the Models section below. -->
 	<div class="mt-2 flex flex-col gap-1">
 		<label class="font-semibold" for="enabled">Enabled</label>
 		<input

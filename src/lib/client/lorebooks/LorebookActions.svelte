@@ -1,8 +1,9 @@
 <script lang="ts">
-	import { getContext, onDestroy, onMount } from "svelte"
+	import { getContext } from "svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import type { SpecV3 } from "@lenml/char-card-reader"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { downloadBlob } from "$lib/client/utils/downloadBlob"
 	import { attachLorebookToSession } from "$lib/client/utils/attachLorebookToSession"
@@ -327,39 +328,42 @@
 		toaster.success({ title: "Lorebook Deleted" })
 	}
 
-	// Named so `off` can name them too. A bare `socket.off("lorebooks:create")`
-	// removes EVERY listener for that event, not just this component's.
-	onMount(() => {
-		socket.on("lorebooks:create", handleLorebooksCreate)
-		socket.on("lorebooks:import", handleLorebooksImport)
-		socket.on("lorebooks:import:error", handleLorebooksImportError)
-		socket.on("lorebooks:importResolve", handleLorebooksImportResolve)
-		socket.on(
-			"lorebooks:importResolve:error",
-			handleLorebooksImportResolveError
-		)
-		socket.on("lorebooks:export", handleLorebooksExport)
-		socket.on("lorebooks:export:error", handleLorebooksExportError)
-		socket.on("lorebooks:delete", handleLorebooksDelete)
-		socket.on("lorebooks:duplicate", handleLorebooksDuplicate)
-		socket.on("lorebooks:duplicate:error", handleLorebooksDuplicateError)
-	})
-
-	onDestroy(() => {
-		socket.off("lorebooks:create", handleLorebooksCreate)
-		socket.off("lorebooks:import", handleLorebooksImport)
-		socket.off("lorebooks:import:error", handleLorebooksImportError)
-		socket.off("lorebooks:importResolve", handleLorebooksImportResolve)
-		socket.off(
-			"lorebooks:importResolve:error",
-			handleLorebooksImportResolveError
-		)
-		socket.off("lorebooks:export", handleLorebooksExport)
-		socket.off("lorebooks:export:error", handleLorebooksExportError)
-		socket.off("lorebooks:delete", handleLorebooksDelete)
-		socket.off("lorebooks:duplicate", handleLorebooksDuplicate)
-		socket.off("lorebooks:duplicate:error", handleLorebooksDuplicateError)
-	})
+	/**
+	 * Every key here is BARE. These are the book-level actions — make, bring
+	 * in, take out, copy, remove — and not one of their replies names a book
+	 * in `SCOPED_EVENTS`, so a scoped key would match nothing at all. The bar
+	 * is the same for the five `:error` events beside them: never gated (plan
+	 * ruling 2 — an error is not an output to skip), but the registry is the
+	 * only listener path.
+	 */
+	useInterest<"lorebooks:create">("lorebooks:create", handleLorebooksCreate)
+	useInterest<"lorebooks:import">("lorebooks:import", handleLorebooksImport)
+	useInterest<"lorebooks:import:error">(
+		"lorebooks:import:error",
+		handleLorebooksImportError
+	)
+	useInterest<"lorebooks:importResolve">(
+		"lorebooks:importResolve",
+		handleLorebooksImportResolve
+	)
+	useInterest<"lorebooks:importResolve:error">(
+		"lorebooks:importResolve:error",
+		handleLorebooksImportResolveError
+	)
+	useInterest<"lorebooks:export">("lorebooks:export", handleLorebooksExport)
+	useInterest<"lorebooks:export:error">(
+		"lorebooks:export:error",
+		handleLorebooksExportError
+	)
+	useInterest<"lorebooks:delete">("lorebooks:delete", handleLorebooksDelete)
+	useInterest<"lorebooks:duplicate">(
+		"lorebooks:duplicate",
+		handleLorebooksDuplicate
+	)
+	useInterest<"lorebooks:duplicate:error">(
+		"lorebooks:duplicate:error",
+		handleLorebooksDuplicateError
+	)
 </script>
 
 <NewLorebookDialog

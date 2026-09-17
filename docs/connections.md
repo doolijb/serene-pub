@@ -4,17 +4,51 @@ Connections tell Serene Pub how to reach a model — which backend, which model,
 
 ## Overview
 
-The **Connections** sidebar (opened from the main navigation, admin-only) is where you create, edit, test, and delete connections. Alongside it in the nav are **Sampling**, **Pipelines**, and **Legacy configs** — plus, when enabled, **KoboldCPP Manager** and **Ollama Manager**. Most of these live behind the admin gate: non-admin users benefit from whatever connection and sampling config an admin has set as the system default, but can't open those sidebars themselves.
+The **Connections** sidebar (opened from the rail, admin-only) is where you create, edit, test, and delete connections. Alongside it in the nav are **Sampling**, **Pipelines**, and **Legacy configs** — plus, when enabled, **KoboldCPP Manager** and **Ollama Manager**. Most of these live behind the admin gate: non-admin users benefit from whatever connection and sampling config an admin has set as the system default, but can't open those sidebars themselves.
 
 Since 0.6, prompts and context templates are configured in the **Pipelines** panel rather than in sidebars of their own — see [Context Templates](./context-templates.md). The 0.5 **Context Configs** and **Prompt Configs** sidebars are now two tabs inside **Legacy configs**, kept so nothing you wrote is lost; nothing in 0.6 builds a prompt from them. [Prompt Configs](./prompt-configs.md) still documents what those rows mean. This page focuses on Connections and Sampling Configs.
 
-Each connection is a named record holding a **type** (which backend adapter to use), a **Base URL** and/or **API Key** where applicable, one or more **Models** (see [Endpoints and models](#endpoints-and-models)), a **Prompt Format**, a **Token Counter**, and a bag of type-specific **Advanced Settings** (stream mode, session-vs-completion mode, and so on). Exactly one connection can be marked as the system's default (a star icon in the sidebar), and individual Session Prompts or sessions can override it — see [Prompt Configs](./prompt-configs.md) and [Sessions](./sessions.md) for how that override chain resolves.
+Each connection is a named record holding a **type** (which backend adapter to use), a **Base URL** and/or **API Key** where applicable, one or more **Models** (see [Endpoints and models](#endpoints-and-models)), a **Prompt Format**, a **Token Counter**, and a bag of type-specific **Advanced Settings** (stream mode, session-vs-completion mode, and so on). A connection is never a default by itself: each capability's instance default names a connection **and one of its models** (see [Choosing a pair](#choosing-a-pair)), and an individual pipeline configuration can override it by naming another pair in its provider slot — see [Pipelines](./pipelines.md). A session never overrides the connection: overrides are by model, never by connection (see [Sessions](./sessions.md#which-connection-a-session-uses)).
 
 Creating a connection is done via the **+** button (or Ctrl/Cmd+N) in the Connections sidebar, which opens a **Create New AI Connection** modal: enter a name, then pick an **AI Service** from a single searchable combobox (placeholder text: "Search for a service (Groq, Ollama, Mistral, ...)"). This picker flattens every native connection type _and_ every OpenAI-compatible preset (Groq, OpenRouter, Mistral, and so on — see [OpenAI Session & Compatible Endpoint Presets](#openai-session--compatible-endpoint-presets) below) into one list, grouped under **Cloud APIs**, **Local / Self-hosted**, and **Custom** — a preset isn't nested two levels deep behind a separate "OpenAI Session" type selection; you can search and pick it directly. Whichever service you pick, its difficulty rating and description appear below the picker before you confirm. The editor tracks unsaved changes and will prompt before you switch connections, close the sidebar, or discard edits; a refresh icon reverts to the last-saved values, and a trash icon deletes the connection (with a confirmation modal).
 
-## Sections
+## The Connections sidebar
 
-The Connections sidebar has four sections, one per modality: **LLM / Text Generation**, **Image Generation**, **Embeddings** and **Named entities**. Each lists its own connections and stars one as the default for its capability. Embeddings and Named entities are covered in [Embeddings and RAG](./embeddings-and-rag.md); the entity form has no base URL or key, only a model idle timeout.
+Connections is a rail item. Its view lives in the sidebar, fills the page when you expand it, and is the same view on a phone (see [Getting Around](./getting-around.md)). It opens on an **index** of every connection with its models listed beneath it — connections first, models second, because the models are what you actually pick between and the connection is where they live.
+
+### Defaults at a glance
+
+The top of the index shows the instance defaults three ways that always agree, and none of them is an editor:
+
+- **The pill row.** Under **Add connection**, a caption reads _Defaults · N of M set_ (M is every transform the SDK knows — chat, vision, document reading, image generation, image editing, image transform, transcription, speech, embeddings, named entities), with a link to **Admin → Defaults**. Beneath it, one status pill per transform that has a default: the output kind's icon, the model's display name, and a dot — green when the model is switched on, listed and (for a local ONNX model) on disk or loaded; amber when it is missing, switched off, not downloaded, failed, or its host could not be listed; grey while it is downloading. One dashed pill, _K not set_, folds up the rest. Tapping a pill opens that model; tapping the dashed one switches to Defaults mode.
+- **In place.** The row of a default model wears a gold **Default · chat** chip (one per transform it is the default for). On the two local modalities the chip reads **Active** instead, because there is exactly one embedding model and one entity model in use app-wide, and being the default is what "active" means.
+- **Defaults mode.** The **Defaults** filter pill turns the list into a ledger of every transform, grouped by output kind exactly as Admin → Defaults groups them, each row naming its pair or _Not set · pick in Admin → Defaults_. An unset chat default is called out, because sessions cannot reply until it is set. A set row opens its model.
+
+Setting a default happens where it always did: Admin → Defaults, a model view's **Set as default…**, a manager's **Use for chat**, or — for embeddings and entities — **Make active**. Every one of them is the same registration.
+
+### Search, filters, and totals
+
+- **Add connection** opens the New Connection modal.
+- **Search** ("Filter N models") matches connections (name, note, service, host) and models (display name or identifier) alike.
+- **Filter pills** — _All_, _Defaults_, _Needs attention_ (with a count), then _Chat_, _Images_, _Embeddings_, _Entities_ for the models that can serve each section's capability. A capability filter arrived at from Jump or a default tile that is not one of those four appears as one extra pill while it is active. There is deliberately no dropdown of any kind.
+- A line of totals — connections, models, and how many need attention.
+
+### Connection groups
+
+Each **connection group** is shaped by what you can do there. Every group has an icon tile, the connection's name, a badge (**Managed**, **ONNX**, or **API**), and the service and host. Then:
+
+- **KoboldCPP Manager** — a status line for the process (_Running · model_, _Starting_, _Stopped_, _Crashed_) with **Stop** or **Start**, a health line counting GGUFs on disk and downloads in flight, and rows with **Load** on a model that is not loaded, a **Loaded** chip on the one that is, or a progress bar and **Cancel** on a download. Starting downloads, performance and launch settings stay in the KoboldCPP Manager; the footer links there.
+- **Ollama** — a status line with the version and how many models are resident, a **Loaded** chip on resident rows, and the health line. Pulling, updating and removing stay in the Ollama Manager; the list follows it.
+- **Local embeddings** and **Local named entities** (ONNX) — described in [Local ONNX models](#local-onnx-models) below.
+- **Everything else** — the health line ("4 models · checked 3 minutes ago", "Couldn't list models — …", "1 of 10 models no longer listed") and plain rows, with **Add a model by name** in the footer.
+
+Every model row has the same anatomy: the display name and one action on the first line; chips, facts and tags on the second — **Default · …** or **Active** in gold, **Not listed** in amber, **Off** when switched off, then what is known about the model (size, dimensions, input length, context window, languages). Click the connection's name to open the **connection view**; click a model row to open the **model view**. The ⋯ menu on a group offers _Refresh models_, _Add a model by name_ where the type allows it, and a door to the Ollama or KoboldCPP manager where that manager owns the models.
+
+The **connection view** is the endpoint's own settings — name, host, key, Prompt Format, Token Counter, Advanced Settings, notes, capabilities, stop scripts — with Save, Reset and Delete at the top. On a local ONNX connection it opens with the endpoint's status and, given desk room, a table of its models (see below); the settings follow underneath.
+
+The **model view** holds everything about one model: its availability, display name, the identifier it sends, an optional context window, Prompt Format and Tokenizer overrides, whether it is offered in pickers, which instance defaults point at it (with _Set as default…_), and Remove — or, on a manager-owned connection, a button to the manager instead. A local ONNX model has its own model view, described below.
+
+Embeddings and Named entities are covered in [Embeddings and RAG](./embeddings-and-rag.md); the entity form has no base URL or key, only a model idle timeout.
 
 ## Connection Types At A Glance
 
@@ -43,15 +77,15 @@ Every form shares a similar skeleton — a **Test Connection** button that repor
 
 ## LM Studio
 
-The LM Studio form has a **Model** dropdown (populated by a **Refresh Models** button that queries LM Studio's REST API) and a **Test Connection** button. Advanced Settings hold the **Base URL** (default `ws://localhost:1234` — note LM Studio's default here is a `ws://` URL, not `http://`), a **Stream** checkbox, and a **Keep Alive (seconds)** field (default 60) controlling how long LM Studio keeps the model resident after a request. Whether requests are sent as chat messages or a rendered text completion is a connection **capability**, not a form switch — see the **Chat messages** / **Text completion** control (auto/on/off, with provenance shown below it) in the Capabilities panel. LM Studio's REST API must be enabled in LM Studio's own settings before Serene Pub can reach it.
+The LM Studio form has a **Test Connection** button; its models are read from LM Studio's REST API on their own (see [Models are synced from the host](#models-are-synced-from-the-host)). Advanced Settings hold the **Base URL** (default `ws://localhost:1234` — note LM Studio's default here is a `ws://` URL, not `http://`), a **Stream** checkbox, and a **Keep Alive (seconds)** field (default 60) controlling how long LM Studio keeps the model resident after a request. Whether requests are sent as chat messages or a rendered text completion is a connection **capability**, not a form switch — see the **Chat messages** / **Text completion** control (auto/on/off, with provenance shown below it) in the Capabilities panel. LM Studio's REST API must be enabled in LM Studio's own settings before Serene Pub can reach it.
 
 ## Ollama
 
-The Ollama connection form has a **Model** dropdown populated via **Refresh Models**, plus **Test Connection**. Advanced Settings expose the **Base URL** (default `http://localhost:11434/`), a **Keep Alive** control split into a number field and a unit dropdown (`ms` / `s` / `m` / `h`, default `5m`), and two switches: **Stream** and **Think** (passes Ollama's `think` flag for reasoning-capable models). Whether requests are sent as chat messages or a rendered text completion is a connection **capability** now, not a form switch — see the **Chat messages** / **Text completion** control (auto/on/off, with provenance shown below it) in the Capabilities panel. This connection type talks to a manually-installed, already-running Ollama server — for browsing, pulling, and deleting Ollama models from inside Serene Pub, see [Ollama Manager](#ollama-manager) below, which is a separate admin sidebar from this connection form.
+The Ollama connection form has **Test Connection**; its models are whatever Ollama has pulled, synced on their own, and pulled or removed in the [Ollama Manager](#ollama-manager). Advanced Settings expose the **Base URL** (default `http://localhost:11434/`), a **Keep Alive** control split into a number field and a unit dropdown (`ms` / `s` / `m` / `h`, default `5m`), and two switches: **Stream** and **Think** (passes Ollama's `think` flag for reasoning-capable models). Whether requests are sent as chat messages or a rendered text completion is a connection **capability** now, not a form switch — see the **Chat messages** / **Text completion** control (auto/on/off, with provenance shown below it) in the Capabilities panel. This connection type talks to a manually-installed, already-running Ollama server — for browsing, pulling, and deleting Ollama models from inside Serene Pub, see [Ollama Manager](#ollama-manager) below, which is a separate admin sidebar from this connection form.
 
 ## OpenAI Session & Compatible Endpoint Presets
 
-OpenAI Session is Serene Pub's generic OpenAI-compatible connection type, meant for the real OpenAI API as well as any of the many services that mimic its session-completion schema. Its form has a **Model** dropdown (via **Refresh Models**), **Test Connection**, a **Base URL** field, and an **API Key** field (password-masked). Advanced Settings hold a **Stream** switch and a **Prerender Prompt** switch — when Prerender Prompt is on, a **Prompt Format** dropdown appears so the prompt is rendered to text client-side before being sent as a single session message, rather than sent as native multi-message session.
+OpenAI Session is Serene Pub's generic OpenAI-compatible connection type, meant for the real OpenAI API as well as any of the many services that mimic its session-completion schema. Its form has **Test Connection**, a **Base URL** field, and an **API Key** field (password-masked); models come from the service's `/models` listing when it serves one, and can be added by name when it does not. Advanced Settings hold a **Stream** switch and a **Prerender Prompt** switch — when Prerender Prompt is on, a **Prompt Format** dropdown appears so the prompt is rendered to text client-side before being sent as a single session message, rather than sent as native multi-message session.
 
 Because so many services speak this same protocol, the **AI Service** picker in the New Connection modal (see [Overview](#overview)) lists every OpenAI-compatible preset directly alongside the native connection types, pre-filling the Base URL and a sensible Token Counter/Prompt Format for each. Selecting any preset here still creates an `openai` (OpenAI Session) connection underneath — the preset only decides the starting values:
 
@@ -89,7 +123,7 @@ Llama.cpp connects to `llama-server`'s completion API. It's the simplest form: a
 
 ## Anthropic (Claude)
 
-The Anthropic form has a **Model** dropdown (via **Refresh Models**), **Test Connection**, a **Token Counter** dropdown, and an **API Key** field (placeholder `sk-ant-...`). Advanced Settings hold a **Stream** switch and an **Extended Thinking** switch — enabling it reveals a **Thinking Budget Tokens** field (1024–32000, default 8000) controlling how many tokens Claude may spend thinking before responding. Extended thinking requires a Claude 3.7+ model. The default connection preset points at `https://api.anthropic.com` with model `claude-sonnet-4-5` and (notably) an `OpenAI`-style default Prompt Format rather than the `Claude` one, since Anthropic sends chat messages — its only wire — rather than a rendered text prompt.
+The Anthropic form has **Test Connection** (its models come from a built-in catalogue of Claude models, and a newer one can be added by name), a **Token Counter** dropdown, and an **API Key** field (placeholder `sk-ant-...`). Advanced Settings hold a **Stream** switch and an **Extended Thinking** switch — enabling it reveals a **Thinking Budget Tokens** field (1024–32000, default 8000) controlling how many tokens Claude may spend thinking before responding. Extended thinking requires a Claude 3.7+ model. The connection preset points at `https://api.anthropic.com`, seeds `claude-sonnet-4-5` as the connection's first model, and (notably) an `OpenAI`-style default Prompt Format rather than the `Claude` one, since Anthropic sends chat messages — its only wire — rather than a rendered text prompt.
 
 ### Where the API keys come from
 
@@ -140,7 +174,7 @@ Clicking **Download & Start** begins the download; progress (bytes downloaded / 
 
 ### Models tab
 
-The **Models** tab lists every model file the Manager can see, split by a **Text | Image** toggle at the top of the tab. Each model card shows its name, whether it's currently loaded (a "Loaded" badge), and action buttons: **Set Default** / **Default** (creates or points a **KoboldCPP Manager**-type connection at this model and marks it the system default), an **Edit** gear icon (jumps to that model's connection in the Connections sidebar, if one already exists), and **Delete** (removes the file from disk — blocked if the model backs the current default connection, with a toast explaining why). A search box filters the list by name, and a refresh button re-queries both the model list and the connections list.
+The **Models** tab lists every model file the Manager can see, split by a **Text | Image** toggle at the top of the tab. Each model card shows its name, whether it's currently loaded (a "Loaded" badge), and action buttons: **Use for chat** / **In use for chat** (ensures a **KoboldCPP Manager**-type connection lists this model, then registers that (connection, model) pair as the chat capability default — the same registration **Admin → Defaults** makes), an **Edit** gear icon (jumps to that model's connection in the Connections sidebar, if one already exists), and **Delete** (removes the file from disk — blocked if the model backs the current default connection, with a toast explaining why). A search box filters the list by name, and a refresh button re-queries both the model list and the connections list.
 
 Files whose type Serene Pub can't confirm from their header are shown in **both** lists wearing an **Unverified** badge, with two buttons to settle it ("It's a text model" / "It's an image model") — a file you can see on disk is never hidden from you just because the classifier gave up on it. Which folder a file sits in counts as evidence of what it is, but not as the verdict: an LLM dropped in the image folder is still recognised as an LLM.
 
@@ -189,7 +223,7 @@ A common cause on Docker and NAS-hosted deployments: the app's data directory (w
 
 Once the Manager has a binary installed (or is connected to an external instance with `--admin` enabled) and at least one model downloaded, you create a **KoboldCPP Manager**-type connection to actually use a model in sessions — this is the `koboldcpp_managed` connection type from the [types table](#connection-types-at-a-glance) above, distinct from the manager sidebar itself. Its form is disabled (with a warning banner) until the Manager is enabled system-wide.
 
-The form's **Model** dropdown is populated straight from the Manager's model list (with its own refresh button) — picking one here is equivalent to using **Set Default** from the Models tab. Prompt Format, Token Counter, and the same long list of KoboldCPP request switches (Stream, Use Memory, Trim Stop Sequences, Render Special Tokens, Bypass EOS Token, Retain Grammar State, Return Logprobs, Replace Instruct Placeholders, Thinking/Reasoning) all work exactly as on the plain KoboldCPP form. The Base URL field is hidden entirely — Advanced Settings notes "Base URL is managed by KoboldCPP Manager's configured address and isn't set per-connection." Underneath those familiar fields, a **Managed mode launch settings** section holds:
+The connection's models are the GGUF files in the Manager's directory, synced on their own; **Use for chat** in the Manager's Models tab is what registers one as the chat default. Prompt Format, Token Counter, and the same long list of KoboldCPP request switches (Stream, Use Memory, Trim Stop Sequences, Render Special Tokens, Bypass EOS Token, Retain Grammar State, Return Logprobs, Replace Instruct Placeholders, Thinking/Reasoning) all work exactly as on the plain KoboldCPP form. The Base URL field is hidden entirely — Advanced Settings notes "Base URL is managed by KoboldCPP Manager's configured address and isn't set per-connection." Underneath those familiar fields, a **Managed mode launch settings** section holds:
 
 - **GPU Layers** — number of model layers to offload to GPU; `-1` autofits as many as will fit, `0` forces CPU-only. Default `-1`.
 - **Flash Attention** — toggle KoboldCPP's flash-attention kernel. Default off.
@@ -215,7 +249,7 @@ As with KoboldCPP's setup screen, **Test** checks the URL currently typed into t
 
 ### Installed tab
 
-Lists every model Ollama currently has pulled, with size, last-modified date, parameter count, and a "Running" badge for models Ollama has resident in memory. Each card has **Set Default**/**Default** (creates or updates an `ollama`-type connection pointed at this model and marks it system default), a settings-gear **Edit** button to jump to that connection, a **View** (external link) button to the model's page on Ollama's library or Hugging Face, and **Delete** (blocked for the model backing the current default connection).
+Lists every model Ollama currently has pulled, with size, last-modified date, parameter count, and a "Running" badge for models Ollama has resident in memory. Each card has **Use for chat** / **In use for chat** (ensures an `ollama`-type connection lists this model, then registers that (connection, model) pair as the chat capability default — the same registration **Admin → Defaults** makes), a settings-gear **Edit** button to jump to that connection, a **View** (external link) button to the model's page on Ollama's library or Hugging Face, and **Delete** (blocked for the model in use for chat).
 
 ### Available tab
 
@@ -360,7 +394,7 @@ Streaming only helps where somebody is watching tokens arrive, which on a multi-
 
 ## Endpoints and models
 
-Since 0.6 a connection is an **endpoint** — where the compute is — and the models reachable through it are rows of their own. Anywhere you choose "which connection", you are really choosing an **(endpoint, model) pair**.
+Since 0.6 a connection is an **endpoint** — where the compute is — and the models reachable through it are rows of their own. Anywhere you choose "which connection", you are really choosing an **(endpoint, model) pair**, and both halves are required: a connection has no default model.
 
 Before this, a connection row held a URL, a key, a wire mode, **one** model name and **one** set of capabilities. That conflated two different things. One llama.cpp host serving three GGUFs had to be three connections, each restating the same URL and key; testing one told you nothing about the other two; and probing a vision checkpoint taught the _endpoint_ vision, so every text-only model behind the same host inherited the claim.
 
@@ -373,47 +407,83 @@ Before this, a connection row held a URL, a key, a wire mode, **one** model name
 | Prompt Format, Token Counter                | **Overrides** of the endpoint's Prompt Format and Token Counter         |
 | Capabilities the _protocol_ can express     | Capabilities _this checkpoint_ has — layered over the endpoint's        |
 | Stop scripts                                | An optional Context window                                              |
-| Per-connection notes                        | Enabled / disabled, and which one is **default**                        |
+| Per-connection notes                        | Offered in pickers or not, and whether its host still lists it          |
 
-Every per-model setting starts blank, and blank means "whatever the connection says". That is what makes the change invisible on upgrade: a model row with no overrides resolves identically to the endpoint it hangs off.
+Every per-model setting starts blank, and blank means "whatever the connection says".
 
-### The Models section
+### Models are synced from the host
 
-Open a connection in the **Connections** sidebar and you will find **Models** beneath the connection's own fields:
+You do not add models by hand in the ordinary case. Serene Pub asks each connection's service what it serves and keeps the connection's model list in step with the answer:
 
-- **Add model** — type the identifier the service uses (`llama3.1:8b`, `gpt-4o`, `Mistral-7B-Instruct.gguf`) and, optionally, a friendlier name.
-- **Add N from the last test** — after **Test Connection** or **Refresh Models**, this adds everything the backend reported that is not already on the list. A probed list is never saved on its own: a large OpenAI-compatible host answers with a hundred ids including embeddings and transcription endpoints, and none of that belongs in your chat picker unless you put it there.
-- The **radio** beside each row is the endpoint's **default model** — what a choice that names only this connection means. Exactly one model per connection can hold it, and the database enforces that rather than the screen.
-- The **on** checkbox stops a model being offered in pickers without deleting it, so a model pulled off the host for a week does not take its settings — or the selections naming it — with it.
-- The **gear** opens that model's own settings: display name, the identifier it sends, a **Context window**, and **Template** / **Tokenizer** overrides. Both overrides default to _From the connection_.
-- The **×** removes a model. The connection is kept — removing the last model from a connection is clearing a field, not throwing away a URL and a key.
+- **When it asks.** When the Connections sidebar opens, when you open a connection or a model, when a connection is created or saved, after a successful **Test Connection**, and after the Ollama Manager pulls a model or the KoboldCPP Manager finishes a download. Automatic checks skip a connection whose listing is less than ten minutes old, so browsing costs nothing; **Refresh models** (on a group's menu, in the connection view, and in the model view) always asks again.
+- **What a listing does.** Every model the service names gets a row, enabled, named as the service names it. A model the service has **stopped** naming is marked **not listed** — kept, not deleted, so its overrides and anything registered against it survive its return. A model that comes back is cleared.
+- **What a failed listing does.** Nothing to any model. An unreachable host is a fact about the host, so the connection shows "Couldn't list models — …" and its rows are left exactly as they were.
+- **Who lists what.** Ollama lists what it has pulled; LM Studio lists what it has downloaded; OpenAI-compatible hosts list `/models`; Anthropic lists a built-in catalogue; llama.cpp and a plain KoboldCPP list the model currently loaded; the managed KoboldCPP process lists the GGUFs in its directory; the local ONNX backends list their catalogue plus anything downloaded to this machine; A1111 lists its checkpoints.
+
+A model you do not want in pickers is switched **off** in its model view rather than removed — a removed model that the host still lists would simply come back on the next refresh.
+
+### A model that is no longer listed is unavailable everywhere
+
+When a listing stops naming a model Serene Pub knows, that model is refused everywhere, and every screen says so:
+
+- the sidebar shows a **Not listed** chip on the row, a warning on its connection's health line, a count in the totals line, and the _Needs attention_ filter gathers them;
+- the model view leads with a warning naming since when, what it means, and **Check again**;
+- the defaults strip marks a default that points at a missing model;
+- **Admin → Defaults** and a pipeline's connection option list it greyed with "no longer listed by its host", and warn beneath the picker when the chosen model is the missing one;
+- a run whose resolved pair names it is refused with a sentence pointing at the fix, rather than sent to a host that would answer with its own error.
+
+The model's settings are kept. Refresh once the host serves it again and everything resumes; or pick another model; or remove it.
+
+### Adding and removing by hand
+
+Where the listing can be incomplete, a group's ⋯ menu offers **Add a model by name**: an OpenAI-compatible host that serves no `/models`, a catalogue that lags a launch, a llama.cpp that lists only what is loaded. Such rows can also be removed from the model view. On an **Ollama** or **KoboldCPP Manager** connection there is no Add and no Remove — models are pulled, downloaded and deleted in that manager, and the list follows it. On a **local ONNX** connection the rows are the recommended list plus anything added by Hugging Face id; a model is switched on or off rather than removed, and its files are downloaded and removed from disk from the sidebar — see [Local ONNX models](#local-onnx-models).
 
 ### Choosing a pair
 
-Every picker that used to name a connection now shows the connection and, beside it, a model:
+Every picker that names a connection also names a model:
 
-- **Admin → Defaults** registers a pair per capability. The model picker offers **Its default model** as the resting choice, which keeps following the star if you later change which model the connection means.
-- A **pipeline's provider node** (the Connection option on a Reply, Summarize or Image step) stores a pair the same way.
-- Choosing a **different connection clears the model**, always. A model belongs to one endpoint, so carrying it across would leave a selection whose two halves name different connections — a pair no screen can show and no run can resolve.
-- A model that is deleted releases anything registered against it back to "the endpoint's default model", rather than stranding the choice. A model that is _switched off_ while something still names it is refused at run time with a sentence saying so, instead of quietly running a different model.
+- **Admin → Defaults** registers a pair per capability. Choosing a connection pins its first switched-on, listed model; the model picker beside it changes that.
+- A **pipeline's oracle node** (the Connection option on a Reply, Summarize or Image step) stores a pair the same way.
+- The **model view**'s _Set as default…_ menu registers that model for one capability it can serve, or for all of them at once.
+- Choosing a **different connection clears the model**, always. A model belongs to one endpoint, so carrying it across would leave a selection whose two halves name different connections.
+- A model that is deleted releases anything registered against it to an incomplete registration, which resolves as unconfigured with a sentence naming the fix. A model that is _switched off_ or _not listed_ while something still names it is refused at run time with a sentence saying so, instead of quietly running a different model.
 
-### What the upgrade did
+## Local ONNX models
 
-Migration `0114` reads every existing connection that named a model and gives it exactly one model row: the identifier it already had, marked default and enabled, **and nothing else**. Prompt Format, Token Counter, capabilities and context window all stay blank on the new row, so the effective settings are byte-for-byte what they were.
+The two local connection types — **Local embeddings (ONNX)** and **Local named entities (ONNX)** — run inside Serene Pub with no server to start. Their models are the **recommended list**, fetched from [github.com/SerenePub/serene-pub-onnx-list](https://github.com/SerenePub/serene-pub-onnx-list) (`embeddings.yaml` and `ner.yaml`), cached for a day under the data directory, and backed by a built-in copy when the network is away. The list gives each model a tier (_Fast_, _Balanced_, _Best_), its download size, dimensions or labels, input length, pooling, prefixes, languages and licence, and the sidebar shows those as facts and tags. Entries whose pooling the loader cannot honour are left off. Ids never change, so stored vectors stay valid across list updates.
 
-A connection that never named a model gets no model row — that is an endpoint nobody finished setting up, and inventing a model for it would make it look configured in every picker. Add one from the Models section when you know what is on the host.
+### Download state and active state are independent
 
-Existing registrations in **Admin → Defaults**, and existing pipeline configurations, are left naming no model — which means "that endpoint's default model", which is the one model they had. Nothing you configured before the upgrade resolves differently after it.
+Every ONNX row carries a state that is a fact about the disk, re-checked on every sync:
 
-The old `model` column on the connection is kept as a mirror of the default model's identifier, so a downgrade or a backup restored into an older build still finds it where it has always been. Nothing in 0.6 reads it.
+| State | Row | Action |
+| --- | --- | --- |
+| Not downloaded | size from the list | **Download** |
+| Downloading | progress bar, "x of y MB" | **Cancel** |
+| On disk | **On disk** chip, measured size | **Make active** (or none, if it already is) |
+| Download failed | the Hub's own sentence | **Retry** |
+
+Being **Active** — the capability default for that modality — is a separate fact. A row can be active and not downloaded (the pill row and the row itself show it in amber, and _Needs attention_ gathers it), and a download never makes anything active. **Downloading warms the cache only**; the lane loads the active model lazily when it has work and unloads it after its idle timeout, which is set on the connection.
+
+**Make active** is the same registration as **Set as default…** on any other model, so it goes through the same confirmation: the dialog names how many stored vectors will be re-embedded (and across how many lorebooks and sessions), says that retrieval answers from keywords until that finishes, and notes that the previous model stays on disk. There is no time estimate, because nothing measures a rate. When nothing is stored yet, there is nothing to confirm and the switch is immediate. Entities work the same way with re-scanning.
+
+**Cancel** cannot interrupt the file in flight — the ONNX runtime exposes no way to abort a fetch — so the current file finishes first, then the partial download is deleted and the row returns to _Not downloaded_. The row says so while it waits. A download interrupted by a restart is marked failed at boot rather than believed.
+
+### The group, the model view, and the endpoint table
+
+The **group** header shows the active model and whether it is loaded ("Active: bge-small-en-v1.5 · loaded, idle 4 min" or "· on disk, not loaded"), an **Unload** button while it is loaded, and a health line with how many models are on disk, their total size, and the queue's state. Rows sit under their tier; models you added yourself sit under **Added by you**. The footer's **Add from Hugging Face…** takes a Hub id (`org/name`), validates it against the Hub before a row exists — the repo must be public and carry an ONNX export, with a readable hidden size for embeddings or an `id2label` for entities — and adds it as _Not downloaded_. The Hub's own sentence is shown when validation fails.
+
+The **model view** of a local ONNX model leads with its status: for the active model, whether it is loaded, the queue, when it was last used, and **Unload now** (embeddings also offer **Load**); for any other model, its download state and its one action, with the re-embed cost stated beneath **Make active** before you press it. Then **On this machine** (size on disk and **Remove**, which is refused for the active model — make another active first; a model you added can also be removed from the list), **About** (the list's description and facts, with a link to the model on Hugging Face), and, for the active model, the **Lane** — the idle timeout, set on the connection, and whether the model is listed in pickers.
+
+Given desk room, the **endpoint view** shows the same models as a table — size, dimensions or labels, input, languages, state and action, grouped by tier — with the endpoint's settings beneath it. At sidebar width the rows live in the index and the endpoint view shows only its status and settings.
 
 ## Testing, defaults, and everyday management
 
 A few behaviors apply across every connection type:
 
 - **Test Connection** sends a live probe to the configured Base URL/API Key and reports success or the exact error returned, before you commit to using it anywhere.
-- **Set Default** (the star button) marks a connection as the system-wide default used by any session or Session Prompt that doesn't specify its own override — see [Prompt Configs](./prompt-configs.md) for the full per-session/per-prompt override resolution order, and [Sessions](./sessions.md) for where that plays out during a conversation.
-- A **KoboldCPP Manager** connection — text or image — can't be used while the KoboldCPP Manager itself is disabled; on the text one the **Set Default** button is disabled with an explanatory tooltip in that case.
-- Image connections never take part in the system default. The star marks the default _text_ connection; the image default is registered per capability instead, and **Use for image generation** in the Manager is what sets it.
-- Deleting a connection, Sampling Config, or Context Config that's currently in use elsewhere doesn't cascade silently — model deletion from the KoboldCPP/Ollama Manager tabs, for instance, explicitly blocks removing a model that backs the current default connection, and the Connections sidebar's delete action always asks for confirmation first.
+- **Set as default…** in a model's view — **Make active** on a local ONNX model — registers that pair as the instance default for a capability it can serve — the same registration **Admin → Defaults** makes — used by any run whose pipeline configuration names no pair of its own. Those are the only two tiers: the configuration's pair, then the instance default — see [Sessions](./sessions.md#which-connection-a-session-uses) for where that plays out during a conversation.
+- A **KoboldCPP Manager** connection — text or image — can't be used while the KoboldCPP Manager itself is disabled; the sidebar marks it **Manager off**.
+- Defaults are per capability. **Use for chat** in the Ollama or KoboldCPP Manager registers the text default; **Use for image generation** in the KoboldCPP Manager registers the image one.
+- Deleting a connection, Sampling Config, or Context Config that's currently in use elsewhere doesn't cascade silently — model deletion from the KoboldCPP/Ollama Manager tabs, for instance, explicitly blocks removing the model a capability default names, and the Connections sidebar's delete action always asks for confirmation first.
 - These sidebars (Connections, Sampling, and both tabs of Legacy configs) track unsaved changes in-memory and will pop a confirmation modal before letting you switch selections, close the sidebar, or navigate away and lose edits.

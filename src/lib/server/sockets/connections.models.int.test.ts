@@ -6,15 +6,15 @@
  *
  *   1. **Form compatibility.** `connections:create` with a `model` field is what
  *      all nine connection forms send, and it has to keep producing a usable
- *      connection — which now means an endpoint AND a default model, not just a
- *      string in a column.
- *   2. **Exactly one default.** Enforced by a partial unique index rather than
- *      by whichever handler wrote last, so the handlers have to move the star
- *      rather than set it. Two defaults is not a display bug; it is a run
- *      resolving to whichever row the planner returned first.
- *   3. **The mirror stays a mirror.** `connections.model` survives the version
- *      freeze for downgrades and for the two managed flows, and it is only worth
- *      anything if every path that can move a default writes it.
+ *      endpoint AND a model row — without marking anything. Connections have
+ *      no default model.
+ *   2. **No implicit star.** Nothing here stars: create, createModel and import
+ *      only ensure ROWS. A default is a PAIR registered through
+ *      `connections:setDefault` with an explicit `modelId`, and an endpoint-only
+ *      registration is refused.
+ *   3. **Delete releases, never promotes.** Deleting a model just deletes it;
+ *      a capability registration naming it is FK-released to endpoint-only and
+ *      resolves as incomplete.
  */
 
 import { beforeAll, describe, expect, test, vi } from "vitest"
@@ -22,6 +22,7 @@ import * as schema from "$lib/server/db/schema"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import { asc, eq } from "drizzle-orm"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
+import { byCapability } from "$lib/server/connections/capabilityDefaults"
 
 vi.mock("$lib/server/embedding", () => ({
 	isModelReady: () => false,
@@ -96,15 +97,16 @@ async function createConnection(model: string | null, name = "fixture") {
 }
 
 describe("connections:create keeps every form working", () => {
-	test("a create carrying a model field gets a default model row", async () => {
+	test("a create carrying a model field gets a model row and marks nothing", async () => {
 		const conn = await createConnection("llama3.1:8b")
 		const models = await modelsOf(conn.id)
 		expect(models).toHaveLength(1)
 		expect(models[0].model).toBe("llama3.1:8b")
 		expect(models[0].name).toBe("llama3.1:8b")
-		expect(models[0].isDefault).toBe(true)
-		// And the mirror agrees, which is what a downgrade reads.
-		expect((await endpoint(conn.id)).model).toBe("llama3.1:8b")
+		// Connections have no default model: nothing is starred, and the
+		// endpoint row carries no model column at all.
+		expect("isDefault" in models[0]).toBe(false)
+		expect("model" in (await endpoint(conn.id))).toBe(false)
 	}, 60_000)
 
 	test("a create with no model makes an endpoint and no model row", async () => {
@@ -117,7 +119,7 @@ describe("connections:create keeps every form working", () => {
 })
 
 describe("connections:createModel", () => {
-	test("the first model becomes the default; the second does not", async () => {
+	test("creates rows without starring anything", async () => {
 		const { connectionsCreateModel } = await import("./connections")
 		const conn = await createConnection(null, "multi")
 		await connectionsCreateModel.handler(
@@ -131,12 +133,10 @@ describe("connections:createModel", () => {
 			noop
 		)
 		const rows = second.models!
-		// Compared as a map rather than a list: the view's order is display order
-		// (`sort_order`, then NAME), and "Bee" sorts before "a-model" — which is
-		// the ordering contract working, not the star being in the wrong place.
-		expect(
-			Object.fromEntries(rows.map((m) => [m.model, m.isDefault]))
-		).toEqual({ "a-model": true, "b-model": false })
+		expect(rows.map((m) => m.model).sort()).toEqual(["a-model", "b-model"])
+		// Nothing is starred: connections have no default model, so a second
+		// row is just a second row.
+		for (const m of rows) expect("isDefault" in m).toBe(false)
 		// The display name defaults to the identifier, and is kept when given.
 		expect(rows.find((m) => m.model === "b-model")!.name).toBe("Bee")
 	}, 60_000)
@@ -173,53 +173,76 @@ describe("connections:createModel", () => {
 	}, 60_000)
 })
 
-describe("connections:setDefaultModel", () => {
-	test("moves the star and re-writes the mirror", async () => {
-		const { connectionsCreateModel, connectionsSetDefaultModel } =
-			await import("./connections")
-		const conn = await createConnection("first", "star")
-		await connectionsCreateModel.handler(
-			admin(),
-			{ id: conn.id, model: { model: "second" } },
-			noop
-		)
-		const rows = await modelsOf(conn.id)
-		const second = rows.find((m) => m.model === "second")!
-		const res = await connectionsSetDefaultModel.handler(
-			admin(),
-			{ id: conn.id, modelId: second.id },
-			noop
-		)
-		expect(
-			res.models!.filter((m) => m.isDefault).map((m) => m.model)
-		).toEqual(["second"])
-		expect((await endpoint(conn.id)).model).toBe("second")
+describe("connections:setDefault names the pair outright", () => {
+	test("an endpoint-only registration is refused", async () => {
+		// Connections have no default model, so "the endpoint, whichever model"
+		// is not a registration — the caller must choose a model.
+		const { connectionsSetDefault } = await import("./connections")
+		const conn = await createConnection("first", "endpoint-only")
+		await expect(
+			connectionsSetDefault.handler(
+				admin(),
+				{ capability: "text->text", id: conn.id } as any,
+				noop
+			)
+		).rejects.toThrow(/choose a model/i)
 	}, 60_000)
 
 	test("refuses a model belonging to a different endpoint", async () => {
 		// A pair whose halves name different connections cannot be displayed and
 		// cannot be run; refusing at the door is cheaper than refusing at
 		// dispatch with a sentence about a choice nobody made.
-		const { connectionsCreateModel, connectionsSetDefaultModel } =
-			await import("./connections")
+		const { connectionsSetDefault } = await import("./connections")
 		const a = await createConnection("a-only", "A")
 		const b = await createConnection("b-only", "B")
 		const bModels = await modelsOf(b.id)
-		const res = await connectionsSetDefaultModel.handler(
+		await expect(
+			connectionsSetDefault.handler(
+				admin(),
+				{
+					capability: "text->text",
+					id: a.id,
+					modelId: bModels[0].id
+				} as any,
+				noop
+			)
+		).rejects.toThrow(/not on the connection/i)
+	}, 60_000)
+
+	test("refuses a model that is switched off", async () => {
+		// The star refuses what the dropdown must not offer: a switched-off
+		// model satisfies nothing.
+		const { connectionsSetDefault, connectionsUpdateModel } = await import(
+			"./connections"
+		)
+		const conn = await createConnection("on-off", "switched")
+		const [row] = await modelsOf(conn.id)
+		await connectionsUpdateModel.handler(
 			admin(),
-			{ id: a.id, modelId: bModels[0].id },
+			{ id: conn.id, modelId: row.id, model: { enabled: false } },
 			noop
 		)
-		expect(res.error).toBeTruthy()
-		expect((await endpoint(a.id)).model).toBe("a-only")
+		await expect(
+			connectionsSetDefault.handler(
+				admin(),
+				{
+					capability: "text->text",
+					id: conn.id,
+					modelId: row.id
+				} as any,
+				noop
+			)
+		).rejects.toThrow(/switched off/i)
 	}, 60_000)
 })
 
 describe("connections:deleteModel", () => {
-	test("deleting the default promotes another and re-mirrors", async () => {
-		const { connectionsCreateModel, connectionsDeleteModel } = await import(
-			"./connections"
-		)
+	test("deleting a model just deletes it; the registration releases to endpoint-only", async () => {
+		const {
+			connectionsCreateModel,
+			connectionsDeleteModel,
+			connectionsSetDefault
+		} = await import("./connections")
 		const conn = await createConnection("keeper", "del")
 		await connectionsCreateModel.handler(
 			admin(),
@@ -227,13 +250,15 @@ describe("connections:deleteModel", () => {
 			noop
 		)
 		const rows = await modelsOf(conn.id)
-		const keeper = rows.find((m) => m.model === "keeper")!
-		// Star the one about to go, so the delete has to move it.
-		const { connectionsSetDefaultModel } = await import("./connections")
 		const goner = rows.find((m) => m.model === "goner")!
-		await connectionsSetDefaultModel.handler(
+		// Register the pair that names the row about to go.
+		await connectionsSetDefault.handler(
 			admin(),
-			{ id: conn.id, modelId: goner.id },
+			{
+				capability: "text->text",
+				id: conn.id,
+				modelId: goner.id
+			} as any,
 			noop
 		)
 		const res = await connectionsDeleteModel.handler(
@@ -242,12 +267,18 @@ describe("connections:deleteModel", () => {
 			noop
 		)
 		expect(res.models!.map((m) => m.model)).toEqual(["keeper"])
-		expect(res.models![0].isDefault).toBe(true)
-		expect(res.models![0].id).toBe(keeper.id)
-		expect((await endpoint(conn.id)).model).toBe("keeper")
+		// `connection_defaults.connection_model_id` is ON DELETE SET NULL: the
+		// registration survives as endpoint-only, which resolves as incomplete
+		// rather than stranded — and nothing is promoted in its place.
+		const [reg] = await db
+			.select()
+			.from(schema.connectionDefaults)
+			.where(byCapability("text->text"))
+		expect(reg.connectionId).toBe(conn.id)
+		expect(reg.connectionModelId).toBeNull()
 	}, 60_000)
 
-	test("deleting the last model leaves the endpoint with a null mirror", async () => {
+	test("deleting the last model leaves the endpoint with no models", async () => {
 		// Not a deleted endpoint. Somebody removing the only model from a
 		// connection is clearing a field, not throwing away a base URL and a
 		// key — the managed flows are the only place the two go together, and
@@ -263,7 +294,6 @@ describe("connections:deleteModel", () => {
 		expect(await modelsOf(conn.id)).toEqual([])
 		const row = await endpoint(conn.id)
 		expect(row).toBeTruthy()
-		expect(row.model).toBeNull()
 	}, 60_000)
 })
 
@@ -290,15 +320,13 @@ describe("connections:importModels", () => {
 			"already-here",
 			"fresh-one"
 		])
-		// The star did not move — an import must not restar the endpoint.
-		expect(
-			res.models!.filter((m) => m.isDefault).map((m) => m.model)
-		).toEqual(["already-here"])
+		// An import stars nothing — it only ensures rows.
+		for (const m of res.models!) expect("isDefault" in m).toBe(false)
 	}, 60_000)
 })
 
 describe("every model handler is admin-only", () => {
-	test("a non-admin is refused by all five", async () => {
+	test("a non-admin is refused by all four", async () => {
 		const mod = await import("./connections")
 		const guest = () =>
 			({
@@ -319,11 +347,6 @@ describe("every model handler is admin-only", () => {
 				{ id: conn.id, modelId: only.id, model: { name: "x" } },
 				noop
 			),
-			mod.connectionsSetDefaultModel.handler(
-				guest(),
-				{ id: conn.id, modelId: only.id },
-				noop
-			),
 			mod.connectionsDeleteModel.handler(
 				guest(),
 				{ id: conn.id, modelId: only.id },
@@ -334,5 +357,36 @@ describe("every model handler is admin-only", () => {
 			expect(res.error).toMatch(/admin/i)
 		// And nothing was written on the way past.
 		expect(await modelsOf(conn.id)).toHaveLength(1)
+	}, 60_000)
+})
+
+describe("connections:models answers satisfiable transforms per pair", () => {
+	test("an enabled model names what the pair may default for; a switched-off one names nothing", async () => {
+		const mod = await import("./connections")
+		const conn = await createConnection("llama3.1:8b", "sat")
+		const res = await mod.connectionsModels.handler(
+			admin(),
+			{ id: conn.id },
+			noop
+		)
+		expect(res.models).toHaveLength(1)
+		// Judged as the pair with the same reader the star uses: an Ollama
+		// text model may hold the chat default.
+		expect(res.models![0].satisfiableCapabilities).toContain("text->text")
+		for (const id of res.models![0].satisfiableCapabilities ?? [])
+			expect(typeof id).toBe("string")
+		// Switching it off empties the list — the star refuses it, so the
+		// dropdown must not offer it either.
+		await mod.connectionsUpdateModel.handler(
+			admin(),
+			{ id: conn.id, modelId: res.models![0].id, model: { enabled: false } },
+			noop
+		)
+		const res2 = await mod.connectionsModels.handler(
+			admin(),
+			{ id: conn.id },
+			noop
+		)
+		expect(res2.models![0].satisfiableCapabilities).toEqual([])
 	}, 60_000)
 })

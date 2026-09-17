@@ -5,8 +5,10 @@
  * infill engines — so the number on screen came from a code path that no longer
  * generated any replies. It was the last live consumer of that path and the
  * reason it could not be deleted. It now compiles through
- * `runTurn({ preview: true })`, the same recipe `generateResponse` uses, so the
- * count reflects the compilation the next turn will actually perform.
+ * `runTurn({ preview: true })` — the same document the next turn runs, halted
+ * at the pre-call substrate and dry (09-B B4: a preview performs no writes, so
+ * the spec's placeholder outlet commits nothing) — so the count reflects the
+ * compilation the next turn will actually perform.
  *
  * That rewrite shipped on the strength of "it reuses a recipe proven elsewhere",
  * which is inference rather than coverage. This is the coverage: the handler
@@ -68,16 +70,23 @@ beforeAll(async () => {
 	userId = user.id
 
 	// No model is reached — the handler previews and halts before the provider —
-	// but a connection has to resolve or it refuses before ever getting there.
+	// but a pair has to resolve or it refuses before ever getting there.
 	const [connection] = await db
 		.insert(schema.connections)
 		.values({
 			name: "Preview Only",
 			type: "ollama",
 			baseUrl: "http://localhost:11434",
-			model: "irrelevant",
 			promptFormat: "vicuna",
 			tokenCounter: "estimate"
+		})
+		.returning()
+	const [previewModel] = await db
+		.insert(schema.connectionModels)
+		.values({
+			connectionId: connection.id,
+			model: "irrelevant",
+			name: "irrelevant"
 		})
 		.returning()
 	const [sampling] = await db.select().from(schema.samplingConfigs).limit(1)
@@ -91,6 +100,7 @@ beforeAll(async () => {
 	)
 	await setCapabilityDefault(db, "text->text", {
 		connectionId: connection.id,
+		connectionModelId: previewModel.id,
 		samplingConfigId: sampling?.id ?? null
 	})
 
@@ -103,10 +113,10 @@ beforeAll(async () => {
 		})
 		.returning()
 	const [persona] = await db
-		.insert(schema.personas)
+		.insert(schema.characters)
 		.values({
 			userId,
-			isDefault: false,
+			isPersona: true,
 			name: "Rell",
 			description: "A cartographer."
 		})

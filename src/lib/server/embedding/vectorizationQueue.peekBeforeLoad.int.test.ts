@@ -94,22 +94,24 @@ beforeAll(async () => {
 			modality: "embeddings",
 			type: CONNECTION_TYPE.OPENAI_EMBEDDINGS,
 			baseUrl: "https://api.example.com",
-			model: "model-a",
 			extraJson: {},
 			capabilities: {}
 		} as any)
 		.returning()
 	embeddingConnectionId = embeddingConn.id
-	await testDb.insert(schema.connectionModels).values({
-		connectionId: embeddingConn.id,
-		model: "model-a",
-		name: "model-a",
-		isDefault: true
-	})
+	const [embeddingModel] = await testDb
+		.insert(schema.connectionModels)
+		.values({
+			connectionId: embeddingConn.id,
+			model: "model-a",
+			name: "model-a"
+		})
+		.returning()
 	await testDb.insert(schema.connectionDefaults).values({
 		input: "text",
 		output: "embedding",
-		connectionId: embeddingConn.id
+		connectionId: embeddingConn.id,
+		connectionModelId: embeddingModel.id
 	})
 }, 60_000)
 
@@ -123,17 +125,13 @@ async function makeUser(username: string) {
 }
 
 async function setApiModel(apiModel: string) {
-	// Both columns: `resolveEmbeddingTarget` reads the model off the merged
-	// pair (the `connection_models` row wins), but the connection's own
-	// `model` column is kept in step the way a real write does.
+	// `resolveEmbeddingTarget` reads the model off the merged pair (the
+	// `connection_models` row wins) — updated in place so the starred
+	// `connection_model_id` keeps pointing at it.
 	await testDb
 		.update(schema.connectionModels)
 		.set({ model: apiModel, name: apiModel })
 		.where(eq(schema.connectionModels.connectionId, embeddingConnectionId))
-	await testDb
-		.update(schema.connections)
-		.set({ model: apiModel })
-		.where(eq(schema.connections.id, embeddingConnectionId))
 }
 
 async function makeStaleLoreEntry(userId: number, name: string) {

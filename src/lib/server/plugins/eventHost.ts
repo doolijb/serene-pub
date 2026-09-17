@@ -3,7 +3,7 @@
  * core occurrence (01 §9c, 11 §2a/§3, F8/F30).
  *
  * Every other plugin seam in this subsystem resolves exactly one implementation
- * for one address: `hookTypes` binds a script type to a hook, `nodeTypes` binds
+ * for one address: `hookKinds` binds a script kind to a hook, `nodeDefinitions` binds
  * a node pin, `engines` binds a template engine, and in each the second claimant
  * is a conflict to refuse. An event is the opposite shape by nature — "a message
  * was written" is not owned by anybody, and three extensions watching it are
@@ -26,7 +26,7 @@
  * same posture and the same reason as its three siblings: the manifest is the
  * one statement of what a plugin can do that core can read without executing it
  * (F6, 13 §10c). Note that this is the *app-runtime* manifest key, the family
- * `hookTypes`/`nodeTypes`/`engines` already belong to; the SDK packager's
+ * `hookKinds`/`nodeDefinitions`/`engines` already belong to; the SDK packager's
  * compiled manifest spells hooks differently and reconciling the two is a
  * standing item, not something this module decides.
  *
@@ -261,7 +261,7 @@ interface RawEventHookDecl {
  * entry are separately testable, exactly as the map-shaped readers beside this
  * one are.
  */
-export function eventHooksOf(manifest: unknown): RawEventHookDecl[] {
+export function eventListenersOf(manifest: unknown): RawEventHookDecl[] {
 	const raw =
 		manifest && typeof manifest === "object"
 			? (manifest as any).eventHooks
@@ -321,7 +321,7 @@ export function subscriptionsOf(row: {
 	const granted = grantedEvents(row.manifest, row.adminDenied)
 	const seen = new Set<string>()
 
-	eventHooksOf(row.manifest).forEach((decl, index) => {
+	eventListenersOf(row.manifest).forEach((decl, index) => {
 		const event = typeof decl.event === "string" ? decl.event : ""
 		const hookName = typeof decl.hook === "string" ? decl.hook : ""
 		const at = `'${row.pluginId}' eventHooks[${index}]`

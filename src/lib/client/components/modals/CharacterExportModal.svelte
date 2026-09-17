@@ -2,9 +2,11 @@
 	import { avatarSrc } from "$lib/client/utils/media"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
-	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import {
+		requestWithInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
-	import { onMount } from "svelte"
 
 	interface ExportableCharacter {
 		id: number
@@ -32,8 +34,6 @@
 		onCancel
 	}: Props = $props()
 
-	const socket = useTypedSocket()
-
 	// Lorebooks bound to this character (via lorebookBindings, NOT the same
 	// as character.lorebookId) — candidates for the optional "embed a
 	// lorebook" export picker.
@@ -41,20 +41,6 @@
 		$state([])
 	let selectedExportLorebookId: number | null = $state(null)
 
-	$effect(() => {
-		if (open && character) {
-			selectedExportLorebookId = null
-			exportableLorebooks = []
-			socket.emit("lorebooks:bindingsForCharacter", {
-				characterId: character.id
-			})
-		}
-	})
-
-	// Named so `off` can name them too. A bare
-	// `socket.off("lorebooks:bindingsForCharacter")` removes EVERY listener for
-	// that event — including other components listening for the same event —
-	// which then stops updating for the rest of the session.
 	function handleLorebooksBindingsForCharacter(
 		message: Sockets.Lorebooks.BindingsForCharacter.Response
 	) {
@@ -70,27 +56,34 @@
 		})
 	}
 
-	onMount(() => {
-		socket.on(
+	/**
+	 * The one request this modal makes, asked for and listened for in one:
+	 * `requestWithInterest` declares the reply's key and THEN emits, on the
+	 * same socket and in that order, so the interest sync can never be
+	 * overtaken by the request that needs it.
+	 *
+	 * BARE — `lorebooks:bindingsForCharacter` has no entry in `SCOPED_EVENTS`,
+	 * so a `#<id>` key would match no payload at all; the handler's own
+	 * `message.characterId !== character.id` check stays the filter. Held only
+	 * while the modal is open on a character, released when either changes,
+	 * which is what re-running this effect does.
+	 */
+	$effect(() => {
+		if (!open || !character) return
+		selectedExportLorebookId = null
+		exportableLorebooks = []
+		return requestWithInterest(
 			"lorebooks:bindingsForCharacter",
+			{ characterId: character.id },
 			handleLorebooksBindingsForCharacter
 		)
-		socket.on(
-			"lorebooks:bindingsForCharacter:error",
-			handleLorebooksBindingsForCharacterError
-		)
-
-		return () => {
-			socket.off(
-				"lorebooks:bindingsForCharacter",
-				handleLorebooksBindingsForCharacter
-			)
-			socket.off(
-				"lorebooks:bindingsForCharacter:error",
-				handleLorebooksBindingsForCharacterError
-			)
-		}
 	})
+
+	/** Standing for the modal's life, and BARE — errors are never scoped. */
+	useInterest<"lorebooks:bindingsForCharacter:error">(
+		"lorebooks:bindingsForCharacter:error",
+		handleLorebooksBindingsForCharacterError
+	)
 
 	function handleExportAsJson() {
 		onConfirm({ format: "json", lorebookId: selectedExportLorebookId })

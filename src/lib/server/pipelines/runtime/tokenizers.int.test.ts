@@ -20,7 +20,7 @@
  * The chain it covers, end to end:
  *
  *   connections.token_counter
- *     → tokenizerFor()            (which connection, by the same tiers dispatch uses)
+ *     → tokenizerFor()            (which connection: the run's, off the world it resolves against)
  *     → RunOptions.tokenizer      (an id, not a function)
  *     → the SDK's registry        (loaded once, asynchronously)
  *     → ctx.countTokens           (synchronous, in every binding)
@@ -33,14 +33,14 @@ import { createHost } from "$lib/server/pipelines/runtime/host"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
 import { run } from "@serene-pub/sdk"
 import { loadTokenizer } from "@serene-pub/sdk/tokenizers"
-import { respondSpec } from "$lib/server/pipelines/specs/respond"
+import { eq } from "drizzle-orm"
+import { respondSpec, RESPOND_SPEC_ID } from "$lib/server/pipelines/specs/respond"
 import { setCapabilityDefault } from "$lib/server/connections/capabilityDefaults"
 import { TEXT_CAPABILITY } from "$lib/server/connections/capabilityTarget"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 import { tokenizerFor } from "$lib/server/pipelines/runtime/tokenizers"
 import * as schema from "$lib/server/db/schema"
 import { worldLoreValues } from "$lib/server/pipelines/testing/fixtures"
-import { eq } from "drizzle-orm"
 
 // No embedding model, so the keyword mechanism runs — it is the mechanism that counts a
 // candidate through `ctx.countTokens`.
@@ -53,6 +53,8 @@ let db: TestDb
 let sessionId: number
 let userId: number
 let gpt4oConnectionId: number
+/** The model half of the registered pair — a default names both. */
+let gpt4oModelId: number
 let llamaConnectionId: number
 
 /**
@@ -63,6 +65,13 @@ const LORE = "An order of oathbound riders — 誓いの騎士団 — sworn twic
 
 beforeAll(async () => {
 	db = await createTestDb()
+	// The shipped specs, published: `tokenizerFor` reads the run's world, and
+	// the world's pipeline layer — where a per-node pick lives — is keyed on
+	// the spec row.
+	const { bootstrapPipelines } = await import(
+		"$lib/server/pipelines/boot/bootstrap"
+	)
+	await bootstrapPipelines(db)
 
 	const [user] = await db
 		.insert(schema.users)
@@ -124,32 +133,74 @@ beforeAll(async () => {
 		.returning()
 	llamaConnectionId = llama.id
 
+	// The MODEL half of each endpoint. A registration names a PAIR — an
+	// endpoint on its own is incomplete and resolves as unconfigured — and the
+	// merge is what puts the pair's `tokenCounter` on the row a budget reads.
+	const { ensureConnectionModel } = await import(
+		"$lib/server/connections/models"
+	)
+	gpt4oModelId = (await ensureConnectionModel(
+		db,
+		gpt4oConnectionId,
+		"gpt-4o"
+	))!.id
+	await ensureConnectionModel(db, llamaConnectionId, "llama3.2:3b")
+
 	await setCapabilityDefault(db, TEXT_CAPABILITY, {
-		connectionId: gpt4oConnectionId
+		connectionId: gpt4oConnectionId,
+		connectionModelId: gpt4oModelId
 	})
 }, 60_000)
 
 describe("tokenizerFor — which connection's setting a run budgets with", () => {
+	// The two session-endpoint cases that stood here are gone with the column
+	// (0130): a session named an endpoint and no model, which either cleared the
+	// registered model half or re-stated it, and `tokenizerFor` no longer takes
+	// a session at all. What it reads now is the RUN's world (R-8): the
+	// registered default where nothing picked otherwise, and the pipeline
+	// panel's per-node pick where one did — the second walk of the database
+	// this used to make is gone.
+	const doc = () => respondSpec()
+	const worldFor = async () => {
+		const { buildWorld } = await import(
+			"$lib/server/pipelines/config/world"
+		)
+		return await buildWorld(db, { sessionId, specId: RESPOND_SPEC_ID })
+	}
+
 	it("reads the column off the registered text->text default", async () => {
-		expect(await tokenizerFor(db, sessionId)).toBe(
+		expect(tokenizerFor(await worldFor(), doc())).toBe(
 			TokenCounterOptions.OPENAI_GPT4O
 		)
 	})
 
-	it("lets a session's own connection override it", async () => {
-		await db
-			.update(schema.sessions)
-			.set({ connectionId: llamaConnectionId })
-			.where(eq(schema.sessions.id, sessionId))
-
-		expect(await tokenizerFor(db, sessionId)).toBe(
-			TokenCounterOptions.LLAMA
-		)
-
-		await db
-			.update(schema.sessions)
-			.set({ connectionId: null })
-			.where(eq(schema.sessions.id, sessionId))
+	it("follows the pipeline panel's pick on the node the budget sizes for", async () => {
+		// A pick the old walk could not see: the generate node's own
+		// connection slot, as the session's override — the one scope the
+		// overrides table takes (ruled 2026-08-24).
+		await db.insert(schema.pipelineNodeOverrides).values({
+			specId: (
+				await db
+					.select({ id: schema.pipelineSpecs.id })
+					.from(schema.pipelineSpecs)
+					.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+			)[0]!.id,
+			scopeKind: "session",
+			scopeId: sessionId,
+			nodeKey: "generate",
+			slot: "connection",
+			path: "",
+			value: { id: llamaConnectionId }
+		})
+		try {
+			expect(tokenizerFor(await worldFor(), doc())).toBe(
+				TokenCounterOptions.LLAMA
+			)
+		} finally {
+			await db
+				.delete(schema.pipelineNodeOverrides)
+				.where(eq(schema.pipelineNodeOverrides.nodeKey, "generate"))
+		}
 	})
 
 	it("says nothing rather than guessing when no default is registered", async () => {
@@ -157,9 +208,10 @@ describe("tokenizerFor — which connection's setting a run budgets with", () =>
 		await setCapabilityDefault(db, TEXT_CAPABILITY, {
 			connectionId: null
 		})
-		expect(await tokenizerFor(db, sessionId)).toBeUndefined()
+		expect(tokenizerFor(await worldFor(), doc())).toBeUndefined()
 		await setCapabilityDefault(db, TEXT_CAPABILITY, {
-			connectionId: gpt4oConnectionId
+			connectionId: gpt4oConnectionId,
+			connectionModelId: gpt4oModelId
 		})
 	})
 })
@@ -194,7 +246,13 @@ describe("the id reaches the number", () => {
 	}
 
 	it("counts a candidate with the connection's tokenizer, not the estimate", async () => {
-		const id = await tokenizerFor(db, sessionId)
+		const { buildWorld } = await import(
+			"$lib/server/pipelines/config/world"
+		)
+		const id = tokenizerFor(
+			await buildWorld(db, { sessionId, specId: RESPOND_SPEC_ID }),
+			respondSpec()
+		)
 		expect(id).toBe(TokenCounterOptions.OPENAI_GPT4O)
 
 		const gpt4o = await loadTokenizer(id)

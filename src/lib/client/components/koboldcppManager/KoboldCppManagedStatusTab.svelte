@@ -1,7 +1,8 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
-	import { getContext, onMount, onDestroy } from "svelte"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
+	import { getContext, onMount } from "svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 
 	const socket = useTypedSocket()
@@ -88,10 +89,6 @@
 		}
 	}
 
-	// Named so `off` can name them too. A bare `socket.off("koboldcpp:subprocessStatus")`
-	// removes EVERY listener for that event — including KoboldCppPerfTab's and
-	// KoboldCppSidebar's, which listen for the same events and would stop updating
-	// for the rest of the session.
 	function handleSubprocessStatus(msg: Status) {
 		subStatus = msg
 		starting = false
@@ -148,31 +145,49 @@
 		toaster.success({ title: "Port updated — restart required" })
 	}
 
+	// All BARE — nothing in `koboldcpp:` carries an interest scope — and all
+	// standing: `subprocessStatus` is pushed for the life of the process, and
+	// every button here (start, stop, unload, TTL, port) can be pressed again
+	// while this tab stays open.
+	//
+	// Declared ABOVE the mount that emits: effects run in creation order, so a
+	// declaration made after one would miss the sync its request flushes and
+	// the status reply would arrive with nobody holding the key.
+	useInterest<"koboldcpp:subprocessStatus">(
+		"koboldcpp:subprocessStatus",
+		handleSubprocessStatus
+	)
+	useInterest<"koboldcpp:getSubprocessStatus">(
+		"koboldcpp:getSubprocessStatus",
+		handleGetSubprocessStatus
+	)
+	useInterest<"koboldcpp:startSubprocess">(
+		"koboldcpp:startSubprocess",
+		handleStartSubprocess
+	)
+	useInterest<"koboldcpp:startSubprocess:error">(
+		"koboldcpp:startSubprocess:error",
+		handleStartSubprocessError
+	)
+	useInterest<"koboldcpp:stopSubprocess">(
+		"koboldcpp:stopSubprocess",
+		handleStopSubprocess
+	)
+	useInterest<"koboldcpp:unloadModel">(
+		"koboldcpp:unloadModel",
+		handleUnloadModel
+	)
+	useInterest<"koboldcpp:setModelTtl">(
+		"koboldcpp:setModelTtl",
+		handleSetModelTtl
+	)
+	useInterest<"koboldcpp:setManagedPort">(
+		"koboldcpp:setManagedPort",
+		handleSetManagedPort
+	)
+
 	onMount(() => {
 		socket.emit("koboldcpp:getSubprocessStatus", {})
-
-		socket.on("koboldcpp:subprocessStatus", handleSubprocessStatus)
-		socket.on("koboldcpp:getSubprocessStatus", handleGetSubprocessStatus)
-		socket.on("koboldcpp:startSubprocess", handleStartSubprocess)
-		socket.on("koboldcpp:startSubprocess:error", handleStartSubprocessError)
-		socket.on("koboldcpp:stopSubprocess", handleStopSubprocess)
-		socket.on("koboldcpp:unloadModel", handleUnloadModel)
-		socket.on("koboldcpp:setModelTtl", handleSetModelTtl)
-		socket.on("koboldcpp:setManagedPort", handleSetManagedPort)
-	})
-
-	onDestroy(() => {
-		socket.off("koboldcpp:subprocessStatus", handleSubprocessStatus)
-		socket.off("koboldcpp:getSubprocessStatus", handleGetSubprocessStatus)
-		socket.off("koboldcpp:startSubprocess", handleStartSubprocess)
-		socket.off(
-			"koboldcpp:startSubprocess:error",
-			handleStartSubprocessError
-		)
-		socket.off("koboldcpp:stopSubprocess", handleStopSubprocess)
-		socket.off("koboldcpp:unloadModel", handleUnloadModel)
-		socket.off("koboldcpp:setModelTtl", handleSetModelTtl)
-		socket.off("koboldcpp:setManagedPort", handleSetManagedPort)
 	})
 </script>
 

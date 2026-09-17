@@ -17,11 +17,12 @@
 	 * swapping a node, reordering, publishing — is the lens view (05 §1–§5)
 	 * and remains undrafted: this page configures the published backbone.
 	 */
-	import { getContext, onDestroy, onMount, tick } from "svelte"
+	import { getContext, onMount, tick, untrack } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { beforeNavigate, goto, replaceState } from "$app/navigation"
 	import { page } from "$app/state"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { getInterestContext } from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import PipelineConfigOptions from "$lib/client/components/pipelines/PipelineConfigOptions.svelte"
 	import ConfigNotices from "$lib/client/components/pipelines/ConfigNotices.svelte"
@@ -36,6 +37,7 @@
 
 	const userCtx: { user: SelectUser } = getContext("userCtx")
 	const socket = useTypedSocket()
+	const interest = getInterestContext()
 
 	const slug = $derived(decodeURIComponent(page.params.slug ?? ""))
 
@@ -209,34 +211,90 @@
 			goto("/")
 			return
 		}
-		socket.on("pipelines:detail", onDetail)
-		socket.on("pipelines:detail:error", onDetailError)
-		socket.on("pipelines:createConfig", onConfigCreated)
-		socket.on("pipelines:createConfig:error", onConfigError)
-		socket.on("pipelines:renameConfig:error", onConfigError)
-		socket.on("pipelines:deleteConfig:error", onConfigError)
-		socket.on("pipelines:setPresetActions:error", onConfigError)
-		socket.on("pipelines:runs", onRuns)
-		socket.on("pipelines:setOptions:error", onBatchError)
-		socket.on("pipelines:resetConfig:error", onConfigError)
-		socket.on("sessions:genres", onModes)
-		socket.emit("pipelines:detail", { slug })
-		socket.emit("pipelines:runs", { limit: 100 })
-		socket.emit("sessions:genres", {})
 	})
 
-	onDestroy(() => {
-		socket.off("pipelines:detail", onDetail)
-		socket.off("pipelines:detail:error", onDetailError)
-		socket.off("pipelines:createConfig", onConfigCreated)
-		socket.off("pipelines:createConfig:error", onConfigError)
-		socket.off("pipelines:renameConfig:error", onConfigError)
-		socket.off("pipelines:deleteConfig:error", onConfigError)
-		socket.off("pipelines:setPresetActions:error", onConfigError)
-		socket.off("pipelines:runs", onRuns)
-		socket.off("pipelines:setOptions:error", onBatchError)
-		socket.off("pipelines:resetConfig:error", onConfigError)
-		socket.off("sessions:genres", onModes)
+	/**
+	 * Everything this workspace reads, each key declared before the request
+	 * that needs it goes out.
+	 *
+	 * The writes' answers stand — a configuration create, rename, delete,
+	 * reset, availability switch or option batch arrives whenever the person
+	 * presses the button, not in reply to anything asked here — while `detail`
+	 * and `runs` have one request site each and are asked for and listened for
+	 * in one. All BARE: a pipeline workspace is not one session's anything.
+	 *
+	 * The app-wide interest context, not `adminInterest`: `pipelines:` is a
+	 * MIXED family — most of its handlers answer every user — so these are
+	 * ordinary keys, and the admin check here is the same one the redirect
+	 * above makes. "sessions:genres" is asked for by the interest below.
+	 *
+	 * `slug` is read untracked: the original asked once, on mount, and
+	 * re-pointing the request at a new slug without resetting this page's
+	 * drafts is a change this conversion is not making.
+	 */
+	$effect(() => {
+		if (!userCtx.user?.isAdmin) return
+		const initialSlug = untrack(() => slug)
+		const releases = [
+			interest.declareInterest<"pipelines:detail:error">(
+				"pipelines:detail:error",
+				onDetailError
+			),
+			interest.declareInterest<"pipelines:createConfig">(
+				"pipelines:createConfig",
+				onConfigCreated
+			),
+			interest.declareInterest<"pipelines:createConfig:error">(
+				"pipelines:createConfig:error",
+				onConfigError
+			),
+			interest.declareInterest<"pipelines:renameConfig:error">(
+				"pipelines:renameConfig:error",
+				onConfigError
+			),
+			interest.declareInterest<"pipelines:deleteConfig:error">(
+				"pipelines:deleteConfig:error",
+				onConfigError
+			),
+			interest.declareInterest<"pipelines:setPresetActions:error">(
+				"pipelines:setPresetActions:error",
+				onConfigError
+			),
+			interest.declareInterest<"pipelines:setOptions:error">(
+				"pipelines:setOptions:error",
+				onBatchError
+			),
+			interest.declareInterest<"pipelines:resetConfig:error">(
+				"pipelines:resetConfig:error",
+				onConfigError
+			),
+			interest.requestWithInterest(
+				"pipelines:detail",
+				{ slug: initialSlug },
+				onDetail
+			),
+			interest.requestWithInterest(
+				"pipelines:runs",
+				{ limit: 100 },
+				onRuns
+			)
+		]
+		return () => {
+			for (const release of releases) release()
+		}
+	})
+
+	/**
+	 * The genre list this workspace labels the spec with, asked for and listened
+	 * for in one. BARE — the registry of types, not one session's anything.
+	 *
+	 * The app-wide interest context, not `adminInterest`: `sessions:` is not a
+	 * restricted interest family, so this is an ordinary key, and the admin
+	 * check is the same one the redirect above makes.
+	 */
+	$effect(() => {
+		if (!userCtx.user?.isAdmin) return
+		return interest.requestWithInterest("sessions:genres", {}, onModes)
 	})
 
 	/* ── the workspace tabs + URL state (22) ────────────────────────── */

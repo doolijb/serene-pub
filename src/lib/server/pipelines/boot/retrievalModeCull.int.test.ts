@@ -55,6 +55,13 @@ const LORE_PARAMS = [
 	"trigramFolding"
 ]
 /**
+ * Each lane's OWN — its band intent (R-7 P5, 2026-09-16): declared unmarked
+ * beside the shared seven, resolved at the lane's own address through the
+ * `slot.params({ node })` reference, rendered on every lane. Not `minEntries`:
+ * lore has no floor (R6).
+ */
+const LANE_OWN_PARAMS = ["maxEntries", "priority", "share"]
+/**
  * ⚠ `minScore` was here and is gone (0099), replaced by `similarityFalloff`.
  *
  * Not a rename. A minimum similarity removes a row from the pool, where no
@@ -65,12 +72,12 @@ const VECTOR_PARAMS = ["maxEntries", "similarityFalloff", "topK"]
 
 let db: TestDb
 let respondSpecRow: { id: number; activeVersionId: number }
-/** `nodeKey → typeId`, for the four types, read off the published version. */
+/** `nodeKey → definitionId`, for the four types, read off the published version. */
 let nodesByType = new Map<string, string[]>()
 
-const declaredParams = async (typeId: string) => {
+const declaredParams = async (definitionId: string) => {
 	const decls = await declarations(db, respondSpecRow.activeVersionId)
-	const keys = new Set(nodesByType.get(typeId) ?? [])
+	const keys = new Set(nodesByType.get(definitionId) ?? [])
 	return [
 		...new Set(
 			decls
@@ -105,7 +112,7 @@ beforeAll(async () => {
 	const nodes = await db
 		.select({
 			nodeKey: schema.pipelineNodes.nodeKey,
-			typeId: schema.pipelineNodes.typeId
+			definitionId: schema.pipelineNodes.definitionId
 		})
 		.from(schema.pipelineNodes)
 		.where(
@@ -117,7 +124,7 @@ beforeAll(async () => {
 	nodesByType = new Map(
 		CULLED_TYPES.map((t) => [
 			t,
-			(nodes as any[]).filter((n) => n.typeId === t).map((n) => n.nodeKey)
+			(nodes as any[]).filter((n) => n.definitionId === t).map((n) => n.nodeKey)
 		])
 	)
 	for (const t of CULLED_TYPES)
@@ -129,22 +136,46 @@ beforeAll(async () => {
 
 describe("the four retrieval query types after the cull", () => {
 	it("declares no retrieval mode on any mechanism", async () => {
-		for (const typeId of CULLED_TYPES) {
-			const paths = await declaredParams(typeId)
+		for (const definitionId of CULLED_TYPES) {
+			const paths = await declaredParams(definitionId)
 			expect(
 				paths.includes(CULLED),
-				`\`${CULLED}\` is still declared on ${typeId}, so the panel is ` +
+				`\`${CULLED}\` is still declared on ${definitionId}, so the panel is ` +
 					`still offering a way to switch a mechanism off in bulk`
 			).toBe(false)
 		}
 	})
 
-	it("keeps exactly the controls that are read, and no more", async () => {
+	it("keeps exactly the controls that are read, and no more — declared ONCE, on the owner lane", async () => {
 		// Asserted whole rather than per key, on 0195's reason: a control has
 		// already arrived on one of these lists ahead of its reader once, and
 		// only a whole-set assertion notices that.
-		for (const typeId of LORE_TYPES)
-			expect(await declaredParams(typeId)).toEqual(LORE_PARAMS)
+		//
+		// One owner per setting per spec (R-7 P2, 2026-09-16): the seven lore
+		// knobs are declared on the world-lore lane alone; the other two lanes
+		// read them through `slot.params({ node })` and the panel renders
+		// nothing of their own. "The panel shows the 7 lore knobs once" is the
+		// U3 acceptance line, and this is where it is held.
+		// The owner carries the shared seven and its own three; a loser lane
+		// carries its own three alone (R-7 P5 — the shared half is the
+		// owner's, the per-source half is each lane's).
+		expect(await declaredParams("core:query/world-lore")).toEqual(
+			[...LORE_PARAMS, ...LANE_OWN_PARAMS].sort()
+		)
+		for (const definitionId of [
+			"core:query/character-lore",
+			"core:query/history-entries"
+		])
+			expect(await declaredParams(definitionId)).toEqual(LANE_OWN_PARAMS)
+		const decls = await declarations(db, respondSpecRow.activeVersionId)
+		const loreKeys = new Set(LORE_TYPES.flatMap((t) => nodesByType.get(t) ?? []))
+		const shown = decls.filter(
+			(d) =>
+				loreKeys.has(d.nodeKey) &&
+				d.slot === "params" &&
+				LORE_PARAMS.includes(d.path)
+		)
+		expect(shown.length).toBe(LORE_PARAMS.length)
 		expect(await declaredParams(VECTOR_TYPE)).toEqual(VECTOR_PARAMS)
 	})
 })

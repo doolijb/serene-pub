@@ -264,7 +264,7 @@ function standingsOf(receipt: any): Map<string, EntryStanding> {
 	}
 
 	const rank = (receipt?.nodes ?? []).find(
-		(n: any) => n.typeId === "core:task/rank-hybrid@1"
+		(n: any) => n.definitionId === "core:task/rank-hybrid@1"
 	)
 	for (const decision of ((rank?.output as any)?.decisions ?? []) as any[]) {
 		const candidate = decision?.candidate ?? {}
@@ -300,7 +300,7 @@ function standingsOf(receipt: any): Map<string, EntryStanding> {
  */
 function promptOrder(receipt: any): string[] {
 	const rank = (receipt?.nodes ?? []).find(
-		(n: any) => n.typeId === "core:task/rank-hybrid@1"
+		(n: any) => n.definitionId === "core:task/rank-hybrid@1"
 	)
 	return (((rank?.output as any)?.decisions ?? []) as any[])
 		.filter((d) => d?.included)

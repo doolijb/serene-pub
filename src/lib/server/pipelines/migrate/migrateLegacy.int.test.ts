@@ -186,7 +186,7 @@ describe("a user's own config comes across", () => {
 			await declarations(db, spec.activeVersionId!)
 		).filter((d: any) => d.control === "prompts-ref")
 		const pools = new Set(
-			decls.map((d: any) => `${d.nodeTypeId}#${d.slot}`)
+			decls.map((d: any) => `${d.nodeDefinitionId}#${d.slot}`)
 		)
 		expect(
 			pools.size,
@@ -226,8 +226,8 @@ describe("a user's own config comes across", () => {
 				.where(eq(schema.pipelinePrompts.id, v.value))
 			// In the step's own pool, carrying that step's fields and nothing
 			// belonging to another one.
-			expect(`${row.nodeTypeId}#${row.slot}`).toBe(
-				`${(d as any).nodeTypeId}#${d.slot}`
+			expect(`${row.nodeDefinitionId}#${row.slot}`).toBe(
+				`${(d as any).nodeDefinitionId}#${d.slot}`
 			)
 			expect(Object.keys(row.fields as any).sort()).toEqual(
 				[...((d as any).promptFields ?? [])].sort()

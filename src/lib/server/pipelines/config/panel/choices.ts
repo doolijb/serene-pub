@@ -21,10 +21,6 @@ import { shapeOfModality } from "$lib/shared/constants/ConnectionTypes"
 import * as schema from "$lib/server/db/schema"
 import { promptPoolKeyFor } from "$lib/server/pipelines/entities/promptPool"
 import { storedCapabilities } from "$lib/server/pipelines/runtime/capabilityGuard"
-import {
-	connectionModels as listConnectionModels,
-	defaultModelsByConnection
-} from "$lib/server/connections/models"
 import { contextPoolKeyFor } from "$lib/shared/pipelines/poolKey"
 import {
 	acceptedEngines,
@@ -51,7 +47,8 @@ export type ChoiceList = Array<{
 		name: string
 		model: string
 		enabled: boolean
-		isDefault: boolean
+		/** Set while the host has stopped listing it — offered greyed, with the reason. */
+		missingSince: string | null
 	}>
 }>
 
@@ -64,12 +61,12 @@ export type ChoiceList = Array<{
  * applied below.
  */
 export async function choiceSets(db: Db, specId: number) {
-	// Every prompt on the instance, pooled by `(node type, slot)` rather than
+	// Every prompt on the instance, pooled by `(node definition, slot)` rather than
 	// by spec — the same rule context templates and layouts follow, and now for
 	// the same reason: a prompt belongs to the NODE that consumes it, so an
 	// action reusing the reply pipeline's context node is offered its twelve
 	// prompts without anything being seeded or copied. Narrowed per option by
-	// `nodeTypeId` + `slot` below, and grouped so the pipeline being configured
+	// `nodeDefinitionId` + `slot` below, and grouped so the pipeline being configured
 	// comes first.
 	const promptRows = await db
 		.select()
@@ -81,10 +78,6 @@ export async function choiceSets(db: Db, specId: number) {
 		.from(schema.connections)
 		.orderBy(asc(schema.connections.id))
 
-	// Which model each endpoint means when nobody has said (0114). One query for
-	// the whole instance, because this set is built once and read against every
-	// slot in the panel — the same reason the capability cache exists.
-	const defaultModels = await defaultModelsByConnection(db)
 	// And ALL of them, grouped, for the pair picker that sits beside the
 	// connection select. One query for the instance rather than one per
 	// connection, and the same ride-along argument `prompt` makes on
@@ -108,7 +101,7 @@ export async function choiceSets(db: Db, specId: number) {
 			name: m.name,
 			model: m.model,
 			enabled: m.enabled,
-			isDefault: m.isDefault
+			missingSince: m.missingSince?.toISOString() ?? null
 		})
 		modelsByConnection.set(m.connectionId, list)
 	}
@@ -118,10 +111,10 @@ export async function choiceSets(db: Db, specId: number) {
 		.from(schema.samplingConfigs)
 		.orderBy(asc(schema.samplingConfigs.id))
 
-	// Every context template on the instance, pooled by node type rather than
+	// Every context template on the instance, pooled by node definition rather than
 	// by spec — the same rule layouts follow, for the same reason: session reply
 	// and the narrator run the same assemble node, so one story string serves
-	// both and always has. Narrowed per option by `nodeTypeId` below, and
+	// both and always has. Narrowed per option by `nodeDefinitionId` below, and
 	// grouped so the pipeline being configured comes first.
 	const contextTemplateRows = await db
 		.select()
@@ -196,21 +189,21 @@ export async function choiceSets(db: Db, specId: number) {
 		return by
 	}
 
-	// Keyed on `(node type, engine)`, which is the pool EVERYWHERE else — the
+	// Keyed on `(node definition, engine)`, which is the pool EVERYWHERE else — the
 	// unique index, `assertSelectable`, `defaultContextTemplateFor`,
 	// `contextTemplateOptionGate` and `refDefaults` all use both halves. Keying
-	// on the node type alone here offered a Jinja template into a Handlebars
+	// on the node definition alone here offered a Jinja template into a Handlebars
 	// slot: it stored cleanly and then rendered its own markup as prose, which
 	// is the exact failure the engine half of the pool exists to prevent.
 	const contextTemplatesBy = pooled(contextTemplateRows as any[], (t: any) =>
-		contextPoolKeyFor(t.nodeTypeId, t.engine)
+		contextPoolKeyFor(t.nodeDefinitionId, t.engine)
 	)
 
 	// Keyed on the composite, which is an in-memory Map key and never leaves
 	// this process — the rows carry two columns and `choicesFor` rebuilds the
 	// key from the declaration's two halves. See `promptPool.ts`.
 	const promptsBy = pooled(promptRows as any[], (p: any) =>
-		promptPoolKeyFor(p.nodeTypeId, p.slot)
+		promptPoolKeyFor(p.nodeDefinitionId, p.slot)
 	)
 
 	// Every layout on the instance, not this spec's — a layout is keyed by the
@@ -251,14 +244,14 @@ export async function choiceSets(db: Db, specId: number) {
 	// offering two different powers under one Add button.
 	const scriptTypeRegistry = await db
 		.select()
-		.from(schema.pipelineTypeRegistry)
-		.where(eq(schema.pipelineTypeRegistry.kind, "script"))
+		.from(schema.pipelineDefinitionRegistry)
+		.where(eq(schema.pipelineDefinitionRegistry.kind, "script"))
 	const scriptTypeMeta = new Map<
 		string,
 		{ name: string; blastRadius: string; operation: string }
 	>()
 	for (const r of scriptTypeRegistry as any[]) {
-		const pinned = `${r.typeId}@${r.version}`
+		const pinned = `${r.definitionId}@${r.version}`
 		const i18n = (r.i18n ?? {}) as Record<string, any>
 		const text = (v: unknown) =>
 			typeof v === "string" ? v : ((v as any)?.en ?? "")
@@ -315,15 +308,6 @@ export async function choiceSets(db: Db, specId: number) {
 			// the run then refuses it, and nothing on screen explains why the
 			// two disagreed. One reader, one answer.
 			capabilities: storedCapabilities(c),
-			// The DEFAULT MODEL's display name, from `connection_models` and no
-			// longer from the endpoint's legacy mirror (0114). The subtitle's
-			// job is unchanged — two rows both called "Ollama" are otherwise
-			// indistinguishable — but what identifies a connection now is the
-			// model it resolves to, and the name is what a person chose to call
-			// it rather than the identifier it happens to send.
-			...(defaultModels.get(c.id)
-				? { description: defaultModels.get(c.id)!.name }
-				: {}),
 			// The pair's second half, carried rather than fetched on selection.
 			...(modelsByConnection.get(c.id)
 				? { models: modelsByConnection.get(c.id)! }
@@ -369,7 +353,7 @@ export async function choiceSets(db: Db, specId: number) {
 function contextChoices(
 	sets: { contextTemplatesBy: Map<string, ChoiceList> },
 	d: Decl,
-	nodeTypeId: string
+	nodeDefinitionId: string
 ): ChoiceList {
 	const engines = acceptedEngines(d)
 	const POOL_ORDER = { usedHere: 0, shipped: 1, alsoFits: 2 } as const
@@ -378,7 +362,7 @@ function contextChoices(
 	const out = engines.flatMap((engine) =>
 		(
 			sets.contextTemplatesBy.get(
-				contextPoolKeyFor(nodeTypeId, engine)
+				contextPoolKeyFor(nodeDefinitionId, engine)
 			) ?? []
 		).map((c) =>
 			engines.length > 1
@@ -481,8 +465,8 @@ export const choicesFor = (
 	// a property of the type's VERSION, so it is checked at selection
 	// (`assertSelectable`) rather than fragmenting the pool on every bump.
 	if (d.control === "prompts-ref")
-		return d.nodeTypeId
-			? (sets.promptsBy.get(promptPoolKeyFor(d.nodeTypeId, d.slot)) ?? [])
+		return d.nodeDefinitionId
+			? (sets.promptsBy.get(promptPoolKeyFor(d.nodeDefinitionId, d.slot)) ?? [])
 			: []
 	// Judged against what the slot declared it requires, and only narrowed by
 	// shape when it declared none — the fallback for every slot authored before
@@ -502,12 +486,12 @@ export const choicesFor = (
 			? (sets.variableTemplatesBy.get(d.variableId) ?? [])
 			: []
 	// The union of the accepted pools, not one of them. The pool is still
-	// `(node type, engine)` and rows never mix inside it; what a slot declaring
+	// `(node definition, engine)` and rows never mix inside it; what a slot declaring
 	// several languages changes is how many pools feed this one picker. Each
 	// row keeps saying which language it is in, because "Default" twice in a
 	// list is the ambiguity the engine half of the pool exists to prevent.
 	if (d.control === "context-template-ref")
-		return d.nodeTypeId ? contextChoices(sets, d, d.nodeTypeId) : []
+		return d.nodeDefinitionId ? contextChoices(sets, d, d.nodeDefinitionId) : []
 	// The union of the hook's accepted types, in declaration order — which is
 	// the attachment rule made visible: nothing outside `accepts` is offered,
 	// and the write path refuses whatever a stale client offers anyway.

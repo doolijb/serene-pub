@@ -8,11 +8,12 @@
 	 * decision — `provider` and `mode` are derived from it rather than picked,
 	 * so nobody can save a combination the supervisor can't run.
 	 */
-	import { onDestroy, onMount } from "svelte"
+	import { onDestroy } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { getAdminInterestContext } from "$lib/client/sockets/interest.svelte"
 	import {
 		DEFAULT_TUNNEL_TTL_SECONDS,
 		MAX_TUNNEL_TTL_SECONDS,
@@ -22,6 +23,10 @@
 	} from "$lib/shared/constants/Tunnels"
 
 	const socket = useTypedSocket()
+	// The admin-only half of the registry (plan ruling 6b): `tunnels:` and
+	// `allowedHosts:` are RESTRICTED interest families, and this context
+	// exists only inside the admin tree, which already turns non-admins away.
+	const interest = getAdminInterestContext()
 
 	let tunnel = $state<Sockets.Tunnels.TunnelView | null>(null)
 	let available = $state(true)
@@ -122,19 +127,37 @@
 		"allowedHosts:get:error"
 	] as const
 
-	onMount(() => {
-		socket.on("tunnels:get", handleGet)
-		socket.on("allowedHosts:get", handleAllowedHosts)
-		for (const e of ERROR_EVENTS) socket.on(e, handleError)
-		socket.emit("tunnels:get", {})
-		socket.emit("allowedHosts:get", {})
+	/**
+	 * One key per refusal, declared in a loop at init — the same list the
+	 * `socket.on` loop walked. `:error` events are never gated (plan ruling
+	 * 2), so these are held for the page's life and simply toast whatever
+	 * arrives. BARE: a tunnel is the instance's.
+	 */
+	for (const e of ERROR_EVENTS) {
+		interest.useInterest<"tunnels:get:error">(e, handleError)
+	}
+
+	/**
+	 * The two reads, each asked for and listened for in one, and both
+	 * STANDING: `tunnels:get` is re-asked by the poll below and re-emitted by
+	 * the server after enable/disable/updateConfig, and `allowedHosts:get`
+	 * changes when a tunnel does.
+	 */
+	$effect(() => {
+		const releases = [
+			interest.requestWithInterest("tunnels:get", {}, handleGet),
+			interest.requestWithInterest(
+				"allowedHosts:get",
+				{},
+				handleAllowedHosts
+			)
+		]
+		return () => {
+			for (const release of releases) release()
+		}
 	})
-	onDestroy(() => {
-		stopPolling()
-		socket.off("tunnels:get", handleGet)
-		socket.off("allowedHosts:get", handleAllowedHosts)
-		for (const e of ERROR_EVENTS) socket.off(e, handleError)
-	})
+
+	onDestroy(stopPolling)
 
 	const ttlSecondsValue = $derived(Math.round((ttlHours || 0) * 3600))
 	const ttlOutOfRange = $derived(

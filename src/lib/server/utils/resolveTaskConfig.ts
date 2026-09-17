@@ -74,15 +74,23 @@ export interface ResolvedTaskConfig {
 /**
  * Resolves connection + sampling for a given task context.
  *
- * Resolution order, highest first:
- *   session override → prompt/summarize/graphBuild config sub-task →
- *   the instance's `text->text` default
+ * Resolution order, highest first — and the two halves do not run to the same
+ * depth, because a session names no connection:
  *
- * The floor used to be `system_settings.default_connection_id`, read here; it is
- * the capability default now, and `resolveCapabilityTarget` reads it — this
- * function's job is to say which of ITS two tiers spoke, not to have an opinion
- * about the third. Every task type below is a text task, which is why the
- * capability is a constant rather than a parameter.
+ *   pair      the calling node's own slots → the prompt/summarize/graphBuild
+ *             config sub-task → the instance's `text->text` default
+ *   sampling  the session's own `sampling_config_id` → the same two, in the
+ *             same order
+ *
+ * The floor is the capability default, and `resolveCapabilityTarget` reads it
+ * — this function's job is to say what ITS own tiers said, not to have an
+ * opinion about the floor. Every task type below is a text task, which is why
+ * the capability is a constant rather than a parameter.
+ *
+ * ⚠ The session tier is handed over as an ID, not as a candidate. Overrides are
+ * by model now, never by connection: `sessions.connection_id` is gone and
+ * `CapabilityTargetRequest` has nowhere for a session to put an endpoint, so
+ * this function cannot reintroduce one by accident.
  */
 export async function resolveTaskConfig(params: {
 	taskType: TaskType
@@ -134,151 +142,142 @@ export async function resolveTaskConfig(params: {
 
 	let overrideConnectionId: number | null = null
 	let overrideSamplingId: number | null = null
-	/**
-	 * Which of the two tiers above the default supplied the pair.
-	 *
-	 * One pair rather than two, because the `if` below is an either/or: a session
-	 * that set ANYTHING stops the config layer being consulted at all. That is
-	 * pre-existing behaviour and deliberately left alone here, but the resolver
-	 * wants to know which tier it is looking at — the failure sentence names
-	 * where a bad value was set, and "the pipeline's configuration" pointed at a
-	 * session override would send somebody to the wrong screen.
-	 */
-	let overrideTier: "pipelineConfig" | "sessionOverride" = "pipelineConfig"
 
-	// ── Session-level override (highest priority) ────────────────────────────────
+	// ── The session's own override — SAMPLING, and nothing else ──────────────
+	//
+	// The config layer below always runs regardless of what this reads:
+	// `resolveCapabilityTarget` walks sampling one tier further than the pair,
+	// so a session's sampling choice and a config's connection both apply at
+	// once, independently of each other.
+	let sessionSamplingId: number | null = null
 	if (sessionId) {
 		const session = await db.query.sessions.findFirst({
 			where: (c, { eq }) => eq(c.id, sessionId),
-			columns: { connectionId: true, samplingConfigId: true }
+			columns: { samplingConfigId: true }
 		})
-		overrideConnectionId = session?.connectionId ?? null
-		overrideSamplingId = session?.samplingConfigId ?? null
-		if (overrideConnectionId || overrideSamplingId)
-			overrideTier = "sessionOverride"
+		sessionSamplingId = session?.samplingConfigId ?? null
 	}
 
 	// ── Prompt/config-level override ──────────────────────────────────────────
-	if (!overrideConnectionId && !overrideSamplingId) {
-		if (taskType === "session" && promptConfigId) {
-			const cfg = await db.query.promptConfigs.findFirst({
-				where: (c, { eq }) => eq(c.id, promptConfigId),
-				columns: { connectionId: true, samplingConfigId: true }
-			})
-			overrideConnectionId = cfg?.connectionId ?? null
-			overrideSamplingId = cfg?.samplingConfigId ?? null
-		} else if (taskType === "narratorPrompt" && narratorPromptConfigId) {
-			const cfg = await db.query.narratorPromptConfigs.findFirst({
-				where: (c, { eq }) => eq(c.id, narratorPromptConfigId),
-				columns: { connectionId: true, samplingConfigId: true }
-			})
-			overrideConnectionId = cfg?.connectionId ?? null
-			overrideSamplingId = cfg?.samplingConfigId ?? null
-		} else if (
-			(taskType.startsWith("summarize_") ||
-				// character_extraction doesn't carry a "summarize_" prefix
-				// (it's shared with the graph-builder's own extraction call,
-				// see graph_* below) — only the scene config table has
-				// dedicated override columns for it, since only scene
-				// summarization has a character-extraction sub-task.
-				(taskType === "character_extraction" &&
-					summarizeConfigType === "scene")) &&
-			summarizeConfigId &&
-			summarizeConfigType
-		) {
-			const subTask =
-				taskType === "character_extraction"
-					? "characterExtraction"
-					: (taskType.replace("summarize_", "") as
-							| "batch"
-							| "synth"
-							| "name")
-			type SumCfgCols = {
-				batchConnectionId: number | null
-				batchSamplingConfigId: number | null
-				synthConnectionId: number | null
-				synthSamplingConfigId: number | null
-				nameConnectionId: number | null
-				nameSamplingConfigId: number | null
-				characterExtractionConnectionId?: number | null
-				characterExtractionSamplingConfigId?: number | null
-			}
-			let cfg: SumCfgCols | undefined
-			if (summarizeConfigType === "world") {
-				cfg = (await db.query.worldSummarizeConfigs.findFirst({
-					where: (c, { eq }) => eq(c.id, summarizeConfigId!),
-					columns: {
-						batchConnectionId: true,
-						batchSamplingConfigId: true,
-						synthConnectionId: true,
-						synthSamplingConfigId: true,
-						nameConnectionId: true,
-						nameSamplingConfigId: true
-					}
-				})) as SumCfgCols | undefined
-			} else if (summarizeConfigType === "character") {
-				cfg = (await db.query.characterSummarizeConfigs.findFirst({
-					where: (c, { eq }) => eq(c.id, summarizeConfigId!),
-					columns: {
-						batchConnectionId: true,
-						batchSamplingConfigId: true,
-						synthConnectionId: true,
-						synthSamplingConfigId: true,
-						nameConnectionId: true,
-						nameSamplingConfigId: true
-					}
-				})) as SumCfgCols | undefined
-			} else {
-				cfg = (await db.query.sceneSummarizeConfigs.findFirst({
-					where: (c, { eq }) => eq(c.id, summarizeConfigId!),
-					columns: {
-						batchConnectionId: true,
-						batchSamplingConfigId: true,
-						synthConnectionId: true,
-						synthSamplingConfigId: true,
-						nameConnectionId: true,
-						nameSamplingConfigId: true,
-						characterExtractionConnectionId: true,
-						characterExtractionSamplingConfigId: true
-					}
-				})) as SumCfgCols | undefined
-			}
-			overrideConnectionId = cfg?.[`${subTask}ConnectionId`] ?? null
-			overrideSamplingId = cfg?.[`${subTask}SamplingConfigId`] ?? null
-		} else if (taskType.startsWith("graph_") && graphBuildConfigId) {
-			// Explicit map, not a ternary. This was
-			// `taskType === "graph_pre_filter" ? "preFilter" : "perspective"`,
-			// which silently resolved every graph step that was not the
-			// pre-filter to the perspective columns — so a new task type would
-			// have inherited perspective's model and sampling without any
-			// indication it had not been wired up.
-			const subTask = GRAPH_TASK_SUBTASK[taskType]
-			if (!subTask) {
-				throw new Error(
-					`resolveTaskConfig: no graphBuildConfigs sub-task mapped for "${taskType}"`
-				)
-			}
-			const cfg = await db.query.graphBuildConfigs.findFirst({
-				where: (c, { eq }) => eq(c.id, graphBuildConfigId),
-				columns: {
-					[`${subTask}ConnectionId`]: true,
-					[`${subTask}SamplingConfigId`]: true
-				} as any
-			})
-			overrideConnectionId =
-				(cfg as any)?.[`${subTask}ConnectionId`] ?? null
-			overrideSamplingId =
-				(cfg as any)?.[`${subTask}SamplingConfigId`] ?? null
+	//
+	// Unconditional: this layer always runs, regardless of what the session
+	// tier read above. A session cannot suppress it, because a session has no
+	// connection column left to suppress it with.
+	if (taskType === "session" && promptConfigId) {
+		const cfg = await db.query.promptConfigs.findFirst({
+			where: (c, { eq }) => eq(c.id, promptConfigId),
+			columns: { connectionId: true, samplingConfigId: true }
+		})
+		overrideConnectionId = cfg?.connectionId ?? null
+		overrideSamplingId = cfg?.samplingConfigId ?? null
+	} else if (taskType === "narratorPrompt" && narratorPromptConfigId) {
+		const cfg = await db.query.narratorPromptConfigs.findFirst({
+			where: (c, { eq }) => eq(c.id, narratorPromptConfigId),
+			columns: { connectionId: true, samplingConfigId: true }
+		})
+		overrideConnectionId = cfg?.connectionId ?? null
+		overrideSamplingId = cfg?.samplingConfigId ?? null
+	} else if (
+		(taskType.startsWith("summarize_") ||
+			// character_extraction doesn't carry a "summarize_" prefix
+			// (it's shared with the graph-builder's own extraction call,
+			// see graph_* below) — only the scene config table has
+			// dedicated override columns for it, since only scene
+			// summarization has a character-extraction sub-task.
+			(taskType === "character_extraction" &&
+				summarizeConfigType === "scene")) &&
+		summarizeConfigId &&
+		summarizeConfigType
+	) {
+		const subTask =
+			taskType === "character_extraction"
+				? "characterExtraction"
+				: (taskType.replace("summarize_", "") as
+						| "batch"
+						| "synth"
+						| "name")
+		type SumCfgCols = {
+			batchConnectionId: number | null
+			batchSamplingConfigId: number | null
+			synthConnectionId: number | null
+			synthSamplingConfigId: number | null
+			nameConnectionId: number | null
+			nameSamplingConfigId: number | null
+			characterExtractionConnectionId?: number | null
+			characterExtractionSamplingConfigId?: number | null
 		}
+		let cfg: SumCfgCols | undefined
+		if (summarizeConfigType === "world") {
+			cfg = (await db.query.worldSummarizeConfigs.findFirst({
+				where: (c, { eq }) => eq(c.id, summarizeConfigId!),
+				columns: {
+					batchConnectionId: true,
+					batchSamplingConfigId: true,
+					synthConnectionId: true,
+					synthSamplingConfigId: true,
+					nameConnectionId: true,
+					nameSamplingConfigId: true
+				}
+			})) as SumCfgCols | undefined
+		} else if (summarizeConfigType === "character") {
+			cfg = (await db.query.characterSummarizeConfigs.findFirst({
+				where: (c, { eq }) => eq(c.id, summarizeConfigId!),
+				columns: {
+					batchConnectionId: true,
+					batchSamplingConfigId: true,
+					synthConnectionId: true,
+					synthSamplingConfigId: true,
+					nameConnectionId: true,
+					nameSamplingConfigId: true
+				}
+			})) as SumCfgCols | undefined
+		} else {
+			cfg = (await db.query.sceneSummarizeConfigs.findFirst({
+				where: (c, { eq }) => eq(c.id, summarizeConfigId!),
+				columns: {
+					batchConnectionId: true,
+					batchSamplingConfigId: true,
+					synthConnectionId: true,
+					synthSamplingConfigId: true,
+					nameConnectionId: true,
+					nameSamplingConfigId: true,
+					characterExtractionConnectionId: true,
+					characterExtractionSamplingConfigId: true
+				}
+			})) as SumCfgCols | undefined
+		}
+		overrideConnectionId = cfg?.[`${subTask}ConnectionId`] ?? null
+		overrideSamplingId = cfg?.[`${subTask}SamplingConfigId`] ?? null
+	} else if (taskType.startsWith("graph_") && graphBuildConfigId) {
+		// Explicit map, not a ternary. This was
+		// `taskType === "graph_pre_filter" ? "preFilter" : "perspective"`,
+		// which silently resolved every graph step that was not the
+		// pre-filter to the perspective columns — so a new task type would
+		// have inherited perspective's model and sampling without any
+		// indication it had not been wired up.
+		const subTask = GRAPH_TASK_SUBTASK[taskType]
+		if (!subTask) {
+			throw new Error(
+				`resolveTaskConfig: no graphBuildConfigs sub-task mapped for "${taskType}"`
+			)
+		}
+		const cfg = await db.query.graphBuildConfigs.findFirst({
+			where: (c, { eq }) => eq(c.id, graphBuildConfigId),
+			columns: {
+				[`${subTask}ConnectionId`]: true,
+				[`${subTask}SamplingConfigId`]: true
+			} as any
+		})
+		overrideConnectionId = (cfg as any)?.[`${subTask}ConnectionId`] ?? null
+		overrideSamplingId =
+			(cfg as any)?.[`${subTask}SamplingConfigId`] ?? null
 	}
 
 	// ── The instance's capability default, and the guard ──────────────────────
 	//
-	// This block used to be `overrideConnectionId ?? systemSettings
-	// .defaultConnectionId`, plus two `findFirst`s, and it neither checked that
-	// the row still existed nor that the connection could do chat. Both are now
-	// the resolver's, along with the sentence for each way it can go wrong.
-	// Merged per HALF, not as a pair, because the resolver walks the two
+	// `resolveCapabilityTarget` checks that the row still exists and that the
+	// connection can do chat, and supplies the sentence for each way it can go
+	// wrong. Merged per HALF, not as a pair, because the resolver walks the two
 	// independently: a node that names a connection but no sampling profile must
 	// keep the instance's sampling default rather than clearing it.
 	const candidate: CapabilityCandidate = {
@@ -297,9 +296,12 @@ export async function resolveTaskConfig(params: {
 	}
 	const target = await resolveCapabilityTarget(db, {
 		capability: TEXT_CAPABILITY,
-		...(overrideTier === "sessionOverride"
-			? { sessionOverride: candidate }
-			: { pipelineConfig: candidate })
+		pipelineConfig: candidate,
+		// Tier 3, and an id rather than a candidate — the one override a session
+		// still makes. It is a separate field from `pipelineConfig` above, on a
+		// different chain, so a session's sampling and a config's connection can
+		// both be in the request at once.
+		sessionSampling: sessionSamplingId
 	})
 
 	if (!target.ok)

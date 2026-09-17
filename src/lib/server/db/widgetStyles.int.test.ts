@@ -13,6 +13,7 @@ import * as schema from "$lib/server/db/schema"
 import { systemStyleSlug, type WidgetDecl } from "$lib/shared/widgets/types"
 import { withCorePresets } from "$lib/shared/widgets/corePresets"
 import type { TestDb } from "$lib/server/utils/testDb"
+import type { SyncWidgetStylesOptions } from "./widgetStyles"
 
 let testDb: TestDb
 let dataDir: string
@@ -36,8 +37,12 @@ afterAll(async () => {
 	await fs.rm(dataDir, { recursive: true, force: true })
 })
 
-const sync = async (decls: WidgetDecl[], version = "1.0.0") =>
-	(await import("./widgetStyles")).syncWidgetStyles(decls, version)
+const sync = async (
+	decls: WidgetDecl[],
+	version = "1.0.0",
+	options?: SyncWidgetStylesOptions
+) =>
+	(await import("./widgetStyles")).syncWidgetStyles(decls, version, options)
 
 const widget = (id: string, presets: WidgetDecl["presets"]): WidgetDecl => ({
 	id,
@@ -186,31 +191,106 @@ describe("syncWidgetStyles", () => {
 	test("prune is scoped to the synced widget ids — other widgets' system rows survive", async () => {
 		await sync([
 			widget("messages", [{ slug: "default", title: "Default", css: "" }]),
-			widget("composer", [{ slug: "default", title: "Default", css: "" }])
+			widget("retired", [{ slug: "default", title: "Default", css: "" }])
 		])
-		// A later sync of ONLY messages must not prune composer's system rows.
+		// A later sync of ONLY messages must not prune the other widget's rows:
+		// a plugin syncing its own widgets speaks for its own ids alone.
 		await sync([
 			widget("messages", [{ slug: "default", title: "Default", css: "" }])
 		])
-		const composer = await systemRows("composer")
-		expect(composer.map((r) => r.slug)).toContain(
-			systemStyleSlug("composer", "default")
+		expect((await systemRows("retired")).map((r) => r.slug)).toContain(
+			systemStyleSlug("retired", "default")
 		)
 	})
+
+	test("pruneUndeclared takes a widget that is no longer declared at all", async () => {
+		// The per-preset prune above can only reach ids still in the decls, so
+		// a widget core stops shipping leaves its skins in the picker for good.
+		// Core boot is the one caller that can say "these are all of them".
+		await sync([
+			widget("messages", [{ slug: "default", title: "Default", css: "" }]),
+			widget("retired", [
+				{ slug: "default", title: "Default", css: "" },
+				{ slug: "minimal", title: "Minimal", css: ".c{}" }
+			])
+		])
+		expect((await systemRows("retired")).length).toBe(2)
+
+		await sync(
+			[
+				widget("messages", [
+					{ slug: "default", title: "Default", css: "" }
+				])
+			],
+			"1.0.0",
+			{ pruneUndeclared: true }
+		)
+		expect(await systemRows("retired")).toEqual([])
+		expect((await systemRows("messages")).map((r) => r.slug)).toContain(
+			systemStyleSlug("messages", "default")
+		)
+	}, 60_000)
+
+	test("pruneUndeclared still spares a user's own style for that widget", async () => {
+		await sync([
+			widget("messages", [{ slug: "default", title: "Default", css: "" }]),
+			widget("retired", [{ slug: "default", title: "Default", css: "" }])
+		])
+		const [mine] = await testDb
+			.insert(schema.widgetStyles)
+			.values({
+				slug: "user:1:retired:keepme",
+				widgetSlug: "retired",
+				source: "user",
+				ownerUserId: null,
+				visibility: "private",
+				title: "My Skin",
+				css: ".mine{color:red}"
+			})
+			.returning()
+
+		await sync(
+			[
+				widget("messages", [
+					{ slug: "default", title: "Default", css: "" }
+				])
+			],
+			"1.0.0",
+			{ pruneUndeclared: true }
+		)
+
+		const [after] = await testDb
+			.select()
+			.from(schema.widgetStyles)
+			.where(eq(schema.widgetStyles.id, mine.id))
+		expect(after).toEqual(mine)
+		expect(await systemRows("retired")).toEqual([])
+	}, 60_000)
+
+	test("pruneUndeclared with nothing declared writes nothing at all", async () => {
+		// An empty decl set is not "nothing is declared" — read that way the
+		// delete carries no widget predicate and takes the whole table.
+		await sync([
+			widget("messages", [{ slug: "default", title: "Default", css: "" }])
+		])
+		await sync([], "1.0.0", { pruneUndeclared: true })
+		expect((await systemRows("messages")).map((r) => r.slug)).toContain(
+			systemStyleSlug("messages", "default")
+		)
+	}, 60_000)
 })
 
-describe("the shipped message + composer packs", () => {
+describe("the shipped message packs", () => {
 	/** What `withCorePresets` is expected to put in front of the reconciler. */
 	const coreDecls = () =>
 		withCorePresets([
 			widget("messages", [{ slug: "default", title: "Default", css: "" }]),
-			widget("composer", [{ slug: "default", title: "Default", css: "" }]),
 			widget("scene-portraits", [
 				{ slug: "default", title: "Default", css: "" }
 			])
 		])
 
-	test("seeds eight pack rows under the expected slugs", async () => {
+	test("seeds five pack rows under the expected slugs", async () => {
 		await sync(coreDecls())
 		expect((await systemRows("messages")).map((r) => r.slug).sort()).toEqual(
 			[
@@ -221,39 +301,28 @@ describe("the shipped message + composer packs", () => {
 				systemStyleSlug("messages", "novel")
 			].sort()
 		)
-		expect((await systemRows("composer")).map((r) => r.slug).sort()).toEqual(
-			[
-				systemStyleSlug("composer", "default"),
-				systemStyleSlug("composer", "minimal"),
-				systemStyleSlug("composer", "writer")
-			].sort()
-		)
 	})
 
-	test("the `default` slot holds Clean / Classic, with Clean's real CSS", async () => {
-		// The slot an unpinned widget resolves to has to hold what a session
-		// looked like before the packs became styles.
+	test("the `default` slot holds Stage, with its real CSS", async () => {
+		// The slot an unpinned widget resolves to has to hold the house look,
+		// so a fresh layout reads as the stage rather than as bare markup.
 		await sync(coreDecls())
 		const messages = new Map(
 			(await systemRows("messages")).map((r) => [r.slug, r])
 		)
-		const clean = messages.get(systemStyleSlug("messages", "default"))!
-		expect(clean.title).toBe("Clean")
-		expect(clean.css).toContain("--sp-clean-card")
-		const composer = new Map(
-			(await systemRows("composer")).map((r) => [r.slug, r])
-		)
-		expect(
-			composer.get(systemStyleSlug("composer", "default"))!.title
-		).toBe("Classic")
+		const stage = messages.get(systemStyleSlug("messages", "default"))!
+		expect(stage.title).toBe("Stage")
+		expect(stage.css).toContain("--sp-stage-card")
 	})
+
+	test("the composer look is a setting, so it seeds no style rows", async () => {
+		await sync(coreDecls(), "1.0.0", { pruneUndeclared: true })
+		expect(await systemRows("composer")).toEqual([])
+	}, 60_000)
 
 	test("pack rows are system rows and carry the seeding version", async () => {
 		await sync(coreDecls(), "9.9.9")
-		for (const r of [
-			...(await systemRows("messages")),
-			...(await systemRows("composer"))
-		]) {
+		for (const r of await systemRows("messages")) {
 			expect(r.source).toBe("system")
 			expect(r.visibility).toBe("system")
 			expect(r.ownerUserId).toBeNull()

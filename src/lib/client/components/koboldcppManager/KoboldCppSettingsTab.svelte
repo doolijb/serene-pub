@@ -1,7 +1,11 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import { onMount, onDestroy, getContext } from "svelte"
+	import { onMount, getContext } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import {
+		declareInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 
 	interface Props {
@@ -219,10 +223,6 @@
 		})
 	}
 
-	// Every listener below is named so onDestroy can remove THIS component's
-	// handler. A bare socket.off("event") removes the first-registered listener
-	// for that event instead — usually Layout's, which is the single writer of
-	// the settings context this whole tab reads.
 	function handleVersion(message: Sockets.KoboldCPP.Version.Response) {
 		isCheckingVersion = false
 		versionCheckFailed = false
@@ -331,32 +331,78 @@
 		}
 	}
 
-	onMount(() => {
-		socket.on("koboldcpp:version", handleVersion)
-		socket.on("koboldcpp:version:error", handleVersionError)
-		socket.on("koboldcpp:isUpdateAvailable", handleIsUpdateAvailable)
-		socket.on(
-			"koboldcpp:isUpdateAvailable:error",
-			handleIsUpdateAvailableError
-		)
-		socket.on("koboldcpp:setBaseUrl", handleSetBaseUrl)
-		socket.on("koboldcpp:setModelsDir", handleSetModelsDir)
+	// The keys both modes read. BARE, like everything in `koboldcpp:` — the
+	// family has no interest scope — and standing: every one of these is a
+	// button the user can press again while the tab stays open.
+	//
+	// Declared ABOVE the mount that emits: effects run in creation order, so a
+	// declaration made after one would miss the sync its request flushes, and a
+	// version reply would land with nobody holding the key.
+	useInterest<"koboldcpp:version">("koboldcpp:version", handleVersion)
+	useInterest<"koboldcpp:version:error">(
+		"koboldcpp:version:error",
+		handleVersionError
+	)
+	useInterest<"koboldcpp:isUpdateAvailable">(
+		"koboldcpp:isUpdateAvailable",
+		handleIsUpdateAvailable
+	)
+	useInterest<"koboldcpp:isUpdateAvailable:error">(
+		"koboldcpp:isUpdateAvailable:error",
+		handleIsUpdateAvailableError
+	)
+	useInterest<"koboldcpp:setBaseUrl">("koboldcpp:setBaseUrl", handleSetBaseUrl)
+	useInterest<"koboldcpp:setModelsDir">(
+		"koboldcpp:setModelsDir",
+		handleSetModelsDir
+	)
 
+	// The per-mode keys, in an effect keyed on `isManaged` rather than declared
+	// once at mount: the two sets are disjoint, and a flip mid-visit swaps which
+	// half of this form is on screen. Releasing on the way out and declaring the
+	// other half on the way in keeps interest and form in step — a one-shot
+	// registration left the newly shown half with no listener at all.
+	$effect(() => {
+		const releases = isManaged
+			? [
+					declareInterest<"koboldcpp:setModelTtl">(
+						"koboldcpp:setModelTtl",
+						handleSetModelTtl
+					),
+					declareInterest<"koboldcpp:setSubprocessTimeout">(
+						"koboldcpp:setSubprocessTimeout",
+						handleSetSubprocessTimeout
+					),
+					declareInterest<"koboldcpp:setManagedPort">(
+						"koboldcpp:setManagedPort",
+						handleSetManagedPort
+					),
+					declareInterest<"koboldcpp:checkManagedBinaryUpdate">(
+						"koboldcpp:checkManagedBinaryUpdate",
+						handleCheckManagedBinaryUpdate
+					),
+					declareInterest<"koboldcpp:checkManagedBinaryUpdate:error">(
+						"koboldcpp:checkManagedBinaryUpdate:error",
+						handleCheckManagedBinaryUpdateError
+					)
+				]
+			: [
+					declareInterest<"koboldcpp:setManagedBinaryDir">(
+						"koboldcpp:setManagedBinaryDir",
+						handleSetManagedBinaryDir
+					),
+					declareInterest<"koboldcpp:setManagedAdminPassword">(
+						"koboldcpp:setManagedAdminPassword",
+						handleSetManagedAdminPassword
+					)
+				]
+		return () => {
+			for (const release of releases) release()
+		}
+	})
+
+	onMount(() => {
 		if (isManaged) {
-			socket.on("koboldcpp:setModelTtl", handleSetModelTtl)
-			socket.on(
-				"koboldcpp:setSubprocessTimeout",
-				handleSetSubprocessTimeout
-			)
-			socket.on("koboldcpp:setManagedPort", handleSetManagedPort)
-			socket.on(
-				"koboldcpp:checkManagedBinaryUpdate",
-				handleCheckManagedBinaryUpdate
-			)
-			socket.on(
-				"koboldcpp:checkManagedBinaryUpdate:error",
-				handleCheckManagedBinaryUpdateError
-			)
 			checkManagedBinaryUpdate()
 			// Also check the live instance's own reported version/capabilities —
 			// distinct from checkManagedBinaryUpdate's GitHub-release check above.
@@ -364,53 +410,8 @@
 			// above rather than toasted for this mode).
 			checkVersion()
 		} else {
-			socket.on(
-				"koboldcpp:setManagedBinaryDir",
-				handleSetManagedBinaryDir
-			)
-			socket.on(
-				"koboldcpp:setManagedAdminPassword",
-				handleSetManagedAdminPassword
-			)
 			checkVersion()
 			checkForUpdates()
-		}
-	})
-
-	onDestroy(() => {
-		socket.off("koboldcpp:version", handleVersion)
-		socket.off("koboldcpp:version:error", handleVersionError)
-		socket.off("koboldcpp:isUpdateAvailable", handleIsUpdateAvailable)
-		socket.off(
-			"koboldcpp:isUpdateAvailable:error",
-			handleIsUpdateAvailableError
-		)
-		socket.off("koboldcpp:setBaseUrl", handleSetBaseUrl)
-		socket.off("koboldcpp:setModelsDir", handleSetModelsDir)
-		if (isManaged) {
-			socket.off("koboldcpp:setModelTtl", handleSetModelTtl)
-			socket.off(
-				"koboldcpp:setSubprocessTimeout",
-				handleSetSubprocessTimeout
-			)
-			socket.off("koboldcpp:setManagedPort", handleSetManagedPort)
-			socket.off(
-				"koboldcpp:checkManagedBinaryUpdate",
-				handleCheckManagedBinaryUpdate
-			)
-			socket.off(
-				"koboldcpp:checkManagedBinaryUpdate:error",
-				handleCheckManagedBinaryUpdateError
-			)
-		} else {
-			socket.off(
-				"koboldcpp:setManagedBinaryDir",
-				handleSetManagedBinaryDir
-			)
-			socket.off(
-				"koboldcpp:setManagedAdminPassword",
-				handleSetManagedAdminPassword
-			)
 		}
 	})
 

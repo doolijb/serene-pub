@@ -52,7 +52,7 @@ export interface NerModelOption {
 
 /** What a concrete NER-adapter module default-exports. */
 export interface NerAdapterExports {
-	Adapter: new (connection: SelectConnection) => BaseNerAdapter
+	Adapter: new (connection: AdapterConnection) => BaseNerAdapter
 	/**
 	 * What this backend can extract with.
 	 *
@@ -86,9 +86,9 @@ export interface BaseNerAdapter
 	extends Partial<Omit<AdapterActions, "extractEntities">> {}
 
 export abstract class BaseNerAdapter implements AdapterActions {
-	connection: SelectConnection
+	connection: AdapterConnection
 
-	constructor(connection: SelectConnection) {
+	constructor(connection: AdapterConnection) {
 		this.connection = connection
 	}
 

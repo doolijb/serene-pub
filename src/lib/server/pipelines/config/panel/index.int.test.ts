@@ -148,7 +148,7 @@ describe("the option payload", () => {
 		// session picker already ships to every user (`sessions:genres`), not
 		// this pipeline's wiring. The word-boundary scan flags it only because
 		// the respond spec happens to name a node `input`, and "input" appears
-		// inside every `core:input/…` id. Same exemption class as PROSE:
+		// inside every `core:inlet/…` id. Same exemption class as PROSE:
 		// a value that is legitimately public, not a leak core derived.
 		// `function` and `specSlug` are a trigger's PUBLIC routing identifiers —
 		// the client fires a function by name and resolves it to a spec by slug,
@@ -276,7 +276,7 @@ describe("the option payload", () => {
 		const [prompt] = await db
 			.insert(schema.pipelinePrompts)
 			.values({
-				nodeTypeId: decl.nodeTypeId!,
+				nodeDefinitionId: decl.nodeDefinitionId!,
 				slot: decl.slot,
 				name: "Rides along",
 				fields: Object.fromEntries(
@@ -1098,44 +1098,92 @@ describe("configurations hold their own values", () => {
  * has to get a labelled band without anyone editing the panel — which is only
  * true while the bands travel with the option.
  */
-describe("a share option carries its own bands", () => {
-	const shareOption = async () => {
+/**
+ * Each source carries its own intent (R-7 P5, 2026-09-16).
+ *
+ * The ranker used to declare `share`, `maxEntries` and `minEntries` as
+ * five-band maps — one `share` control naming every source. Those live on the
+ * sources now: each of the five retrieval nodes declares its own `share`,
+ * ceiling and priority (the conversation its floor too), labelled with the
+ * band it speaks for, and the ranker reads them off the candidates. So the
+ * panel shows "Share — world lore" on the world-lore step and no "Context
+ * split" anywhere.
+ */
+describe("each source carries its own intent", () => {
+	const BANDS: Record<string, string> = {
+		"gather.history.read": "conversation",
+		"gather.worldLore.read": "world lore",
+		"gather.characterLore.read": "character lore",
+		"gather.historyEntries.read": "history",
+		"gather.relationships.read": "relationships"
+	}
+	const declsOf = async () => {
+		const { declarations } = await import(
+			"$lib/server/pipelines/config/panel"
+		)
+		const [spec] = await db
+			.select()
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+		return declarations(db, spec!.activeVersionId!)
+	}
+	const shareOptions = async () => {
 		const v = (await namespaceView(db, SECRET, RESPOND_SPEC_ID, {
 			userId: 1,
 			isAdmin: true
 		})) as NamespaceView
 		return v.steps
 			.flatMap((s) => [...s.options, ...s.advanced])
-			.find((o) => o.control === "share")
+			.filter((o) => /^Share — /.test(o.label))
 	}
 
-	it("names every source, in order, with a label and a colour", async () => {
-		const o = await shareOption()
-		expect(o, "the ranker declares no share option").toBeTruthy()
-		expect(o!.members?.map((m) => m.key)).toEqual([
-			"messages",
-			"worldLore",
-			"characterLore",
-			"history",
-			"relationships"
-		])
-		// Display text resolved server-side: the client renders strings, it
-		// does not pick them.
-		expect(o!.members?.map((m) => m.label)).toEqual([
-			"Conversation",
-			"World lore",
-			"Character lore",
-			"History entries",
-			"Relationships"
-		])
-		expect(o!.members?.every((m) => typeof m.tone === "number")).toBe(true)
+	it("declares no context split on the ranker, and a share on every source, named for its band", async () => {
+		const decls = await declsOf()
+		expect(
+			decls.filter((d) => d.nodeKey === "rank" && d.slot === "params").map((d) => d.path)
+		).not.toEqual(expect.arrayContaining(["share", "maxEntries", "minEntries"]))
+		expect(decls.find((d) => d.control === "share")).toBeUndefined()
+		for (const [nodeKey, band] of Object.entries(BANDS)) {
+			const share = decls.find(
+				(d) => d.nodeKey === nodeKey && d.slot === "params" && d.path === "share"
+			)
+			expect(share, `${nodeKey} declares no share`).toBeTruthy()
+			expect(share!.label).toBe(`Share — ${band}`)
+			expect(share!.control).toBe("number")
+			expect(share!.facet).toBe("weights")
+		}
 	})
 
 	it("defaults to today's split, so nothing moves on upgrade", async () => {
-		// `DEFAULT_GROUPS` in ranking/weights.ts: 0.5 to messages reproduces
-		// MESSAGE_FILL_FRACTION exactly.
-		const o = await shareOption()
-		expect((o!.authorDefault as Record<string, number>).messages).toBe(0.5)
+		// `DEFAULT_GROUPS` in ranking/weights.ts: 0.5 to the conversation is
+		// MESSAGE_FILL_FRACTION exactly, the three lore bands sum to the other
+		// half, relationships ship at 0.
+		const decls = await declsOf()
+		const shareOf = (nodeKey: string) =>
+			decls.find(
+				(d) => d.nodeKey === nodeKey && d.slot === "params" && d.path === "share"
+			)!.authorDefault
+		expect(shareOf("gather.history.read")).toBe(0.5)
+		expect(shareOf("gather.worldLore.read")).toBe(0.1667)
+		expect(shareOf("gather.characterLore.read")).toBe(0.1667)
+		expect(shareOf("gather.historyEntries.read")).toBe(0.1666)
+		expect(shareOf("gather.relationships.read")).toBe(0)
+		const capOf = (nodeKey: string) =>
+			decls.find(
+				(d) => d.nodeKey === nodeKey && d.slot === "params" && d.path === "maxEntries"
+			)!.authorDefault
+		expect(capOf("gather.history.read")).toBe(50)
+		expect(capOf("gather.worldLore.read")).toBe(20)
+		expect(capOf("gather.characterLore.read")).toBe(15)
+		expect(capOf("gather.historyEntries.read")).toBe(10)
+		// Uncapped by declaration: the query's own ceiling, absent, is the band's.
+		expect(capOf("gather.relationships.read")).toBeUndefined()
+		// The one floor (R6): the conversation's, nowhere else.
+		expect(
+			decls
+				.filter((d) => d.slot === "params" && d.path === "minEntries")
+				.map((d) => [d.nodeKey, d.authorDefault])
+		).toEqual([["gather.history.read", 6]])
 	})
 
 	it("carries the real window once a sampling config is selected", async () => {
@@ -1149,13 +1197,13 @@ describe("a share option carries its own bands", () => {
 		expect(sampling, "no sampling slot to read a window from").toBeTruthy()
 
 		// Absent until something is selected, and that is the honest state
-		// rather than a placeholder: a percentage of an unknown window buys an
+		// rather than a placeholder: a share of an unknown window buys an
 		// unknown number of tokens, and inventing one would be the same defect
 		// as the `budget: 4096` this replaced.
-		expect(
-			(await shareOption())!.windowTokens,
-			"a window appeared before one was selected"
-		).toBeUndefined()
+		const before = await shareOptions()
+		expect(before.length).toBe(5)
+		for (const o of before)
+			expect(o.windowTokens, `${o.label} showed a window before one was selected`).toBeUndefined()
 
 		// Both budgets are parameters since 0171 — a key present in `enabled` is
 		// the switch being on, so the window is only real when both are listed.
@@ -1178,27 +1226,31 @@ describe("a share option carries its own bands", () => {
 
 		// The same arithmetic `core:task/context-budget@1` performs, because the
 		// number on screen has to be the number the ranker divides:
-		// (8192 - 512) * 0.95.
-		expect((await shareOption())!.windowTokens).toBe(7296)
+		// (8192 - 512) * 0.95 — on every source's share, since each is a
+		// share OF that window.
+		for (const o of await shareOptions()) expect(o.windowTokens).toBe(7296)
 	})
 
-	it("gives the per-member ceiling the same bands", async () => {
+	it("keeps the signal matrix per band on the ranker — the cross-source half", async () => {
 		const v = (await namespaceView(db, SECRET, RESPOND_SPEC_ID, {
 			userId: 1,
 			isAdmin: true
 		})) as NamespaceView
-		const ceiling = v.steps
+		const matrix = v.steps
 			.flatMap((s) => [...s.options, ...s.advanced])
-			.find((o) => o.control === "per-member")
-		expect(ceiling?.members?.map((m) => m.key)).toEqual([
-			"messages",
-			"worldLore",
-			"characterLore",
-			"history",
-			"relationships"
-		])
-		// …and no window: a ceiling counts entries, not tokens.
-		expect(ceiling?.windowTokens).toBeUndefined()
+			.filter((o) => o.control === "per-member")
+		expect(matrix.length).toBeGreaterThan(0)
+		for (const row of matrix) {
+			expect(row.members?.map((m) => m.key)).toEqual([
+				"messages",
+				"worldLore",
+				"characterLore",
+				"history",
+				"relationships"
+			])
+			// …and no window: a weight is not a share of anything.
+			expect(row.windowTokens).toBeUndefined()
+		}
 	})
 })
 
@@ -1258,6 +1310,174 @@ describe("every reference control has something to reference", () => {
 						)
 		}
 		expect(empty).toEqual([])
+	})
+})
+
+/**
+ * One control per shared slot — the "renders once" guards (U3; R-7 P2).
+ *
+ * A slot the document wired to another node's (`slot.params({ node })`,
+ * `slot.samplingOf(…)`, a shared connection) belongs to the node it points
+ * at, and `declarations()` offers it there and nowhere else. Two boxes for one
+ * value is the three-System-boxes defect (13 §12 finding i): writing the second
+ * would change nothing, because the executor resolves a shared slot against
+ * the TARGET node's stored value. These used to live in the reprojection tests
+ * that 0134 retired; re-homed here so the proof outlives the migrations.
+ */
+describe("a shared slot renders once, on its owner", () => {
+	const declsOf = async (slug: string) => {
+		const { declarations } = await import(
+			"$lib/server/pipelines/config/panel"
+		)
+		const [spec] = await db
+			.select()
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, slug))
+		return declarations(db, spec!.activeVersionId!)
+	}
+
+	const SCAN_KNOBS = [
+		"admitThreshold",
+		"guaranteedMessages",
+		"lexicalScoring",
+		"maxRecursionDepth",
+		"scanDepth",
+		"titleWeight",
+		"trigramFolding"
+	]
+	/** Each lane's own (R-7 P5): unmarked on the declaration, rendered per lane. */
+	const LANE_OWN = ["maxEntries", "priority", "share"]
+	const LANES = [
+		"gather.worldLore.read",
+		"gather.characterLore.read",
+		"gather.historyEntries.read"
+	]
+
+	it("shows the seven lore knobs once, on the world-lore lane, and the embed switch once, on the semantic embed", async () => {
+		const decls = await declsOf(RESPOND_SPEC_ID)
+		const paramsOn = (nodeKey: string) =>
+			decls.filter((d) => d.nodeKey === nodeKey && d.slot === "params")
+		// The losers read the owner's slot through `ofNode` for the SHARED
+		// fields: none of the seven scan knobs renders there. Their own three
+		// do — see the next case.
+		for (const loser of ["gather.characterLore.read", "gather.historyEntries.read"])
+			expect(
+				paramsOn(loser).map((d) => d.path).sort(),
+				`${loser} offers a shared knob`
+			).toEqual(LANE_OWN)
+		// `enabled` is the embed pair's one field and it is shared, so the
+		// loser embed node renders nothing at all.
+		expect(paramsOn("names.arm.embed")).toEqual([])
+		// The owners carry the controls — the seven knobs (and its own three),
+		// and the switch.
+		expect(paramsOn("gather.worldLore.read").map((d) => d.path).sort()).toEqual(
+			[...SCAN_KNOBS, ...LANE_OWN].sort()
+		)
+		expect(paramsOn("semantic.arm.embed").map((d) => d.path)).toContain(
+			"enabled"
+		)
+		// And across the whole document each of the seven appears on exactly
+		// one lore lane — the proof "7 lore knobs once" names.
+		for (const path of SCAN_KNOBS)
+			expect(
+				decls.filter(
+					(d) =>
+						d.slot === "params" &&
+						d.path === path &&
+						/^gather\.(worldLore|characterLore|historyEntries)\.read$/.test(
+							d.nodeKey
+						)
+				).length,
+				`${path} appears on more than one lore lane`
+			).toBe(1)
+	})
+
+	it("shows share, ceiling and priority once PER LANE, each labelled with its band", async () => {
+		// The other half of P2's line (R-7 P5): a field the declaration does
+		// not mark `shared` is the lane's own, so every lane renders one and
+		// the label says which lane it moves.
+		const decls = await declsOf(RESPOND_SPEC_ID)
+		const bandOf: Record<string, string> = {
+			"gather.worldLore.read": "world lore",
+			"gather.characterLore.read": "character lore",
+			"gather.historyEntries.read": "history"
+		}
+		for (const path of LANE_OWN) {
+			const on = decls.filter(
+				(d) => d.slot === "params" && d.path === path && LANES.includes(d.nodeKey)
+			)
+			expect(on.map((d) => d.nodeKey).sort(), `${path}`).toEqual([...LANES].sort())
+			for (const d of on) expect(d.label).toMatch(new RegExp(`— ${bandOf[d.nodeKey]}$`))
+		}
+		// Own fields resolve at their own address: the panel's provenance for
+		// a loser lane's share is the loser lane, not the owner.
+		expect(
+			decls.find(
+				(d) => d.nodeKey === "gather.characterLore.read" && d.path === "share"
+			)!.authorDefault
+		).toBe(0.1667)
+	})
+
+	it("labels the owner's controls with the shared truth, not one lane's", async () => {
+		// The owner governs three sources. A label reading "world lore" over a
+		// control that moves character lore and history too was the U3
+		// review's W4; the wording is the shared one on the declaration.
+		const decls = await declsOf(RESPOND_SPEC_ID)
+		const scan = decls.find(
+			(d) =>
+				d.nodeKey === "gather.worldLore.read" &&
+				d.slot === "params" &&
+				d.path === "scanDepth"
+		)!
+		expect(scan.label).toBe("Messages scanned for lore triggers")
+		expect(scan.description).toContain(
+			"world lore, character lore and history"
+		)
+	})
+
+	it("offers one connection option, on the step that sends", async () => {
+		// A `connection` slot on Assemble would be a second connection picker
+		// beside the reply step's. It is absent because it is SHARED — the
+		// document wires `prompt`'s to `generate`'s — not because there is no
+		// slot; the second assertion is what tells the two apart.
+		const decls = await declsOf(RESPOND_SPEC_ID)
+		const conns = decls.filter((d) => d.control === "connection-ref")
+		expect(conns.filter((d) => d.nodeKey === "generate").length).toBe(1)
+		expect(conns.some((d) => d.nodeKey === "prompt")).toBe(false)
+		const [spec] = await db
+			.select()
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+		const [prompt] = await db
+			.select()
+			.from(schema.pipelineNodes)
+			.where(
+				and(
+					eq(schema.pipelineNodes.specVersionId, spec!.activeVersionId!),
+					eq(schema.pipelineNodes.nodeKey, "prompt")
+				)
+			)
+		expect((prompt!.config as any).connection).toMatchObject({
+			__ref: "slot",
+			slot: "connection",
+			ofNode: "generate"
+		})
+		expect((prompt!.resolvedRefs as any).connection).toBe("generate")
+	})
+
+	it("adds no second Sampling control on the step that only reads the window", async () => {
+		// `contextBudget` reads `slot.samplingOf("generate")`: one control for
+		// the pair, which is what makes the two windows unable to disagree.
+		const decls = await declsOf(RESPOND_SPEC_ID)
+		expect(
+			decls.filter(
+				(d) => d.nodeKey === "contextBudget" && d.slot === "sampling"
+			)
+		).toEqual([])
+		expect(
+			decls.filter((d) => d.nodeKey === "generate" && d.slot === "sampling")
+				.length
+		).toBe(1)
 	})
 })
 
@@ -1379,6 +1599,230 @@ describe("the facet vocabulary travels with the view", () => {
  * The client regroups by facet on top of this, deliberately. Within a facet,
  * this is what decides what comes first.
  */
+/**
+ * The substrate's settings render from the row, like any slot (R-9, R-11 —
+ * 2026-09-16).
+ *
+ * `settings.enabled`, `settings.review` and a gather clause's `settings.mode`
+ * were three controls `declarations.ts` synthesised by hand — wording,
+ * defaults and facets written in the panel, declared by nothing. They are a
+ * `settings` slot now: projected onto the registry row for every optional or
+ * gated definition, declared by the SDK for a gather clause, and walked by the
+ * same branch that renders a `params` field. What is pinned is that the panel
+ * has no special knowledge left: every settings option corresponds to a
+ * declaration it read, the defaults are the declaration's (an author's
+ * `reviewDefault` reaches the panel, which the hand-written control got
+ * wrong), the facets and `quick` are what they were, the addresses are
+ * unchanged, and an interior script point's option lists what the point
+ * accepts rather than what the panel assumed.
+ */
+describe("the substrate's settings render from the row, like any slot", () => {
+	const declsOf = async (slug: string) => {
+		const { declarations } = await import(
+			"$lib/server/pipelines/config/panel"
+		)
+		const [spec] = await db
+			.select()
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, slug))
+		return {
+			versionId: spec!.activeVersionId!,
+			decls: await declarations(db, spec!.activeVersionId!)
+		}
+	}
+
+	it("offers `enabled` on every optional node and nowhere else, as the row declares it", async () => {
+		const { versionId, decls } = await declsOf(RESPOND_SPEC_ID)
+		const nodes = await db
+			.select()
+			.from(schema.pipelineNodes)
+			.where(eq(schema.pipelineNodes.specVersionId, versionId))
+		const registry = await db.select().from(schema.pipelineDefinitionRegistry)
+		const rowOf = (n: any) =>
+			registry.find(
+				(r) => r.definitionId === n.definitionId && r.version === n.definitionVersion
+			)!
+		const optional = (nodes as any[]).filter((n) => rowOf(n).optional)
+		expect(optional.length, "no optional node in the reply spec").toBeGreaterThan(0)
+		const enabled = decls.filter((d) => d.slot === "settings" && d.path === "enabled")
+		expect(enabled.map((d) => d.nodeKey).sort()).toEqual(
+			optional.map((n) => n.nodeKey).sort()
+		)
+		for (const d of enabled) {
+			// Read from the row (F6): the slot is on it, and the option is it.
+			const row = rowOf((nodes as any[]).find((n) => n.nodeKey === d.nodeKey))
+			expect((row.slots as any).settings?.schema?.enabled?.type).toBe("boolean")
+			expect(d).toMatchObject({
+				matrixSlot: "settings",
+				facet: "settings",
+				quick: true,
+				control: "boolean",
+				authorDefault: true,
+				label: "Use this source"
+			})
+		}
+	})
+
+	it("offers `review` on every gated node, at the declaration's own default", async () => {
+		const { versionId, decls } = await declsOf(RESPOND_SPEC_ID)
+		const nodes = await db
+			.select()
+			.from(schema.pipelineNodes)
+			.where(eq(schema.pipelineNodes.specVersionId, versionId))
+		const registry = await db.select().from(schema.pipelineDefinitionRegistry)
+		const gated = (nodes as any[]).filter((n) => {
+			const r = registry.find(
+				(r) => r.definitionId === n.definitionId && r.version === n.definitionVersion
+			)!
+			return r.effects === "write" || r.effects === "external"
+		})
+		expect(gated.length).toBeGreaterThan(0)
+		const review = decls.filter((d) => d.slot === "settings" && d.path === "review")
+		expect(review.map((d) => d.nodeKey).sort()).toEqual(gated.map((n) => n.nodeKey).sort())
+		for (const d of review)
+			expect(d).toMatchObject({
+				matrixSlot: "settings",
+				// Its own heading, beside the switch's — the field's facet.
+				facet: "review",
+				control: "enum",
+				of: ["off", "on"],
+				label: "Review"
+			})
+		// The reply's two message writes default off (R-21 (3)); the
+		// hand-written control said `off` for every node, which was wrong for
+		// any author defaulting review on — pinned on the SDK side against
+		// `attach-image`, and here that the panel reads the default at all.
+		expect(review.find((d) => d.nodeKey === "save")?.authorDefault).toBe("off")
+		expect(review.find((d) => d.nodeKey === "placeholder")?.authorDefault).toBe("off")
+	})
+
+	it("offers `mode` on every gather clause, declared by the SDK from the clause's own row", async () => {
+		const { versionId, decls } = await declsOf(RESPOND_SPEC_ID)
+		const clauses = await db
+			.select()
+			.from(schema.pipelineClauses)
+			.where(eq(schema.pipelineClauses.specVersionId, versionId))
+		const gathers = (clauses as any[]).filter((c) => c.kind === "gather")
+		expect(gathers.length).toBeGreaterThan(0)
+		const modes = decls.filter((d) => d.slot === "settings" && d.path === "mode")
+		expect(modes.map((d) => d.nodeKey).sort()).toEqual(
+			gathers.map((c) => c.clauseId).sort()
+		)
+		for (const d of modes) {
+			const clause = gathers.find((c) => c.clauseId === d.nodeKey)!
+			expect(d).toMatchObject({
+				matrixSlot: "settings",
+				facet: "settings",
+				nodeKind: "clause",
+				control: "enum",
+				of: ["parallel", "sequential"],
+				authorDefault: clause.mode ?? "parallel",
+				label: "Run"
+			})
+		}
+		// The other three constructs carry none.
+		const others = (clauses as any[]).filter((c) => c.kind !== "gather")
+		for (const c of others)
+			expect(decls.some((d) => d.nodeKey === c.clauseId)).toBe(false)
+	})
+
+	it("has no settings option the declarations did not produce", async () => {
+		// The rule the three special cases broke: a settings option exists
+		// because a row or the SDK declared it, never because the panel knew
+		// about a node. Every `settings` decl is one of the three declared
+		// paths, and each path's set was matched exactly above.
+		const { decls } = await declsOf(RESPOND_SPEC_ID)
+		const paths = new Set(
+			decls.filter((d) => d.slot === "settings").map((d) => d.path)
+		)
+		expect([...paths].sort()).toEqual(["enabled", "mode", "review"])
+	})
+
+	it("keeps the addresses a stored value was written at", async () => {
+		// A pre-existing `settings.review = on` row is exactly as valid after
+		// the slot became a declaration as before: the address is declared,
+		// so the reconciler keeps it, and it is a deviation from the author's
+		// `off`, so the sweep keeps it too. `reviewGate.int.test.ts` proves
+		// the same row still parks a run.
+		const { SUMMARIZE_WORLD_SPEC_ID } = await import(
+			"$lib/server/pipelines/specs/summarize"
+		)
+		const { reconcileConfigs } = await import(
+			"$lib/server/pipelines/config/named"
+		)
+		const [spec] = await db
+			.select()
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, SUMMARIZE_WORLD_SPEC_ID))
+		const [config] = await db
+			.insert(schema.pipelineConfigs)
+			.values({ specId: spec!.id, name: "gated summaries" })
+			.returning()
+		await db.insert(schema.pipelineConfigValues).values({
+			configId: config!.id,
+			nodeKey: "save",
+			slot: "settings",
+			path: "review",
+			value: "on"
+		})
+		const reports = await reconcileConfigs(
+			db,
+			spec!.id,
+			spec!.activeVersionId!,
+			SUMMARIZE_WORLD_SPEC_ID
+		)
+		const mine = reports.find((r) => r.configId === config!.id)!
+		expect(mine.culled).toEqual([])
+		const rows = await db
+			.select()
+			.from(schema.pipelineConfigValues)
+			.where(eq(schema.pipelineConfigValues.configId, config!.id))
+		expect(
+			rows.filter((r) => r.nodeKey === "save" && r.slot === "settings" && r.path === "review")
+		).toHaveLength(1)
+		expect(rows.find((r) => r.slot === "settings")?.value).toBe("on")
+		// And the panel resolves it at the address it was written at.
+		const { declarations } = await import(
+			"$lib/server/pipelines/config/panel"
+		)
+		const decls = await declarations(db, spec!.activeVersionId!)
+		expect(
+			decls.find((d) => d.nodeKey === "save" && d.slot === "settings" && d.path === "review")
+		).toMatchObject({ facet: "review", authorDefault: "off" })
+	})
+
+	it("lists what an interior script point accepts, from the point", async () => {
+		// R-11: `summarize-batch`'s `each-draft` says text/transform itself;
+		// the option carries the point's list, not a kind the panel assumed.
+		const { SUMMARIZE_WORLD_SPEC_ID } = await import(
+			"$lib/server/pipelines/specs/summarize"
+		)
+		const { decls } = await declsOf(SUMMARIZE_WORLD_SPEC_ID)
+		const point = decls.find(
+			(d) => d.slot === "scripts" && d.path === "each-draft"
+		)
+		expect(point, "the drafting step's interior point").toBeTruthy()
+		expect(point).toMatchObject({
+			nodeKey: "drafting.item.draft",
+			control: "scripts-chain",
+			facet: "scripts",
+			label: "Each draft",
+			accepts: ["core:script:text/transform@1"]
+		})
+		// The registry row is where it came from, in the full shape.
+		const [row] = await db
+			.select()
+			.from(schema.pipelineDefinitionRegistry)
+			.where(
+				eq(schema.pipelineDefinitionRegistry.definitionId, "core:oracle/summarize-batch")
+			)
+		expect((row!.scriptPoints as any[])[0]).toMatchObject({
+			key: "each-draft",
+			accepts: ["core:script:text/transform@1"]
+		})
+	})
+})
+
 describe("options arrive in the order they were declared", () => {
 	it("follows the parameter schema's own order within a slot", async () => {
 		const v = (await namespaceView(db, SECRET, RESPOND_SPEC_ID, {
@@ -1419,9 +1863,12 @@ describe("options arrive in the order they were declared", () => {
 			// parameter, so it lands in `options` while the shares sit in
 			// `advanced` — declaration order within each group still holds.
 			"Scripts",
-			"Context split",
-			"Most entries per source",
-			"Always keep at least",
+			// ⚠ "Context split", "Most entries per source" and "Always keep at
+			// least" led this list until 2026-09-16 and are gone from the
+			// ranker (R-7 P5): each source declares its own share, ceiling and
+			// floor now — "Share — world lore" on the world-lore lane, and so
+			// on — and the ranker keeps only what is cross-source. See "each
+			// source carries its own intent" above.
 			// The three grouped mechanism strengths (migration 0201), declared
 			// **ahead** of the nine and rendering there — the altitude a reader
 			// starts at, with the individual signals under them for anyone who
@@ -1453,11 +1900,10 @@ describe("options arrive in the order they were declared", () => {
 			"Length against the pool",
 			"Keywords close together",
 			"Author priority",
-			// The allocation switch (migration 0196), declared after the
-			// matrix and therefore rendered after it. Last rather than beside
-			// "Context split" because it is spread onto this type alone, after
-			// the signal fields — `rankSlots` is shared with
-			// `rank-by-recency`, which does not run this selection.
+			// How the sources' shares divide the window (R-7 P5) — the one
+			// thing about shares that is the ranker's — then the allocation
+			// switch (migration 0196), declared last and rendered last.
+			"How shares divide the window",
 			"Let the best entries lead"
 		])
 	})
@@ -1496,5 +1942,53 @@ describe("options arrive in the order they were declared", () => {
 		expect(labels.indexOf("Rank hybrid")).toBeLessThan(
 			labels.indexOf("Assemble")
 		)
+	})
+})
+
+/**
+ * The panel step list's IA (plans/29 R-18 (2); U5g review follow-up): a
+ * gather clause's settings step sits at the spine position of its first
+ * member node rather than at the tail, and an envoy's step is not a step of
+ * the run at all — it moves to `alsoConfigured`, a trailing, unnumbered
+ * group, rather than being counted among `steps`.
+ *
+ * `guide-respond` is the one shipped spec with both in one document: a
+ * `gather` clause (`history`/`cast`/`docs`, run in parallel) and a reference
+ * to the guide genre's one envoy, `mascot`, on `context`'s `prompts` slot.
+ */
+describe("a clause's step sits at its spine position; an envoy's step is not a step", () => {
+	it("guide-respond: the gather clause precedes its first member; the envoy is offered in `alsoConfigured`, not `steps`", async () => {
+		const { GUIDE_RESPOND_SPEC_ID } = await import(
+			"@serene-pub/core-catalog"
+		)
+		const v = (await namespaceView(db, SECRET, GUIDE_RESPOND_SPEC_ID, {
+			userId: 1,
+			isAdmin: true
+		})) as NamespaceView
+
+		const labels = v.steps.map((s) => s.label)
+		const gatherAt = labels.findIndex((l) => /gather/i.test(l))
+		const historyAt = labels.findIndex((l) => /session history/i.test(l))
+		expect(gatherAt, labels.join(", ")).toBeGreaterThanOrEqual(0)
+		expect(historyAt, labels.join(", ")).toBeGreaterThanOrEqual(0)
+		// At its spine position — right before the block it governs — not
+		// appended after every node in the document (`save` included).
+		expect(gatherAt).toBeLessThan(historyAt)
+		expect(gatherAt).toBeLessThan(labels.length - 1)
+		expect(v.steps[gatherAt]!.kind).toBe("clause")
+
+		// The envoy is not a step of the run: nothing executes it, so it is
+		// absent from `steps` and never counted in "step N of M".
+		expect(v.steps.some((s) => s.kind === "envoy")).toBe(false)
+		expect(v.steps.some((s) => /envoy/i.test(s.label))).toBe(false)
+
+		// It is still offered — in the trailing, unnumbered group.
+		expect(v.alsoConfigured.length).toBeGreaterThan(0)
+		expect(v.alsoConfigured.every((s) => s.kind === "envoy")).toBe(true)
+		expect(v.alsoConfigured.some((s) => /envoy/i.test(s.label))).toBe(
+			true
+		)
+		// Unnumbered: none of its keys is one of `steps`' `s<i>` ordinals.
+		for (const s of v.alsoConfigured) expect(s.key).not.toMatch(/^s\d+$/)
 	})
 })

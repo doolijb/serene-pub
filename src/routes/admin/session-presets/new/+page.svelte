@@ -5,14 +5,19 @@
 	 * selections server-side (fromPresetId); starting bare inherits every
 	 * pipeline's default config.
 	 */
-	import { getContext, onDestroy, onMount } from "svelte"
+	import { getContext, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { goto } from "$app/navigation"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { getAdminInterestContext } from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 
 	const userCtx: { user: SelectUser } = getContext("userCtx")
 	const socket = useTypedSocket()
+	// The admin-only half of the registry (plan ruling 6b): `sessionGenres:`
+	// is a RESTRICTED interest family, and this context exists only inside the
+	// admin tree, which already turns non-admins away.
+	const interest = getAdminInterestContext()
 
 	let types: Sockets.SessionAdmin.GenreRow[] = $state([])
 	let presets: Sockets.SessionAdmin.PresetRow[] = $state([])
@@ -51,20 +56,28 @@
 	}
 
 	onMount(() => {
-		if (!userCtx.user?.isAdmin) {
-			goto("/")
-			return
-		}
-		socket.on("sessionGenres:list", onTypes)
-		socket.on("sessionPresets:list", onPresets)
-		socket.on("sessionPresets:create", onCreated)
-		socket.emit("sessionGenres:list", {})
-		socket.emit("sessionPresets:list", {})
+		if (!userCtx.user?.isAdmin) goto("/")
 	})
-	onDestroy(() => {
-		socket.off("sessionGenres:list", onTypes)
-		socket.off("sessionPresets:list", onPresets)
-		socket.off("sessionPresets:create", onCreated)
+
+	/**
+	 * The genres this form picks from and the presets it can copy, each asked
+	 * for and listened for in one, plus the create's answer — a STANDING key,
+	 * because it lands whenever the person presses Create rather than in reply
+	 * to anything asked here. All BARE: a preset is the instance's.
+	 */
+	$effect(() => {
+		if (!userCtx.user?.isAdmin) return
+		const releases = [
+			interest.declareInterest<"sessionPresets:create">(
+				"sessionPresets:create",
+				onCreated
+			),
+			interest.requestWithInterest("sessionGenres:list", {}, onTypes),
+			interest.requestWithInterest("sessionPresets:list", {}, onPresets)
+		]
+		return () => {
+			for (const release of releases) release()
+		}
 	})
 
 	// Changing type invalidates a copy-source from another type.

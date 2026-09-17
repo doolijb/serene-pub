@@ -439,9 +439,13 @@ describe("guards", () => {
 	 * If preloadEnv.js and getAppDataDir() ever disagree about the default data
 	 * directory, the app reads its database from one place and its
 	 * configuration from another. preloadEnv.js is copied unbundled and cannot
-	 * import $lib, so the two call sites can only be kept honest by comparing
-	 * them — and getAppDataDir()'s module pulls in the database, which a unit
-	 * test must not touch, so compare the source text.
+	 * import $lib at all, so the two call sites can only be kept honest by
+	 * comparing their source text.
+	 *
+	 * ⚠ `getAppDataDir()` lives in `utils/appDataDir.ts`, NOT in
+	 * `utils/index.ts` — it was moved out of that barrel precisely because
+	 * importing the barrel opens a database, and callers that need only a path
+	 * must not pay for one. The barrel re-exports it.
 	 */
 	test("computes the default data directory exactly as getAppDataDir() does", () => {
 		const root = path.resolve(__dirname, "../../../..")
@@ -450,12 +454,19 @@ describe("guards", () => {
 			path.join(root, "src/lib/server/config/preloadEnv.js"),
 			"utf8"
 		)
-		const utils = fs.readFileSync(
-			path.join(root, "src/lib/server/utils/index.ts"),
+		const appDataDir = fs.readFileSync(
+			path.join(root, "src/lib/server/utils/appDataDir.ts"),
 			"utf8"
 		)
 		expect(preload).toContain(call)
-		expect(utils).toContain(call)
+		expect(appDataDir).toContain(call)
+		// And the barrel still hands it to every existing caller.
+		expect(
+			fs.readFileSync(
+				path.join(root, "src/lib/server/utils/index.ts"),
+				"utf8"
+			)
+		).toContain('export { getAppDataDir } from "./appDataDir"')
 	})
 
 	/**

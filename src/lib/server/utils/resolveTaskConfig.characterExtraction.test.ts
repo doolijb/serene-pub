@@ -78,8 +78,19 @@ describe("resolveTaskConfig — character_extraction", () => {
 			summarizeConfigType: "scene"
 		})
 
-		expect(result.connection?.id).toBe(extractionConn.id)
-		expect(result.sampling?.id).toBe(extractionSamp.id)
+		// The column is READ — that is what this test is about, and the problem
+		// names the very endpoint it holds.
+		expect(result.problem?.connectionId).toBe(extractionConn.id)
+		// ⚠ And the sub-task cannot run on it: the override is one column and a
+		// selection is a PAIR, so a scene config pointing at an endpoint no
+		// lower tier has chosen a model for is an incomplete selection.
+		// Connections have no default model, so nothing completes it, and the
+		// refusal names the fix rather than guessing a row.
+		expect(result.connection).toBeNull()
+		expect(result.problem?.kind).toBe("model")
+		expect(result.problem?.message).toMatch(
+			/Pick a model on that connection/
+		)
 	})
 
 	test("falls back to the registered capability default when the scene config sets no override", async () => {
@@ -94,8 +105,18 @@ describe("resolveTaskConfig — character_extraction", () => {
 		const { setCapabilityDefault } = await import(
 			"$lib/server/connections/capabilityDefaults"
 		)
+		// A PAIR, because that is what a registration is.
+		const { ensureConnectionModel } = await import(
+			"$lib/server/connections/models"
+		)
+		const defaultModel = await ensureConnectionModel(
+			testDb as any,
+			defaultConn.id,
+			"default-7b"
+		)
 		await setCapabilityDefault(testDb as any, "text->text", {
 			connectionId: defaultConn.id,
+			connectionModelId: defaultModel!.id,
 			samplingConfigId: defaultSamp.id
 		})
 		const [config] = await testDb

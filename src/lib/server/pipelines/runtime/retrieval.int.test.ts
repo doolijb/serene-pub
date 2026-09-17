@@ -17,7 +17,7 @@ import { describe, it, expect, beforeAll, vi } from "vitest"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import { createHost } from "$lib/server/pipelines/runtime/host"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
-import { spec, compile, run, slot } from "@serene-pub/sdk"
+import { spec, compile, run, slot, splitCandidates } from "@serene-pub/sdk"
 import * as C from "@serene-pub/contracts"
 import * as schema from "$lib/server/db/schema"
 import { eq } from "drizzle-orm"
@@ -34,6 +34,13 @@ vi.mock("$lib/server/embedding", () => ({
 	getLoadedModelId: () => (modelReady ? "test-embed-model" : null)
 }))
 
+/**
+ * The scan's `hits`, items alone. The port opens with the node's band-intent
+ * elements (R-7 P5 — three of them on `lorebook-triggers`, one per band it
+ * produces); readers call `splitCandidates()`.
+ */
+const hitsOf = (output: any): any[] => splitCandidates<any>(output?.hits ?? []).items
+
 let db: TestDb
 let sessionId: number
 let userId: number
@@ -42,7 +49,7 @@ let lorebookId: number
 const retrieval = () =>
 	compile(
 		spec("core:spec/lore-turn", { version: "1.0.0" })
-			.input("input", C.userMessage.v1())
+			.inlet("input", C.userMessage.v1())
 			.query("lore", ($) => C.lorebookTriggers.v1({ text: $.input.text }))
 			.build()
 	)
@@ -137,13 +144,13 @@ describe("lore retrieval in a pipeline", () => {
 		expect(receipt.outcome).toBe("ok")
 
 		const lore = receipt.nodes.find((n) => n.nodeKey === "lore")!
-		const names = (lore.output as any).hits.map((h: any) => h.payload.name)
+		const names = hitsOf(lore.output).map((h: any) => h.payload.name)
 		expect(names).toContain("The Ashguard")
 	})
 
 	it("includes a constant entry that matched nothing", async () => {
 		const lore = (await execute()).nodes.find((n) => n.nodeKey === "lore")!
-		const pinned = (lore.output as any).hits.find(
+		const pinned = hitsOf(lore.output).find(
 			(h: any) => h.payload.name === "Standing Orders"
 		)
 		expect(pinned.pinned).toBe(true)
@@ -168,7 +175,7 @@ describe("lore retrieval in a pipeline", () => {
 		// a level-1 install would — the plan's §4 structural property, that
 		// discovery degrades with setup and selection never does.
 		const lore = (await execute()).nodes.find((n) => n.nodeKey === "lore")!
-		const names = (lore.output as any).hits.map((h: any) => h.payload.name)
+		const names = hitsOf(lore.output).map((h: any) => h.payload.name)
 		expect(names).toContain("Vector Only")
 	})
 
@@ -194,7 +201,7 @@ describe("lore retrieval in a pipeline", () => {
 	 */
 	it("keeps every entry it found when embeddings become available", async () => {
 		const before = (await execute()).nodes.find((n) => n.nodeKey === "lore")!
-		const found = (before.output as any).hits.map(
+		const found = hitsOf(before.output).map(
 			(h: any) => h.payload.name
 		)
 		expect(found).toContain("Vector Only")
@@ -204,7 +211,7 @@ describe("lore retrieval in a pipeline", () => {
 			const after = (await execute()).nodes.find(
 				(n) => n.nodeKey === "lore"
 			)!
-			const names = (after.output as any).hits.map(
+			const names = hitsOf(after.output).map(
 				(h: any) => h.payload.name
 			)
 			for (const name of found)
@@ -252,7 +259,7 @@ describe("lore retrieval in a pipeline", () => {
 		})
 		expect(receipt.outcome).toBe("ok")
 		const lore = receipt.nodes.find((n) => n.nodeKey === "lore")!
-		expect((lore.output as any).hits).toEqual([])
+		expect(hitsOf(lore.output)).toEqual([])
 	})
 
 	it("lore from another session's lorebook is refused, not filtered", async () => {
@@ -263,8 +270,8 @@ describe("lore retrieval in a pipeline", () => {
 				{ sessionId: sessionId + 999 },
 				{
 					key: "lore",
-					typeId: "core:query/lorebook-triggers",
-					typeVersion: 1,
+					definitionId: "core:query/lorebook-triggers",
+					definitionVersion: 1,
 					kind: "query"
 				}
 			)
@@ -290,8 +297,8 @@ describe("character lore is only visible to whoever it belongs to", () => {
 
 	const node = {
 		key: "lore",
-		typeId: "core:query/lorebook-triggers",
-		typeVersion: 1,
+		definitionId: "core:query/lorebook-triggers",
+		definitionVersion: 1,
 		kind: "query" as const
 	}
 
@@ -483,7 +490,7 @@ describe("a candidate records what it was, not just that it was", () => {
 
 	it("carries a fingerprint on every candidate it publishes", async () => {
 		const out = await lore()
-		const hit = out.hits.find((h: any) => h.payload.name === "The Ashguard")
+		const hit = hitsOf(out).find((h: any) => h.payload.name === "The Ashguard")
 		expect(hit.payload.fingerprint).toEqual(expect.any(String))
 		// The annotation lane's short digest, not a full sha256 — one recipe.
 		expect(hit.payload.fingerprint).toHaveLength(16)
@@ -495,7 +502,7 @@ describe("a candidate records what it was, not just that it was", () => {
 		// keys are spelled, about which column is the title — every row reads
 		// as edited and the states stop meaning anything.
 		const out = await lore()
-		const hit = out.hits.find((h: any) => h.payload.name === "The Ashguard")
+		const hit = hitsOf(out).find((h: any) => h.payload.name === "The Ashguard")
 		expect(hit.payload.fingerprint).toBe(await liveHash())
 	})
 
@@ -518,7 +525,7 @@ describe("a candidate records what it was, not just that it was", () => {
 		const receipt = await run(
 			compile(
 				spec("core:spec/world-lore-turn", { version: "1.0.0" })
-					.input("input", C.userMessage.v1())
+					.inlet("input", C.userMessage.v1())
 					.query("world", ($) =>
 						C.worldLore.v1({ scope: $.input.sessionScope })
 					)
@@ -537,7 +544,7 @@ describe("a candidate records what it was, not just that it was", () => {
 		expect(receipt.outcome).toBe("ok")
 		const out = receipt.nodes.find((n) => n.nodeKey === "world")!
 			.output as any
-		const hit = out.hits.find((h: any) => h.id === ashguardId)
+		const hit = hitsOf(out).find((h: any) => h.id === ashguardId)
 		expect(hit.payload.fingerprint).toBe(await liveHash())
 		const skip = out.skipped.find((s: any) => s.id !== ashguardId)
 		expect(skip.fingerprint).toEqual(expect.any(String))
@@ -549,7 +556,7 @@ describe("a candidate records what it was, not just that it was", () => {
 		["a rewritten entry", { content: "An order of oathbound riders, once." }]
 	])("stops matching the record for %s", async (_what, edit) => {
 		const before = await lore()
-		const recorded = before.hits.find(
+		const recorded = hitsOf(before).find(
 			(h: any) => h.id === ashguardId
 		).payload.fingerprint
 		expect(recorded).toBe(await liveHash())

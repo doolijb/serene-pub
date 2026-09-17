@@ -273,14 +273,14 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 				const engines = acceptedEngines(d)
 				if (d.control === "prompts-ref") {
 					promptSlots.add(d.slot)
-					if (d.nodeTypeId)
+					if (d.nodeDefinitionId)
 						promptLabels.set(
-							promptPoolKeyFor(d.nodeTypeId, d.slot),
+							promptPoolKeyFor(d.nodeDefinitionId, d.slot),
 							// The step's own name and the slot's, because a
 							// type may declare more than one prompts slot and
 							// the type name alone would name both headings
 							// identically.
-							`${d.typeLabel || humanizeTypeId(d.nodeTypeId)} · ${d.label}`
+							`${d.typeLabel || humanizeTypeId(d.nodeDefinitionId)} · ${d.label}`
 						)
 				}
 				if (d.control === "variable-template-ref" && d.variableId) {
@@ -291,12 +291,12 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 							`${d.label ?? d.variableId} · ${languageOf(engine)}`
 						)
 				}
-				if (d.control === "context-template-ref" && d.nodeTypeId) {
+				if (d.control === "context-template-ref" && d.nodeDefinitionId) {
 					templateSlots.add(d.slot)
 					for (const engine of engines)
 						nodeTypeLabels.set(
-							contextPoolKeyFor(d.nodeTypeId, engine),
-							`${humanizeTypeId(d.nodeTypeId)} · ${languageOf(engine)}`
+							contextPoolKeyFor(d.nodeDefinitionId, engine),
+							`${humanizeTypeId(d.nodeDefinitionId)} · ${languageOf(engine)}`
 						)
 				}
 			}
@@ -322,7 +322,7 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 			.from(schema.pipelinePrompts)
 			.orderBy(asc(schema.pipelinePrompts.id))
 	).map((p: any) => {
-		const poolId = promptPoolKeyFor(p.nodeTypeId, p.slot)
+		const poolId = promptPoolKeyFor(p.nodeDefinitionId, p.slot)
 		return {
 			id: p.id,
 			poolId,
@@ -332,7 +332,7 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 			// humanized rather than shown raw.
 			poolLabel:
 				promptLabels.get(poolId) ??
-				`${humanizeTypeId(p.nodeTypeId)} · ${p.slot}`,
+				`${humanizeTypeId(p.nodeDefinitionId)} · ${p.slot}`,
 			...(p.createdForSpecId != null
 				? { origin: specName.get(p.createdForSpecId) }
 				: {}),
@@ -358,10 +358,10 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 			source: t.source ?? "",
 			engine,
 			isImmutable: !!t.isImmutable,
-			poolId: t.nodeTypeId,
+			poolId: t.nodeDefinitionId,
 			poolLabel:
-				nodeTypeLabels.get(contextPoolKeyFor(t.nodeTypeId, engine)) ??
-				`${humanizeTypeId(t.nodeTypeId)} · ${languageOf(engine)}`,
+				nodeTypeLabels.get(contextPoolKeyFor(t.nodeDefinitionId, engine)) ??
+				`${humanizeTypeId(t.nodeDefinitionId)} · ${languageOf(engine)}`,
 			...(t.createdForSpecId != null
 				? { origin: specName.get(t.createdForSpecId) }
 				: {}),

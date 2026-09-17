@@ -247,51 +247,53 @@ describe("character import partial failure", () => {
 
 describe("persona import partial failure", () => {
 	test("an oversized avatar imports the persona with a warning, not an error", async () => {
-		const { personasImportCard } = await import("./personas")
+		// personasImportCard (and the whole personas:* socket family) is
+		// gone — a persona is a character row now, and card parsing +
+		// row creation is the same shared building blocks charactersImportCard
+		// itself uses, just calling createPersonaFromParsedData instead of
+		// createCharacterFromParsedData. Exercised directly since there is no
+		// standalone persona-card-import socket handler to call anymore.
+		const { parseCharacterCardFromBase64, getRobustSpecV3Data } =
+			await import("$lib/server/utils/characterCardParser")
+		const { createPersonaFromParsedData } = await import(
+			"$lib/server/utils/personaCard"
+		)
 		const user = await makeUser("oversized-persona-user")
 
 		const png = buildOversizedCharacterPng("Oversized Persona")
-		const emitted: { event: string; payload: any }[] = []
-		const emit = (event: string, payload: any) =>
-			emitted.push({ event, payload })
-
-		const res = await personasImportCard.handler(
-			fakeSocket(user.id),
-			{ file: png.toString("base64") },
-			emit as any
+		const { card, avatarBuffer } = await parseCharacterCardFromBase64(
+			png.toString("base64")
+		)
+		const data = getRobustSpecV3Data(card)
+		const warnings: string[] = []
+		const persona = await createPersonaFromParsedData(
+			data,
+			avatarBuffer,
+			user.id,
+			testDb,
+			warnings
 		)
 
-		expect(res.status).toBe("created")
-		expect(res.persona?.name).toBe("Oversized Persona")
-		expect(
-			emitted.some((e) => e.event === "personas:importCard:error"),
-			"an import that actually succeeded must not emit an error"
-		).toBe(false)
-		expect(res.warnings?.join(" ")).toMatch(/image could not be saved/i)
-		expect(
-			emitted.some((e) => e.event === "personas:list"),
-			"the persona list must be refreshed after an import"
-		).toBe(true)
+		expect(persona.name).toBe("Oversized Persona")
+		expect(persona.isPersona).toBe(true)
+		expect(warnings.join(" ")).toMatch(/image could not be saved/i)
 	}, 60_000)
 
 	test("a genuinely broken persona card still fails, with nothing committed", async () => {
-		const { personasImportCard } = await import("./personas")
+		const { parseCharacterCardFromBase64 } = await import(
+			"$lib/server/utils/characterCardParser"
+		)
 		const user = await makeUser("broken-persona-user")
 
-		const emitted: { event: string; payload: any }[] = []
-		const emit = (event: string, payload: any) =>
-			emitted.push({ event, payload })
-
 		await expect(
-			personasImportCard.handler(
-				fakeSocket(user.id),
-				{ file: Buffer.from("not a card").toString("base64") },
-				emit as any
+			parseCharacterCardFromBase64(
+				Buffer.from("not a card").toString("base64")
 			)
 		).rejects.toThrow()
 
-		const rows = await testDb.query.personas.findMany({
-			where: eq(schema.personas.userId, user.id)
+		const rows = await testDb.query.characters.findMany({
+			where: (c, { and, eq }) =>
+				and(eq(c.userId, user.id), eq(c.isPersona, true))
 		})
 		expect(rows).toHaveLength(0)
 	}, 60_000)

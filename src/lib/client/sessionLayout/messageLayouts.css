@@ -1,39 +1,27 @@
 /* ============================================================================
-   Session message + composer BASE styling (mockup 2026-08-28; the packs became
-   widget styles on 2026-08-30).
+   Session message BASE styling.
 
-   The LOOKS themselves — Clean, Bubbles, Novel, Compact, Dreamlit Cameo, and
-   the composer's Classic / Minimal / Writer — are no longer here. They are
-   seeded `widget_styles` rows (see shared/widgets/corePresets.ts) that the
-   widget's own `WidgetHost` injects scoped to that widget's box, exactly like
-   a style a user writes. Which is the whole point: the shipped packs and a
-   person's own skin are now the same kind of object, picked the same way, from
-   the same place.
+   THE CONTRACT. A message is a flat four-cell grid — `.sp-msg-avatar`,
+   `.sp-msg-identity`, `.sp-msg-controls` and `.sp-msg-content` — under a
+   `.sp-msg` that states what the message IS in `data-msg-*` attributes (role,
+   author, state, plus generating / hidden / greeting / newest), sitting in a
+   `li.sp-msg-row` that carries its scene's colour as `--sp-scene`; identity
+   holds the name, the badges and the live status, controls hold the time, the
+   swipe pair, the quick actions, the ⋮ menu and Stop, content holds the
+   disclosures and the body, and the log's own chrome between rows is
+   `.sp-history-marker` and `.sp-scene-title`. This sheet gives all of that its
+   STRUCTURE — the grid, the spacing, the control sizes, the shared state
+   overlays and the small neutral chrome that carries meaning (the ember dot,
+   the timestamp, the badges, the disclosure panel). The LOOK — the card, the
+   ground, the prose face, the speaker's colour, the scene's edge — belongs to
+   the style packs: seeded `widget_styles` rows (see shared/widgets/corePresets.ts)
+   that the widget's own `WidgetHost` injects scoped to that widget's box,
+   exactly like a style a user writes, so a pack ADDS a look rather than
+   fighting a default.
 
-   What is left here is what every look sits on:
-
-     • the ZERO-STYLE grid skeleton — no background, no card, no baked avatar
-       size — so a style adds its look instead of fighting a default;
-     • the shared message-STATE treatment (selected / dim / editing), one place
-       and consistent across every style;
-     • the mode-aware `--sp-*` skin palette (see below).
-
-   SessionMessage is authored as a FLAT grid of four named cells (its direct
-   children):
-
-       .sp-msg-avatar     .sp-msg-identity     .sp-msg-controls
-       .sp-msg-content  (narrator + thinking collapsibles + the message body)
-
-   A style is a `grid-template-areas` + per-cell CSS, so it can genuinely
-   RESTRUCTURE (avatar beside the body, a single IRC line, no avatar at all).
    The avatar is a plain <img>/glyph (not the reusable Avatar component, which
-   hard-sizes its own root), so every style owns its size and shape via the
-   `--sp-av` custom property.
-
-   `data-msg-state` (normal | selected | dim | editing) carries the message's
-   state; backgrounds and the edit outline hang off it. Only the NORMAL
-   background is style-specific (Clean and Cameo set one; the bare styles
-   don't), so that one lives in the style.
+   hard-sizes its own root), so every style owns its size and shape through
+   `--sp-av`.
 
    Imported once (SessionLayout.svelte) as a plain global sheet — outside
    Tailwind's cascade layers, so it wins over utility classes without
@@ -52,51 +40,46 @@
    instead — tokens follow a clone across modes automatically, unlike a
    hand-written `[data-mode="dark"]` rule, which every clone would have
    to carry forward itself. Anyone writing a style from scratch has these
-   to reach for, and `light-dark()` is not an option until the app sets
-   `color-scheme`.
+   to reach for — or it may use `light-dark()` directly, since Skeleton's
+   globals set `color-scheme`.
 
    Defined unconditionally rather than per style: an unread custom property
    costs nothing, and defining them all here is what lets a CLONE of any style
    keep its colours. */
 :root {
-	/* Clean — the classic card surface. */
-	--sp-clean-card: var(--color-primary-50);
-	/* Bubbles — character bubbles get their own tint so they read AS bubbles
-	   instead of melting into the page background; the user's is the primary
-	   tint. */
-	--sp-bub-bg: color-mix(
-		in oklab,
-		var(--color-secondary-500) 10%,
-		var(--color-surface-100)
-	);
-	--sp-bub-bd: color-mix(in oklab, var(--color-secondary-500) 28%, transparent);
-	--sp-bub-user-bg: var(--color-primary-100);
-	--sp-bub-user-bd: var(--color-primary-300);
-	/* Compact — the IRC speaker name. */
-	--sp-compact-name: var(--color-secondary-600);
-	--sp-compact-user-name: var(--color-primary-600);
 	/* Cameo — a mild, borderless surface card. */
-	--sp-cameo-card: color-mix(in oklab, var(--color-surface-500) 12%, transparent);
-	--sp-cameo-bd: color-mix(in oklab, var(--color-surface-500) 30%, transparent);
-	--sp-cameo-glow: color-mix(in oklab, var(--color-surface-950) 20%, transparent);
-	--sp-cameo-accent: var(--color-primary-600);
+	--sp-cameo-card: color-mix(
+		in oklab,
+		var(--color-surface-500) 12%,
+		transparent
+	);
+	--sp-cameo-glow: color-mix(
+		in oklab,
+		var(--color-surface-950) 20%,
+		transparent
+	);
 }
 [data-mode="dark"] {
-	--sp-clean-card: var(--color-primary-950);
-	--sp-bub-bg: color-mix(
+	--sp-cameo-card: color-mix(
 		in oklab,
-		var(--color-secondary-500) 16%,
-		var(--color-surface-800)
+		var(--color-surface-400) 14%,
+		transparent
 	);
-	--sp-bub-bd: color-mix(in oklab, var(--color-secondary-500) 34%, transparent);
-	--sp-bub-user-bg: var(--color-primary-900);
-	--sp-bub-user-bd: var(--color-primary-700);
-	--sp-compact-name: var(--color-secondary-400);
-	--sp-compact-user-name: var(--color-primary-400);
-	--sp-cameo-card: color-mix(in oklab, var(--color-surface-400) 14%, transparent);
-	--sp-cameo-bd: color-mix(in oklab, var(--color-surface-400) 30%, transparent);
-	--sp-cameo-glow: color-mix(in oklab, var(--color-surface-950) 40%, transparent);
-	--sp-cameo-accent: var(--color-primary-400);
+	--sp-cameo-glow: color-mix(
+		in oklab,
+		var(--color-surface-950) 40%,
+		transparent
+	);
+}
+
+/* ── the row a message sits in ──────────────────────────────────────────
+   One <li> per message. `--sp-scene` is set on it only while the message is
+   in a scene, and the pack draws the scene's edge from it. No `display` here
+   on purpose: the row also takes Tailwind's `hidden` when the message is on
+   another channel, and an unlayered display would beat it. */
+.sp-msg-row {
+	inline-size: 100%;
+	min-inline-size: 0;
 }
 
 /* ── BASE (zero-styled): grid skeleton + neutral spacing only ───────────── */
@@ -106,8 +89,8 @@
 	grid-template-areas:
 		"avatar identity controls"
 		"content content content";
-	column-gap: 0.5rem;
-	row-gap: 0.15rem;
+	column-gap: 1rem;
+	row-gap: 0.25rem;
 	align-items: start;
 	padding: 0.5rem;
 	border-radius: 0.6rem;
@@ -116,20 +99,28 @@
 	grid-area: avatar;
 	align-self: start;
 	display: block;
-	/* Matches the original clean design (~4em). Styles override per pack. */
-	--sp-av: 3.9rem;
+	--sp-av: 2.5rem;
 }
 .sp-msg-identity {
 	grid-area: identity;
 	/* Anchor the name to the TOP of the row (beside the avatar's top), not
 	   centred against the avatar — styles that want it centred override. */
 	align-self: start;
-	min-width: 0;
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+	min-inline-size: 0;
+	min-block-size: 1.75rem;
 }
 .sp-msg-controls {
 	grid-area: controls;
 	align-self: start;
 	justify-self: end;
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	min-block-size: 1.75rem;
 }
 .sp-msg-content {
 	grid-area: content;
@@ -154,6 +145,9 @@
 	object-fit: cover;
 	border-radius: var(--sp-av-radius, 9999px);
 }
+/* The disc a speaker with no picture gets: their initial, in the heading face.
+   Tinted by who is speaking — gold for the person at the keyboard, a surface
+   step for everybody else. */
 .sp-msg-avatar-glyph {
 	display: flex;
 	align-items: center;
@@ -161,24 +155,439 @@
 	width: var(--sp-av);
 	height: var(--sp-av);
 	border-radius: var(--sp-av-radius, 9999px);
-	background: color-mix(in oklab, var(--color-primary-500) 12%, transparent);
+	font-family: var(--typo-heading--font-family);
+	font-weight: 600;
+	font-size: calc(var(--sp-av) * 0.42);
+	line-height: 1;
+	background: var(--color-surface-200);
+	color: var(--color-surface-800);
+}
+[data-mode="dark"] .sp-msg-avatar-glyph {
+	background: var(--color-surface-800);
+	color: var(--color-surface-200);
+}
+.sp-msg[data-msg-author="persona"] .sp-msg-avatar-glyph {
+	background: color-mix(in oklab, var(--color-primary-500) 14%, transparent);
+	color: var(--color-primary-700);
+}
+[data-mode="dark"] .sp-msg[data-msg-author="persona"] .sp-msg-avatar-glyph {
 	color: var(--color-primary-500);
+}
+
+/* ── identity: the name, what the message is, what it is doing ─────────── */
+.sp-msg-name {
+	display: block;
+	max-inline-size: 100%;
+	margin: 0;
+	padding: 0;
+	border: 0;
+	background: none;
+	font-family: var(--typo-heading--font-family);
+	font-size: 0.875rem;
+	font-weight: 600;
+	line-height: 1.4;
+	text-align: start;
+	color: inherit;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+button.sp-msg-name {
+	cursor: pointer;
+}
+button.sp-msg-name:hover {
+	text-decoration: underline;
+}
+
+.sp-msg-badges {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.375rem;
+	min-inline-size: 0;
+}
+.sp-msg-badge {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.25rem;
+	flex: none;
+	font-size: 0.75rem;
+	line-height: 1.4;
+	color: var(--color-surface-500);
+}
+/* The scene's own colour, inherited from the row (`--sp-scene`), so this badge
+   and the pack's scene edge are the same colour by construction. */
+.sp-msg-badge-scene {
+	color: var(--sp-scene, var(--color-surface-500));
+}
+.sp-msg-badge-text {
+	max-inline-size: 12ch;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.sp-msg-status {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.375rem;
+	flex: none;
+	font-size: 0.75rem;
+	line-height: 1.4;
+	color: var(--color-surface-500);
+}
+
+/* The ember: the one motion in the app that repeats on its own, and it means
+   the model is working (STYLE-GUIDE §8). */
+.sp-dot {
+	position: relative;
+	flex: none;
+	inline-size: 6px;
+	block-size: 6px;
+	border-radius: 9999px;
+	background: var(--color-warning-500);
+}
+.sp-dot::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	border-radius: inherit;
+	animation: sp-dot-pulse 1.6s ease-out infinite;
+}
+@keyframes sp-dot-pulse {
+	from {
+		box-shadow: 0 0 0 0
+			color-mix(in oklab, var(--color-warning-500) 55%, transparent);
+	}
+	to {
+		box-shadow: 0 0 0 6px transparent;
+	}
+}
+
+/* ── controls: time, swipes, quick actions, the menu, Stop ─────────────── */
+.sp-msg-time {
+	flex: none;
+	font-size: 0.75rem;
+	line-height: 1.4;
+	font-variant-numeric: tabular-nums;
+	color: var(--color-surface-500);
+}
+/* The widget's own setting decides whether the clock is drawn at all. */
+.sp-conversation[data-show-timestamps="false"] .sp-msg-time {
+	display: none;
+}
+
+.sp-msg-swipes {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+}
+.sp-msg-swipe-count {
+	min-inline-size: 3.5ch;
+	text-align: center;
+	font-size: 0.75rem;
+	line-height: 1.4;
+	font-variant-numeric: tabular-nums;
+	user-select: none;
+	color: var(--color-surface-500);
+}
+
+.sp-msg-actions {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+}
+/* Nothing is hover-only (STYLE-GUIDE §9): the quick icons fade in under a
+   fine pointer on hover or focus, and stand permanently on a coarse one. */
+@media (pointer: fine) {
+	.sp-msg-actions {
+		opacity: 0;
+		transition: opacity 120ms ease-out;
+	}
+	.sp-msg:hover .sp-msg-actions,
+	.sp-msg:focus-within .sp-msg-actions {
+		opacity: 1;
+	}
+}
+.sp-msg-menu {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+}
+.sp-msg-menu-root {
+	display: inline-flex;
+	align-items: center;
+}
+
+/* One box for every icon control on the row: the swipe arrows, the quick
+   actions and the ⋮ trigger. */
+.sp-msg-icon-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: none;
+	inline-size: 1.75rem;
+	block-size: 1.75rem;
+	padding: 0;
+	border: 0;
+	border-radius: 0.5rem;
+	background: none;
+	cursor: pointer;
+	color: var(--color-surface-600);
+}
+[data-mode="dark"] .sp-msg-icon-btn {
+	color: var(--color-surface-400);
+}
+.sp-msg-icon-btn:hover:not(:disabled) {
+	background: var(--color-surface-200);
+	color: var(--color-surface-900);
+}
+[data-mode="dark"] .sp-msg-icon-btn:hover:not(:disabled) {
+	background: var(--color-surface-800);
+	color: var(--color-surface-100);
+}
+/* The ⋮ trigger holds the hover treatment while its menu is open. */
+.sp-msg-icon-btn[aria-expanded="true"] {
+	background: var(--color-surface-200);
+	color: var(--color-surface-900);
+}
+[data-mode="dark"] .sp-msg-icon-btn[aria-expanded="true"] {
+	background: var(--color-surface-800);
+	color: var(--color-surface-100);
+}
+.sp-msg-icon-btn:disabled {
+	opacity: 0.35;
+	cursor: not-allowed;
+}
+/* A 28px control gets a 44px target where a finger can land. */
+@media (pointer: coarse) {
+	.sp-msg-icon-btn {
+		position: relative;
+	}
+	.sp-msg-icon-btn::after {
+		content: "";
+		position: absolute;
+		inset: -0.5rem;
+	}
+}
+
+/* Quiet text action (Cancel, beside Save). */
+.sp-msg-quiet-btn {
+	flex: none;
+	padding: 0.25rem 0.5rem;
+	border: 0;
+	border-radius: 0.5rem;
+	background: none;
+	cursor: pointer;
+	font-size: 0.8125rem;
+	line-height: 1.45;
+	color: var(--color-surface-600);
+}
+[data-mode="dark"] .sp-msg-quiet-btn {
+	color: var(--color-surface-400);
+}
+.sp-msg-quiet-btn:hover {
+	color: var(--color-surface-900);
+}
+[data-mode="dark"] .sp-msg-quiet-btn:hover {
+	color: var(--color-surface-100);
+}
+
+/* Stop: the one control that ends something in flight, so it says its word. */
+.sp-msg-stop {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.25rem;
+	flex: none;
+	padding: 0.125rem 0.5rem;
+	border: 0;
+	border-radius: 9999px;
+	cursor: pointer;
+	font-size: 0.75rem;
+	line-height: 1.5;
+}
+
+/* Focus is visible on everything the row can reach (STYLE-GUIDE §9). */
+.sp-msg button:focus-visible,
+.sp-msg [role="button"]:focus-visible,
+.sp-history-marker:focus-visible,
+.sp-scene-title:focus-visible {
+	outline: 2px solid var(--color-primary-500);
+	outline-offset: 2px;
+}
+
+/* ── content: the disclosures above the body ───────────────────────────── */
+.sp-msg-disclosures {
+	display: flex;
+	flex-direction: column;
+	gap: 0.125rem;
+	margin-block-end: 0.25rem;
+}
+.sp-disclosure-toggle {
+	display: flex;
+	align-items: center;
+	gap: 0.375rem;
+	inline-size: 100%;
+	padding: 0.25rem 0;
+	border: 0;
+	background: none;
+	cursor: pointer;
+	font-size: 0.75rem;
+	line-height: 1.4;
+	color: var(--color-surface-500);
+}
+.sp-disclosure-toggle:hover {
+	color: var(--color-surface-700);
+}
+[data-mode="dark"] .sp-disclosure-toggle:hover {
+	color: var(--color-surface-300);
+}
+.sp-disclosure-toggle svg:last-child {
+	transition: transform 150ms ease-out;
+}
+.sp-disclosure-toggle[aria-expanded="true"] svg:last-child {
+	transform: rotate(180deg);
+}
+/* 0fr -> 1fr is the only way to transition to and from an auto height in pure
+   CSS; the clip element is what keeps the content inside the collapsed track. */
+.sp-disclosure-track {
+	display: grid;
+	transition: grid-template-rows 200ms ease-out;
+}
+.sp-disclosure-clip {
+	overflow: hidden;
+}
+.sp-disclosure-panel {
+	padding: 0.5rem 0.625rem;
+	border-radius: 10px;
+	font-family: var(--typo-base--font-family);
+	font-size: 0.8125rem;
+	line-height: 1.5;
+	background: var(--color-surface-50);
+	color: var(--color-surface-700);
+}
+[data-mode="dark"] .sp-disclosure-panel {
+	background: var(--color-surface-950);
+	color: var(--color-surface-300);
+}
+
+/* ── the error a reply can carry ───────────────────────────────────────── */
+.sp-msg-error {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 0.25rem;
+	inline-size: 100%;
+	font-size: 0.8125rem;
+	line-height: 1.5;
+}
+.sp-msg-error-detail {
+	max-block-size: 10rem;
+	overflow: auto;
+	white-space: pre-wrap;
+	font-size: 0.75rem;
+	opacity: 0.8;
+}
+.sp-msg-retry {
+	border: 0;
+	background: none;
+	padding: 0;
+	cursor: pointer;
+	font-size: 0.8125rem;
+	text-decoration: underline;
+	text-underline-offset: 2px;
+	color: var(--color-primary-700);
+}
+[data-mode="dark"] .sp-msg-retry {
+	color: var(--color-primary-500);
+}
+
+/* ── the log's chrome between rows ─────────────────────────────────────── */
+.sp-history-marker {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 0.375rem;
+	inline-size: 100%;
+	padding: 0.25rem 0.5rem;
+	border: 0;
+	background: none;
+	font-size: 0.75rem;
+	line-height: 1.4;
+	color: var(--color-surface-500);
+}
+button.sp-history-marker {
+	cursor: pointer;
+}
+button.sp-history-marker:hover {
+	color: var(--color-surface-700);
+}
+[data-mode="dark"] button.sp-history-marker:hover {
+	color: var(--color-surface-300);
+}
+.sp-history-marker-new {
+	color: var(--color-primary-700);
+}
+[data-mode="dark"] .sp-history-marker-new {
+	color: var(--color-primary-500);
+}
+.sp-scene-title {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.375rem;
+	padding: 0;
+	border: 0;
+	background: none;
+	font-family: var(--typo-heading--font-family);
+	font-size: 0.875rem;
+	font-weight: 600;
+	line-height: 1.4;
+	color: var(--sp-scene, var(--color-surface-500));
+}
+button.sp-scene-title {
+	cursor: pointer;
+}
+button.sp-scene-title:hover {
+	text-decoration: underline;
+}
+.sp-scene-title-state {
+	font-family: var(--typo-base--font-family);
+	font-size: 0.75rem;
+	font-weight: 400;
+	color: var(--color-surface-500);
 }
 
 /* ── Message state (all styles) ─────────────────────────────────────────── */
 .chat-core .sp-msg[data-msg-state="selected"] {
-	background: var(--color-secondary-100);
+	background: var(--color-surface-200);
+	box-shadow: inset 3px 0 0 var(--color-primary-500);
 }
 [data-mode="dark"] .chat-core .sp-msg[data-msg-state="selected"] {
-	background: var(--color-secondary-900);
+	background: var(--color-surface-800);
 }
 .chat-core .sp-msg[data-msg-state="dim"] {
-	opacity: 0.6;
-	background: color-mix(in oklab, var(--color-surface-500) 14%, transparent);
+	opacity: 0.55;
+}
+/* A hidden message is out of what the model reads, and reads that way. */
+.chat-core
+	.sp-msg[data-msg-hidden]:not(
+		[data-msg-state="editing"],
+		[data-msg-state="selected"]
+	) {
+	opacity: 0.55;
 }
 .chat-core .sp-msg[data-msg-state="editing"] {
 	outline: 2px solid
 		color-mix(in oklab, var(--color-warning-500) 70%, transparent);
 	outline-offset: -1px;
 	box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.18);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.sp-dot::after,
+	.sp-msg-actions,
+	.sp-disclosure-track,
+	.sp-disclosure-toggle svg:last-child {
+		animation: none;
+		transition: none;
+	}
 }

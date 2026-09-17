@@ -20,6 +20,12 @@
  *         whole design.
  */
 
+import {
+	isBandPriority,
+	type BandIntent,
+	type BandPriority
+} from "@serene-pub/sdk"
+
 /**
  * A **band**: what kind of content a candidate is, and whose budget share pays
  * for it. The five things the context is built from; a slider exists per entry
@@ -39,6 +45,57 @@ export type RetrievalBand =
 	| "characterLore"
 	| "history"
 	| "relationships"
+
+/**
+ * A band's key at runtime: one of the five, or whatever a plugin source
+ * declares (R-7 P5). The five stay a closed type where the code needs one
+ * complete row per core band — the signal matrix — and a plugin band is a
+ * string beside them, read through `bandsFromIntents` and scored with
+ * `signalsForBand`.
+ */
+export type BandKey = RetrievalBand | (string & {})
+
+/**
+ * The index's spelling for a source, as the budget group that pays for it.
+ *
+ * `select` allocates against the five bands; the vector mechanism's
+ * candidates carry the vector index's own vocabulary, and only `worldLore` and
+ * `characterLore` happen to be spelled the same in both. Without this, a
+ * semantic-mechanism spec — `vector-search → rank-semantic → rank-hybrid`, the shape
+ * the RAG parity harness and the SDK use-cases document — reached the ranker
+ * with every message, history entry and relationship in a spelling no group
+ * owned, and `select` dropped the lot as `excluded_unknown_source`. Assemble
+ * keys its `worldLore` / `history` / `characterLore` sections off the same five
+ * names, so a survivor would have rendered nowhere either.
+ *
+ * ⚠ Applied at the entry to `rank-hybrid` and nowhere earlier — to the
+ * candidates by `toBudgetGroups` in `bindings.ts`, to the band intents ahead
+ * of them by `bandsFromIntents` below. `rank-semantic` matches
+ * `sourceBudget` keys against the *index* vocabulary literally
+ * (`DEFAULT_SEMANTIC`), a `S.json` in-port makes it legal to wire after
+ * `core:task/merge-candidates@1`, and the documented semantic chain has no
+ * merge node at all — so the merge is neither early enough nor reliably
+ * present. Ranking is the last node before the budget, and the first that has
+ * to know about it.
+ *
+ * ⚠ Deliberately three entries, not six. `narrativeNode`, `character` and
+ * `persona` have no band to map onto — inventing one is a budget-share
+ * decision, not a spelling fix — so they keep being excluded, now visibly, with
+ * a reason on the receipt. The original spelling survives on the candidate's
+ * `payload`, which is the vector hit as it arrived.
+ *
+ * Separate from `VECTOR_SOURCE_ALIASES` (`bindings.ts`) although they agree
+ * on `historyEntry` today. That one answers "which lore row is this hit", and
+ * is read against a `lorebook_entries` result and `LORE_SOURCES`; this one
+ * answers "which budget pays for it". Folding them together would mean the three sources above join
+ * the lore-row lookup the moment somebody settles their budget group, which is
+ * an unrelated question with a different right answer.
+ */
+export const BUDGET_GROUP_ALIASES: Record<string, string> = {
+	message: "messages",
+	historyEntry: "history",
+	narrativeRelationship: "relationships"
+}
 
 // ── (i) Signal weights ──────────────────────────────────────────────────────
 
@@ -480,12 +537,12 @@ export interface SemanticParams {
 	/** How fast that lift decays with age. `RagInfillEngine:114`. */
 	recencyDecay: number
 	/**
-	 * Floor for the adaptive score threshold, and the fraction of the top score
+	 * Threshold for the adaptive score cutoff, and the fraction of the top score
 	 * it must also clear. `RagInfillEngine:117-119`.
 	 *
 	 * Two numbers rather than one because they answer different questions: the
-	 * floor rejects a session where *nothing* is relevant, the relative one rejects
-	 * the long tail of a session where something is.
+	 * threshold rejects a session where *nothing* is relevant, the relative one
+	 * rejects the long tail of a session where something is.
 	 */
 	thresholdMin: number
 	relativeThreshold: number
@@ -602,44 +659,77 @@ export const SIGNAL_MECHANISM: Partial<
  * Today's fixed behaviour is this model with the sliders welded: messages get
  * `MESSAGE_FILL_FRACTION = 0.5` and everything else shares the rest.
  */
+/**
+ * ⚠ **Resolved from the sources (R-7 P5), never declared on the ranker.**
+ * Each retrieval definition declares its own `share`, `maxEntries`,
+ * `minEntries` and `priority` and publishes them as a `BandIntent` at the
+ * head of its candidates; `bandsFromIntents` below turns the intents the
+ * ranker was handed into this table, over `DEFAULT_GROUPS` for the five core
+ * bands. The ranker's own params carry none of it. The shape exists because
+ * `select` and `allocateBudgets` are written against it, and because it is
+ * the honest view of what one run resolved — the receipt records it whole.
+ */
 export interface GroupWeights {
 	/** Relative importance. Normalised, so only the ratios matter. */
-	share: Record<RetrievalBand, number>
-	/** Most entries a source may contribute. `KeywordInfillEngine:56`. */
-	maxEntries: Record<RetrievalBand, number>
+	share: Record<BandKey, number>
+	/**
+	 * Most entries a source may contribute. `KeywordInfillEngine:56`. Absent
+	 * means **no ceiling** — `relationship-search` declares none by default,
+	 * and its own cap is the band's.
+	 */
+	maxEntries: Record<BandKey, number | undefined>
+	/**
+	 * How strongly a band resists being trimmed once its minimum is met
+	 * (`BandPriority` in the SDK). `normal` everywhere is no ordering at all —
+	 * the sweep stays in score order — which is what every source ships.
+	 */
+	priority: Record<BandKey, BandPriority>
 	/**
 	 * Fewest entries a source keeps when space is tight, whatever its share.
 	 *
 	 * ⚠ This replaced `minMessageTokens: 512`, and the change is a change of
-	 * unit as much as of scope. A token floor answered "how much conversation"
+	 * unit as much as of scope. A token minimum answered "how much conversation"
 	 * in a currency nobody thinks in — 512 tokens is some number of messages
 	 * that depends on how long the last few were, so the same setting produced
 	 * a different amount of readable session on every turn. Entries is what the
 	 * user means: *keep the last six messages*.
 	 *
-	 * These are floors, not reservations — `select` fills them in score order
-	 * and stops at `availableTokens`. Floors that sum past the window are the
+	 * These are minimums, not reservations — `select` fills them in score order
+	 * and stops at `availableTokens`. Minimums that sum past the window are the
 	 * one way this could produce a prompt too big to send, so they lose.
 	 *
 	 * ## ⚠ Only `messages` is reachable now — ruling R6
 	 *
-	 * *"Per-source floors are removed everywhere except recent conversation,
+	 * *"Per-source minimums are removed everywhere except recent conversation,
 	 * which keeps its guaranteed share. Lore competes on score alone."* The
 	 * declaration on `core:task/rank-hybrid@1` names one band, `rankingParamsFrom`
 	 * reads one key out of whatever a stored value holds, and migration 0201
-	 * rewrites the values already stored. So no lore floor can be set.
+	 * rewrites the values already stored. So no lore minimum can be set.
 	 *
 	 * **The map keeps its five keys and `select` keeps honouring all of them**,
-	 * and that is not an oversight. A floor is the one mechanism that could
+	 * and that is not an oversight. A minimum is the one mechanism that could
 	 * quietly re-admit a candidate the ranker excluded, which is exactly what
-	 * R1's clairvoyance filter must not allow — so `select` proves a floor
+	 * R1's clairvoyance filter must not allow — so `select` proves a minimum
 	 * cannot resurrect an `ineligible` candidate, and that proof needs a lore
-	 * floor to exist for the test to construct. Removing the shape would remove
-	 * the guard along with the feature.
+	 * minimum to exist for the test to construct. Removing the shape would
+	 * remove the guard along with the feature.
 	 */
-	minEntries: Record<RetrievalBand, number>
+	minEntries: Record<BandKey, number>
 }
 
+/**
+ * The five core bands' defaults — **the fallback for a band no source
+ * declared this run**, and pinned equal to what the source definitions
+ * declare by `runtime/signalWiring.int.test.ts`.
+ *
+ * Still here after R-7 P5, and on purpose: a spec that ranks
+ * `lorebook-triggers@1` (one node, three bands, no per-band declaration), the
+ * vector-only parity harness, or a candidate a plugin stamps `worldLore` with
+ * no intent of its own all reach the ranker with bands nothing spoke for, and
+ * the parity corpus holds that they select exactly what they always did. A
+ * band outside these five with no intent is not defaulted — it is excluded
+ * with `excluded_unknown_source`, which is the loud answer.
+ */
 export const DEFAULT_GROUPS: GroupWeights = {
 	// 0.5 to messages and 0.5 across the lore sources reproduces
 	// MESSAGE_FILL_FRACTION exactly; the split within lore is unweighted today,
@@ -656,11 +746,22 @@ export const DEFAULT_GROUPS: GroupWeights = {
 		worldLore: 20,
 		characterLore: 15,
 		history: 10,
-		relationships: 0
+		// Uncapped, as `relationship-search@1`'s own `maxEntries` declares
+		// (no default = no ceiling). ⚠ Not 0: a cap of nothing behind a share
+		// of nothing means raising the share alone excludes every relationship
+		// as over its ceiling, which is a trap and not a default.
+		relationships: undefined
+	},
+	priority: {
+		messages: "normal",
+		worldLore: "normal",
+		characterLore: "normal",
+		history: "normal",
+		relationships: "normal"
 	},
 	// Six messages is what `core:query/session-history@1` used to guarantee under
 	// its own `minInclude`. The others are zero and — since R6 — unreachable:
-	// a floor is a promise to spend budget on something whether or not it
+	// a minimum is a promise to spend budget on something whether or not it
 	// scored, which is the opposite of what a ranker is for, and it is the one
 	// route by which an excluded entry could come back in.
 	minEntries: {
@@ -751,16 +852,94 @@ export function withDefaults(
 				...DEFAULT_GROUPS.maxEntries,
 				...(partial.groups?.maxEntries ?? {})
 			},
-			// Nested like its two neighbours, so naming one source's floor
+			// Nested like its two neighbours, so naming one source's minimum
 			// does not silently set every other source's to undefined —
 			// which `select` would read as zero and quietly stop honouring.
 			minEntries: {
 				...DEFAULT_GROUPS.minEntries,
 				...(partial.groups?.minEntries ?? {})
+			},
+			priority: {
+				...DEFAULT_GROUPS.priority,
+				...(partial.groups?.priority ?? {})
 			}
 		}
 	}
 }
+
+/**
+ * The band table one run resolves, from what the sources said (R-7 P5).
+ *
+ * Every intent the ranker was handed overlays the core defaults, field by
+ * field: a source that declared a share and no ceiling gets its share and the
+ * default ceiling for its band; a plugin band nothing defaults gets exactly
+ * what it declared and `0` / `normal` / no ceiling where it said nothing. A
+ * core band no source spoke for this run keeps `DEFAULT_GROUPS`' row — see
+ * that constant for why.
+ *
+ * Also the receipt's answer to "where did this share come from": `declared`
+ * lists the bands an intent reached the ranker for, so a source whose params
+ * a spec forgot to wire is visible as a band running on defaults.
+ */
+export function bandsFromIntents(
+	intents: readonly BandIntent[],
+	fallback: GroupWeights = DEFAULT_GROUPS
+): { groups: GroupWeights; declared: string[] } {
+	const groups: GroupWeights = {
+		share: { ...fallback.share },
+		maxEntries: { ...fallback.maxEntries },
+		minEntries: { ...fallback.minEntries },
+		priority: { ...fallback.priority }
+	}
+	const declared: string[] = []
+	for (const { band: spelled, intent } of intents) {
+		// The index's spelling lands on the budget group that pays for it,
+		// exactly as the candidates' does (`toBudgetGroups`): an intent for
+		// `message` is the `messages` band's, not a sixth band beside it.
+		const band = BUDGET_GROUP_ALIASES[spelled] ?? spelled
+		if (declared.includes(band)) continue // first per band wins
+		declared.push(band)
+		if (!(band in groups.share)) {
+			groups.share[band] = 0
+			groups.maxEntries[band] = undefined
+			groups.minEntries[band] = 0
+			groups.priority[band] = "normal"
+		}
+		if (typeof intent.share === "number" && Number.isFinite(intent.share))
+			groups.share[band] = Math.max(0, intent.share)
+		if (
+			typeof intent.maxEntries === "number" &&
+			Number.isFinite(intent.maxEntries)
+		)
+			groups.maxEntries[band] = Math.max(0, Math.floor(intent.maxEntries))
+		if (
+			typeof intent.minEntries === "number" &&
+			Number.isFinite(intent.minEntries)
+		)
+			groups.minEntries[band] = Math.max(0, Math.floor(intent.minEntries))
+		if (isBandPriority(intent.priority))
+			groups.priority[band] = intent.priority
+	}
+	return { groups, declared }
+}
+
+/**
+ * The signal set a band's candidates are scored with. One complete row per
+ * core band; a plugin band takes the lore row, which is what a source that
+ * publishes lorebook-shaped signals means, and a source that ranks itself
+ * hands over a `presetScore` that this never reaches.
+ */
+export function signalsForBand(
+	signals: Record<RetrievalBand, SignalWeights>,
+	band: BandKey
+): SignalWeights {
+	return signals[band as RetrievalBand] ?? signals.worldLore
+}
+
+/** How the sources' shares are read when the window is divided. See `SHARE_NORMALISATION`. */
+export type ShareNormalisation = "relative" | "fixed"
+export const isShareNormalisation = (v: unknown): v is ShareNormalisation =>
+	v === "relative" || v === "fixed"
 
 type DeepPartial<T> = {
 	[K in keyof T]?: T[K] extends object ? Partial<T[K]> : T[K]
@@ -772,28 +951,36 @@ type DeepPartial<T> = {
  * Zero-weight sources are excluded before normalising, so a disabled group does
  * not quietly consume budget it cannot use.
  *
- * Purely proportional now. The message floor used to be applied here, raising
+ * Purely proportional now. The message minimum used to be applied here, raising
  * `out.messages` *after* the split without taking the difference from anywhere
  * — so the returned budgets could sum past `availableTokens`, and on a small
- * window routinely did. Floors are `minEntries` and belong to `select`, which
+ * window routinely did. Minimums are `minEntries` and belong to `select`, which
  * is the only place that knows what a candidate costs.
  */
 export function allocateBudgets(
 	groups: GroupWeights,
-	availableTokens: number
-): Record<RetrievalBand, number> {
-	const active = (Object.keys(groups.share) as RetrievalBand[]).filter(
+	availableTokens: number,
+	normalisation: ShareNormalisation = "relative"
+): Record<BandKey, number> {
+	const active = (Object.keys(groups.share) as BandKey[]).filter(
 		(k) => groups.share[k] > 0
 	)
 	const total = active.reduce((sum, k) => sum + groups.share[k], 0)
 
 	const out = Object.fromEntries(
-		(Object.keys(groups.share) as RetrievalBand[]).map((k) => [k, 0])
-	) as Record<RetrievalBand, number>
+		(Object.keys(groups.share) as BandKey[]).map((k) => [k, 0])
+	) as Record<BandKey, number>
 	if (total <= 0 || availableTokens <= 0) return out
 
+	/**
+	 * `relative`: `share / Σ shares` — the arithmetic this has always run,
+	 * bit for bit. `fixed`: each share is the fraction of the window it
+	 * states, and the set is scaled down together only when it exceeds the
+	 * window — so `Math.max(1, total)` is the whole of the difference.
+	 */
+	const divisor = normalisation === "fixed" ? Math.max(1, total) : total
 	for (const k of active)
-		out[k] = Math.floor(availableTokens * (groups.share[k] / total))
+		out[k] = Math.floor(availableTokens * (groups.share[k] / divisor))
 
 	return out
 }

@@ -1,8 +1,9 @@
 <script lang="ts">
 	import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
-	import { onMount, onDestroy } from "svelte"
+	import { onMount } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { z } from "zod"
 
 	/**
@@ -24,7 +25,6 @@
 	}
 
 	const schema = z.object({
-		model: z.string().min(1, "Model is required"),
 		apiKey: z.string().min(1, "API key is required")
 	})
 
@@ -39,27 +39,18 @@
 		apiKey: ""
 	}
 
-	let availableModels: any[] = $state([])
 	let fields: ExtraFieldData | undefined = $state()
 	let validationErrors: ValidationErrors = $state({})
 	let testResult: { ok: boolean; error?: string | null } | null = $state(null)
 
-		const onConnectionsRefreshModels = (msg: Sockets.Connections.RefreshModels.Response) => {
-		if (msg.models) availableModels = msg.models
-	}
-	socket.on("connections:refreshModels", onConnectionsRefreshModels)
-
-	// Named so `off` can name it too. A bare `socket.off("connections:test")`
-	// removes EVERY listener for that event — including the parent sidebar's,
-	// which then stops updating for the rest of the session.
+	// Standing interest in the test result, held by the registry for as long as
+	// this form is mounted and released with it. The registry keeps ONE raw
+	// listener for the event and fans it out, so the parent sidebar's own
+	// interest is untouched by this form coming and going.
 	const onConnectionsTest = (msg: Sockets.Connections.Test.Response) => {
 		testResult = msg
 	}
-	socket.on("connections:test", onConnectionsTest)
-
-	function handleRefreshModels() {
-		socket.emit("connections:refreshModels", { connection })
-	}
+	useInterest<"connections:test">("connections:test", onConnectionsTest)
 
 	function handleTestConnection() {
 		if (!validateConnection()) return
@@ -69,7 +60,6 @@
 
 	function validateConnection(): boolean {
 		const result = schema.safeParse({
-			model: connection.model || "",
 			apiKey: fields?.apiKey || ""
 		})
 		if (result.success) {
@@ -109,45 +99,13 @@
 			...defaultExtraJson,
 			...(connection.extraJson || {})
 		})
-		handleRefreshModels()
-	})
-
-	onDestroy(() => {
-		socket.off("connections:refreshModels", onConnectionsRefreshModels)
-		socket.off("connections:test", onConnectionsTest)
 	})
 </script>
 
 {#if connection && fields}
-	<div class="mt-2 flex flex-col gap-1">
-		<label class="font-semibold" for="model">Model</label>
-		<select
-			id="model"
-			bind:value={connection.model}
-			class="select bg-background border-muted w-full rounded border {validationErrors.model
-				? 'border-error-500'
-				: ''}"
-		>
-			<option value="">-- Select Model --</option>
-			{#each availableModels as m}
-				<option value={m.id}>{m.name}</option>
-			{/each}
-		</select>
-		{#if validationErrors.model}
-			<p class="text-error-500 mt-1 text-sm" role="alert">
-				{validationErrors.model}
-			</p>
-		{/if}
-	</div>
+	<!-- Model picker removed: models live in the Models section below. -->
 
 	<div class="mt-4 flex gap-2">
-		<button
-			type="button"
-			class="btn btn-sm preset-tonal-primary w-full"
-			onclick={handleRefreshModels}
-		>
-			Refresh Models
-		</button>
 		<button
 			type="button"
 			class="btn preset-tonal-success btn-sm w-full"

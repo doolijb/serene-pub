@@ -29,6 +29,8 @@ import * as C from "@serene-pub/contracts"
 import {
 	start,
 	cancel,
+	cancelSession,
+	setLiveRow,
 	finish,
 	active,
 	cancellation,
@@ -46,12 +48,12 @@ afterEach(() => setRunStopObserver(null))
 
 describe("what a stopped run knows about who stopped it", () => {
 	it("says nothing while the run is still going", () => {
-		const handle = start({ runId: "r1", userId: USER })
+		const handle = start({ runId: "r1", userId: USER, kind: "action" })
 		expect(cancellation(handle)).toBeUndefined()
 	})
 
 	it("names the person who pressed Cancel", () => {
-		const handle = start({ runId: "r1", userId: USER })
+		const handle = start({ runId: "r1", userId: USER, kind: "action" })
 		expect(cancel("r1", USER)).toEqual({ found: true, allowed: true })
 		expect(cancellation(handle)).toEqual({
 			by: `user:${USER}`,
@@ -62,8 +64,8 @@ describe("what a stopped run knows about who stopped it", () => {
 	it("does not invent a person for a run superseded by a re-send", () => {
 		// A repeated id means a client re-sent; nobody pressed anything, so the
 		// stale run's receipt must not claim a user cancelled it.
-		const stale = start({ runId: "r1", userId: USER })
-		start({ runId: "r1", userId: USER })
+		const stale = start({ runId: "r1", userId: USER, kind: "action" })
+		start({ runId: "r1", userId: USER, kind: "action" })
 		expect(cancellation(stale)).toEqual({
 			by: "system:superseded",
 			reason: "superseded by a newer run with the same id"
@@ -71,7 +73,7 @@ describe("what a stopped run knows about who stopped it", () => {
 	})
 
 	it("distinguishes a registry reset from either", () => {
-		const handle = start({ runId: "r1", userId: USER })
+		const handle = start({ runId: "r1", userId: USER, kind: "action" })
 		_reset()
 		expect(cancellation(handle)).toEqual({
 			by: "system:reset",
@@ -80,7 +82,7 @@ describe("what a stopped run knows about who stopped it", () => {
 	})
 
 	it("leaves somebody else's run running, and unstamped", () => {
-		const handle = start({ runId: "r1", userId: USER })
+		const handle = start({ runId: "r1", userId: USER, kind: "action" })
 		expect(cancel("r1", OTHER_USER)).toEqual({
 			found: true,
 			allowed: false
@@ -90,7 +92,7 @@ describe("what a stopped run knows about who stopped it", () => {
 	})
 
 	it("deregisters exactly once, and a late cancel is not an error", () => {
-		start({ runId: "r1", userId: USER })
+		start({ runId: "r1", userId: USER, kind: "action" })
 		finish("r1")
 		expect(active()).toHaveLength(0)
 		expect(cancel("r1", USER)).toEqual({ found: false, allowed: true })
@@ -108,7 +110,7 @@ describe("what a stopped run knows about who stopped it", () => {
 const twoNodes = () =>
 	compile(
 		spec("test:spec/cancel-wiring", { version: "1.0.0" })
-			.input("input", C.userMessage.v1())
+			.inlet("input", C.userMessage.v1())
 			.query("first", ($) =>
 				C.sessionHistory.v1({ scope: $.input.sessionScope })
 			)
@@ -121,13 +123,13 @@ const twoNodes = () =>
 describe("the executor stopping between nodes", () => {
 	it("does not run the node after the cancelled one", async () => {
 		const ran: string[] = []
-		const handle = start({ runId: "r1", userId: USER })
+		const handle = start({ runId: "r1", userId: USER, kind: "action" })
 
 		const receipt = await run(twoNodes(), {
 			input: { text: "hello", sessionScope: { sessionId: 1 } },
 			seed: "seed:cancel",
 			bindings: {
-				"core:input/user-message@1": async (i: any) => ok(i),
+				"core:inlet/user-message@1": async (i: any) => ok(i),
 				"core:query/session-history@1": async () => {
 					ran.push("first")
 					// Mid-node, exactly as a socket handler would: the person
@@ -156,13 +158,13 @@ describe("the executor stopping between nodes", () => {
 
 	it("runs to the end when nobody cancels — the poll is not a brake", async () => {
 		const ran: string[] = []
-		const handle = start({ runId: "r1", userId: USER })
+		const handle = start({ runId: "r1", userId: USER, kind: "action" })
 
 		const receipt = await run(twoNodes(), {
 			input: { text: "hello", sessionScope: { sessionId: 1 } },
 			seed: "seed:cancel",
 			bindings: {
-				"core:input/user-message@1": async (i: any) => ok(i),
+				"core:inlet/user-message@1": async (i: any) => ok(i),
 				"core:query/session-history@1": async () => {
 					ran.push("first")
 					return ok({ main: "history" })
@@ -207,7 +209,7 @@ describe("telling the rest of the process a run stopped", () => {
 
 	it("names who and why for a person's cancel", () => {
 		const seen = recorder()
-		start({ runId: "r1", userId: USER })
+		start({ runId: "r1", userId: USER, kind: "action" })
 		cancel("r1", USER)
 		expect(seen.stops).toEqual([
 			{
@@ -223,8 +225,8 @@ describe("telling the rest of the process a run stopped", () => {
 
 	it("flags a supersede, because the id is about to mean a different run", () => {
 		const seen = recorder()
-		start({ runId: "r1", userId: USER })
-		start({ runId: "r1", userId: USER })
+		start({ runId: "r1", userId: USER, kind: "action" })
+		start({ runId: "r1", userId: USER, kind: "action" })
 		// Without this flag an observer keyed on the run id would apply the
 		// stale run's stop to the replacement's work — a re-send cancelling
 		// itself.
@@ -237,18 +239,18 @@ describe("telling the rest of the process a run stopped", () => {
 
 	it("reports a reset, and reports a finish", () => {
 		const seen = recorder()
-		start({ runId: "r1", userId: USER })
+		start({ runId: "r1", userId: USER, kind: "action" })
 		_reset()
 		expect(seen.stops[0].stop.by).toBe("system:reset")
 
-		start({ runId: "r2", userId: USER })
+		start({ runId: "r2", userId: USER, kind: "action" })
 		finish("r2")
 		expect(seen.finished).toEqual(["r2"])
 	})
 
 	it("is not told about a cancel it was not allowed to make", () => {
 		const seen = recorder()
-		start({ runId: "r1", userId: USER })
+		start({ runId: "r1", userId: USER, kind: "action" })
 		cancel("r1", OTHER_USER)
 		expect(seen.stops).toEqual([])
 	})
@@ -262,7 +264,7 @@ describe("telling the rest of the process a run stopped", () => {
 				throw new Error("observer is broken")
 			}
 		})
-		const handle = start({ runId: "r1", userId: USER })
+		const handle = start({ runId: "r1", userId: USER, kind: "action" })
 		expect(() => cancel("r1", USER)).not.toThrow()
 		// The run is still stopped, and still says who stopped it: a listener
 		// is a listener, not a participant.
@@ -274,10 +276,108 @@ describe("telling the rest of the process a run stopped", () => {
 	it("goes quiet when it is unwired", () => {
 		const seen = recorder()
 		setRunStopObserver(null)
-		start({ runId: "r1", userId: USER })
+		start({ runId: "r1", userId: USER, kind: "action" })
 		cancel("r1", USER)
 		finish("r1")
 		expect(seen.stops).toEqual([])
 		expect(seen.finished).toEqual([])
+	})
+})
+
+describe("a message's Stop stops what the released rows were about — and only that", () => {
+	// A guest's Stop on a reply used to abort the owner's image render or
+	// summary in the same session: `cancelSession` matched on the session
+	// alone. It matches on the rows now.
+	const SESSION = 3
+
+	it("stops a reply whose row was released, by the row", () => {
+		const reply = start({
+			runId: "reply",
+			userId: USER,
+			sessionId: SESSION,
+			kind: "reply",
+			liveRow: 41
+		})
+		expect(cancelSession(SESSION, `user:${OTHER_USER}`, [41])).toBe(1)
+		expect(reply.controller.signal.aborted).toBe(true)
+		expect(cancellation(reply)?.by).toBe(`user:${OTHER_USER}`)
+	})
+
+	it("a concurrent action in the session survives a Stop on a message it is not filling", () => {
+		const reply = start({
+			runId: "reply",
+			userId: USER,
+			sessionId: SESSION,
+			kind: "reply",
+			liveRow: 41
+		})
+		const render = start({
+			runId: "render",
+			userId: OTHER_USER,
+			sessionId: SESSION,
+			kind: "action"
+		})
+		const summary = start({
+			runId: "summary",
+			userId: OTHER_USER,
+			sessionId: SESSION,
+			kind: "action",
+			liveRow: 99
+		})
+		expect(cancelSession(SESSION, `user:${USER}`, [41])).toBe(1)
+		expect(reply.controller.signal.aborted).toBe(true)
+		expect(render.controller.signal.aborted).toBe(false)
+		expect(summary.controller.signal.aborted).toBe(false)
+	})
+
+	it("an action IS stopped when the row it fills is among the released", () => {
+		const post = start({
+			runId: "post",
+			userId: OTHER_USER,
+			sessionId: SESSION,
+			kind: "action",
+			liveRow: 99
+		})
+		expect(cancelSession(SESSION, `user:${USER}`, [41, 99])).toBe(1)
+		expect(post.controller.signal.aborted).toBe(true)
+	})
+
+	it("a reply that has not made its row yet is stopped — the only thing a Stop can mean for it", () => {
+		const fresh = start({
+			runId: "fresh",
+			userId: USER,
+			sessionId: SESSION,
+			kind: "reply"
+		})
+		expect(cancelSession(SESSION, `user:${USER}`, [41])).toBe(1)
+		expect(fresh.controller.signal.aborted).toBe(true)
+	})
+
+	it("the row a fresh reply opens is learned from the live row, and matched from then on", () => {
+		const fresh = start({
+			runId: "fresh",
+			userId: USER,
+			sessionId: SESSION,
+			kind: "reply"
+		})
+		setLiveRow("fresh", 41)
+		// A Stop on some OTHER stuck row no longer reaches it…
+		expect(cancelSession(SESSION, `user:${USER}`, [12])).toBe(0)
+		expect(fresh.controller.signal.aborted).toBe(false)
+		// …and a Stop on its own row does.
+		expect(cancelSession(SESSION, `user:${USER}`, [41])).toBe(1)
+		expect(fresh.controller.signal.aborted).toBe(true)
+	})
+
+	it("another session's runs are never touched", () => {
+		const elsewhere = start({
+			runId: "elsewhere",
+			userId: USER,
+			sessionId: SESSION + 1,
+			kind: "reply",
+			liveRow: 41
+		})
+		expect(cancelSession(SESSION, `user:${USER}`, [41])).toBe(0)
+		expect(elsewhere.controller.signal.aborted).toBe(false)
 	})
 })

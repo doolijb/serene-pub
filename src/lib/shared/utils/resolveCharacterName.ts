@@ -25,14 +25,20 @@ export function resolveCharacterName(
 }
 
 /**
- * Resolves the display name for a persona. Personas only have a `name`
- * column (no `nickname`), so this simply trims and falls back — kept as a
- * separate helper (rather than overloading `resolveCharacterName`) so call
- * sites that only ever have a persona don't need to reason about a
- * `nickname` field that can't exist on that type.
+ * Resolves the display name for a persona — the character a user voices.
+ *
+ * A persona is a character row, so this takes the same shape as
+ * `resolveCharacterName` above. It stays a SEPARATE helper, and it reads `name`
+ * ONLY: `{{persona}}` renders as the bare name in every prompt, so honouring a
+ * nickname here would silently change what every existing session sends to the
+ * model. The fallback differs for the same reason — `"user"`, not
+ * `"assistant"`.
  */
 export function resolvePersonaName(
-	persona: { name?: string | null } | null | undefined,
+	persona:
+		| { name?: string | null; nickname?: string | null }
+		| null
+		| undefined,
 	fallback = "user"
 ): string {
 	return persona?.name?.trim() || fallback

@@ -115,6 +115,15 @@ async function regressToPreMigration(db: TestDb) {
 		 DROP CONSTRAINT "connection_models_prompt_format_completion_templates_key_fk"`
 	)
 	await db.execute(`DROP TABLE "completion_templates"`)
+	// ⚠ And `connections.model`, dropped by 0128 when the per-connection default
+	// went away. Another migration LATER than the one under test, undone for the
+	// same honest reason as 0114's constraint above: the rows an upgrading
+	// install actually holds carry an identifier in that column, and a fixture
+	// that could not write one would be describing a table no install ever had.
+	// 0097 never mentions it, so nothing asserted below is weakened — the column
+	// is there to be carried through untouched, which is exactly what the
+	// column-by-column check wants of it.
+	await db.execute(`ALTER TABLE "connections" ADD COLUMN "model" text`)
 }
 
 async function expectPreMigrationState(db: TestDb) {

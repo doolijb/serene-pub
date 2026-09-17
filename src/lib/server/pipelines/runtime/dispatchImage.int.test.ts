@@ -22,13 +22,19 @@ import { transformIdOf } from "$lib/shared/capabilities/sides"
 const SECRET_KEY = "sk-do-not-leak-9f8e7d"
 const SECRET_URL = "http://192.168.1.50:8888"
 
+/**
+ * The checkpoint, which lives on a MODEL row and not on the endpoint (0128).
+ * `mergeEndpointModel` puts it back on `connection.model`, which is what the
+ * request builder reads — so the identifier the adapter sends is the pair's.
+ */
+const CHECKPOINT = "juggernautXL.safetensors"
+
 const imageConnection = {
 	id: 1,
 	type: "a1111",
 	name: "Local A1111",
 	modality: "image-gen",
 	baseUrl: SECRET_URL,
-	model: "juggernautXL.safetensors",
 	extraJson: { apiKey: SECRET_KEY }
 }
 
@@ -239,7 +245,30 @@ let capabilityDefaults: Record<string, any> = {}
 /** The KoboldCPP Manager's settings — where a MANAGED instance's address lives. */
 let koboldCppSettings: any = { koboldCppManagerBaseUrl: SECRET_URL }
 let connectionsById: Record<number, any> = {}
+/** The `connection_models` rows, by id — the MODEL half of every pair (0128). */
+let modelsById: Record<number, any> = {}
 let samplingById: Record<number, any> = {}
+
+/**
+ * Give an endpoint a model row, and answer the PAIR that names both halves.
+ *
+ * Connections have no default model, so naming an endpoint alone resolves as
+ * unconfigured — every selection below therefore spreads this rather than a
+ * bare `connectionId`. The id is derived from the connection's so a second call
+ * for the same endpoint rewrites one row instead of growing a second.
+ */
+function withModel(connectionId: number, model: string = CHECKPOINT) {
+	const id = 900 + connectionId
+	modelsById[id] = {
+		id,
+		connectionId,
+		model,
+		name: model,
+		enabled: true,
+		missingSince: null
+	}
+	return { connectionId, connectionModelId: id }
+}
 
 /**
  * The database, handed in rather than imported — the same shape `dispatch.ts`
@@ -262,6 +291,10 @@ const fakeDb = {
 					if (name === "connections")
 						return Object.values(connectionsById).filter(
 							(c) => c.id === lastWhereId
+						)
+					if (name === "connection_models")
+						return Object.values(modelsById).filter(
+							(m) => m.id === lastWhereId
 						)
 					if (name === "sampling_configs")
 						return Object.values(samplingById).filter(
@@ -335,14 +368,18 @@ beforeEach(() => {
 	renderCtx = []
 	koboldCppSettings = { koboldCppManagerBaseUrl: SECRET_URL }
 	connectionsById = { 1: imageConnection, 2: textConnection }
+	modelsById = {}
 	samplingById = { 10: imageSampling }
 	capabilityDefaults = {
 		"text->image": {
 			capability: "text->image",
-			connectionId: 1,
+			...withModel(1),
 			samplingConfigId: 10
 		}
 	}
+	// The decoy's own half, so a test that points something at the text
+	// connection fails the capability guard rather than the model check.
+	withModel(2, "kobold-text")
 })
 
 describe("dispatchImage — what comes back", () => {
@@ -506,7 +543,7 @@ describe("dispatchImage — resolving the target", () => {
 		// interesting half is what the message does NOT say and a matcher that
 		// is handed the Error rather than the string passes whatever it is
 		// given.
-		const err: any = await dispatch({ connectionId: 2 }).then(
+		const err: any = await dispatch(withModel(2, "kobold-text")).then(
 			() => {
 				throw new Error("expected a refusal")
 			},
@@ -526,11 +563,16 @@ describe("dispatchImage — resolving the target", () => {
 		// and draws pictures from one process, so its TYPE says `text-gen` and the
 		// old `isImage(type)` check refused it — for being what it is. What it can
 		// do is the set on the row, not the label on the type.
+		// Stated as the PROBE answer rather than as `resolved`: resolving a
+		// pair rebuilds the cache from the endpoint's and the model's durable
+		// layers (`mergeEndpointModel`), so a hand-written `resolved` is
+		// recomputed away. The probe is where "we asked this instance and it
+		// draws" actually lives.
 		connectionsById[2] = {
 			...textConnection,
-			capabilities: { resolved: { "text->image": 1 } }
+			capabilities: { probe: { found: { "text->image": 1 } } }
 		}
-		await dispatch({ connectionId: 2 })
+		await dispatch(withModel(2, "kobold-text"))
 		expect(seen.constructedWith.id).toBe(2)
 	})
 
@@ -641,10 +683,7 @@ describe("dispatchImage — one render at a time per connection", () => {
 			baseUrl: `${SECRET_URL}/` // trailing slash — same server
 		}
 		mode = "slow"
-		await Promise.all([
-			dispatch({ connectionId: 1 }),
-			dispatch({ connectionId: 3 })
-		])
+		await Promise.all([dispatch(withModel(1)), dispatch(withModel(3))])
 		expect(maxConcurrent).toBe(1)
 		expect(created).toHaveLength(2)
 	})
@@ -670,7 +709,7 @@ describe("dispatchImage — one render at a time per connection", () => {
 			// can render.
 			capabilities: { resolved: { "text->image": 1 } }
 		}
-		await dispatch({ connectionId: 5 })
+		await dispatch(withModel(5))
 		expect(preflightLog).toEqual([
 			"preflight:start",
 			"preflight:done",
@@ -681,7 +720,7 @@ describe("dispatchImage — one render at a time per connection", () => {
 	it("does not preflight a backend nobody asked this app to start", async () => {
 		// An external KoboldCPP, an A1111, a Forge — starting those would be a
 		// surprise, and the Manager does not own them.
-		await dispatch({ connectionId: 1 })
+		await dispatch(withModel(1))
 		expect(preflightLog).toEqual(["render"])
 	})
 
@@ -698,7 +737,7 @@ describe("dispatchImage — one render at a time per connection", () => {
 			capabilities: { resolved: { "text->image": 1 } }
 		}
 		preflightFails = true
-		await expect(dispatch({ connectionId: 5 })).rejects.toThrow(
+		await expect(dispatch(withModel(5))).rejects.toThrow(
 			/Manager is disabled/
 		)
 		// And the render never ran — the queue slot is released, not consumed by
@@ -716,10 +755,7 @@ describe("dispatchImage — one render at a time per connection", () => {
 			baseUrl: "http://192.168.1.99:7860"
 		}
 		mode = "slow"
-		await Promise.all([
-			dispatch({ connectionId: 1 }),
-			dispatch({ connectionId: 4 })
-		])
+		await Promise.all([dispatch(withModel(1)), dispatch(withModel(4))])
 		expect(maxConcurrent).toBe(2)
 	})
 })
@@ -735,9 +771,9 @@ describe("dispatchImage — one render at a time per connection", () => {
 describe("dispatchImage — reached through the host", () => {
 	const node = {
 		key: "render",
-		typeId: "core:provider/generate-image",
-		typeVersion: 1,
-		kind: "provider"
+		definitionId: "core:oracle/generate-image",
+		definitionVersion: 1,
+		kind: "oracle"
 	}
 
 	const callHost = async (scope: any, payload: any = {}) => {
@@ -745,7 +781,8 @@ describe("dispatchImage — reached through the host", () => {
 		const host = createHost(fakeDb as any, scope)
 		return await host.call!(
 			{ prompt: "a knight at dusk", ...payload },
-			node as any
+			node as any,
+			{ dry: false }
 		)
 	}
 
@@ -806,13 +843,14 @@ describe("dispatchImage — reached through the host", () => {
 				sink: { onProgress: (e: any) => events.push(e) }
 			} as any
 		)
-		const result = await coreBindings()["core:provider/generate-image@1"]!(
+		const result = await coreBindings()["core:oracle/generate-image@1"]!(
 			{
 				prompt: "a knight at dusk",
 				params: { streaming: "off" }
 			} as any,
 			{
-				call: (payload: unknown) => host.call!(payload, node as any),
+				call: (payload: unknown) =>
+					host.call!(payload, node as any, { dry: false }),
 				signal: new AbortController().signal,
 				progress: () => {},
 				log: () => {}

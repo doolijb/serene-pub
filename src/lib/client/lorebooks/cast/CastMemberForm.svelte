@@ -29,7 +29,6 @@
 		}) => void
 		onDelete: () => void
 		onLinkCharacter: () => void
-		onLinkPersona: () => void
 		onUnlink: () => void
 	}
 
@@ -40,7 +39,6 @@
 		onSave,
 		onDelete,
 		onLinkCharacter,
-		onLinkPersona,
 		onUnlink
 	}: Props = $props()
 
@@ -54,7 +52,7 @@
 	/** Which member the draft belongs to, so a list arrival never discards it. */
 	let draftFor = $state<number | null>(null)
 
-	let card = $derived(row.character ?? row.persona ?? null)
+	let card = $derived(row.character ?? null)
 
 	$effect(() => {
 		if (draftFor === member.id) return
@@ -230,8 +228,7 @@
 				{/each}
 			</div>
 			<p class="text-surface-700-300 text-xs">
-				Kept in step with the linked
-				{row.characterId ? "character" : "persona"} card's own names. Edit
+				Kept in step with the linked character card's own names. Edit
 				them there.
 			</p>
 		</div>
@@ -309,14 +306,16 @@
 			<div class="flex min-w-0 flex-1 flex-col gap-0.5">
 				<p class="text-sm font-semibold">Character card</p>
 				<p class="text-surface-600-400 truncate text-xs">
-					{member.name}, {row.characterId ? "character" : "persona"}
+					{member.name}, {member.kind === "persona"
+						? "your persona"
+						: "character"}
 				</p>
 			</div>
 			<button
 				class="btn btn-sm preset-tonal-surface"
 				type="button"
 				title="Point this member at a different card"
-				onclick={row.characterId ? onLinkCharacter : onLinkPersona}
+				onclick={onLinkCharacter}
 			>
 				<Icons.Repeat size={14} aria-hidden="true" /> Change
 			</button>
@@ -329,19 +328,14 @@
 				<Icons.Unlink size={14} aria-hidden="true" /> Unlink card
 			</button>
 		{:else}
+			<!-- One picker: a persona IS a character, so "link a persona" and
+				"link a character" were always the same act. -->
 			<button
 				class="btn btn-sm preset-tonal-surface"
 				type="button"
 				onclick={onLinkCharacter}
 			>
 				<Icons.Link size={14} aria-hidden="true" /> Link character
-			</button>
-			<button
-				class="btn btn-sm preset-tonal-surface"
-				type="button"
-				onclick={onLinkPersona}
-			>
-				<Icons.Link size={14} aria-hidden="true" /> Link persona
 			</button>
 		{/if}
 		<button

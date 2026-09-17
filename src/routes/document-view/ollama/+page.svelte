@@ -1,12 +1,15 @@
 <script lang="ts">
 	import { onMount, getContext } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { OllamaModelSearchSource } from "$lib/shared/constants/OllamaModelSource"
 	import { announce } from "$lib/client/accessibility/state.svelte"
+	import { ollamaChatDefaultModelName } from "$lib/client/components/ollamaManager/defaultModel"
 
 	const socket = useTypedSocket()
 	let userCtx: UserCtx = getContext("userCtx")
 	let ollamaSettingsCtx: OllamaSettingsCtx = getContext("ollamaSettingsCtx")
+	let systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
 
 	let allowed = $derived(
 		!!userCtx.user?.isAdmin &&
@@ -21,6 +24,10 @@
 	let runningModels: any[] = $state([])
 	let loaded = $state(false)
 	let error = $state("")
+	// Only source for "which installed model is the instance's chat default":
+	// a capability default is an (endpoint, model) PAIR, and an endpoint alone
+	// names nothing.
+	let connectionsList = $state<Sockets.Connections.List.Row[]>([])
 
 	let pullModelName = $state("")
 	let downloadingQuants: Record<
@@ -43,6 +50,7 @@
 		socket.emit("ollama:modelsList", {})
 		socket.emit("ollama:listRunningModels", {})
 		socket.emit("ollama:getDownloadProgress", {})
+		socket.emit("connections:list", {})
 	}
 
 	function saveBaseUrl(event: SubmitEvent) {
@@ -108,6 +116,16 @@
 			.join(". ")
 	)
 
+	// The installed model name the instance's chat capability default
+	// currently resolves to, or null if it points elsewhere (another
+	// provider, or nothing yet).
+	let inUseForChat = $derived(
+		ollamaChatDefaultModelName(
+			connectionsList,
+			systemSettingsCtx.capabilityDefaults
+		)
+	)
+
 	// ollamaSettingsCtx.settings arrives asynchronously (AccessibleShell's own
 	// socket round-trip, kicked off after this page has already mounted) —
 	// a one-time read in onMount would often run first and capture an empty
@@ -139,11 +157,16 @@
 		announce(baseUrlStatus)
 	}
 	function handleConnectModel() {
-		baseUrlStatus = "Connection set as system default."
-		announce("Connection set as system default.")
+		// `ollama:connectModel` registers the (endpoint, model) PAIR as the
+		// instance's chat capability default — what the button says it does.
+		baseUrlStatus = "Now using this model for chat."
+		announce(baseUrlStatus)
+		// Re-requests `connections:list` so `inUseForChat` picks up the new
+		// pair and the marker moves to this model.
+		refresh()
 	}
 	function handleConnectModelError(msg: { error?: string }) {
-		error = msg.error || "Failed to connect model."
+		error = msg.error || "Failed to use that model for chat."
 		announce(error)
 	}
 	function handleDeleteModel() {
@@ -166,7 +189,7 @@
 	function handleGetDownloadProgress(msg: any) {
 		downloadingQuants = msg.downloadingQuants || {}
 	}
-	function handleOllamaPullProgress(msg: any) {
+	function handlePullProgress(msg: any) {
 		downloadingQuants = msg.downloadingQuants || {}
 		if (Object.values(downloadingQuants).some((d) => d.isDone)) refresh()
 	}
@@ -202,50 +225,81 @@
 		announce(error)
 	}
 
+	/**
+	 * Sixteen standing interests, all BARE — no `ollama:` event carries a
+	 * scope, and this page is one screen over the whole manager rather than a
+	 * view of one thing.
+	 *
+	 * Standing rather than one-shot even for the search: this page keeps its
+	 * results on screen and re-searches into the same list, so there is no
+	 * moment at which it stops wanting the reply. `ollama:pullProgress` is a
+	 * push that arrives for the life of a pull. The `:error` halves are never
+	 * gated (plan ruling 2) and are declared like any other key.
+	 *
+	 * Declared ABOVE `onMount`, which is an effect too and emits: the keys
+	 * have to be held before the first request leaves, and the typed `emit`
+	 * flushes the interest sync ahead of itself (plan ruling 3).
+	 *
+	 * `ollama:` is restricted interest — every handler behind it is admin-only
+	 * — which is the same admin check this page's own body renders on.
+	 * `connections:list` below is not restricted, but nothing here reaches a
+	 * non-admin either, since `refresh()` that requests it is admin-gated UI.
+	 */
+	useInterest<"ollama:modelsList">("ollama:modelsList", handleModelsList)
+	useInterest<"ollama:listRunningModels">(
+		"ollama:listRunningModels",
+		handleListRunningModels
+	)
+	useInterest<"ollama:setBaseUrl">("ollama:setBaseUrl", handleSetBaseUrl)
+	useInterest<"ollama:setBaseUrl:error">(
+		"ollama:setBaseUrl:error",
+		handleSetBaseUrlError
+	)
+	useInterest<"ollama:connectModel">(
+		"ollama:connectModel",
+		handleConnectModel
+	)
+	useInterest<"ollama:connectModel:error">(
+		"ollama:connectModel:error",
+		handleConnectModelError
+	)
+	useInterest<"ollama:deleteModel">("ollama:deleteModel", handleDeleteModel)
+	useInterest<"ollama:deleteModel:error">(
+		"ollama:deleteModel:error",
+		handleDeleteModelError
+	)
+	useInterest<"ollama:pullModel">("ollama:pullModel", handlePullModel)
+	useInterest<"ollama:pullModel:error">(
+		"ollama:pullModel:error",
+		handlePullModelError
+	)
+	useInterest<"ollama:getDownloadProgress">(
+		"ollama:getDownloadProgress",
+		handleGetDownloadProgress
+	)
+	useInterest<"ollama:pullProgress">(
+		"ollama:pullProgress",
+		handlePullProgress
+	)
+	useInterest<"ollama:recommendedModels">(
+		"ollama:recommendedModels",
+		handleRecommendedModels
+	)
+	useInterest<"ollama:searchAvailableModels">(
+		"ollama:searchAvailableModels",
+		handleSearchAvailableModels
+	)
+	useInterest<"ollama:searchAvailableModels:error">(
+		"ollama:searchAvailableModels:error",
+		handleSearchAvailableModelsError
+	)
+	useInterest<"connections:list">("connections:list", (msg) => {
+		connectionsList = msg.connectionsList ?? []
+	})
+
 	onMount(() => {
-		socket.on("ollama:modelsList", handleModelsList)
-		socket.on("ollama:listRunningModels", handleListRunningModels)
-		socket.on("ollama:setBaseUrl", handleSetBaseUrl)
-		socket.on("ollama:setBaseUrl:error", handleSetBaseUrlError)
-		socket.on("ollama:connectModel", handleConnectModel)
-		socket.on("ollama:connectModel:error", handleConnectModelError)
-		socket.on("ollama:deleteModel", handleDeleteModel)
-		socket.on("ollama:deleteModel:error", handleDeleteModelError)
-		socket.on("ollama:pullModel", handlePullModel)
-		socket.on("ollama:pullModel:error", handlePullModelError)
-		socket.on("ollama:getDownloadProgress", handleGetDownloadProgress)
-		socket.on("ollamaPullProgress", handleOllamaPullProgress)
-		socket.on("ollama:recommendedModels", handleRecommendedModels)
-		socket.on("ollama:searchAvailableModels", handleSearchAvailableModels)
-		socket.on(
-			"ollama:searchAvailableModels:error",
-			handleSearchAvailableModelsError
-		)
 		refresh()
 		socket.emit("ollama:recommendedModels", {})
-		return () => {
-			socket.off("ollama:modelsList", handleModelsList)
-			socket.off("ollama:listRunningModels", handleListRunningModels)
-			socket.off("ollama:setBaseUrl", handleSetBaseUrl)
-			socket.off("ollama:setBaseUrl:error", handleSetBaseUrlError)
-			socket.off("ollama:connectModel", handleConnectModel)
-			socket.off("ollama:connectModel:error", handleConnectModelError)
-			socket.off("ollama:deleteModel", handleDeleteModel)
-			socket.off("ollama:deleteModel:error", handleDeleteModelError)
-			socket.off("ollama:pullModel", handlePullModel)
-			socket.off("ollama:pullModel:error", handlePullModelError)
-			socket.off("ollama:getDownloadProgress", handleGetDownloadProgress)
-			socket.off("ollamaPullProgress", handleOllamaPullProgress)
-			socket.off("ollama:recommendedModels", handleRecommendedModels)
-			socket.off(
-				"ollama:searchAvailableModels",
-				handleSearchAvailableModels
-			)
-			socket.off(
-				"ollama:searchAvailableModels:error",
-				handleSearchAvailableModelsError
-			)
-		}
 	})
 </script>
 
@@ -413,21 +467,25 @@
 	{:else}
 		<ul class="a11y-list">
 			{#each models as m}
+				{@const modelName = m.name || m.model}
+				{@const inUse = inUseForChat === modelName}
 				<li class="a11y-list-item">
-					<h3>{m.name || m.model}</h3>
+					<h3>{modelName}</h3>
 					<p>{formatSize(m.size)}</p>
 					<div class="a11y-list-item-actions">
 						<button
 							type="button"
 							class="a11y-btn a11y-btn-small"
-							onclick={() => connectModel(m.name || m.model)}
+							onclick={() => connectModel(modelName)}
+							disabled={inUse}
+							aria-pressed={inUse}
 						>
-							Use as Default Connection
+							{inUse ? "In use for chat" : "Use for chat"}
 						</button>
 						<button
 							type="button"
 							class="a11y-btn a11y-btn-danger a11y-btn-small"
-							onclick={() => deleteModel(m.name || m.model)}
+							onclick={() => deleteModel(modelName)}
 						>
 							Delete
 						</button>

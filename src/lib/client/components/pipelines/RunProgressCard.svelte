@@ -15,15 +15,18 @@
 	 * be anywhere: the server emitted `pipelines:runStarted` and
 	 * `pipelines:progress`, the store had an `apply` for them, and nothing in
 	 * the client ever called it. Every card this component can draw was
-	 * invisible. The subscription belongs to the one component that renders them
+	 * invisible. The interest belongs to the one component that renders them
 	 * rather than to a global listener, so nothing accumulates for a screen with
 	 * no session on it.
 	 */
-	import { onDestroy } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import { declareInterest } from "$lib/client/sockets/interest.svelte"
+	import { interestKey } from "$lib/shared/sockets/interest"
 	import { runProgress } from "$lib/client/stores/runProgress.svelte"
 	import { runInspector } from "$lib/client/stores/runInspector.svelte"
+	import { statusText } from "$lib/client/i18n/state.svelte"
+	import { outcomeOf, outcomeIcon, outcomeStatusText } from "./runOutcome"
 	import type { RunProgress } from "$lib/shared/sockets/progress"
 
 	interface Props {
@@ -46,8 +49,22 @@
 	let lastFinished = $state<{
 		runId: string
 		title: string
-		outcome: string
+		outcome: NonNullable<RunProgress["outcome"]>
+		haltNodeKey?: string
+		/** The reason, when the outcome carries one — never shown on `cancelled`. */
+		reason?: string
 	} | null>(null)
+
+	/**
+	 * The caption beside the title, which the `capitalize` class above
+	 * already reads as "Respond" — `outcomeStatusText` (`./runOutcome`) is
+	 * the locale map, this resolves it the same way a node's own status is
+	 * (2026-09-16: a card that said "Respond finished ✓" on an errored run
+	 * was reading `done` as success; every terminal frame now carries its
+	 * own `outcome`, projected by `./runOutcome`, pinned there).
+	 */
+	const outcomeCaption = (f: NonNullable<typeof lastFinished>) =>
+		statusText(outcomeStatusText(f.outcome, f.haltNodeKey))
 
 	const onRunStarted = (event: RunProgress) => {
 		if (event.sessionId === sessionId) lastFinished = null
@@ -61,24 +78,36 @@
 				lastFinished = {
 					runId: event.runId,
 					title: title(known ?? event),
-					outcome: event.cancelled
-						? "stopped"
-						: event.error
-							? "failed"
-							: "finished"
+					outcome: outcomeOf(event),
+					haltNodeKey: event.haltNodeKey,
+					reason: event.error
 				}
 		}
 		runProgress.apply(event)
 	}
 
-	socket.on("pipelines:runStarted", onRunStarted)
-	socket.on("pipelines:progress", onProgress)
-	onDestroy(() => {
-		// Named handlers, always: `off(event)` with no handler removes every
-		// listener on that event, app-wide.
-		socket.off("pipelines:runStarted", onRunStarted)
-		socket.off("pipelines:progress", onProgress)
-	})
+	/**
+	 * Both pushes carry `sessionId`, so both are declared as SCOPED interest
+	 * (`pipelines:runStarted#<id>`, `pipelines:progress#<id>`) — this card only
+	 * ever draws its own session's runs, and the server has no reason to send
+	 * it another one's.
+	 *
+	 * The `$effect` form rather than `useInterest`: the prop can be re-pointed
+	 * at another session, and `useInterest` reads its key ONCE. Declaring here
+	 * releases the old key as it takes the new one.
+	 */
+	$effect(() =>
+		declareInterest<"pipelines:runStarted">(
+			interestKey("pipelines:runStarted", sessionId),
+			onRunStarted
+		)
+	)
+	$effect(() =>
+		declareInterest<"pipelines:progress">(
+			interestKey("pipelines:progress", sessionId),
+			onProgress
+		)
+	)
 
 	function cancel(runId: string) {
 		socket.emit("pipelines:cancelRun", { runId })
@@ -96,37 +125,63 @@
 	// place rather than one per emitter.
 	const title = (r: (typeof runs)[number]) =>
 		(r.label ?? "Working").replace(/[-_]/g, " ")
+
+	/**
+	 * The run's own word for what it is doing (R-19) — *Jasmine is typing*,
+	 * *summarising part 2 of 5* — in the reader's language. Shown in place
+	 * of the stage name when the run has said one; the step count stays
+	 * beside it as the secondary detail. The store merges frames, so a
+	 * status once sent stands until the next.
+	 */
+	const status = (r: (typeof runs)[number]) => statusText(r.status)
 </script>
 
 {#if lastFinished && !runs.length}
 	<!-- The receipt, while the answer to "what did that just do" is still the
 	     question being asked. -->
 	<div
-		class="border-surface-500/25 bg-surface-100-900 mb-2 flex items-center gap-2 rounded-lg border p-2 shadow-sm"
+		class="border-surface-500/25 bg-surface-100-900 mb-2 rounded-lg border p-2 shadow-sm"
 	>
-		<Icons.Check size={14} class="text-success-500 shrink-0" />
-		<span class="min-w-0 flex-1 truncate text-sm capitalize">
-			{lastFinished.title}
-			<span class="text-muted-foreground text-xs lowercase">
-				{lastFinished.outcome}
+		<div class="flex items-center gap-2">
+			{#if outcomeIcon(lastFinished.outcome) === "check"}
+				<Icons.Check size={14} class="text-success-500 shrink-0" />
+			{:else if outcomeIcon(lastFinished.outcome) === "ban"}
+				<Icons.Ban size={14} class="text-muted-foreground shrink-0" />
+			{:else}
+				<!-- `err` and `halt` alike — neither produced a reply, and a
+				     check mark on either is the defect this fixes. -->
+				<Icons.TriangleAlert size={14} class="text-error-500 shrink-0" />
+			{/if}
+			<span class="min-w-0 flex-1 truncate text-sm capitalize">
+				{lastFinished.title}
+				<span class="text-muted-foreground text-xs lowercase">
+					{outcomeCaption(lastFinished)}
+				</span>
 			</span>
-		</span>
-		<button
-			type="button"
-			class="btn btn-sm preset-tonal-surface shrink-0"
-			onclick={() => runInspector.open(lastFinished!.runId)}
-			title="See what this run did, stage by stage"
-		>
-			<Icons.Receipt size={14} /> Inspect
-		</button>
-		<button
-			type="button"
-			class="btn btn-sm preset-tonal-surface shrink-0"
-			onclick={() => (lastFinished = null)}
-			aria-label="Dismiss"
-		>
-			<Icons.X size={14} />
-		</button>
+			<button
+				type="button"
+				class="btn btn-sm preset-tonal-surface shrink-0"
+				onclick={() => runInspector.open(lastFinished!.runId)}
+				title="See what this run did, stage by stage"
+			>
+				<Icons.Receipt size={14} /> Inspect
+			</button>
+			<button
+				type="button"
+				class="btn btn-sm preset-tonal-surface shrink-0"
+				onclick={() => (lastFinished = null)}
+				aria-label="Dismiss"
+			>
+				<Icons.X size={14} />
+			</button>
+		</div>
+		{#if lastFinished.reason}
+			<!-- Already redacted server-side (`redactConnections`, applied at
+			     every `emitToUser`) — shown as it arrived. -->
+			<p class="text-muted-foreground mt-1 pl-6 text-xs">
+				{lastFinished.reason}
+			</p>
+		{/if}
 	</div>
 {/if}
 
@@ -145,9 +200,14 @@
 						{title(run)}
 					</span>
 					<span
-						class="text-muted-foreground shrink-0 text-xs capitalize"
+						class="text-muted-foreground min-w-0 truncate text-xs"
+						data-run-status={status(run) ? "" : undefined}
 					>
-						{#if run.stage}{run.stage}{/if}
+						{#if status(run)}
+							{status(run)}
+						{:else if run.stage}
+							<span class="capitalize">{run.stage}</span>
+						{/if}
 						{#if run.percent != null}
 							· {Math.round(run.percent)}%
 						{/if}

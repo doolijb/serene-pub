@@ -4,7 +4,7 @@ Prompt Configs are the admin-managed library of system-prompt templates that sha
 
 ## Overview
 
-The **Prompts** sidebar (opened from the main navigation) is a management screen for five distinct kinds of prompt template, each stored as its own list of named, reusable configs:
+The **Prompts** sidebar (opened from the rail) is a management screen for five distinct kinds of prompt template, each stored as its own list of named, reusable configs:
 
 - **Session Prompts** (shown in the sidebar as **Session Prompts: Character**) — the system instructions injected into every session's generation request. This is what most people mean by "prompt config."
 - **Session Prompts: Narrator** — the system instructions used for a manually-triggered **Narrator** response (narration as the environment itself, rather than as a character). See [Sessions](./sessions.md) for how to trigger one.
@@ -48,7 +48,9 @@ Toolbar buttons in the editor header: a **+** button to clone the current config
 
 ### AI Override (connection and sampling)
 
-Every Session Prompt can optionally pin its own **Connection** and **Sampling** config, overriding whatever connection/sampling the session would otherwise use. Both pickers default to **System default**, meaning "inherit from the system default connection/sampling config." This lets you pair a particular writing style with a particular model or sampler set — for example, routing a "Chain of Thought" prompt to a larger, more deliberate model.
+Every Session Prompt can optionally pin its own **Sampling** config, overriding the sampling the session would otherwise use. The picker defaults to **System default**, meaning "inherit from the default sampling config." This lets you pair a particular writing style with a particular sampler set.
+
+**The Connection picker beside it does not take effect.** Which connection a reply goes to is the pipeline configuration's pair or the instance default for text (see [Sessions](./sessions.md#which-connection-a-session-uses)); a connection chosen here is saved and shown, and read by nothing. It has been that way on any install with a default connection registered — the default outranked it — and it is left as-is rather than revived, because reviving it would send replies to an endpoint with no model chosen. Whether the picker is retired or moved onto the pipeline panel awaits a ruling.
 
 ### Setting a default Session Prompt
 
@@ -60,15 +62,15 @@ Click the **+** icon while viewing any existing config (built-in or custom) to o
 
 ### Per-session prompt override
 
-Beyond your personal default, an admin can pick a specific Session Prompt in a session's edit form — an **AI Override** section with a **Prompt** dropdown (alongside Connection and Sampling overrides) defaulting to **System default**.
+Beyond your personal default, an admin can pick a specific Session Prompt in a session's edit form — an **AI Override** section with a **Prompt** dropdown (alongside the Sampling override) defaulting to **System default**. There is no connection override on a session: which model a session runs on is its pipeline configuration's pair or the instance default (see [Sessions](./sessions.md#which-connection-a-session-uses)).
 
-**This particular override doesn't currently take effect.** Unlike the Connection, Sampling, and Narrator Prompt overrides on the same form — which are all genuinely read and applied at generation time — the session-level Session Prompt selection is saved and shown as set in the UI, but generation always resolves the Session Prompt from your personal active selection (or the system-wide default) and never actually re-checks the session's own override. In practice, picking a specific Session Prompt for one session currently has no effect on what that session generates; treat it as not-yet-functional rather than as a working per-session pin until this is fixed.
+**This particular override doesn't currently take effect.** Unlike the Sampling and Narrator Prompt overrides on the same form — which are all genuinely read and applied at generation time — the session-level Session Prompt selection is saved and shown as set in the UI, but generation always resolves the Session Prompt from your personal active selection (or the system-wide default) and never actually re-checks the session's own override. In practice, picking a specific Session Prompt for one session currently has no effect on what that session generates; treat it as not-yet-functional rather than as a working per-session pin until this is fixed.
 
 ## Session Prompts: Narrator
 
 Session Prompts: Narrator is a small library of prompt templates for a **Narrator response** — a manually-triggered narration message that speaks as the environment itself (weather, scenery, side characters, shopkeepers, monsters) rather than as any of the session's defined characters. See [Sessions](./sessions.md) for where to trigger one from inside a session.
 
-Structurally a Session Prompts: Narrator config is shaped like a Session Prompt, not a Summarize config — a single **Name**, a **Display Name**, **System Instructions**, and an **AI Override** — but it's a separate list because it's resolved and triggered completely independently of the session's regular Session Prompt, and it deliberately never participates in [round-robin turn order](./sessions.md#turn-order-round-robin-replies).
+Structurally a Session Prompts: Narrator config is shaped like a Session Prompt, not a Summarize config — a single **Name**, a **Display Name**, **System Instructions**, and an **AI Override** — but it's a separate list because it's resolved and triggered completely independently of the session's regular Session Prompt, and it deliberately never participates in [round-robin turn order](./sessions.md#turn-order--round-robin-replies).
 
 Serene Pub ships with one built-in config, named **"Narrator,"** whose instructions tell the model to narrate the environment and voice minor NPCs directly, explicitly forbidding it from speaking or acting as any of the session's characters or personas.
 
@@ -78,7 +80,7 @@ Unlike the config's own **Name** (which only identifies it in this sidebar), **D
 
 ### Per-session override
 
-Like Session Prompts, an admin can pin a specific Session Prompts: Narrator config to an individual session from the same **AI Override** section in the session settings form — a **Narrator Prompt** dropdown alongside Connection, Sampling, and Prompt, defaulting to **System default**. Resolution order at generation time is the same chain used everywhere else in Serene Pub for per-session overrides: the session's own override, falling back to your active Session Prompts: Narrator config, falling back to the system-wide default. The resolved config's Display Name is what actually shows up on the trigger button and generated message for that session, so a per-session override changes both the instructions _and_ the label at once.
+Like Session Prompts, an admin can pin a specific Session Prompts: Narrator config to an individual session from the same **AI Override** section in the session settings form — a **Narrator Prompt** dropdown alongside Sampling and Prompt, defaulting to **System default**. Resolution order at generation time is the same chain used everywhere else in Serene Pub for per-session overrides: the session's own override, falling back to your active Session Prompts: Narrator config, falling back to the system-wide default. The resolved config's Display Name is what actually shows up on the trigger button and generated message for that session, so a per-session override changes both the instructions _and_ the label at once.
 
 ### {{char}} and {{user}} mean "everyone" here
 

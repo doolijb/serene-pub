@@ -11,6 +11,14 @@ node_modules
 .svelte-kit/
 /build
 /dist
+# Compiled documentation (the docs-dist). Produced by scripts/build-docs.js
+# on every build and on dev-server start; never edited, never committed.
+/src/lib/generated/
+/static/docs/
+# The site profile of the same output — guides, catalog AND the TypeDoc API
+# reference — written by `npm run docs:site` for serenepub.com to copy. Never
+# read by the app, never committed.
+/docs-site/
 
 # OS
 .DS_Store
@@ -42,7 +50,9 @@ package-lock.json
 /*.md
 !/DOCKER.md
 !/NOMENCLATURE.md
+!/STYLE-GUIDE.md
 /AI-TEMP/*
+.opencode
 
 # Android
 /android/.gradle

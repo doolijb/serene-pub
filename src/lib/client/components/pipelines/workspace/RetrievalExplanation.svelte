@@ -34,7 +34,8 @@
 	 */
 	import * as Icons from "@lucide/svelte"
 	import { SvelteMap, SvelteSet } from "svelte/reactivity"
-	import { getContext, onDestroy, onMount } from "svelte"
+	import { getContext } from "svelte"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { entryTypeScope } from "$lib/client/lorebooks/entrySections"
@@ -115,14 +116,19 @@
 		})
 	}
 
-	onMount(() => {
-		socket.on("entries:update", onEntryUpdate)
-		socket.on("entries:update:error", showWriteRefusal)
-	})
-	onDestroy(() => {
-		socket.off("entries:update", onEntryUpdate)
-		socket.off("entries:update:error", showWriteRefusal)
-	})
+	/**
+	 * Both BARE, deliberately. `entries:update` IS scoped — on the entry's
+	 * `lorebookId` — and this panel does not know one: it is handed an
+	 * explanation whose rows carry `typeId:id` and nothing else, so there is no
+	 * book to key on. The reply is matched by the `typeId:id` it comes back
+	 * with, which is what `onEntryUpdate` does. `entries:update:error` has no
+	 * scope at all and is never gated (plan ruling 2).
+	 */
+	useInterest<"entries:update">("entries:update", onEntryUpdate)
+	useInterest<"entries:update:error">(
+		"entries:update:error",
+		showWriteRefusal
+	)
 
 	// A new explanation is a new set of facts: nothing carried over from the
 	// last one is true of this one, least of all a lever recorded against a

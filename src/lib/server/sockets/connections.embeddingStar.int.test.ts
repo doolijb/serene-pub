@@ -10,10 +10,13 @@
  * did: stop the queue, unload the backend, drop the stale vectors, forget the
  * failure/cooldown state, and start again from the beginning.
  *
- * ⚠ The identity, not the connection id. Starring a DIFFERENT row that names the
+ * ⚠ The identity, not the connection id. Starring a DIFFERENT pair that names the
  * same endpoint and model produces byte-identical vectors, so re-indexing there
- * would be hours of work for no change — and starring the same row twice (the
+ * would be hours of work for no change — and starring the same pair twice (the
  * button is pressable twice) must be a no-op.
+ *
+ * Connections have no default model: every star names the pair outright with an
+ * explicit `modelId`, and an endpoint-only registration is refused.
  */
 
 import {
@@ -98,7 +101,7 @@ const noop = () => {}
 
 async function makeEmbeddingConnection(
 	name: string,
-	over: Record<string, any> = {}
+	model = "text-embedding-3-small"
 ) {
 	const [conn] = await testDb
 		.insert(schema.connections)
@@ -107,19 +110,19 @@ async function makeEmbeddingConnection(
 			type: CONNECTION_TYPE.OPENAI_EMBEDDINGS,
 			modality: "embeddings",
 			baseUrl: "http://localhost:1234/v1",
-			model: "text-embedding-3-small",
 			extraJson: {},
-			capabilities: { resolved: { "text->embedding": 1 } },
-			...over
+			capabilities: { resolved: { "text->embedding": 1 } }
 		} as any)
 		.returning()
-	await testDb.insert(schema.connectionModels).values({
-		connectionId: conn.id,
-		model: over.model ?? "text-embedding-3-small",
-		name: "m",
-		isDefault: true
-	})
-	return conn
+	const [modelRow] = await testDb
+		.insert(schema.connectionModels)
+		.values({
+			connectionId: conn.id,
+			model,
+			name: model
+		})
+		.returning()
+	return { conn, modelId: modelRow.id }
 }
 
 async function seedVector(model: string) {
@@ -133,11 +136,15 @@ async function seedVector(model: string) {
 	} as any)
 }
 
-async function setDefault(capability: string, id: number | null) {
+async function setDefault(
+	capability: string,
+	id: number | null,
+	modelId?: number | null
+) {
 	const { connectionsSetDefault } = await import("./connections")
 	return connectionsSetDefault.handler(
 		socket,
-		{ capability, id } as any,
+		{ capability, id, ...(id == null ? {} : { modelId }) } as any,
 		noop
 	)
 }
@@ -147,13 +154,14 @@ beforeEach(async () => {
 	unloads.length = 0
 	await testDb.delete(schema.connectionDefaults)
 	await testDb.delete(schema.characters)
+	await testDb.delete(schema.connectionModels)
 	await testDb.delete(schema.connections)
 })
 
 describe("the embedding star", () => {
 	it("clears every vector and restarts from the beginning when the model changes", async () => {
 		const first = await makeEmbeddingConnection("Small")
-		await setDefault("text->embedding", first.id)
+		await setDefault("text->embedding", first.conn.id, first.modelId)
 		// The FIRST star is itself a change (null → an identity), so it stops,
 		// unloads and starts too. Only the second one is under test here.
 		queueCalls.length = 0
@@ -162,10 +170,11 @@ describe("the embedding star", () => {
 			"api::http://localhost:1234/v1::text-embedding-3-small"
 		)
 
-		const second = await makeEmbeddingConnection("Large", {
-			model: "text-embedding-3-large"
-		})
-		await setDefault("text->embedding", second.id)
+		const second = await makeEmbeddingConnection(
+			"Large",
+			"text-embedding-3-large"
+		)
+		await setDefault("text->embedding", second.conn.id, second.modelId)
 
 		// Stop BEFORE clear, or a running pass writes vectors back in behind
 		// the delete; restart from the beginning, not a resume.
@@ -182,16 +191,16 @@ describe("the embedding star", () => {
 		expect(rows[0].embeddingModel).toBeNull()
 	}, 60_000)
 
-	it("does nothing when the same connection is starred twice", async () => {
+	it("does nothing when the same pair is starred twice", async () => {
 		const conn = await makeEmbeddingConnection("Small")
-		await setDefault("text->embedding", conn.id)
+		await setDefault("text->embedding", conn.conn.id, conn.modelId)
 		await seedVector(
 			"api::http://localhost:1234/v1::text-embedding-3-small"
 		)
 		queueCalls.length = 0
 		unloads.length = 0
 
-		await setDefault("text->embedding", conn.id)
+		await setDefault("text->embedding", conn.conn.id, conn.modelId)
 
 		expect(queueCalls).toEqual([])
 		expect(unloads).toEqual([])
@@ -199,22 +208,31 @@ describe("the embedding star", () => {
 		expect(row.embedding).not.toBeNull()
 	}, 60_000)
 
-	it("does nothing when a DIFFERENT row names the same endpoint and model", async () => {
+	it("does nothing when a DIFFERENT pair names the same endpoint and model", async () => {
 		// Identical vectors would come back out, so re-indexing would be hours
 		// of work to arrive exactly where it started.
 		const a = await makeEmbeddingConnection("Copy A")
-		await setDefault("text->embedding", a.id)
+		await setDefault("text->embedding", a.conn.id, a.modelId)
 		await seedVector(
 			"api::http://localhost:1234/v1::text-embedding-3-small"
 		)
 		queueCalls.length = 0
 
 		const b = await makeEmbeddingConnection("Copy B")
-		await setDefault("text->embedding", b.id)
+		await setDefault("text->embedding", b.conn.id, b.modelId)
 
 		expect(queueCalls).toEqual([])
 		const [row] = await testDb.select().from(schema.characters)
 		expect(row.embedding).not.toBeNull()
+	}, 60_000)
+
+	it("refuses an endpoint-only registration", async () => {
+		// Connections have no default model: starring an endpoint without
+		// naming which model on it is refused rather than resolved by guessing.
+		const conn = await makeEmbeddingConnection("Small")
+		await expect(
+			setDefault("text->embedding", conn.conn.id)
+		).rejects.toThrow(/choose a model/i)
 	}, 60_000)
 
 	it("stops the queue on UNSTAR but keeps the vectors", async () => {
@@ -222,7 +240,7 @@ describe("the embedding star", () => {
 		// disable switch promised exactly this ("existing embeddings aren't
 		// deleted, just unused"), and unstarring is that switch now.
 		const conn = await makeEmbeddingConnection("Small")
-		await setDefault("text->embedding", conn.id)
+		await setDefault("text->embedding", conn.conn.id, conn.modelId)
 		await seedVector(
 			"api::http://localhost:1234/v1::text-embedding-3-small"
 		)
@@ -245,20 +263,21 @@ describe("every other star", () => {
 				type: CONNECTION_TYPE.OPENAI,
 				modality: "text-gen",
 				baseUrl: "http://localhost:1234/v1",
-				model: "gpt-4o",
 				extraJson: {},
 				capabilities: { resolved: { "text->text": 1 } }
 			} as any)
 			.returning()
-		await testDb.insert(schema.connectionModels).values({
-			connectionId: text.id,
-			model: "gpt-4o",
-			name: "m",
-			isDefault: true
-		})
+		const [textModel] = await testDb
+			.insert(schema.connectionModels)
+			.values({
+				connectionId: text.id,
+				model: "gpt-4o",
+				name: "gpt-4o"
+			})
+			.returning()
 		await seedVector("whatever")
 
-		await setDefault("text->text", text.id)
+		await setDefault("text->text", text.id, textModel.id)
 
 		expect(queueCalls).toEqual([])
 		expect(unloads).toEqual([])

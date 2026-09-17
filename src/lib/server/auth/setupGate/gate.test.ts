@@ -8,6 +8,7 @@
  */
 import { describe, expect, test } from "vitest"
 import { isBlockedDuringSetup } from "./index"
+import { INTEREST_SYNC_EVENT } from "$lib/shared/sockets/interest"
 
 describe("isBlockedDuringSetup", () => {
 	test("permits exactly what a session needs to finish setup", () => {
@@ -25,6 +26,15 @@ describe("isBlockedDuringSetup", () => {
 		]) {
 			expect(isBlockedDuringSetup(event)).toBe(false)
 		}
+	})
+
+	test("permits the interest sync a setup screen needs to hear anything", () => {
+		// The allowlist spells this one out as a literal, so the constant is
+		// named here: renamed on one side only, the gate would fail closed and
+		// a pending session would declare nothing, going silent on the very
+		// events it IS allowed to use. It grants no access of its own — it
+		// changes a Set of strings on the socket and reads nothing.
+		expect(isBlockedDuringSetup(INTEREST_SYNC_EVENT)).toBe(false)
 	})
 
 	test("blocks ordinary application traffic", () => {

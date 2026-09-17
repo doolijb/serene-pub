@@ -286,7 +286,7 @@ describe("an install on a context config of its own", () => {
 
 	it("gives the copy a free name when the legacy one collides", async () => {
 		// Two legacy rows both called "Default" — core's and a clone somebody
-		// never renamed. `(node_type_id, name)` is unique, so without a free
+		// never renamed. `(node_definition_id, name)` is unique, so without a free
 		// name the insert throws at boot.
 		const { db } = await install({
 			instance: "mine",

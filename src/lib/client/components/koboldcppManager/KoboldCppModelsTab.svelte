@@ -1,7 +1,8 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import { onMount, onDestroy, getContext } from "svelte"
+	import { onMount, getContext } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
@@ -36,9 +37,11 @@
 
 	let currentModel = $state<string | null>(null)
 	let availableModels = $state<KoboldCppModel[]>([])
-	// Server returns Partial<SelectConnection>[] (see Sockets.Connections.List.Response) —
-	// not every field is guaranteed present, so this must stay Partial here too.
-	let connectionsList = $state<Partial<SelectConnection>[]>([])
+	// One row per endpoint, each carrying its own `connection_models` rows (see
+	// Sockets.Connections.List.Row). The endpoint half stays Partial — not every
+	// column is on the wire — but `models` always is, and it is where a model
+	// name lives now: an endpoint names none.
+	let connectionsList = $state<Sockets.Connections.List.Row[]>([])
 	// What the process is actually holding, per kind. Without it the Image header
 	// can only say "you connected something", not whether the model is in memory
 	// right now — and since koboldcpp holds one model at a time, most of the time
@@ -91,25 +94,42 @@
 			null
 	)
 	/**
-	 * The chat default, read from the same table as its image twin above.
-	 *
-	 * It used to come from `system_settings.default_connection_id` — a second
-	 * spelling that was dual-written beside `connection_defaults` and is gone
-	 * with 0181. Three sites below ask this (the sort's "float the current model
-	 * to the top", the delete guard, and the row's checkmark), and they asked it
-	 * three separate ways.
+	 * Which endpoint type a capability's default has to be for this Manager to
+	 * recognise it. The type check is what keeps an A1111 image default or an
+	 * OpenAI chat default from being read as one of these files.
 	 */
-	let textConnectionId = $derived(
-		systemSettingsCtx.capabilityDefaults?.["text->text"]?.connectionId ??
-			null
-	)
-	let selectedImageModel = $derived(
-		connectionsList.find(
+	const MANAGED_TYPE_FOR_CAPABILITY: Record<string, string> = {
+		"text->text": CONNECTION_TYPE.KOBOLDCPP_MANAGED,
+		"text->image": CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE
+	}
+
+	/**
+	 * The file name one instance capability default points at, or null.
+	 *
+	 * A default is an (endpoint, model) PAIR: `connectionId` names the endpoint
+	 * and `connectionModelId` names one of its `connection_models` rows. An
+	 * endpoint has no model of its own to fall back on, so a pair missing either
+	 * half names nothing — which is exactly how a row here reports itself
+	 * unused. The four sites below (the sort's "float the current model to the
+	 * top", the delete guard, the row checkmark and the Image header) all ask
+	 * through this one reading.
+	 */
+	function defaultModelName(capability: string): string | null {
+		const pair = systemSettingsCtx.capabilityDefaults?.[capability]
+		if (!pair?.connectionId || !pair.connectionModelId) return null
+		const connection = connectionsList.find(
 			(c) =>
-				c.id === imageConnectionId &&
-				c.type === CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE
-		)?.model ?? null
-	)
+				c.id === pair.connectionId &&
+				c.type === MANAGED_TYPE_FOR_CAPABILITY[capability]
+		)
+		return (
+			connection?.models.find((m) => m.id === pair.connectionModelId)
+				?.model ?? null
+		)
+	}
+
+	let defaultTextModel = $derived(defaultModelName("text->text"))
+	let selectedImageModel = $derived(defaultModelName("text->image"))
 	let imageStatus = $derived(
 		imageModelStatus(selectedImageModel, loadedConfig?.resident.image)
 	)
@@ -147,8 +167,7 @@
 				const isTop = (m: KoboldCppModel) =>
 					modelKind === "image"
 						? selectedImageModel === m.name
-						: findConnectionForModel(m.name)?.id ===
-							textConnectionId
+						: defaultTextModel === m.name
 				const aTop = isTop(a)
 				const bTop = isTop(b)
 				if (aTop && !bTop) return -1
@@ -181,30 +200,33 @@
 		socket.emit("koboldcpp:connectModel", { modelName })
 	}
 
+	// The endpoint that carries this file as one of its connection models —
+	// what "Edit connection" opens. An endpoint names no model itself, so the
+	// name is matched against its `models` rows.
 	function findConnectionForModel(
 		modelName: string
-	): Partial<SelectConnection> | undefined {
+	): Sockets.Connections.List.Row | undefined {
 		return connectionsList.find(
 			(c) =>
 				c.type === CONNECTION_TYPE.KOBOLDCPP_MANAGED &&
-				c.model === modelName
+				c.models.some((m) => m.model === modelName)
 		)
 	}
 
-	// Its own type, not a variant of the text one: a connection names exactly
-	// one model, and an image model is never named by a text connection.
+	// Its own type, not a variant of the text one: an image model is never
+	// carried by a text connection.
 	function findImageConnectionForModel(
 		modelName: string
-	): Partial<SelectConnection> | undefined {
+	): Sockets.Connections.List.Row | undefined {
 		return connectionsList.find(
 			(c) =>
 				c.type === CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE &&
-				c.model === modelName
+				c.models.some((m) => m.model === modelName)
 		)
 	}
 
 	function openConnectionSidebar(
-		conn: Partial<SelectConnection> | undefined
+		conn: Sockets.Connections.List.Row | undefined
 	) {
 		if (!conn?.id) return
 		panelsCtx.digest.connectionId = conn.id
@@ -245,13 +267,11 @@
 	}
 
 	function handleDeleteClick(model: KoboldCppModel) {
-		const defaultConnId = textConnectionId
-		const conn = findConnectionForModel(model.name)
-		if (conn && conn.id === defaultConnId) {
+		if (defaultTextModel === model.name) {
 			toaster.error({
-				title: "Cannot delete default model",
+				title: "Cannot delete the model in use for chat",
 				description:
-					"Set a different default connection before deleting."
+					"Choose a different model for chat before deleting."
 			})
 			return
 		}
@@ -285,35 +305,25 @@
 		return `${size.toFixed(1)} ${units[i]}`
 	}
 
-	// Named so the teardown below removes only this listener. A bare
-	// socket.off("koboldcpp:listModels") drops every handler for the event,
-	// including KoboldCppSidebar's, which reads the same list to decide whether
-	// to open on Available during the setup wizard.
 	function handleListModels(message: Sockets.KoboldCPP.ListModels.Response) {
 		isLoading = false
 		currentModel = message.currentModel
 		availableModels = message.availableModels ?? []
 	}
 
-	// Named for the same reason: KoboldCppPerfTab listens to this event too and
-	// tears down with a bare off().
 	function handleGetLoadedConfig(
 		message: Sockets.KoboldCPP.GetLoadedConfig.Response
 	) {
 		loadedConfig = message.config
 	}
 
-	// Every listener below is named and torn down by reference for the same
-	// reason: socket.off("event") with no handler removes the FIRST-registered
-	// listener for that event, which is usually Layout's or another panel's,
-	// not this component's.
 	function handleConnectionsList(msg: Sockets.Connections.List.Response) {
 		connectionsList = msg.connectionsList ?? []
 		// Only now — not on the bare connectModel ack — does isDefault/
 		// existingConn below actually reflect the new default, since both
 		// derive from this list. Clearing the spinner earlier left a window
 		// where the button looked interactive/unchanged (spinner gone, but
-		// still reading "Set Default") right up until this refresh landed,
+		// still reading "Use for chat") right up until this refresh landed,
 		// which read as "did clicking it even do anything?" in practice.
 		isConnecting = false
 		connectingModel = null
@@ -321,7 +331,7 @@
 	}
 
 	function handleConnectModelAck() {
-		toaster.success({ title: "Model set as default" })
+		toaster.success({ title: "Now using this model for chat" })
 		refresh()
 	}
 
@@ -380,38 +390,58 @@
 		})
 	}
 
+	// Every key is BARE: nothing in `koboldcpp:` has an interest scope, and
+	// `connections:list` is one message about every endpoint. All standing —
+	// `refresh()` re-asks for the lists after each connect, kind change and
+	// delete, and this tab stays open across all of it.
+	//
+	// `connections:list` is not restricted, the rest of the family is; this
+	// Manager is admin-only UI either way, so the ordinary registry is right
+	// and the registry itself refuses a restricted key for a known non-admin.
+	//
+	// Declared ABOVE the mount that emits: effects run in creation order, so a
+	// declaration made after one would miss the sync `refresh()` flushes and
+	// the first replies would land with nobody holding the keys.
+	useInterest<"koboldcpp:listModels">(
+		"koboldcpp:listModels",
+		handleListModels
+	)
+	useInterest<"koboldcpp:getLoadedConfig">(
+		"koboldcpp:getLoadedConfig",
+		handleGetLoadedConfig
+	)
+	useInterest<"connections:list">("connections:list", handleConnectionsList)
+	useInterest<"koboldcpp:connectModel">(
+		"koboldcpp:connectModel",
+		handleConnectModelAck
+	)
+	useInterest<"koboldcpp:connectModel:error">(
+		"koboldcpp:connectModel:error",
+		handleConnectModelError
+	)
+	useInterest<"koboldcpp:connectImageModel">(
+		"koboldcpp:connectImageModel",
+		handleConnectImageModel
+	)
+	useInterest<"koboldcpp:connectImageModel:error">(
+		"koboldcpp:connectImageModel:error",
+		handleConnectImageModelError
+	)
+	useInterest<"koboldcpp:setModelKind">(
+		"koboldcpp:setModelKind",
+		handleSetModelKindAck
+	)
+	useInterest<"koboldcpp:deleteModel">(
+		"koboldcpp:deleteModel",
+		handleDeleteModel
+	)
+	useInterest<"koboldcpp:deleteModel:error">(
+		"koboldcpp:deleteModel:error",
+		handleDeleteModelError
+	)
+
 	onMount(() => {
-		socket.on("koboldcpp:listModels", handleListModels)
-		socket.on("koboldcpp:getLoadedConfig", handleGetLoadedConfig)
-		socket.on("connections:list", handleConnectionsList)
-		socket.on("koboldcpp:connectModel", handleConnectModelAck)
-		socket.on("koboldcpp:connectModel:error", handleConnectModelError)
-		socket.on("koboldcpp:connectImageModel", handleConnectImageModel)
-		socket.on(
-			"koboldcpp:connectImageModel:error",
-			handleConnectImageModelError
-		)
-		socket.on("koboldcpp:setModelKind", handleSetModelKindAck)
-		socket.on("koboldcpp:deleteModel", handleDeleteModel)
-		socket.on("koboldcpp:deleteModel:error", handleDeleteModelError)
-
 		refresh()
-	})
-
-	onDestroy(() => {
-		socket.off("koboldcpp:listModels", handleListModels)
-		socket.off("koboldcpp:getLoadedConfig", handleGetLoadedConfig)
-		socket.off("connections:list", handleConnectionsList)
-		socket.off("koboldcpp:connectModel", handleConnectModelAck)
-		socket.off("koboldcpp:connectModel:error", handleConnectModelError)
-		socket.off("koboldcpp:connectImageModel", handleConnectImageModel)
-		socket.off(
-			"koboldcpp:connectImageModel:error",
-			handleConnectImageModelError
-		)
-		socket.off("koboldcpp:setModelKind", handleSetModelKindAck)
-		socket.off("koboldcpp:deleteModel", handleDeleteModel)
-		socket.off("koboldcpp:deleteModel:error", handleDeleteModelError)
 	})
 </script>
 
@@ -591,8 +621,7 @@
 	<div class="space-y-3 py-4">
 		{#each filteredModels as model}
 			{@const loaded = isCurrentlyLoaded(currentModel, model.name)}
-			{@const isDefault =
-				findConnectionForModel(model.name)?.id === textConnectionId}
+			{@const isDefault = defaultTextModel === model.name}
 			{@const existingConn = findConnectionForModel(model.name)}
 			{@const existingImageConn = findImageConnectionForModel(model.name)}
 			{@const inUseForImages = selectedImageModel === model.name}
@@ -707,8 +736,8 @@
 									(isConnecting &&
 										connectingModel === model.name)}
 								title={isDefault
-									? "Already the default connection"
-									: "Set as default connection"}
+									? "Already in use for chat"
+									: "Use this model for chat"}
 							>
 								{#if isConnecting && connectingModel === model.name}
 									<Icons.Loader2
@@ -723,7 +752,7 @@
 											: "none"}
 									/>
 								{/if}
-								{isDefault ? "Default" : "Set Default"}
+								{isDefault ? "In use for chat" : "Use for chat"}
 							</button>
 							{#if existingConn}
 								<button

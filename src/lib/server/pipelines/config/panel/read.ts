@@ -9,9 +9,11 @@
  */
 
 import { valueDeclOf } from "@serene-pub/sdk"
-import { asc, eq } from "drizzle-orm"
+import { and, asc, eq } from "drizzle-orm"
 import { getFacet } from "@serene-pub/sdk"
 import { resolveSampling } from "$lib/server/utils/resolveSampling"
+import { contextBudgetFrom } from "$lib/server/pipelines/runtime/contextWindow"
+import { slotModelId } from "$lib/shared/connections/slotRef"
 import { i18nText } from "$lib/server/pipelines/config/panel/declarations"
 import * as schema from "$lib/server/db/schema"
 import { mayWrite, type ScopeKind } from "@serene-pub/sdk"
@@ -198,6 +200,39 @@ const humanizeFacet = (id: string): string =>
 		.replace(/([a-z0-9])([A-Z])/g, "$1 $2")
 		.replace(/^./, (c) => c.toUpperCase())
 
+/**
+ * The node keys the context-budget node's `sampling` and `connection` slots
+ * refer to, off its stored config — `{ __ref: 'slot', slot, ofNode }` where the
+ * spec wrote `slot.samplingOf(...)` / `slot.connectionOf(...)`. Undefined for
+ * a slot the budget names as its own, or for a document with no budget node.
+ */
+async function budgetPairNodes(
+	db: Db,
+	specVersionId: number
+): Promise<{ sampling?: string; connection?: string }> {
+	const [budget] = await db
+		.select({ config: schema.pipelineNodes.config })
+		.from(schema.pipelineNodes)
+		.where(
+			and(
+				eq(schema.pipelineNodes.specVersionId, specVersionId),
+				eq(schema.pipelineNodes.definitionId, "core:task/context-budget")
+			)
+		)
+		.limit(1)
+	const config = (budget?.config ?? {}) as Record<string, unknown>
+	const ofNode = (slot: string): string | undefined => {
+		const ref = config[slot]
+		return ref &&
+			typeof ref === "object" &&
+			(ref as { __ref?: unknown }).__ref === "slot" &&
+			typeof (ref as { ofNode?: unknown }).ofNode === "string"
+			? ((ref as { ofNode: string }).ofNode as string)
+			: undefined
+	}
+	return { sampling: ofNode("sampling"), connection: ofNode("connection") }
+}
+
 export async function namespaceView(
 	db: Db,
 	secret: string,
@@ -227,6 +262,12 @@ export async function namespaceView(
 		string,
 		{ options: ConfigOption[]; advanced: ConfigOption[] }
 	>()
+	/**
+	 * The budget node's margin as this viewer resolves it, for the window
+	 * figure below. Captured in the walk rather than looked up afterwards,
+	 * because an option carries no address — the payload never names a node.
+	 */
+	let safetyMargin: unknown
 	for (const d of decls) {
 		if (!visibleTo(d.matrixSlot, viewer)) continue
 
@@ -320,9 +361,7 @@ export async function namespaceView(
 					type:
 						d.control === "per-member"
 							? "perMember"
-							: d.control === "text"
-								? "string"
-								: d.control,
+							: d.control,
 					default: d.authorDefault,
 					min: d.min,
 					max: d.max,
@@ -388,7 +427,7 @@ export async function namespaceView(
 									: {})(
 								(
 									sets.contextTemplatesBy.get(
-										contextTemplateRow.nodeTypeId
+										contextTemplateRow.nodeDefinitionId
 									) as any[] | undefined
 								)?.find((c) => c.id === contextTemplateRow.id)
 							)
@@ -455,7 +494,7 @@ export async function namespaceView(
 								(
 									sets.promptsBy.get(
 										promptPoolKeyFor(
-											promptRow.nodeTypeId,
+											promptRow.nodeDefinitionId,
 											promptRow.slot
 										)
 									) as any[] | undefined
@@ -473,14 +512,15 @@ export async function namespaceView(
 			source,
 			// The same decision resolveWriteScope enforces, asked without
 			// throwing: session writes need the session column and the non-admin
-			// prompts line; config writes are the admin's, on the instance
-			// column (a config's values are what the whole instance resolves).
+			// prompts line; config writes are the admin's, on the preset column
+			// (a config's values are what the whole instance resolves — R-10
+			// folded `instance` into `preset`, the selected config).
 			writable:
 				effScope === "session"
 					? mayWrite(d.matrixSlot, "session" as ScopeKind) &&
 						(viewer.isAdmin || d.matrixSlot === "prompts")
 					: viewer.isAdmin &&
-						mayWrite(d.matrixSlot, "instance" as ScopeKind),
+						mayWrite(d.matrixSlot, "preset" as ScopeKind),
 			overriddenHere:
 				effScope === "session"
 					? !!chain.session?.has(key)
@@ -503,6 +543,9 @@ export async function namespaceView(
 			 */
 			changed: chain.preset.has(key)
 		}
+
+		if (d.matrixSlot === "params" && d.path === "safetyMargin")
+			safetyMargin = value
 
 		let group = byNode.get(d.nodeKey)
 		if (!group) {
@@ -531,11 +574,15 @@ export async function namespaceView(
 		else group.options.push(option)
 	}
 
-	const nodeKeys = [...byNode.keys()]
+	// `declarations()` already sorts these to the spine order: a node at its
+	// own position, a clause tied with (and just before) its first member,
+	// and an envoy pushed past the end — which is what lets the split below
+	// be a filter rather than a second sort.
+	const allNodeKeys = [...byNode.keys()]
 	const typeLabelOf = new Map<string, string>()
 	for (const d of decls)
 		if (!typeLabelOf.has(d.nodeKey)) typeLabelOf.set(d.nodeKey, d.typeLabel)
-	const labels = stepLabels(nodeKeys, typeLabelOf)
+	const labels = stepLabels(allNodeKeys, typeLabelOf)
 
 	// `key` is the step's ordinal, not the node key — the id scheme for
 	// writes stays the HMAC per option, and the payload still never names a
@@ -543,6 +590,16 @@ export async function namespaceView(
 	const kindOf = new Map<string, string>()
 	for (const d of decls)
 		if (!kindOf.has(d.nodeKey)) kindOf.set(d.nodeKey, d.nodeKind)
+
+	/**
+	 * An envoy is not a step in the run's spine — nothing executes it, and
+	 * counting it among "step N of M" would tell a reader a pipeline has one
+	 * more thing happening than it does. Its settings still need a home, so
+	 * they render after the steps in their own unnumbered group (U5g review
+	 * follow-up; `namespaceView` below, `alsoConfigured`).
+	 */
+	const nodeKeys = allNodeKeys.filter((k) => kindOf.get(k) !== "envoy")
+	const envoyKeys = allNodeKeys.filter((k) => kindOf.get(k) === "envoy")
 
 	/**
 	 * The tokens a share divides, read from the sampling config that is
@@ -560,10 +617,43 @@ export async function namespaceView(
 		...n.options,
 		...n.advanced
 	])
-	const samplingId = all.find(
+	/**
+	 * Which node's pair the budget sizes to — the node the budget's
+	 * `samplingOf` / `connectionOf` refs name (`generate` on the shipped
+	 * specs). Read off the budget node's stored config rather than taken as
+	 * "the first ref in the panel": a multi-agent spec has a connection-ref
+	 * per provider, and the first in position order is the planner's, not
+	 * the narrator's the budget is sized for. Falls back to the whole panel
+	 * for a document with no budget node, which is what it always did.
+	 */
+	const budgetRefs = await budgetPairNodes(db, at.specVersionId)
+	const refsOn = (nodeKey: string | undefined) =>
+		nodeKey && byNode.has(nodeKey)
+			? [...byNode.get(nodeKey)!.options, ...byNode.get(nodeKey)!.advanced]
+			: all
+	const samplingId = refsOn(budgetRefs.sampling).find(
 		(o) => o.control === "sampling-ref" && typeof o.value === "number"
 	)?.value as number | undefined
-	if (samplingId != null && all.some((o) => o.control === "share")) {
+	/**
+	 * Which options carry the window: a `share` control, and — since the
+	 * shares moved onto the sources (R-7 P5) — each source's own `share`
+	 * number in the weights facet. The number beside a relative share is the
+	 * window it is a share OF, which is the one fact that makes a ratio
+	 * readable.
+	 */
+	const windowCarriers = new Set(
+		decls
+			.filter(
+				(d) =>
+					d.control === "share" ||
+					(d.path === "share" &&
+						d.facet === "weights" &&
+						d.control === "number")
+			)
+			.map((d) => optionId(secret, d.nodeKey, d.slot, d.path))
+	)
+	const carriesWindow = (o: { id: string }) => windowCarriers.has(o.id)
+	if (samplingId != null && all.some(carriesWindow)) {
 		const [row] = await db
 			.select({
 				shape: schema.samplingConfigs.shape,
@@ -579,26 +669,55 @@ export async function namespaceView(
 		// held a number. A sampling-ref naming a row that no longer exists
 		// still yields nothing, as it did before.
 		const sampling = row ? resolveSampling(row) : null
-		// The same arithmetic `core:task/context-budget@1` performs, because
-		// the number on screen has to be the number the ranker divides — and
-		// therefore the same fallbacks it applies when a budget is switched off
-		// (bindings.ts contextBudgetFrom, which repeats dispatchStep's for the
-		// identical reason). Zero here would hide the figure in exactly the case
-		// the ranker still has one.
-		const window = sampling
-			? (Number(sampling.contextTokens) || 4096) -
-				(Number(sampling.responseTokens) || 512)
-			: 0
-		if (window > 0)
-			for (const o of all)
-				if (o.control === "share")
-					(o as { windowTokens?: number }).windowTokens = Math.floor(
-						window * 0.95
-					)
+		if (sampling) {
+			// The model's own window, off the pair the connection picker
+			// selected (0114) — the same cap the budget and the dispatch
+			// apply, read from the node the budget's `connectionOf` names.
+			const pair = refsOn(budgetRefs.connection).find(
+				(o) => o.control === "connection-ref" && o.value != null
+			)?.value
+			const modelId = slotModelId(pair)
+			const [model] =
+				modelId != null
+					? await db
+							.select({
+								contextWindow:
+									schema.connectionModels.contextWindow
+							})
+							.from(schema.connectionModels)
+							.where(
+								eq(schema.connectionModels.id, Number(modelId))
+							)
+							.limit(1)
+					: []
+			// THE arithmetic `core:task/context-budget@1` performs (R-8,
+			// `runtime/contextWindow.ts`), because the number on screen has to
+			// be the number the ranker divides. It was spelled here a fourth
+			// time, with the margin hard-coded, and agreed with the run only
+			// while nobody touched either.
+			const { available } = contextBudgetFrom({
+				sampling,
+				connection: model ?? null,
+				safetyMargin
+			})
+			if (available > 0)
+				for (const o of all)
+					if (carriesWindow(o))
+						(o as { windowTokens?: number }).windowTokens =
+							available
+		}
 	}
 
 	const steps: ConfigStep[] = nodeKeys.map((nodeKey, i) => ({
 		key: `s${i}`,
+		label: labels.get(nodeKey) ?? nodeKey,
+		kind: kindOf.get(nodeKey) ?? "",
+		options: byNode.get(nodeKey)!.options,
+		advanced: byNode.get(nodeKey)!.advanced
+	}))
+	// Trailing and unnumbered on purpose — see the filter above.
+	const alsoConfigured: ConfigStep[] = envoyKeys.map((nodeKey, i) => ({
+		key: `e${i}`,
 		label: labels.get(nodeKey) ?? nodeKey,
 		kind: kindOf.get(nodeKey) ?? "",
 		options: byNode.get(nodeKey)!.options,
@@ -697,6 +816,7 @@ export async function namespaceView(
 		 */
 		canSelectConfig: scope === "session" || viewer.isAdmin === true,
 		steps,
+		alsoConfigured,
 		writeScope: scope
 	}
 }

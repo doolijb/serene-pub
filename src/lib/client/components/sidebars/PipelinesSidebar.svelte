@@ -39,8 +39,8 @@
 	 * is the whole of the admin's extra surface, and it is a link, not a
 	 * disabled control.
 	 */
-	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
-	import { getContext, onDestroy, onMount } from "svelte"
+	import { requestWithInterest } from "$lib/client/sockets/interest.svelte"
+	import { getContext } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
 	import PanelToolbar from "$lib/client/components/panels/PanelToolbar.svelte"
@@ -55,7 +55,6 @@
 
 	let { onclose = $bindable(), sessionId }: Props = $props()
 
-	const socket = useTypedSocket()
 	const userCtx: { user: SelectUser } = getContext("userCtx")
 
 	let list = $state<Sockets.Pipelines.Namespace[]>([])
@@ -84,14 +83,15 @@
 		if (!selectedSlug && list.length === 1) open(list[0].slug)
 	}
 
-	onMount(() => {
-		socket.on("pipelines:list", onList)
-		socket.emit("pipelines:list", {})
-	})
-
-	onDestroy(() => {
-		socket.off("pipelines:list", onList)
-	})
+	/**
+	 * The published pipelines and the request that fills them, in one: the
+	 * interest sync naming `pipelines:list` leaves ahead of the request (ruling
+	 * 3), so the reply cannot arrive before the key that wants it exists.
+	 *
+	 * BARE — the list is every pipeline on the instance, not one pipeline's
+	 * rows, so it has no interest scope to narrow to.
+	 */
+	$effect(() => requestWithInterest("pipelines:list", {}, onList))
 </script>
 
 {#if !selectedSlug}

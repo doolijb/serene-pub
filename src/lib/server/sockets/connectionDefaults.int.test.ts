@@ -75,6 +75,23 @@ async function makeConnection(
 	return conn
 }
 
+/**
+ * A model on an endpoint, so a write can name a PAIR.
+ *
+ * The connection half of a registration REQUIRES it — connections have no
+ * default model, so "this endpoint, whichever model" is not a registration.
+ */
+async function modelOn(connectionId: number) {
+	const { ensureConnectionModel } = await import(
+		"$lib/server/connections/models"
+	)
+	return (await ensureConnectionModel(
+		testDb as any,
+		connectionId,
+		`model-${connectionId}`
+	))!.id
+}
+
 describe("connectionDefaults:list", () => {
 	test("the combo list is aggregated, not a hardcoded array", async () => {
 		const { connectionDefaultsList } = await import("./connectionDefaults")
@@ -207,9 +224,15 @@ describe("connectionDefaults:set", () => {
 			.values({ name: "Set-half sampling" })
 			.returning()
 
+		const modelId = await modelOn(conn.id)
 		await connectionDefaultsSet.handler(
 			socketFor(admin.id),
-			{ capability: "text->text", half: "connection", id: conn.id },
+			{
+				capability: "text->text",
+				half: "connection",
+				id: conn.id,
+				modelId
+			},
 			noopEmit
 		)
 		await connectionDefaultsSet.handler(
@@ -227,6 +250,7 @@ describe("connectionDefaults:set", () => {
 			.from(schema.connectionDefaults)
 			.where(byCapability("text->text"))
 		expect(row.connectionId).toBe(conn.id)
+		expect(row.connectionModelId).toBe(modelId)
 		expect(row.samplingConfigId).toBe(sampling.id)
 
 		// Clearing the sampling half means "let the backend use its own
@@ -238,10 +262,9 @@ describe("connectionDefaults:set", () => {
 		)
 		expect(res.defaults["text->text"]).toEqual({
 			connectionId: conn.id,
-			// The MODEL half (0114), untouched by a sampling write and null
-			// because the connection was registered without naming one — which
-			// means "that endpoint's default model".
-			connectionModelId: null,
+			// The MODEL half, untouched by a sampling write: a registration is
+			// the whole pair, and writing one half must not drop the other.
+			connectionModelId: modelId,
 			samplingConfigId: null
 		})
 	})
@@ -260,13 +283,17 @@ describe("connectionDefaults:set", () => {
 			{ "text->image": 1 }
 		)
 
+		// A complete pair, so the refusal under test is the CAPABILITY one: the
+		// model half is validated first, and an endpoint-only write is turned
+		// away before anything asks what the pair can do.
 		await expect(
 			connectionDefaultsSet.handler(
 				socketFor(admin.id),
 				{
 					capability: "text->text",
 					half: "connection",
-					id: image.id
+					id: image.id,
+					modelId: await modelOn(image.id)
 				},
 				noopEmit
 			)

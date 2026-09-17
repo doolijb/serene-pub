@@ -37,7 +37,7 @@ export interface BasePromptSession extends SelectSession {
 		character: SelectCharacter & { lorebook?: SelectLorebook }
 	})[]
 	sessionPersonas?: (SelectSessionPersona & {
-		persona: SelectPersona & { lorebook?: SelectLorebook }
+		persona: SelectCharacter & { lorebook?: SelectLorebook }
 	})[]
 	// Removed (soft-deleted) participants, deliberately kept OUT of
 	// sessionCharacters/sessionPersonas above so every "who's active in this session"
@@ -52,7 +52,7 @@ export interface BasePromptSession extends SelectSession {
 		character: SelectCharacter | null
 	})[]
 	removedSessionPersonas?: (SelectSessionPersona & {
-		persona: SelectPersona | null
+		persona: SelectCharacter | null
 	})[]
 	sessionMessages: SelectSessionMessage[]
 	// A session's lorebookId is nullable, and the relational query result mirrors
@@ -66,7 +66,7 @@ export interface BasePromptSession extends SelectSession {
 					// characterId/personaId are nullable FKs (onDelete: "set null"),
 					// so the populated relation can likewise be null, not just absent.
 					character?: SelectCharacter | null
-					persona?: SelectPersona | null
+					persona?: SelectCharacter | null
 				})[]
 		  })
 		| null
@@ -365,7 +365,7 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 	isSummarizerMode = false
 	isNarratorResponseMode = false
 	generatingMessageMetadata: any = {}
-	// Set directly by generateResponse.ts (not a constructor param — it's
+	// Set directly by the caller (not a constructor param — it's
 	// computed after the adapter is constructed, from an async
 	// buildGraphContext() call). Merged into extraInstructions by
 	// compilePrompt() below for the regular (non-summarizer/non-narrator)
@@ -672,8 +672,8 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 	 * own, and the five disagreed about the one thing that matters — whether a
 	 * completion template's delimiters belong on a chat request. They do not, and
 	 * Ollama sent them anyway. The composition is `connections/stops.ts` now
-	 * (ruling 2026-09-10), called at each of the FIVE places this app constructs
-	 * a text adapter — `pipelines/runtime/dispatch.ts`, `utils/generateResponse.ts`,
+	 * (ruling 2026-09-10), called at each of the FOUR places this app constructs
+	 * a text adapter — `pipelines/runtime/dispatch.ts`,
 	 * `utils/summarizer/index.ts`, `utils/graphBuilder.ts` and
 	 * `pipelines/runtime/dispatchStep.ts` — and an adapter's whole remaining job
 	 * is to put `this.stops` in whatever its service calls the field.
@@ -825,7 +825,7 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 
 	/**
 	 * What this request carried and what it could not — the pair
-	 * `ProviderCtx.reportSampling` takes.
+	 * `OracleCtx.reportSampling` takes.
 	 *
 	 * `applied` is read through the key map rather than accumulated at each
 	 * assignment: the map IS this app's answer to "which of the vocabulary's
@@ -1359,7 +1359,7 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 	 * Compile a Narrator response prompt — a manually-triggered narration/
 	 * environment response with no character perspective of its own.
 	 * PromptBuilder.compilePrompt() treats a null currentCharacterId (set for
-	 * this adapter in generateResponse.ts) as "no single perspective" rather
+	 * this adapter) as "no single perspective" rather
 	 * than throwing, so this reuses the exact same context-block pipeline a
 	 * character's own turn gets — lore/history matching (RAG or keyword),
 	 * full character/persona context, per-format rendering — with

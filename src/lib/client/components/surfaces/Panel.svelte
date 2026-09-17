@@ -21,7 +21,11 @@
 	import { nativeSurface } from "$lib/client/surfaces/registry"
 	import type { PanelInstance } from "$lib/client/surfaces/types"
 	import type { SurfaceManager } from "$lib/client/surfaces/panelManager.svelte"
-	import type { PlacementInput } from "$lib/shared/widgets/context"
+	import type {
+		ActionsV1,
+		PlacementInput
+	} from "$lib/shared/widgets/context"
+	import type { CoreVerbHandlers } from "$lib/shared/widgets/invokeAction"
 
 	interface Props {
 		instance: PanelInstance
@@ -52,10 +56,22 @@
 		hideHeader?: boolean
 		/** The primary conversation body, supplied by the session page. */
 		primaryChildren?: Snippet
+		/**
+		 * The session's action venues (`sessions:actions`; U5c review W4),
+		 * handed to a frame body as `actions.v1`. ⏳ Reaches this panel only
+		 * once the layouts lane threads it through `SessionLayout`, which
+		 * owns the hop from the page; `WidgetHost` (a native body) is that
+		 * lane's too. Absent, a frame gets no venues and its `invoke` refuses
+		 * everything by name.
+		 */
+		actions?: ActionsV1
+		/** The host's handlers for core's verbs (W4) — see `actions`. */
+		coreVerbs?: CoreVerbHandlers
 		onFrameAction?: (
 			fn: string,
 			messageId?: number,
-			payload?: Record<string, unknown>
+			payload?: Record<string, unknown>,
+			action?: string
 		) => void
 	}
 
@@ -69,6 +85,8 @@
 		chrome = "grid",
 		hideHeader = false,
 		primaryChildren,
+		actions,
+		coreVerbs,
 		onFrameAction
 	}: Props = $props()
 
@@ -253,6 +271,8 @@
 				skin={frameSkin}
 				{placement}
 				source={manager}
+				{actions}
+				{coreVerbs}
 				{suspended}
 				onAction={onFrameAction}
 			/>

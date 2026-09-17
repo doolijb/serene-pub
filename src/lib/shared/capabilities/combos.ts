@@ -3,11 +3,11 @@
  *
  * Not a fixed list, and not one derived from a single source. It is the UNION
  * of what this build can SERVE (the adapter manifest) and what core nodes
- * DEMAND (the connection slots in `pipeline_type_registry`), because today's
+ * DEMAND (the connection slots in `pipeline_definition_registry`), because today's
  * data proves neither half is sufficient on its own:
  *
  *   - manifest only  → drops `text->audio` and `text->embedding`, which
- *     `core:provider/speak@1` and `core:provider/embed-text@1` require and no
+ *     `core:oracle/speak@1` and `core:oracle/embed-text@1` require and no
  *     adapter declares.
  *   - registry only  → drops `text+image->text` and `text+document->text`,
  *     which are servable today and demanded by nothing yet.
@@ -56,7 +56,7 @@ export interface ComboRow {
 	/** Some manifest entry can express it. See the warning above. */
 	servable: boolean
 	/** Which node types require it — what the empty-state warning names. */
-	requiredBy: Array<{ typeId: string; version: number; slot: string }>
+	requiredBy: Array<{ definitionId: string; version: number; slot: string }>
 	/**
 	 * Which node types merely prefer it.
 	 *
@@ -66,18 +66,18 @@ export interface ComboRow {
 	 * is not missing, and warning that it is unset would put a permanent
 	 * complaint on a screen about something no run will ever need.
 	 */
-	optionalFor: Array<{ typeId: string; version: number; slot: string }>
+	optionalFor: Array<{ definitionId: string; version: number; slot: string }>
 }
 
 /**
- * One `pipeline_type_registry` row, reduced to what the aggregation reads.
+ * One `pipeline_definition_registry` row, reduced to what the aggregation reads.
  *
  * Typed structurally rather than as the Drizzle select type so this file stays
  * importable from the browser — and so a test can hand it three literals
  * instead of standing up a database to assert a set union.
  */
-export interface RegistryTypeRow {
-	typeId: string
+export interface RegistryDefinitionRow {
+	definitionId: string
 	version: number
 	/** `Record<string, SlotDecl>`, as stored. Loose because the JSON column is. */
 	slots?: Record<string, unknown> | null
@@ -126,7 +126,7 @@ export function servableTransforms(): string[] {
  * skips them — a slot may legitimately require `json_schema`, and that is not a
  * thing an admin points a connection at.
  */
-export function aggregateCombos(rows: readonly RegistryTypeRow[]): ComboRow[] {
+export function aggregateCombos(rows: readonly RegistryDefinitionRow[]): ComboRow[] {
 	const by = new Map<string, ComboRow>()
 	const rowFor = (id: string): ComboRow => {
 		let combo = by.get(id)
@@ -155,7 +155,7 @@ export function aggregateCombos(rows: readonly RegistryTypeRow[]): ComboRow[] {
 				optional?: readonly CapabilityId[]
 			}
 			const site = {
-				typeId: row.typeId,
+				definitionId: row.definitionId,
 				version: row.version,
 				slot
 			}

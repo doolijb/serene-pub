@@ -29,7 +29,7 @@ RAG scoring only ever considers messages _older_ than the most recent ten in a s
 
 Embeddings are a section of the **Connections** sidebar, beside LLMs and Image. An embedding connection is a connection like any other: a service, a base URL and key where the service needs them, a model, and an idle TTL. Three services are offered:
 
-- **Local ONNX** runs a model on this device: one download, then fully offline with no per-request cost. Not offered where the native runtime is unavailable (Android).
+- **Local ONNX** runs a model on this device: pick one from the recommended list in the Connections sidebar, download it, make it active, and it runs fully offline with no per-request cost. Downloading, cancelling, removing from disk and adding a model by Hugging Face id all happen in the sidebar — see [Local ONNX models](./connections.md#local-onnx-models). Not offered where the native runtime is unavailable (Android).
 - **OpenAI-compatible** points at any `/embeddings` endpoint: OpenAI, or a self-hosted LM Studio or llama.cpp server on your network.
 - **Ollama** uses Ollama's own embed endpoint with any embedding model it has pulled.
 
@@ -59,13 +59,13 @@ On a Local ONNX connection, **Idle TTL** unloads the model after that many minut
 
 ## Named entity connections
 
-Named entities are a fourth Connections section. One local service is offered (ONNX, token classification) with two catalogue models: bert-base-NER (English; people, places, organisations, other; about 109 MB) and distilbert multilingual NER (ten languages; people, places, organisations, dates; about 135 MB). The form has no base URL or key, only an idle TTL.
+Named entities are a fourth Connections section. One local service is offered (ONNX, token classification); its models come from the recommended list — from distilbert-NER (English; people, places, organisations, other; about 67 MB) up to larger and multilingual checkpoints that also emit dates — and are downloaded and made active from the Connections sidebar, exactly like embeddings. The form has no base URL or key, only an idle TTL.
 
 Starring one, **Use for entity extraction**, adds a tier to name extraction: the spans the model finds are stored beside the names the lorebook already knows, so an entry can be matched by what a scene calls it even in lower case. With no star the extraction lane runs on the lorebook's own names and capitalised words, which is a working state rather than an off one. A starred model that fails to load falls back to that state and says so.
 
 Starring a different entity model asks first and names the cost: "Every annotated row is re-scanned against the new model: N rows". On confirm every annotation is dropped and rebuilt through the background lane. A second connection naming the same model is a no-op; unstarring keeps what has been scanned.
 
-## The starred connection's detail panel
+## The starred connection's detail
 
 The starred embedding connection shows its queue:
 
@@ -90,7 +90,7 @@ If the queue looks stuck at "Idle" with items still needing embeddings, check th
 
 ## Understanding RAG Notices
 
-Inside a session, a **RAG notice** banner (the `RagNotice` component) can appear just above the message composer once a conversation has grown past 10 messages — below that threshold everything already fits in the guaranteed context window, so the notice doesn't apply. It checks the embedding status of the session's older messages, its linked characters, personas, and lorebook content, and shows one of three variants:
+Inside a session, a **RAG notice** (the `RagNotice` component) can appear as a quiet line above the composer, beside the Actions label, once a conversation has grown past 10 messages — below that threshold everything already fits in the guaranteed context window, so the notice doesn't apply. It checks the embedding status of the session's older messages, its linked characters, personas, and lorebook content, and shows one of three variants:
 
 - **"RAG content not yet indexed"** — none of the applicable older content has been embedded yet, so RAG can't surface anything from this session.
 - **"RAG content indexed with a different model"** — everything was embedded with a previous model/backend and needs re-indexing with the currently active one.
@@ -100,7 +100,7 @@ Each notice includes a **Prioritize in queue** button, which moves the session (
 
 ### The per-item vectorization status icon
 
-Elsewhere in the UI (character and persona editors, for example), a small icon next to an entity's name reflects its individual embedding status against the currently active model: a lightning bolt for "vectors up to date," a refresh icon for "vectors stale — model changed," and nothing shown at all if embeddings are disabled or the item has never been embedded.
+Elsewhere in the UI (the character editor, for example), a small icon next to an entity's name reflects its individual embedding status against the currently active model: a lightning bolt for "vectors up to date," a refresh icon for "vectors stale — model changed," and nothing shown at all if embeddings are disabled or the item has never been embedded.
 
 ## How Serene Pub ranks retrieved content
 
@@ -128,9 +128,9 @@ They are ordered by three things, in this order:
 
 The order is strict: presence beats everything under it, and being the speaker's own beats recency. A relationship the scene is present for is never pushed down by one that was merely edited a minute ago.
 
-**Relationships get no share of the context window until you give them one.** Under **Context split** on the ranking step, the Relationships band starts at zero, which leaves the whole graph out of the budget — so the retrieval panel lists every relationship as _Left out — Relationships is switched off: its share is zero_, and nothing is spent. Drag that band above zero and relationships start competing for room like world lore and history do.
+**Relationships get no share of the context window until you give them one.** **Share — relationships** on the _Relationships: ranked_ step starts at zero, which leaves the whole graph out of the budget — so the retrieval panel lists every relationship as _Left out — Relationships is switched off: its share is zero_, and nothing is spent. Raise it above zero and relationships start competing for room like world lore and history do. (Each source carries its own share on its own step — see _Where the weights live_ in the pipelines guide.)
 
-The band is also what the prompt's relationship sections are written from. While it has no share, nothing is selected and those sections carry the narrative-graph block they always have — every relationship the walk reached, in whatever order the rows came back, governed only by the **Most relationships** ceiling on the two relationship steps. Give the band a share and the same sections are rebuilt from what ranking actually chose: the relationships that were selected, in the order above, and only as many as the band's slice of the window and its **Most entries per source** ceiling had room for. Nothing else about them changes — the same headings, the same layout, the same **Relationship perspectives** and **Known relationships** blocks — so raising the share narrows the graph in the prompt to the part of it that earned the room, and lowering it back to zero restores the full block.
+The band is also what the prompt's relationship sections are written from. While it has no share, nothing is selected and those sections carry the narrative-graph block they always have — every relationship the walk reached, in whatever order the rows came back, governed only by the **Most relationships** ceiling on the two relationship steps. Give the band a share and the same sections are rebuilt from what ranking actually chose: the relationships that were selected, in the order above, and only as many as the band's slice of the window and the ranked step's own **Most relationships** ceiling had room for — one ceiling, the source's, which the ranker reads as the band's. Nothing else about them changes — the same headings, the same layout, the same **Relationship perspectives** and **Known relationships** blocks — so raising the share narrows the graph in the prompt to the part of it that earned the room, and lowering it back to zero restores the full block.
 
 Every relationship that is considered shows up in the retrieval explanation with its reasons written out — _someone on this tie is in the cast_, _the speaking character is party to it_, _2nd most recently changed of 6_ — so an absent relationship has an answer rather than a shrug. See [Lorebooks](./lorebooks.md) for how relationships are created and edited.
 

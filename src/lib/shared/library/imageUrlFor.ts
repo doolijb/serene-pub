@@ -15,5 +15,5 @@ export function imageUrlFor(item: LibraryCatalogItem): string | null {
 		return `/library/cardImage/charavault/${encodeURIComponent(folder)}/${encodeURIComponent(file)}`
 	}
 	if (!item.file.endsWith(".png")) return null
-	return `https://raw.githubusercontent.com/doolijb/serene-pub-chara-list/main/${item.file}`
+	return `https://raw.githubusercontent.com/SerenePub/serene-pub-chara-list/main/${item.file}`
 }

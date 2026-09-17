@@ -25,9 +25,14 @@
  *      where `socket.user` is the wrong subject to ask about. It became
  *      `emitRedacted`, which asks per recipient.
  *
- * A fifth is in `UNREDACTED_EMITS` below, found by writing this file. Read
- * `users.ts :: user`'s entry: it is not a leak today, and the only thing
- * standing between it and one is a column that used to exist.
+ * A fifth was found by writing this file — `users.ts :: user`, the legacy
+ * "push the current user row" helper, emitting through `socket.server`, the only
+ * use of that handle the repo ever had. It sat in `UNREDACTED_EMITS` below as
+ * latent rather than live: safe only because the `users` table no longer has a
+ * connection column, and a leak again the day one is re-added. It was closed on
+ * 2026-09-15 by the interest-gate work, which had its own reason to want that
+ * helper going through `emitToUser` — so the entry is gone and this paragraph
+ * is what is left of it.
  *
  * ## What this asserts
  *
@@ -83,9 +88,9 @@
  *   - **`.svelte` files are not scanned.** No server module is a component; a
  *     `.svelte` file under `lib/server/` would be a category error worth its own
  *     failure, and there are none.
- *   - **`withoutConnectionColumns` is not a projection for this purpose.** It is
- *     the INBOUND, shallow one — it drops a subject's connection columns from a
- *     row they are writing. A function that calls it has not redacted anything on
+ *   - **`namesAConnection` is not a projection for this purpose.** It is the
+ *     INBOUND check — it asks whether a form somebody submitted named a
+ *     connection at all. A function that calls it has not redacted anything on
  *     the way out, so it must not sanction an emit. Neither does
  *     `connectionsVisibleTo`, which decides but does not project.
  *
@@ -230,7 +235,9 @@ const SERVER_SOURCES = walk(SRC).filter(isServerModule).sort()
  *   `io.to(room).emit(…)`               index.ts, broadcastHelpers.ts
  *   `socket.io.to(room).emit(…)`        index.ts, pipelines.ts, sessions.ts
  *   `socket.server.to(room).emit(…)`    users.ts — the only `socket.server` in
- *                                       the entire repo
+ *                                       the entire repo, and gone since
+ *                                       2026-09-15; the shape stays matched
+ *                                       because nothing stops the next one
  *
  * The receiver is therefore not worth matching on: this matches the NAME, and
  * `emitWithAck` / `serverSideEmit` are here because socket.io offers them and a
@@ -250,10 +257,10 @@ const SOCKET_HANDLE = /\b(?:socket|io|server|nsp|namespace)\b/i
 /**
  * The projections from `connections/visibility.ts` that make an emit safe.
  *
- * Both are the OUTBOUND walk. `withoutConnectionColumns` and
- * `connectionsVisibleTo` are deliberately absent — see the docblock. Asserted
- * against the module's actual exports below, so renaming one fails here rather
- * than silently un-sanctioning every emitter that calls it.
+ * Both are the OUTBOUND walk. `namesAConnection` and `connectionsVisibleTo` are
+ * deliberately absent — see the docblock. Asserted against the module's actual
+ * exports below, so renaming one fails here rather than silently un-sanctioning
+ * every emitter that calls it.
  */
 const REDACTORS: ReadonlySet<string> = new Set([
 	"redactConnections",
@@ -496,6 +503,18 @@ const REDACTING_EMITTERS: Deliberate[] = [
 	},
 	{
 		subject:
+			"src/lib/server/sockets/index.ts :: emitToUser.deliver → io.to(…).emit(<computed>)",
+		reason:
+			"THE wrapper's other half — the per-socket delivery a GATED event " +
+			"takes (socket-interest plan, ruling 5). One emit per socket in " +
+			"the room that declared the key, so the subject is that socket's " +
+			"own `target.user` rather than the emitting socket's: the same " +
+			"person as the recipient, named at the recipient rather than " +
+			"inferred from the room. Same staleness argument as the entry " +
+			"above — demotion force-disconnects a user's sockets."
+	},
+	{
+		subject:
 			"src/lib/server/sockets/pipelines.ts :: registerPipelineHandlers → socket.io.to(…).emit(<computed>)",
 		reason:
 			"Hole 1, closed. The review gate's push transport, bound once per " +
@@ -538,12 +557,15 @@ describe("§1 socket egress — every in-place projection is written down", () =
 /**
  * Raw emits that run no projection, and the reason each is safe without one.
  *
- * ⚠ Read `users.ts :: user` before deciding this list is boring.
+ * ⚠ It was five. `users.ts :: user` — the fifth hole this file was written to
+ * find — is not here any more because the emit is not there any more: it goes
+ * through `emitToUser` since 2026-09-15. A list that shrinks by a fix rather
+ * than by an edit is the only kind of shrinking worth having.
  *
  * Four entries against four sanctioned emitters is a thin-looking margin, and it
  * is stated rather than hidden: this file's value is not the ratio, it is that
- * the population is CLOSED. Eight sites, all eight accounted for, and a ninth
- * fails on the day it is written.
+ * the population is CLOSED. Every site accounted for, and the next one fails on
+ * the day it is written.
  */
 const UNREDACTED_EMITS: Deliberate[] = [
 	{
@@ -574,7 +596,7 @@ const UNREDACTED_EMITS: Deliberate[] = [
 	},
 	{
 		subject:
-			'src/lib/server/sockets/taskQueue.ts :: registerTaskQueueHandlers → socket.emit("taskQueue:update")',
+			"src/lib/server/sockets/taskQueue.ts :: registerTaskQueueHandlers.send → socket.emit(<computed>)",
 		reason:
 			"⚠ Redacted by a ROLE GATE, not by the rule, and the payload is one " +
 			"the rule would act on: `QueuedTask.connectionName` is a member of " +
@@ -584,37 +606,14 @@ const UNREDACTED_EMITS: Deliberate[] = [
 			"listeners at all — and demotion force-disconnects, so the gate " +
 			"cannot go stale. The gate is the only thing holding it: relax that " +
 			"early return, or register the emitter from anywhere else, and " +
-			"`connectionName` ships. Covers both byte-identical sites (the " +
-			"connect snapshot and the `taskQueue:get` re-fetch)."
-	},
-	{
-		subject:
-			"src/lib/server/sockets/taskQueue.ts :: registerTaskQueueHandlers.emitter → socket.emit(<computed>)",
-		reason:
-			"The same payload by the other route: the function handed to " +
-			"`taskQueue.registerEmitter`, which the store calls on every queue " +
-			"change. Same admin gate, same `connectionName`, same caveat — and " +
-			"the same shape as hole 3, where a store-registered emitter was how " +
-			"the activity stream escaped the walk entirely."
-	},
-	{
-		subject:
-			'src/lib/server/sockets/users.ts :: user → socket.server.to(…).emit("users:current")',
-		reason:
-			"⚠ THE FIFTH HOLE, and it is latent rather than live. `user()` is " +
-			"the legacy 'push the current user row' helper — called by " +
-			"`connections.ts`, `contextConfigs.ts` and `samplingConfigs.ts` " +
-			"after a write — and it emits the whole `users` row through " +
-			"`socket.server`, the only use of that handle in the repo, so no " +
-			"wrapper has ever seen it. It leaks nothing TODAY only because the " +
-			"`users` table has no connection column. It used to: " +
-			"`users.activeConnectionId` and its `activeConnection` relation " +
-			"existed from the first commit, which is why `activeConnection` is " +
-			"in `CONNECTION_IDENTITY_KEYS` at all. For as long as both existed " +
-			"this line served every non-admin the id of the connection they were " +
-			"not allowed to know about. Re-add any such column and it leaks " +
-			"again, silently, with no test but this one to say so. Not fixed " +
-			"here on purpose — a real leak wants its own lane."
+			"`connectionName` ships. ONE subject where there were two: the " +
+			"connect snapshot, the `taskQueue:get` re-fetch and the function " +
+			"handed to `taskQueue.registerEmitter` (which the store calls on " +
+			"every queue change) all go through this one closure now, because " +
+			"the **interest gate** has to be applied at each of them and a rule " +
+			"spelled three times is a rule two of them can drift from. Same " +
+			"shape as hole 3, where a store-registered emitter was how the " +
+			"activity stream escaped the walk entirely."
 	}
 ]
 

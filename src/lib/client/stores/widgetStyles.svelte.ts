@@ -33,8 +33,11 @@
  * reply and never asks for a narrowed list — an arriving list is always the
  * whole usable set, and the per-widget narrowing happens here.
  */
-import { getSocket } from "$lib/client/sockets/socketInstance"
-import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+import {
+	declareInterest,
+	requestWithInterest
+} from "$lib/client/sockets/interest.svelte"
+import { typedSocketOrNull } from "$lib/client/sockets/typedSocket"
 import { resolveStyle } from "$lib/shared/widgets/resolve"
 import {
 	legacyPackPin,
@@ -839,8 +842,8 @@ let pinWriter: ((next: Record<string, WidgetStyleRef>) => void) | null = null
 let pinOnCreate: string | null = null
 /**
  * The pre-style-system pack choice the session's layout blob still carries
- * (`styles.chat` / `styles.composer`), if any — pushed here by SessionLayout,
- * which is the only thing that holds that blob.
+ * (`styles.chat`), if any — pushed here by SessionLayout, which is the only
+ * thing that holds that blob.
  *
  * It is a FALLBACK under `pins`, never a migration: nothing writes it back, so
  * a layout saved before the packs became styles keeps rendering the look it was
@@ -866,11 +869,12 @@ let started = false
 function socketOrNull() {
 	// SSR and the moment before the client socket connects both land here; the
 	// next caller starts it, so nothing is lost by declining now.
-	return getSocket() ? useTypedSocket() : null
+	return typedSocketOrNull()
 }
 
-/* Named handlers, registered exactly once — `off(event)` with no handler would
-   take every other module's listener for that event down with it. */
+/* Named handlers, one reference each: the interest registry counts subscribers
+   by reference, so `start` declaring them twice would still be one listener —
+   and the release it hands back is the only thing that ever removes it. */
 function onList(res: Sockets.WidgetStyles.List.Response) {
 	rows = mergeStyles(rows, res?.styles ?? [])
 	loaded = true
@@ -934,31 +938,46 @@ const ERROR_EVENTS = [
 	"widgetStyles:clone:error"
 ] as const
 
+/** What `stopWidgetStyles` releases — one per declared interest key. */
+let releases: Array<() => void> = []
+
+/**
+ * Declare what this store reads, then ask for the list.
+ *
+ * Still refuses to start before the socket exists, exactly as it did: the
+ * registry would happily hold the interest and attach the listener on connect,
+ * but the REQUEST would be dropped with nothing to retry it, and the list would
+ * never arrive. The next caller starts it instead.
+ */
 function start(): void {
 	if (started) return
-	const socket = socketOrNull()
-	if (!socket) return
+	if (!socketOrNull()) return
 	started = true
-	socket.on("widgetStyles:list", onList)
-	for (const e of CREATE_EVENTS) socket.on(e, onCreated)
-	for (const e of ERROR_EVENTS) socket.on(e, onError)
-	socket.emit("widgetStyles:list", {})
+	releases = [
+		declareInterest<"widgetStyles:list">("widgetStyles:list", onList),
+		...CREATE_EVENTS.map((e) =>
+			declareInterest<"widgetStyles:create">(e, onCreated)
+		),
+		...ERROR_EVENTS.map((e) =>
+			declareInterest<"widgetStyles:list:error">(e, onError)
+		)
+	]
+	// The reply is the request's own event, so this adds no second subscriber
+	// (same `onList` reference) — what it adds is the interest sync ahead of
+	// the request, which is what makes the gated reply reachable at all.
+	requestWithInterest("widgetStyles:list", {}, onList)
 }
 
 /**
- * Drop the subscription. Nothing in the app calls this today — the cache is
- * module-scoped and lives as long as the tab, which is the point — but the
- * handlers are named so a teardown is possible at all: `socket.off(event)`
- * without one removes every listener in the app for that event.
+ * Drop the interest. Nothing in the app calls this today — the cache is
+ * module-scoped and lives as long as the tab, which is the point — but each
+ * release is kept so a teardown is possible at all, and so it removes THIS
+ * store's listeners rather than every listener for the event.
  */
 export function stopWidgetStyles(): void {
 	if (!started) return
-	const socket = socketOrNull()
-	if (socket) {
-		socket.off("widgetStyles:list", onList)
-		for (const e of CREATE_EVENTS) socket.off(e, onCreated)
-		for (const e of ERROR_EVENTS) socket.off(e, onError)
-	}
+	for (const release of releases) release()
+	releases = []
 	started = false
 }
 
@@ -1001,19 +1020,18 @@ export function resolveWidgetStyle(
 
 /**
  * Push (or clear) the layout blob's legacy pack choice. Pass `null` on
- * teardown; anything that is not a `{chat?, composer?}` object is treated as no
- * choice at all, since the blob is forward-compatible json.
+ * teardown; anything that is not a `{chat?}` object is treated as no choice at
+ * all, since the blob is forward-compatible json. A blob written by an older
+ * build carries a second key naming a composer look, which the messages widget
+ * holds as a setting rather than a skin — it is read past.
  */
 export function setLegacyStylePacks(next: unknown): void {
 	if (!next || typeof next !== "object" || Array.isArray(next)) {
 		legacyPacks = null
 		return
 	}
-	const { chat, composer } = next as LegacyStylePacks
-	legacyPacks = {
-		chat: typeof chat === "string" ? chat : null,
-		composer: typeof composer === "string" ? composer : null
-	}
+	const { chat } = next as LegacyStylePacks
+	legacyPacks = { chat: typeof chat === "string" ? chat : null }
 }
 
 /**
@@ -1140,7 +1158,8 @@ export function widgetStylesStore() {
 		 * for no gain. Narrowing per widget is this module's job.
 		 */
 		refresh() {
-			socket()?.emit("widgetStyles:list", {})
+			if (!socket()) return
+			requestWithInterest("widgetStyles:list", {}, onList)
 		},
 		/**
 		 * `pinTo` is the widget that should WEAR the new row the moment it
@@ -1148,13 +1167,12 @@ export function widgetStylesStore() {
 		 */
 		create(params: Sockets.WidgetStyles.Create.Params, pinTo?: string) {
 			lastError = null
-			const s = socket()
-			if (!s) return
+			if (!socket()) return
 			pinOnCreate = pinTo ?? null
 			// Hold `pinTo`'s live preview across the round trip. No id yet —
 			// the create reply is what names the row (see `nextSaveState`).
 			if (pinTo) pendingSave = { widgetId: pinTo, id: null }
-			s.emit("widgetStyles:create", params)
+			requestWithInterest("widgetStyles:create", params, onCreated)
 		},
 		/**
 		 * `holdFor` is the widget whose live preview should stay up until the
@@ -1166,16 +1184,26 @@ export function widgetStylesStore() {
 			const s = socket()
 			if (!s) return
 			if (holdFor) pendingSave = { widgetId: holdFor, id: params.id }
+			// Fire-and-forget: nothing reads a `widgetStyles:update` reply —
+			// the refreshed `:list` the server pushes after it is what the
+			// store folds in — so there is no interest to declare, and the
+			// gate skips the reply nobody was going to read.
 			s.emit("widgetStyles:update", params)
 		},
 		remove(id: number) {
 			lastError = null
+			// Fire-and-forget for the same reason as `update` above.
 			socket()?.emit("widgetStyles:delete", { id })
 		},
 		clone(id: number, pinTo?: string, title?: string) {
 			lastError = null
 			pinOnCreate = pinTo ?? null
-			socket()?.emit("widgetStyles:clone", title ? { id, title } : { id })
+			if (!socket()) return
+			requestWithInterest(
+				"widgetStyles:clone",
+				title ? { id, title } : { id },
+				onCreated
+			)
 		}
 	}
 }

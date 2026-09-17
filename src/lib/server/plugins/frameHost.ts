@@ -13,7 +13,7 @@
  *       "panels": [ { "id": "map", "entry": "ui/map.html", "title": "Map" } ]
  *     }
  *
- * Read tolerantly like `engines`/`nodeTypes` — the stored manifest is the one
+ * Read tolerantly like `engines`/`nodeDefinitions` — the stored manifest is the one
  * source of truth (F6), and a malformed declaration is a missing surface, not
  * a crash.
  *

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
+	import Avatar from "$lib/client/components/Avatar.svelte"
 
 	interface Props {
 		nextCharacter: SelectCharacter | undefined
@@ -7,9 +8,9 @@
 		onContinueWithNextCharacter: () => void
 		onChooseDifferentCharacter: () => void
 		/**
-		 * Whether there is anyone else to hand the turn to. Defaults true so the
-		 * control keeps its previous behaviour for any caller that doesn't pass
-		 * it; a one-character session has no alternative to choose.
+		 * Whether there is anyone else to hand the turn to. Defaults true so a
+		 * caller that doesn't pass it keeps the choice; a one-character session
+		 * has no alternative to offer.
 		 */
 		canChooseDifferentCharacter?: boolean
 	}
@@ -21,35 +22,44 @@
 		onChooseDifferentCharacter,
 		canChooseDifferentCharacter = true
 	}: Props = $props()
+
+	let displayName = $derived(
+		nextCharacter?.nickname || nextCharacter?.name || ""
+	)
 </script>
 
 {#if shouldShow && nextCharacter}
-	<li class="my-2 flex min-w-0 items-center justify-between gap-2 px-4">
-		<div class="flex min-w-0 flex-col">
-			<span class="text-surface-700-300 truncate text-sm font-medium">
-				{nextCharacter.nickname || nextCharacter.name}
-			</span>
-			<span class="text-surface-700-300 text-xs">ready to continue</span>
-		</div>
-		<div class="flex shrink-0 gap-2">
-			<button
-				class="btn btn-sm preset-filled-primary-500"
-				onclick={onContinueWithNextCharacter}
-				title="Continue with {nextCharacter.nickname ||
-					nextCharacter.name}"
-			>
-				<Icons.Play size={16} />
-				<span class="hidden sm:inline">Continue</span>
-			</button>
+	<!-- One line: who is up, and the two things you can do about it. -->
+	<div class="my-2 flex min-w-0 items-center gap-2 px-4">
+		<Avatar char={nextCharacter} size="w-6 h-6" />
+		<span
+			class="text-surface-700 dark:text-surface-300 min-w-0 truncate text-[13px] leading-[1.45]"
+		>
+			{displayName} is ready to continue
+		</span>
+		<div class="ml-auto flex shrink-0 items-center gap-1">
 			{#if canChooseDifferentCharacter}
 				<button
-					class="btn btn-sm preset-tonal-primary"
+					type="button"
+					class="composer-quiet-btn px-2"
 					onclick={onChooseDifferentCharacter}
-					title="Choose a different character"
+					title="Someone else"
+					aria-label="Pick someone else to continue"
 				>
-					<Icons.Users size={16} />
+					<Icons.Users size={14} aria-hidden="true" />
+					<span class="max-sm:sr-only">Someone else</span>
 				</button>
 			{/if}
+			<button
+				type="button"
+				class="btn composer-send preset-filled-primary-500"
+				onclick={onContinueWithNextCharacter}
+				title="Continue"
+				aria-label="Continue with {displayName}"
+			>
+				<Icons.Play aria-hidden="true" />
+				<span>Continue</span>
+			</button>
 		</div>
-	</li>
+	</div>
 {/if}

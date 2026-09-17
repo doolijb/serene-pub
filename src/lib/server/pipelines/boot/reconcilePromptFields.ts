@@ -26,7 +26,7 @@
  *
  * ## Runs after the registry sync, before the config reconcile
  *
- * It reads what the slots declare from `pipeline_type_registry`, so the
+ * It reads what the slots declare from `pipeline_definition_registry`, so the
  * registry must already describe this build. And a config's back-fill picks a
  * prompt per pool, so the pools must already be in their final shape when it
  * runs.
@@ -66,36 +66,36 @@ export async function declaredFieldsByPool(
 ): Promise<Map<string, Set<string>>> {
 	// Only versions some published spec actually PINS.
 	//
-	// `syncTypeRegistry` inserts and updates but never deletes, so a superseded
+	// `syncDefinitionRegistry` inserts and updates but never deletes, so a superseded
 	// version's row survives forever. Unioning declared fields across every row
 	// meant a field dropped in `@2` was still "declared" by the `@1` row sitting
 	// beside it — so the sweep archived nothing, and any field ever declared by
 	// any version stayed live. That is the whole purpose of this function
 	// failing silently: the archive would simply always be empty.
 	//
-	// `pipeline_nodes.typeVersion` is exactly the reachable set, and it is the
+	// `pipeline_nodes.definition_version` is exactly the reachable set, and it is the
 	// same lookup the panel already uses to decide which declaration a config is
 	// being reconciled against.
 	const pinned = new Set<string>(
 		(
 			await db
 				.select({
-					typeId: schema.pipelineNodes.typeId,
-					typeVersion: schema.pipelineNodes.typeVersion
+					definitionId: schema.pipelineNodes.definitionId,
+					definitionVersion: schema.pipelineNodes.definitionVersion
 				})
 				.from(schema.pipelineNodes)
-		).map((n: any) => `${n.typeId}@${n.typeVersion}`)
+		).map((n: any) => `${n.definitionId}@${n.definitionVersion}`)
 	)
-	const registry = await db.select().from(schema.pipelineTypeRegistry)
+	const registry = await db.select().from(schema.pipelineDefinitionRegistry)
 	const out = new Map<string, Set<string>>()
 	for (const row of registry as any[]) {
 		// A registry row nothing pins is a superseded version; its declarations
 		// are history, not a reason to keep a field alive.
-		if (!pinned.has(`${row.typeId}@${row.version ?? 1}`)) continue
+		if (!pinned.has(`${row.definitionId}@${row.version ?? 1}`)) continue
 		const slots = (row.slots ?? {}) as Record<string, any>
 		for (const [slotName, decl] of Object.entries(slots)) {
 			if ((decl as any)?.kind !== "prompts") continue
-			const pool = promptPoolKeyFor(row.typeId, slotName)
+			const pool = promptPoolKeyFor(row.definitionId, slotName)
 			const set = out.get(pool) ?? new Set<string>()
 			for (const field of Object.keys((decl as any).fields ?? {}))
 				set.add(field)
@@ -128,7 +128,7 @@ export async function reconcilePromptFields(
 
 	const out: PromptFieldReport[] = []
 	for (const row of rows as any[]) {
-		const pool = promptPoolKeyFor(row.nodeTypeId, row.slot)
+		const pool = promptPoolKeyFor(row.nodeDefinitionId, row.slot)
 		const known = declared.get(pool)
 		// No declaration in sight — see `declaredFieldsByPool`. Archiving here
 		// would empty every prompt for a plugin somebody merely switched off,

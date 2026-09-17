@@ -42,8 +42,8 @@
  * ## How the two sides are derived
  *
  * **Declared** comes off the type registry the app itself syncs at boot —
- * `getType()` over the descriptors `@serene-pub/contracts` registers on import,
- * which is the same map `bootstrap.ts` snapshots through `allTypes()`. Not a
+ * `getDefinition()` over the descriptors `@serene-pub/contracts` registers on import,
+ * which is the same map `bootstrap.ts` snapshots through `allDefinitions()`. Not a
  * list: a slot added to a contract arrives here without an edit to this file.
  *
  * **Wired** comes off the built documents — `CORE_SPECS[].build()`, the exact
@@ -52,7 +52,7 @@
  * spelling of it.
  *
  * ⚠ **The walk is the one thing that could lie, so it is guarded.** An empty
- * catalog, a renamed descriptor field, or a `getType` that returns nothing
+ * catalog, a renamed descriptor field, or a `getDefinition` that returns nothing
  * would report zero unwired slots and go green on having asked nothing. So the
  * walk is asserted to have visited every shipped spec, to have resolved a
  * descriptor for every node, to have seen params slots, and to have found
@@ -80,7 +80,8 @@
 
 import { describe, it, expect } from "vitest"
 import { CORE_SPECS } from "$lib/server/pipelines/specs"
-import { getType, isSlotRef, type SlotDecl } from "@serene-pub/sdk"
+import { getDefinition, isSlotRef, type SlotDecl } from "@serene-pub/sdk"
+import { UNREAD_ALLOW_LIST } from "$lib/server/pipelines/boot/unreadAllowList"
 
 /**
  * Slot kinds the **host** supplies, so a spec that never names one is correct.
@@ -135,8 +136,8 @@ interface WalkableDoc {
 	version: string
 	nodes: Array<{
 		key: string
-		typeId: string
-		typeVersion: number
+		definitionId: string
+		definitionVersion: number
 		config?: Record<string, unknown>
 	}>
 }
@@ -194,8 +195,8 @@ const walk = (docs: WalkableDoc[]): Walk => {
 		out.specsWalked.push(doc.id)
 		for (const node of doc.nodes) {
 			out.nodesWalked++
-			const pin = `${node.typeId}@${node.typeVersion}`
-			const descriptor = getType(pin)
+			const pin = `${node.definitionId}@${node.definitionVersion}`
+			const descriptor = getDefinition(pin)
 			if (!descriptor) {
 				out.unknownPins.push(`${doc.id} node "${node.key}" (${pin})`)
 				continue
@@ -228,15 +229,18 @@ const shipped = (): WalkableDoc[] =>
  * The slots that are declared, rendered as controls, and wired by nobody —
  * **today**, on this branch, each one measured rather than assumed.
  *
- * ⚠ This is a debt ledger and not a list of exemptions. It is asserted in both
- * directions below: an entry that stops applying fails the suite as loudly as a
- * new instance does, so a fix cannot leave a stale line behind and a regression
- * cannot hide behind one. Nothing may be added here without the sentence that
- * says what a person setting the control is actually getting.
+ * ⚠ **Derived, not written** (R-12, 2026-09-16). Every remaining entry is shape
+ * 3 — a slot with no reader — and "no reader" is exactly what
+ * `boot/declaredReads.ts` measures from the handlers' own `reads`
+ * declarations. So the ledger here is computed from that file's ONE allow-list:
+ * a slot a definition is allowed to declare unread is, on every shipped node of
+ * that definition, a slot the spec is correctly not naming. One reason, written
+ * once, read by both guards; the day a handler reads `embed-text.connection`
+ * the allow-list line goes and these six entries go with it.
  *
  * Three distinct shapes were in here. **Shapes 1 and 2 are closed** — eleven
- * entries, deleted below rather than annotated, because a ledger that outlives
- * its debt is an exemption nobody decided to grant:
+ * entries, deleted rather than annotated, because a ledger that outlives its
+ * debt is an exemption nobody decided to grant:
  *
  *  1. **`params` on the two relationship queries** — `respond`'s
  *     `gather.relationshipsPerspectives.read` and `gather.relationshipsKnown.read`
@@ -258,7 +262,7 @@ const shipped = (): WalkableDoc[] =>
  *     followed the pick. `runtime/samplingSlotDispatch.int.test.ts` is where
  *     that is asserted end to end.
  *  3. **Slots with no reader at all** — the six that remain, and the only shape
- *     naming the slot does not fix. `core:provider/embed-text@1`'s `connection`
+ *     naming the slot does not fix. `core:oracle/embed-text@1`'s `connection`
  *     is never consulted — `host.ts` embeds through the local model
  *     (`embeddingApi()`), which is what the "embedding models become
  *     connections" work exists to change. Naming it would resolve a value into a
@@ -283,32 +287,29 @@ const shipped = (): WalkableDoc[] =>
  * the wired-side assertion below, which is what tells a fix apart from a
  * deleted ledger line.
  */
-const LEDGER = new Map<string, string>([
-	[
-		'core:spec/respond node "semantic.arm.embed" slot "connection"',
-		"shape 3 — embed-text embeds through the local model; the slot has no reader"
-	],
-	[
-		'core:spec/respond node "names.arm.embed" slot "connection"',
-		"shape 3 — embed-text embeds through the local model; the slot has no reader"
-	],
-	[
-		'core:spec/narrate node "semantic.arm.embed" slot "connection"',
-		"shape 3 — embed-text embeds through the local model; the slot has no reader"
-	],
-	[
-		'core:spec/narrate node "names.arm.embed" slot "connection"',
-		"shape 3 — embed-text embeds through the local model; the slot has no reader"
-	],
-	[
-		'core:spec/narrate-character node "semantic.arm.embed" slot "connection"',
-		"shape 3 — embed-text embeds through the local model; the slot has no reader"
-	],
-	[
-		'core:spec/narrate-character node "names.arm.embed" slot "connection"',
-		"shape 3 — embed-text embeds through the local model; the slot has no reader"
-	]
-])
+const ledgerFrom = (docs: WalkableDoc[]): Map<string, string> => {
+	const out = new Map<string, string>()
+	// Only SLOT entries of the allow-list apply here: a parameter field
+	// (`params.priority`) is a control inside a slot the spec does name, and
+	// an in-port is not a slot at all. Filtered on the entry's declared
+	// `kind`, which `declaredReads.test.ts` holds to the walk's own finding.
+	const allowedSlots = UNREAD_ALLOW_LIST.filter((a) => a.kind === "slot")
+	for (const doc of docs)
+		for (const node of doc.nodes) {
+			const pin = `${node.definitionId}@${node.definitionVersion}`
+			const descriptor = getDefinition(pin)
+			const slots = (descriptor?.slots ?? {}) as Record<string, SlotDecl>
+			for (const a of allowedSlots)
+				if (a.definition === pin && slots[a.name])
+					out.set(
+						`${doc.id} node "${node.key}" slot "${a.name}"`,
+						`shape 3 — ${a.reason}`
+					)
+		}
+	return out
+}
+
+const LEDGER = ledgerFrom(shipped())
 
 const result = walk(shipped())
 
@@ -419,6 +420,10 @@ describe("every declared slot is named by the spec that uses it", () => {
 	 * 9 → 6 as of `drizzle/0115`. The number may only go DOWN without a ruling:
 	 * a shape-3 entry is a slot with no reader anywhere in the app, so adding
 	 * one means shipping a control that is inert by construction.
+	 *
+	 * Derived now, so the two ways it can move are both visible: a new
+	 * allow-list SLOT line in `declaredReads.ts` (a ruling), or a spec gaining
+	 * or losing a node of an allow-listed definition (a spec edit).
 	 */
 	it("stands at six open entries", () => {
 		expect(
@@ -491,7 +496,7 @@ describe("every declared slot is named by the spec that uses it", () => {
 	/**
 	 * The image render's `params`, which arrived with the slot itself.
 	 *
-	 * `core:provider/generate-image@1` declared no parameters slot at all, so
+	 * `core:oracle/generate-image@1` declared no parameters slot at all, so
 	 * `streaming` is the first thing a person can set on this node — and the
 	 * spec naming it is the whole of what makes the control live. Unnamed, the
 	 * panel would draw the picker, the scope chain would store `off`, and

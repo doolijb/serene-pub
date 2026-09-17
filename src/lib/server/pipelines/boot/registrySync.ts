@@ -1,7 +1,7 @@
 /**
- * Boot-time type registry sync (02 §5, U2).
+ * Boot-time definition registry sync (02 §5, U2).
  *
- * Node types are declared in code and **materialized as rows**, so that every
+ * Node definitions are declared in code and **materialized as rows**, so that every
  * pin in every spec is joinable and — the part that actually matters — so core
  * can decide whether a plugin fits this release **without executing it** (F6,
  * 13 §10c).
@@ -9,8 +9,8 @@
  * ## A slug is an indirection (ruling 2026-09-10)
  *
  * `core:query/vector-search@1` names a *pointer*, not a declaration. The
- * `pipeline_type_registry` row for that slug carries whichever declaration it
- * currently resolves to, and `pipeline_type_declarations` keeps every
+ * `pipeline_definition_registry` row for that slug carries whichever declaration it
+ * currently resolves to, and `pipeline_definition_declarations` keeps every
  * declaration it has ever resolved to, keyed by content hash. Publishing a
  * changed declaration writes the new one into the archive if its hash is
  * unseen, then moves the pointer. Nothing is rewritten and nothing is deleted.
@@ -41,12 +41,19 @@
 import { eq, and } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
+	listGenreActions,
+	promoteIncludedActions,
+	type GenreAction
+} from "$lib/server/pipelines/entities/sessionGenres"
+import {
 	snapshotRegistry,
+	authoredSlots,
 	declarationMaterial,
 	DESCRIPTOR_DISPLAY_KEYS,
+	isEventId,
 	type RegistryEntry,
 	type Descriptor,
-	type ScriptTypeDecl
+	type ScriptKindDecl
 } from "@serene-pub/sdk"
 
 export interface SyncResult {
@@ -110,7 +117,7 @@ export interface SyncResult {
  * So the strip is now the SDK's, called with the SDK's own list rather than a
  * copy of it. `declarationMaterial` differs from what stood here in one further
  * way, deliberately kept: a function value canonicalizes to its source text
- * instead of being dropped by `JSON.stringify`. No node type reaches it — a
+ * instead of being dropped by `JSON.stringify`. No node definition reaches it — a
  * `SlotDecl`, an `EntryShape` and a `SettingsSchema` are data — but if one ever
  * carries a predicate, hashing it is the correct answer and silently ignoring it
  * is not.
@@ -136,18 +143,27 @@ const sortDeep = (v: unknown): unknown => {
  * What is hashed, as an object.
  *
  * Split out from the digest because the archive stores it: a
- * `pipeline_type_declarations` row keeps **exactly what was hashed** beside the
+ * `pipeline_definition_declarations` row keeps **exactly what was hashed** beside the
  * hash, so re-digesting the stored material has to reproduce the stored string.
  * Returning the material from the same function that composes it for the digest
  * is what makes that true by construction rather than by two lists agreeing.
  */
-export function typeContentMaterial(
+export function definitionContentMaterial(
 	entry: RegistryEntry
 ): Record<string, unknown> {
 	return {
 		kind: entry.kind,
 		ports: entry.ports,
-		slots: stripDisplay(entry.slots),
+		/**
+		 * The author's slots, and only those. The projection adds the
+		 * substrate's `settings` slot (R-9, 2026-09-16) to every optional or
+		 * gated definition's row so the panel reads it like any slot; it is
+		 * derived from `optional` and `effects`, both hashed below on their
+		 * own terms, so hashing it too would move every one of those pins for
+		 * a change nobody authored. Left out by name — the SDK reserves the
+		 * name, so nothing authored can hide behind it (`authoredSlots`).
+		 */
+		slots: stripDisplay(authoredSlots(entry.slots)),
 		effects: entry.effects,
 		causesEvent: entry.causesEvent,
 		public: entry.public,
@@ -176,19 +192,22 @@ export function typeContentMaterial(
 		 * earliest answer wins" — a behaviour change wearing a compatible
 		 * signature — the change the hash exists to make visible.
 		 *
-		 * `undefined` on node types, and `JSON.stringify` drops undefined keys,
-		 * so no node type's hash moves by this being here.
+		 * `undefined` on node definitions, and `JSON.stringify` drops undefined keys,
+		 * so no node definition's hash moves by this being here.
 		 */
 		semantics: entry.semantics,
 		/**
 		 * Hashed on the S3 argument, one construct over (18 §4e): a point
-		 * appearing or vanishing changes what an untouched spec's configuration
-		 * can reach — the panel offers a chain option per point, and the broker
-		 * refuses undeclared names. Keys are contract; the sort strips their
-		 * `i18n`/`description` like everywhere else. Undefined on types that
-		 * declare none, so nothing else re-hashes.
+		 * appearing or vanishing, or what it accepts (R-11), changes what an
+		 * untouched spec's configuration can reach — the panel offers a chain
+		 * option per point, and the broker refuses undeclared names and the
+		 * applier undeclared kinds. Keys and `accepts` are contract; the
+		 * point's `label`/`description` are display and stripped here — the
+		 * comment said so before 2026-09-16 and the code did not, so renaming
+		 * "Each draft" moved a pin. Undefined on types that declare none, so
+		 * nothing else re-hashes.
 		 */
-		scriptPoints: entry.scriptPoints,
+		scriptPoints: stripDisplay(entry.scriptPoints),
 		/**
 		 * The session-shape contract (19 §1), hashed for the reason the doc
 		 * states in the `optional` register: widening `characters.max` changes
@@ -253,8 +272,8 @@ function hashMaterial(material: unknown): string {
 }
 
 /** A stable hash of everything about a type that a spec can depend on. */
-export function typeContentHash(entry: RegistryEntry): string {
-	return hashMaterial(typeContentMaterial(entry))
+export function definitionContentHash(entry: RegistryEntry): string {
+	return hashMaterial(definitionContentMaterial(entry))
 }
 
 /**
@@ -266,7 +285,7 @@ export function typeContentHash(entry: RegistryEntry): string {
  * of two declarations, which is the one state neither the hash nor a reader can
  * detect.
  *
- * `type_id`, `version`, `owner_plugin_id` and `transport` are deliberately
+ * `definition_id`, `version`, `owner_plugin_id` and `transport` are deliberately
  * absent: they identify the slug and who owns it, not what it declares, and a
  * declaration cannot change them.
  */
@@ -307,27 +326,33 @@ async function archiveDeclaration(
 	entry: RegistryEntry,
 	hash: string,
 	release: string,
-	source: "declared" | "adopted"
+	source: "declared" | "adopted",
+	// The registry row's own kind, when it differs from `entry`'s — the
+	// rename retry in `adoptCurrent` builds `entry` under the OLD word so its
+	// hash reproduces `row.contentHash`, but the archive's `kind` column is
+	// read against the CURRENT vocabulary and must not carry that retry back
+	// out. Defaults to `entry.kind` for every other caller.
+	kind: RegistryEntry["kind"] = entry.kind
 ): Promise<boolean> {
 	const [seen] = await db
-		.select({ id: schema.pipelineTypeDeclarations.id })
-		.from(schema.pipelineTypeDeclarations)
+		.select({ id: schema.pipelineDefinitionDeclarations.id })
+		.from(schema.pipelineDefinitionDeclarations)
 		.where(
 			and(
-				eq(schema.pipelineTypeDeclarations.typeId, entry.id),
-				eq(schema.pipelineTypeDeclarations.version, entry.version),
-				eq(schema.pipelineTypeDeclarations.contentHash, hash)
+				eq(schema.pipelineDefinitionDeclarations.definitionId, entry.id),
+				eq(schema.pipelineDefinitionDeclarations.version, entry.version),
+				eq(schema.pipelineDefinitionDeclarations.contentHash, hash)
 			)
 		)
 		.limit(1)
 	if (seen) return false
 
-	await db.insert(schema.pipelineTypeDeclarations).values({
-		typeId: entry.id,
+	await db.insert(schema.pipelineDefinitionDeclarations).values({
+		definitionId: entry.id,
 		version: entry.version,
-		kind: entry.kind,
+		kind,
 		contentHash: hash,
-		material: typeContentMaterial(entry) as Record<string, any>,
+		material: definitionContentMaterial(entry) as Record<string, any>,
 		entry: entry as unknown as Record<string, any>,
 		release,
 		source
@@ -340,7 +365,7 @@ async function archiveDeclaration(
  *
  * The migration path, and the reason 0119 seeds no rows: the hash is a digest of
  * a stripped declaration, which SQL cannot compute — but the row already carries
- * the hash it was published under, and `readTypeRegistry` reconstructs the
+ * the hash it was published under, and `readDefinitionRegistry` reconstructs the
  * declaration from the row losslessly (the round trip is pinned by
  * `registrySync.int.test.ts`). So the first boot after the migration adopts each
  * existing row from the row itself.
@@ -353,12 +378,29 @@ async function archiveDeclaration(
  */
 async function adoptCurrent(db: Db, row: any, release: string): Promise<void> {
 	if (!row.contentHash) return
+	let entry = rowToEntry(row)
+	// The one-shot rename (0134) rewrote `kind` on a registry row whose hash
+	// was taken over the OLD word (`input`, not `inlet`); `renamed_from` says
+	// so. Until this boot moves the pointer, adopting the row as it stands
+	// would archive material that does not re-hash to the hash beside it —
+	// the one thing an archive must not do. So the material is adopted under
+	// the kind it was hashed with, verified rather than assumed: only when
+	// the old kind reproduces the row's hash exactly.
+	if (row.renamedFrom && definitionContentHash(entry) !== row.contentHash) {
+		const was = /^[^:]+:([^/]+)\//.exec(row.renamedFrom)?.[1]
+		if (was) {
+			const candidate = { ...entry, kind: was as RegistryEntry["kind"] }
+			if (definitionContentHash(candidate) === row.contentHash)
+				entry = candidate
+		}
+	}
 	await archiveDeclaration(
 		db,
-		rowToEntry(row),
+		entry,
 		row.contentHash,
 		row.release ?? release,
-		"adopted"
+		"adopted",
+		row.kind
 	)
 }
 
@@ -369,12 +411,12 @@ async function adoptCurrent(db: Db, row: any, release: string): Promise<void> {
  * run. That property is what lets this run unconditionally at boot instead of
  * behind a "have we migrated yet" flag, which is a flag that eventually lies.
  */
-export async function syncTypeRegistry(
+export async function syncDefinitionRegistry(
 	db: Db,
 	// Script types ride the same sync (18 §2). `snapshotRegistry` branches on
 	// the id, so everything below this line is unaware there are two kinds of
 	// declaration — which is the property that keeps publishing one rule.
-	descriptors: Array<Descriptor | ScriptTypeDecl>,
+	descriptors: Array<Descriptor | ScriptKindDecl>,
 	opts: { release: string; ownerPluginId?: number } = { release: "dev" }
 ): Promise<SyncResult> {
 	const entries = snapshotRegistry(descriptors, { release: opts.release })
@@ -386,24 +428,24 @@ export async function syncTypeRegistry(
 	}
 
 	for (const entry of entries) {
-		const hash = typeContentHash(entry)
+		const hash = definitionContentHash(entry)
 		const pin = `${entry.id}@${entry.version}`
 
 		const [row] = await db
 			.select()
-			.from(schema.pipelineTypeRegistry)
+			.from(schema.pipelineDefinitionRegistry)
 			.where(
 				and(
-					eq(schema.pipelineTypeRegistry.typeId, entry.id),
-					eq(schema.pipelineTypeRegistry.version, entry.version)
+					eq(schema.pipelineDefinitionRegistry.definitionId, entry.id),
+					eq(schema.pipelineDefinitionRegistry.version, entry.version)
 				)
 			)
 			.limit(1)
 
 		if (!row) {
 			await archiveDeclaration(db, entry, hash, opts.release, "declared")
-			await db.insert(schema.pipelineTypeRegistry).values({
-				typeId: entry.id,
+			await db.insert(schema.pipelineDefinitionRegistry).values({
+				definitionId: entry.id,
 				version: entry.version,
 				ownerPluginId: opts.ownerPluginId ?? null,
 				// Core's own types run in-process; anything a plugin owns does
@@ -441,12 +483,12 @@ export async function syncTypeRegistry(
 			 */
 			await archiveDeclaration(db, entry, hash, opts.release, "declared")
 			await db
-				.update(schema.pipelineTypeRegistry)
+				.update(schema.pipelineDefinitionRegistry)
 				.set({
 					...projectedColumns(entry, opts.release),
 					contentHash: hash
 				})
-				.where(eq(schema.pipelineTypeRegistry.id, row.id))
+				.where(eq(schema.pipelineDefinitionRegistry.id, row.id))
 			result.republished.push(pin)
 			continue
 		}
@@ -500,7 +542,7 @@ export async function syncTypeRegistry(
 			row.release !== opts.release
 		) {
 			await db
-				.update(schema.pipelineTypeRegistry)
+				.update(schema.pipelineDefinitionRegistry)
 				.set({
 					release: opts.release,
 					...(optionalChanged
@@ -523,7 +565,7 @@ export async function syncTypeRegistry(
 							}
 						: {})
 				})
-				.where(eq(schema.pipelineTypeRegistry.id, row.id))
+				.where(eq(schema.pipelineDefinitionRegistry.id, row.id))
 			if (slotsChanged || configSchemaChanged) {
 				result.updated.push(pin)
 				continue
@@ -544,8 +586,8 @@ export async function syncTypeRegistry(
  * older type version left in place for the specs still pinning it is exactly
  * the case that would otherwise be invisible.
  */
-export async function readTypeRegistry(db: Db): Promise<RegistryEntry[]> {
-	const rows = await db.select().from(schema.pipelineTypeRegistry)
+export async function readDefinitionRegistry(db: Db): Promise<RegistryEntry[]> {
+	const rows = await db.select().from(schema.pipelineDefinitionRegistry)
 	return rows.map(rowToEntry)
 }
 
@@ -553,13 +595,13 @@ export async function readTypeRegistry(db: Db): Promise<RegistryEntry[]> {
  * One registry row, back as the declaration it was projected from.
  *
  * Its own function because two callers need it and they need it to agree:
- * `readTypeRegistry` hands it to install validation, and `adoptCurrent` hands it
+ * `readDefinitionRegistry` hands it to install validation, and `adoptCurrent` hands it
  * to the archive. If the second reconstructed a declaration the first would not,
  * an adopted row's material would describe something no reader ever saw.
  */
 function rowToEntry(r: any): RegistryEntry {
 	return {
-		id: r.typeId,
+		id: r.definitionId,
 		version: r.version,
 		kind: r.kind,
 		ports: r.ports,
@@ -609,6 +651,25 @@ export interface PluginPresetSyncReport {
 	projected: string[]
 	withdrawn: string[]
 	restored: string[]
+	/**
+	 * Presets whose manifest keyed a binding by bare event name and were read
+	 * as the event id (`core:event/<name>@1`) — one release, see the site.
+	 */
+	normalisedBindingKeys: string[]
+	/**
+	 * Presets whose manifest keyed a binding by bare event name under a
+	 * non-core genre — a bare key only ever meant `core:event/<name>@1`, so
+	 * one declared against a plugin's own genre cannot be normalised and the
+	 * binding is dropped rather than pointed at the wrong event.
+	 */
+	skippedBindingKeys: string[]
+	/**
+	 * Presets whose manifest included an action by bare function key that
+	 * no single action of the genre declares, so it was written bare — see
+	 * the site (third pass, W1). A bare key exactly one action declares is
+	 * promoted to that identity and not reported.
+	 */
+	bareIncludedKeys: string[]
 }
 
 /** `plugin:<plugin id>:<declared slug>` — the idempotence key, never a row id. */
@@ -663,7 +724,10 @@ export async function syncPluginPresets(
 	const report: PluginPresetSyncReport = {
 		projected: [],
 		withdrawn: [],
-		restored: []
+		restored: [],
+		normalisedBindingKeys: [],
+		skippedBindingKeys: [],
+		bareIncludedKeys: []
 	}
 
 	const plugins = await db.select().from(schema.plugins)
@@ -697,12 +761,87 @@ export async function syncPluginPresets(
 	const bySeedKey = new Map(
 		(rows as any[]).filter((r) => r.seedKey).map((r) => [r.seedKey, r])
 	)
+	// The genre's offered actions, read once per genre across the presets
+	// that share it — what a bare included key is promoted against.
+	const offeredByGenre = new Map<string, GenreAction[]>()
+	const offeredFor = async (genreId: string): Promise<GenreAction[]> => {
+		let offered = offeredByGenre.get(genreId)
+		if (!offered) {
+			offered = await listGenreActions(db, genreId)
+			offeredByGenre.set(genreId, offered)
+		}
+		return offered
+	}
 
 	for (const [seedKey, { ownerId, decl }] of declared) {
 		const bindings: Record<string, { spec: string }> = {}
-		for (const [event, b] of Object.entries(decl.bindings ?? {}))
-			if (b && typeof (b as any).spec === "string")
-				bindings[event] = { spec: (b as any).spec }
+		for (const [key, b] of Object.entries(decl.bindings ?? {})) {
+			if (!b || typeof (b as any).spec !== "string") continue
+			// ⏳ TEMPORARY — remove in the release after 0.6, with
+			// `sdk/src/deprecated.ts`. A manifest packaged by the previous SDK
+			// keys its bindings by bare genre-event name (`message-respond`);
+			// 0134 rekeyed the stored rows by event id, and writing the
+			// manifest's key verbatim here would revert that fold on every
+			// boot, so the run's lookup by id finds nothing and the preset
+			// binds nothing, silently (U3 review, W6). Normalised to the id,
+			// logged once per preset (seedKey). `announce.build()` refuses a
+			// bare key on packaging now, so no new manifest carries one; when
+			// this goes, a bare key must be skipped and reported, never
+			// written.
+			let event = key
+			if (!isEventId(key)) {
+				// A bare key only ever meant `core:event/<name>@1` — a plugin's
+				// own genre owns no bare-named events, so normalising here would
+				// bind against an id nobody declared. Skipped instead.
+				if (!(decl.genre as string).startsWith("core:")) {
+					if (!report.skippedBindingKeys.includes(seedKey)) {
+						report.skippedBindingKeys.push(seedKey)
+						console.warn(
+							`[pipelines] preset ${seedKey} binds '${key}' by bare name under non-core genre '${decl.genre}'; ` +
+								`skipped — repackage the plugin against the current SDK`
+						)
+					}
+					continue
+				}
+				const normalised = `core:event/${key}@1`
+				if (!isEventId(normalised)) continue
+				if (!report.normalisedBindingKeys.includes(seedKey)) {
+					report.normalisedBindingKeys.push(seedKey)
+					console.warn(
+						`[pipelines] preset ${seedKey} binds '${key}' by bare name; ` +
+							`read as '${normalised}' — repackage the plugin against the current SDK`
+					)
+				}
+				event = normalised
+			}
+			bindings[event] = { spec: (b as any).spec }
+		}
+
+		// The included set is stored by identity (W-A). `preset()` refuses a
+		// bare key on packaging now, so only a manifest packaged by a previous
+		// SDK carries one; written verbatim it would put back, on every boot,
+		// a shape the reader promotes only by its ⏳ fallback (third pass,
+		// W1). Promoted here by the shared rule — a bare key exactly one
+		// action of the genre declares becomes that identity — and the rest
+		// kept bare and said once per preset, never refused: a boot that
+		// refuses a preset is a boot that offers nothing.
+		let includedActions: string[] | null = null
+		if (Array.isArray(decl.actions?.include)) {
+			const promoted = promoteIncludedActions(
+				await offeredFor(decl.genre as string),
+				(decl.actions.include as unknown[]).map(String)
+			)
+			includedActions = promoted.included
+			if (promoted.bare.length && !report.bareIncludedKeys.includes(seedKey)) {
+				report.bareIncludedKeys.push(seedKey)
+				console.warn(
+					`[pipelines] preset ${seedKey} includes ${promoted.bare.map((k) => `'${k}'`).join(", ")} ` +
+						`by bare function key and no single action of '${decl.genre}' declares ` +
+						`${promoted.bare.length === 1 ? "it" : "them"}; written bare — ` +
+						`repackage the plugin naming each action by identity ('<spec slug>#<key>')`
+				)
+			}
+		}
 
 		const projected = {
 			name: typeof decl.label === "string" ? decl.label : decl.slug,
@@ -710,9 +849,7 @@ export async function syncPluginPresets(
 				typeof decl.description === "string" ? decl.description : null,
 			genreId: decl.genre as string,
 			bindings,
-			includedActions: Array.isArray(decl.actions?.include)
-				? (decl.actions.include as string[])
-				: null,
+			includedActions,
 			defaults: (decl.defaults as Record<string, unknown>) ?? null,
 			ownerPluginId: ownerId
 		}

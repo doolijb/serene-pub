@@ -1,17 +1,21 @@
 <script lang="ts">
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { getContext, onDestroy, onMount } from "svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { z } from "zod"
 	import CharacterListItem from "../listItems/CharacterListItem.svelte"
-	import PersonaListItem from "../listItems/PersonaListItem.svelte"
 	import SessionListItem from "../listItems/SessionListItem.svelte"
 	import LorebookListItem from "../listItems/LorebookListItem.svelte"
 	import EmptyState from "../EmptyState.svelte"
 	import PanelNavHeader from "../panels/PanelNavHeader.svelte"
+	import PanelFilterInput from "../panels/PanelFilterInput.svelte"
+	import PanelSplit from "../panels/PanelSplit.svelte"
+	import { ViewModeTracker } from "$lib/client/shell/viewMode.svelte"
 	import { goto } from "$app/navigation"
+	import { JUMP_CONTEXT, type JumpCtx } from "$lib/client/shell/jump.svelte"
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
@@ -21,6 +25,9 @@
 
 	const socket = useTypedSocket()
 	const panelsCtx: PanelsCtx = $state(getContext("panelsCtx"))
+	// Measures the view's own box, not the window: the same view is 400px in
+	// the dock and ~1376px full page, and both must land in the right shape.
+	const vm = new ViewModeTracker()
 
 	let tagsList: SelectTag[] = $state([])
 	let isLoading = $state(true)
@@ -41,7 +48,6 @@
 	// with only a display-column subset (see registerTagHandlers), so they're
 	// Partial, matching what the *ListItem components expect.
 	let relatedCharacters: Partial<SelectCharacter>[] = $state([])
-	let relatedPersonas: Partial<SelectPersona>[] = $state([])
 	let relatedLorebooks: SelectLorebook[] = $state([])
 	// tags:getRelatedData never actually populates sessions server-side today
 	// (see registerTagHandlers), so this stays empty at runtime — typed to
@@ -71,6 +77,32 @@
 						.includes(search.toLowerCase()))
 		)
 	})
+
+	/**
+	 * Jump, scoped to this view — see CharactersSidebar's matching block for
+	 * why the registration is closures rather than values.
+	 */
+	const jumpCtx = getContext<JumpCtx | undefined>(JUMP_CONTEXT)
+	$effect(() =>
+		jumpCtx?.registerScope("tags", {
+			label: "Tags",
+			placeholder: "Filter tags",
+			getQuery: () => search,
+			setQuery: (next) => (search = next),
+			getHits: () =>
+				filteredTags.map((tag) => ({
+					kind: "tag" as const,
+					id: tag.id,
+					title: tag.name,
+					subtitle: tag.description || undefined
+				})),
+			// The row's own onclick: select the tag and fetch what it is on.
+			onPick: (hit) => {
+				const tag = tagsList.find((t) => t.id === Number(hit.id))
+				if (tag) handleTagClick(tag)
+			}
+		})
+	)
 
 	// Color preset options
 	const colorPresetOptions = [
@@ -337,16 +369,6 @@
 		panelsCtx.openPanel({ key: "characters", toggle: false })
 	}
 
-	function handlePersonaClick(persona: Partial<SelectPersona>) {
-		panelsCtx.digest.sessionPersonaId = persona.id
-		panelsCtx.openPanel({ key: "sessions", toggle: false })
-	}
-
-	function handlePersonaEditClick(persona: Partial<SelectPersona>) {
-		panelsCtx.digest.personaId = persona.id
-		panelsCtx.openPanel({ key: "personas", toggle: false })
-	}
-
 	function handleLorebookClick(lorebook: SelectLorebook) {
 		panelsCtx.digest.lore = {
 			lorebookId: lorebook.id,
@@ -359,7 +381,7 @@
 		session: Sockets.Sessions.List.Response["sessionList"][0]
 	) {
 		goto(`/sessions/${session.id}`)
-		panelsCtx.fullscreenPanel = null
+		panelsCtx.fullPageView = null
 	}
 
 	function handleSessionEditClick(
@@ -369,9 +391,8 @@
 		panelsCtx.openPanel({ key: "sessions", toggle: false })
 	}
 
-	// Named so `off` can name them too. A bare `socket.off("tags:list")`
-	// removes EVERY listener for that event — including any other open tags
-	// UI, not just this sidebar's.
+	// Declared on the interest registry below, which owns the one listener per
+	// event and releases this sidebar's subscribers when it is destroyed.
 	function handleTagsList(msg: any) {
 		tagsList = msg.tagsList || []
 		isLoading = false
@@ -407,24 +428,40 @@
 	}
 
 	function handleTagsGetRelatedData(msg: any) {
+		// No personas section: a persona is a character, so a tagged persona
+		// arrives in `characters` (flagged by its own `isPersona`) and
+		// showing it twice would be two rows for one row.
 		relatedCharacters = msg.tagData.characters || []
-		relatedPersonas = msg.tagData.personas || []
 		relatedLorebooks = msg.tagData.lorebooks || []
 		relatedSessions = msg.tagData.sessions || []
 	}
 
+	/**
+	 * This sidebar's `tags:*` replies, on the interest registry. All BARE —
+	 * the list is the whole of this user's tags, and the three writes plus
+	 * `getRelatedData` answer on their own event with no id this view already
+	 * holds, so none of them has an interest scope to narrow to.
+	 *
+	 * `tags:list` is STANDING rather than a one-shot: it is a cascade target,
+	 * re-sent after every create, update and delete, and this sidebar is what
+	 * renders it. The request that fills it first is in `onMount` below; the
+	 * typed `emit` puts the sync packet naming these keys ahead of it on the
+	 * same socket.
+	 */
+	useInterest<"tags:list">("tags:list", handleTagsList)
+	// The server has no `tags:list:error` emit today — the key is declared
+	// anyway, because the registry is the only listener path and a key nobody
+	// sends costs one string in a sync packet.
+	useInterest<"tags:list:error">("tags:list:error", handleTagsListError)
+	useInterest<"tags:create">("tags:create", handleTagsCreate)
+	useInterest<"tags:update">("tags:update", handleTagsUpdate)
+	useInterest<"tags:delete">("tags:delete", handleTagsDelete)
+	useInterest<"tags:getRelatedData">(
+		"tags:getRelatedData",
+		handleTagsGetRelatedData
+	)
+
 	onMount(() => {
-		socket.on("tags:list", handleTagsList)
-		socket.on("tags:list:error", handleTagsListError)
-
-		socket.on("tags:create", handleTagsCreate)
-
-		socket.on("tags:update", handleTagsUpdate)
-
-		socket.on("tags:delete", handleTagsDelete)
-
-		socket.on("tags:getRelatedData", handleTagsGetRelatedData)
-
 		socket.emit("tags:list", {})
 
 		onclose = async () => {
@@ -433,417 +470,436 @@
 	})
 
 	onDestroy(() => {
-		socket.off("tags:list", handleTagsList)
-		socket.off("tags:list:error", handleTagsListError)
-		socket.off("tags:create", handleTagsCreate)
-		socket.off("tags:update", handleTagsUpdate)
-		socket.off("tags:delete", handleTagsDelete)
-		socket.off("tags:getRelatedData", handleTagsGetRelatedData)
+		// The `tags:*` listeners are not here: the interest registry releases
+		// this sidebar's subscribers as its effects are destroyed.
 		onclose = undefined
 	})
 </script>
 
-<div class="text-foreground h-full p-4">
-	{#if selectedTag && !isEditing}
-		<!-- Selected tag view -->
-		<div class="mb-4">
-			<div class="mb-4">
-				<PanelNavHeader
-					title={selectedTag.name}
-					onBack={() => {
-						selectedTag = null
-					}}
-					backLabel="Back to tags"
-					actionsLabel="Tag"
-				>
-					{#snippet primaryAction()}
-						<button
-							class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-2"
-							onclick={handleEditClick}
-							title="Edit Tag"
-							aria-label="Edit Tag"
-							type="button"
+<div use:vm.observe class="text-foreground flex h-full min-h-0 flex-col">
+	<PanelSplit
+		mode={vm.mode}
+		hasDetail={isCreating || isEditing || selectedTag != null}
+		emptyMessage="Pick a tag to see what it is on."
+	>
+		{#snippet detail()}
+			{#if selectedTag && !isEditing}
+				<!-- Selected tag view -->
+				<div class="mb-4">
+					<div class="mb-4">
+						<PanelNavHeader
+							title={selectedTag.name}
+							onBack={vm.mode === "desk"
+								? undefined
+								: () => {
+										selectedTag = null
+									}}
+							backLabel="Back to tags"
+							actionsLabel="Tag"
 						>
-							<Icons.Pencil size={16} aria-hidden="true" />
-						</button>
-					{/snippet}
-					{#snippet actions()}
-						<button
-							class="btn btn-sm popover-menu-btn hover:preset-filled-error-500"
-							onclick={handleDeleteClick}
-							type="button"
+							{#snippet primaryAction()}
+								<button
+									class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-2"
+									onclick={handleEditClick}
+									title="Edit Tag"
+									aria-label="Edit Tag"
+									type="button"
+								>
+									<Icons.Pencil
+										size={16}
+										aria-hidden="true"
+									/>
+								</button>
+							{/snippet}
+							{#snippet actions()}
+								<button
+									class="btn btn-sm popover-menu-btn hover:preset-filled-error-500"
+									onclick={handleDeleteClick}
+									type="button"
+								>
+									<Icons.Trash2
+										size={16}
+										aria-hidden="true"
+									/>
+									<span>Delete</span>
+								</button>
+							{/snippet}
+						</PanelNavHeader>
+					</div>
+
+					{#if selectedTag.description}
+						<div
+							class="border-primary-500 bg-surface-50-950 mb-4 rounded-lg border p-4"
 						>
-							<Icons.Trash2 size={16} aria-hidden="true" />
-							<span>Delete</span>
+							<p class="text-muted-foreground text-sm">
+								{selectedTag.description}
+							</p>
+						</div>
+					{/if}
+
+					<!-- Related sections -->
+					{#if relatedCharacters.length > 0}
+						<div class="mb-6">
+							<h3
+								class="mb-3 flex items-center gap-2 text-lg font-semibold"
+							>
+								<Icons.User size={18} />
+								Characters ({relatedCharacters.length})
+							</h3>
+							<div class="flex flex-col gap-2">
+								{#each relatedCharacters as character}
+									<CharacterListItem
+										{character}
+										onclick={handleCharacterClick}
+										onEdit={() =>
+											handleCharacterEditClick(character)}
+										showControls={true}
+										contentTitle="Go to character sessions"
+									/>
+								{/each}
+							</div>
+						</div>
+					{/if}
+
+					{#if relatedLorebooks.length > 0}
+						<div class="mb-6">
+							<h3
+								class="mb-3 flex items-center gap-2 text-lg font-semibold"
+							>
+								<Icons.Book size={18} />
+								Lorebooks ({relatedLorebooks.length})
+							</h3>
+							<div class="grid gap-2">
+								{#each relatedLorebooks as lorebook}
+									<LorebookListItem
+										{lorebook}
+										onclick={() =>
+											handleLorebookClick(lorebook)}
+										showControls={false}
+										contentTitle="Go to lorebook"
+									/>
+								{/each}
+							</div>
+						</div>
+					{/if}
+
+					{#if relatedSessions.length > 0}
+						<div class="mb-6">
+							<h3
+								class="mb-3 flex items-center gap-2 text-lg font-semibold"
+							>
+								<Icons.MessageSquare size={18} />
+								Sessions ({relatedSessions.length})
+							</h3>
+							<div class="flex flex-col gap-2">
+								{#each relatedSessions as session}
+									<SessionListItem
+										{session}
+										onclick={handleSessionClick}
+										onEdit={() => {
+											handleSessionEditClick(session)
+										}}
+										showControls={true}
+										contentTitle="Go to session"
+									/>
+								{/each}
+							</div>
+						</div>
+					{/if}
+				</div>
+			{:else if isCreating}
+				<!-- Create tag form -->
+				<div>
+					<h1 class="mb-4 text-lg font-bold">Create New Tag</h1>
+					<div
+						class="mt-4 mb-4 flex gap-2"
+						role="group"
+						aria-label="Form actions"
+					>
+						<button
+							class="btn btn-sm preset-filled-surface-500 w-full"
+							onclick={cancelCreate}
+						>
+							Cancel
 						</button>
-					{/snippet}
-				</PanelNavHeader>
-			</div>
-
-			{#if selectedTag.description}
-				<div
-					class="border-primary-500 bg-surface-50-950 mb-4 rounded-lg border p-4"
-				>
-					<p class="text-muted-foreground text-sm">
-						{selectedTag.description}
-					</p>
-				</div>
-			{/if}
-
-			<!-- Related sections -->
-			{#if relatedCharacters.length > 0}
-				<div class="mb-6">
-					<h3
-						class="mb-3 flex items-center gap-2 text-lg font-semibold"
-					>
-						<Icons.User size={18} />
-						Characters ({relatedCharacters.length})
-					</h3>
-					<div class="flex flex-col gap-2">
-						{#each relatedCharacters as character}
-							<CharacterListItem
-								{character}
-								onclick={handleCharacterClick}
-								onEdit={() =>
-									handleCharacterEditClick(character)}
-								showControls={true}
-								contentTitle="Go to character sessions"
-							/>
-						{/each}
+						<button
+							class="btn btn-sm preset-filled-primary-500 w-full"
+							onclick={createTag}
+							disabled={Object.keys(validationErrors).length >
+								0 || !newTagName.trim()}
+						>
+							Create Tag
+						</button>
 					</div>
-				</div>
-			{/if}
-
-			{#if relatedPersonas.length > 0}
-				<div class="mb-6">
-					<h3
-						class="mb-3 flex items-center gap-2 text-lg font-semibold"
-					>
-						<Icons.UserCog size={18} />
-						Personas ({relatedPersonas.length})
-					</h3>
-					<div class="flex flex-col gap-2">
-						{#each relatedPersonas as persona}
-							<PersonaListItem
-								{persona}
-								onclick={handlePersonaClick}
-								onEdit={() => handlePersonaEditClick(persona)}
-								showControls={true}
-								contentTitle="Go to persona sessions"
-							/>
-						{/each}
-					</div>
-				</div>
-			{/if}
-
-			{#if relatedLorebooks.length > 0}
-				<div class="mb-6">
-					<h3
-						class="mb-3 flex items-center gap-2 text-lg font-semibold"
-					>
-						<Icons.Book size={18} />
-						Lorebooks ({relatedLorebooks.length})
-					</h3>
-					<div class="grid gap-2">
-						{#each relatedLorebooks as lorebook}
-							<LorebookListItem
-								{lorebook}
-								onclick={() => handleLorebookClick(lorebook)}
-								showControls={false}
-								contentTitle="Go to lorebook"
-							/>
-						{/each}
-					</div>
-				</div>
-			{/if}
-
-			{#if relatedSessions.length > 0}
-				<div class="mb-6">
-					<h3
-						class="mb-3 flex items-center gap-2 text-lg font-semibold"
-					>
-						<Icons.MessageSquare size={18} />
-						Sessions ({relatedSessions.length})
-					</h3>
-					<div class="flex flex-col gap-2">
-						{#each relatedSessions as session}
-							<SessionListItem
-								{session}
-								onclick={handleSessionClick}
-								onEdit={() => {
-									handleSessionEditClick(session)
+					<div class="space-y-4">
+						<div>
+							<label
+								class="mb-1 block font-semibold"
+								for="tagName"
+							>
+								Name
+							</label>
+							<input
+								id="tagName"
+								name="tagName"
+								type="text"
+								class="input w-full {validationErrors.name
+									? 'border-error-500'
+									: ''}"
+								bind:value={newTagName}
+								placeholder="Enter tag name"
+								aria-invalid={validationErrors.name
+									? "true"
+									: "false"}
+								aria-describedby={validationErrors.name
+									? "name-error"
+									: undefined}
+								oninput={() => {
+									if (validationErrors.name) {
+										const { name, ...rest } =
+											validationErrors
+										validationErrors = rest
+									}
 								}}
-								showControls={true}
-								contentTitle="Go to session"
 							/>
-						{/each}
+							{#if validationErrors.name}
+								<p
+									id="name-error"
+									class="text-error-500 mt-1 text-sm"
+									role="alert"
+								>
+									{validationErrors.name}
+								</p>
+							{/if}
+						</div>
+						<div>
+							<label
+								class="mb-1 block font-semibold"
+								for="tagDescription"
+							>
+								Description (Optional)
+							</label>
+							<textarea
+								name="tagDescription"
+								class="input w-full"
+								bind:value={newTagDescription}
+								placeholder="Enter tag description"
+								rows="3"
+							></textarea>
+						</div>
+						<div>
+							<label
+								class="mb-1 block font-semibold"
+								for="colorPreset"
+							>
+								Color Preset
+							</label>
+							<select
+								name="colorPreset"
+								class="input w-full"
+								bind:value={newTagColorPreset}
+							>
+								{#each colorPresetOptions as option}
+									<option value={option.value}>
+										{option.label}
+									</option>
+								{/each}
+							</select>
+							<div class="mt-2">
+								<span class="text-muted-foreground text-sm">
+									Preview:
+								</span>
+								<button
+									type="button"
+									class="chip {newTagColorPreset} ml-2"
+								>
+									{newTagName.trim() || "Tag Preview"}
+								</button>
+							</div>
+						</div>
+					</div>
+				</div>
+			{:else if isEditing}
+				<!-- Edit tag form -->
+				<div>
+					<h1 class="mb-4 text-lg font-bold">Edit Tag</h1>
+					<div
+						class="mt-4 mb-4 flex gap-2"
+						role="group"
+						aria-label="Form actions"
+					>
+						<button
+							class="btn btn-sm preset-filled-surface-500 w-full"
+							onclick={cancelEdit}
+						>
+							Cancel
+						</button>
+						<button
+							class="btn btn-sm preset-filled-primary-500 w-full"
+							onclick={updateTag}
+							disabled={Object.keys(editValidationErrors).length >
+								0 || !editTagName.trim()}
+						>
+							Update Tag
+						</button>
+					</div>
+					<div class="space-y-4">
+						<div>
+							<label
+								class="mb-1 block font-semibold"
+								for="editTagName"
+							>
+								Name
+							</label>
+							<input
+								id="editTagName"
+								name="editTagName"
+								type="text"
+								class="input w-full {editValidationErrors.name
+									? 'border-error-500'
+									: ''}"
+								bind:value={editTagName}
+								placeholder="Enter tag name"
+								aria-invalid={editValidationErrors.name
+									? "true"
+									: "false"}
+								aria-describedby={editValidationErrors.name
+									? "edit-name-error"
+									: undefined}
+								oninput={() => {
+									if (editValidationErrors.name) {
+										const { name, ...rest } =
+											editValidationErrors
+										editValidationErrors = rest
+									}
+								}}
+							/>
+							{#if editValidationErrors.name}
+								<p
+									id="edit-name-error"
+									class="text-error-500 mt-1 text-sm"
+									role="alert"
+								>
+									{editValidationErrors.name}
+								</p>
+							{/if}
+						</div>
+						<div>
+							<label
+								class="mb-1 block font-semibold"
+								for="editTagDescription"
+							>
+								Description (Optional)
+							</label>
+							<textarea
+								name="editTagDescription"
+								class="input w-full"
+								bind:value={editTagDescription}
+								placeholder="Enter tag description"
+								rows="3"
+							></textarea>
+						</div>
+						<div>
+							<label
+								class="mb-1 block font-semibold"
+								for="editColorPreset"
+							>
+								Color Preset
+							</label>
+							<select
+								name="editColorPreset"
+								class="input w-full"
+								bind:value={editTagColorPreset}
+							>
+								{#each colorPresetOptions as option}
+									<option value={option.value}>
+										{option.label}
+									</option>
+								{/each}
+							</select>
+							<div class="mt-2">
+								<span class="text-muted-foreground text-sm">
+									Preview:
+								</span>
+								<button
+									type="button"
+									class="chip {editTagColorPreset} ml-2"
+								>
+									{editTagName.trim() || "Tag Preview"}
+								</button>
+							</div>
+						</div>
 					</div>
 				</div>
 			{/if}
-		</div>
-	{:else if isCreating}
-		<!-- Create tag form -->
-		<div>
-			<h1 class="mb-4 text-lg font-bold">Create New Tag</h1>
-			<div
-				class="mt-4 mb-4 flex gap-2"
-				role="group"
-				aria-label="Form actions"
-			>
-				<button
-					class="btn btn-sm preset-filled-surface-500 w-full"
-					onclick={cancelCreate}
-				>
-					Cancel
-				</button>
-				<button
-					class="btn btn-sm preset-filled-primary-500 w-full"
-					onclick={createTag}
-					disabled={Object.keys(validationErrors).length > 0 ||
-						!newTagName.trim()}
-				>
-					Create Tag
-				</button>
-			</div>
-			<div class="space-y-4">
-				<div>
-					<label class="mb-1 block font-semibold" for="tagName">
-						Name
-					</label>
-					<input
-						id="tagName"
-						name="tagName"
-						type="text"
-						class="input w-full {validationErrors.name
-							? 'border-error-500'
-							: ''}"
-						bind:value={newTagName}
-						placeholder="Enter tag name"
-						aria-invalid={validationErrors.name ? "true" : "false"}
-						aria-describedby={validationErrors.name
-							? "name-error"
-							: undefined}
-						oninput={() => {
-							if (validationErrors.name) {
-								const { name, ...rest } = validationErrors
-								validationErrors = rest
-							}
-						}}
-					/>
-					{#if validationErrors.name}
-						<p
-							id="name-error"
-							class="text-error-500 mt-1 text-sm"
-							role="alert"
-						>
-							{validationErrors.name}
-						</p>
-					{/if}
-				</div>
-				<div>
-					<label
-						class="mb-1 block font-semibold"
-						for="tagDescription"
-					>
-						Description (Optional)
-					</label>
-					<textarea
-						name="tagDescription"
-						class="input w-full"
-						bind:value={newTagDescription}
-						placeholder="Enter tag description"
-						rows="3"
-					></textarea>
-				</div>
-				<div>
-					<label class="mb-1 block font-semibold" for="colorPreset">
-						Color Preset
-					</label>
-					<select
-						name="colorPreset"
-						class="input w-full"
-						bind:value={newTagColorPreset}
-					>
-						{#each colorPresetOptions as option}
-							<option value={option.value}>{option.label}</option>
-						{/each}
-					</select>
-					<div class="mt-2">
-						<span class="text-muted-foreground text-sm">
-							Preview:
-						</span>
-						<button
-							type="button"
-							class="chip {newTagColorPreset} ml-2"
-						>
-							{newTagName.trim() || "Tag Preview"}
-						</button>
-					</div>
-				</div>
-			</div>
-		</div>
-	{:else if isEditing}
-		<!-- Edit tag form -->
-		<div>
-			<h1 class="mb-4 text-lg font-bold">Edit Tag</h1>
-			<div
-				class="mt-4 mb-4 flex gap-2"
-				role="group"
-				aria-label="Form actions"
-			>
-				<button
-					class="btn btn-sm preset-filled-surface-500 w-full"
-					onclick={cancelEdit}
-				>
-					Cancel
-				</button>
-				<button
-					class="btn btn-sm preset-filled-primary-500 w-full"
-					onclick={updateTag}
-					disabled={Object.keys(editValidationErrors).length > 0 ||
-						!editTagName.trim()}
-				>
-					Update Tag
-				</button>
-			</div>
-			<div class="space-y-4">
-				<div>
-					<label class="mb-1 block font-semibold" for="editTagName">
-						Name
-					</label>
-					<input
-						id="editTagName"
-						name="editTagName"
-						type="text"
-						class="input w-full {editValidationErrors.name
-							? 'border-error-500'
-							: ''}"
-						bind:value={editTagName}
-						placeholder="Enter tag name"
-						aria-invalid={editValidationErrors.name
-							? "true"
-							: "false"}
-						aria-describedby={editValidationErrors.name
-							? "edit-name-error"
-							: undefined}
-						oninput={() => {
-							if (editValidationErrors.name) {
-								const { name, ...rest } = editValidationErrors
-								editValidationErrors = rest
-							}
-						}}
-					/>
-					{#if editValidationErrors.name}
-						<p
-							id="edit-name-error"
-							class="text-error-500 mt-1 text-sm"
-							role="alert"
-						>
-							{editValidationErrors.name}
-						</p>
-					{/if}
-				</div>
-				<div>
-					<label
-						class="mb-1 block font-semibold"
-						for="editTagDescription"
-					>
-						Description (Optional)
-					</label>
-					<textarea
-						name="editTagDescription"
-						class="input w-full"
-						bind:value={editTagDescription}
-						placeholder="Enter tag description"
-						rows="3"
-					></textarea>
-				</div>
-				<div>
-					<label
-						class="mb-1 block font-semibold"
-						for="editColorPreset"
-					>
-						Color Preset
-					</label>
-					<select
-						name="editColorPreset"
-						class="input w-full"
-						bind:value={editTagColorPreset}
-					>
-						{#each colorPresetOptions as option}
-							<option value={option.value}>{option.label}</option>
-						{/each}
-					</select>
-					<div class="mt-2">
-						<span class="text-muted-foreground text-sm">
-							Preview:
-						</span>
-						<button
-							type="button"
-							class="chip {editTagColorPreset} ml-2"
-						>
-							{editTagName.trim() || "Tag Preview"}
-						</button>
-					</div>
-				</div>
-			</div>
-		</div>
-	{:else}
-		<!-- Main tags list view -->
-		<div class="mb-2 flex gap-2">
-			<button
-				class="btn btn-sm preset-filled-primary-500"
-				onclick={handleCreateClick}
-				title="Create New Tag"
-			>
-				<Icons.Plus size={16} />
-				New
-			</button>
-		</div>
+		{/snippet}
 
-		<div class="mb-4 flex items-center gap-2">
-			<input
-				type="text"
-				placeholder="Search tags..."
-				aria-label="Search tags"
-				class="input"
-				bind:value={search}
-			/>
-		</div>
+		{#snippet list()}
+			<!-- Main tags list view -->
+			<div class="mb-2 flex gap-2">
+				<button
+					class="btn btn-sm preset-filled-primary-500"
+					onclick={handleCreateClick}
+					title="Create New Tag"
+				>
+					<Icons.Plus size={16} />
+					New
+				</button>
+			</div>
 
-		{#if isLoading}
-			<div class="flex items-center justify-center py-8">
-				<Icons.Loader2
-					size={20}
-					class="text-surface-400 animate-spin"
+			<div class="mb-4">
+				<PanelFilterInput
+					bind:value={search}
+					placeholder="tags"
+					count={tagsList.length}
+					aria-label="Filter tags by name or description"
 				/>
 			</div>
-		{:else if filteredTags.length === 0}
-			<EmptyState
-				icon={Icons.Tag}
-				message={search
-					? `No tags found matching "${search}".`
-					: "No tags yet — create one to get started."}
-				ctaLabel={search ? undefined : "New Tag"}
-				onCta={search ? undefined : () => (isCreating = true)}
-			/>
-		{:else}
-			<!-- Beautiful multi-row flex layout using Skeleton chips -->
-			<div class="flex flex-wrap gap-2">
-				{#each filteredTags as tag}
-					<button
-						type="button"
-						class="chip {tag.colorPreset ||
-							'preset-filled-primary-500'} text-sm transition-all duration-200"
-						onclick={() => handleTagClick(tag)}
-						title={tag.description || tag.name}
-					>
-						{tag.name}
-					</button>
-				{/each}
-			</div>
-		{/if}
-	{/if}
+
+			{#if isLoading}
+				<div class="flex items-center justify-center py-8">
+					<Icons.Loader2
+						size={20}
+						class="text-surface-400 animate-spin"
+					/>
+				</div>
+			{:else if filteredTags.length === 0}
+				<EmptyState
+					icon={Icons.Tag}
+					message={search
+						? `No tags found matching "${search}".`
+						: "No tags yet — create one to get started."}
+					ctaLabel={search ? undefined : "New Tag"}
+					onCta={search ? undefined : () => (isCreating = true)}
+				/>
+			{:else}
+				<!-- Beautiful multi-row flex layout using Skeleton chips -->
+				<div class="flex flex-wrap gap-2">
+					{#each filteredTags as tag}
+						{@const isSelected =
+							vm.mode === "desk" && selectedTag?.id === tag.id}
+						<!-- Selection is an OUTLINE, not `.sidebar-row-active`: a
+					     tag's background is the tag's own colour preset (its
+					     data), so the app's usual selected-row surface would
+					     paint over the one thing this chip is for. The outline
+					     sits outside it and reads on every preset. -->
+						<button
+							type="button"
+							class="chip {tag.colorPreset ||
+								'preset-filled-primary-500'} text-sm transition-all duration-200 {isSelected
+								? 'outline-primary-500 outline-2 outline-offset-2'
+								: ''}"
+							onclick={() => handleTagClick(tag)}
+							title={tag.description || tag.name}
+							aria-current={isSelected ? "true" : undefined}
+						>
+							{tag.name}
+						</button>
+					{/each}
+				</div>
+			{/if}
+		{/snippet}
+	</PanelSplit>
 </div>
 
 <!-- Delete confirmation modal -->

@@ -78,8 +78,15 @@ declare global {
 		interface CapabilityDefault {
 			connectionId: number | null
 			/**
-			 * WHICH MODEL on that endpoint (0114). NULL means its default model,
-			 * which is what every registration the backfill left behind says.
+			 * WHICH MODEL on that endpoint (0114).
+			 *
+			 * NULL beside a stated `connectionId` means the registration is
+			 * INCOMPLETE, and it resolves as unconfigured — a connection has no
+			 * default model to fall back to, so "the endpoint, whichever model"
+			 * names nothing a run can dispatch to. Every registration the
+			 * backfill left behind, and every one the `ON DELETE SET NULL` on
+			 * `connection_models` releases, reads this way. See
+			 * `docs/connections.md`, "Choosing a pair".
 			 *
 			 * ⚠ Half of a PAIR. It travels with `connectionId` and is cleared
 			 * whenever that changes — a `connection_models` row belongs to one
@@ -144,6 +151,11 @@ declare global {
 			namespace List {
 				interface Params {}
 				interface Response {
+					/**
+					 * `isPersona` / `isDefaultPersona` / `folderId` ride the
+					 * row: the persona picker and the folder-grouped library
+					 * are both reads of THIS list, not of a second family.
+					 */
 					characterList: WithAvatarMedia<Partial<SelectCharacter>>[]
 				}
 			}
@@ -170,6 +182,18 @@ declare global {
 								tags: string[]
 						  })
 						| null
+					/**
+					 * The requested character id — present on a not-found reply so
+					 * the interest scope can still be derived.
+					 *
+					 * A reply with `character: null` has no `character.id` for
+					 * `SCOPED_EVENTS` to read, so without this the payload would
+					 * carry no scope and only a bare `characters:get` key — one that
+					 * matches every other character's reply as well — could receive
+					 * it. Absent on a successful reply, where the id is on the
+					 * character. Same treatment as `Sessions.Get.Response`.
+					 */
+					characterId?: number
 				}
 			}
 			namespace Create {
@@ -262,6 +286,15 @@ declare global {
 					hasBook?: boolean
 					/** Only CharaVault honors this (its ?creator= param) — ignored by other sources. */
 					creatorFilter?: string
+					/**
+					 * Which of the source's CATALOGUES to browse — the word
+					 * describes the remote library, not our table. A card
+					 * source still publishes characters and personas
+					 * separately (`supportsPersonas`), and a persona-catalogue
+					 * card lands here flagged `isPersona`. Defaults to
+					 * `"characters"`.
+					 */
+					catalog?: "characters" | "personas"
 					cursor?: { limit: number; offset: number }
 					/**
 					 * Client-generated, echoed back verbatim on the response —
@@ -285,6 +318,8 @@ declare global {
 				interface Params {
 					source: CardSourceId
 					ref: unknown
+					/** See SearchLibrary.Params.catalog. */
+					catalog?: "characters" | "personas"
 				}
 				interface Response {
 					character: SelectCharacter
@@ -341,6 +376,34 @@ declare global {
 					images: Media[]
 				}
 			}
+			/**
+			 * Make this the persona a new session starts with.
+			 *
+			 * One transaction: the caller's previous default is cleared and
+			 * this one set, so `characters_default_persona_unique` never sees
+			 * two. Sets `isPersona` too — a default you cannot play is not a
+			 * state worth having.
+			 */
+			namespace SetDefaultPersona {
+				interface Params {
+					characterId: number
+				}
+				interface Response {
+					success: boolean
+				}
+			}
+			/** File a character under a folder, or `null` for the top level. */
+			namespace SetFolder {
+				interface Params {
+					characterId: number
+					folderId: number | null
+				}
+				interface Response {
+					success?: boolean
+					error?: string
+					characterId?: number
+				}
+			}
 		}
 
 		/**
@@ -391,7 +454,6 @@ declare global {
 			 *  download or a card export, never for routine rendering. */
 			originalUrl: string
 			characterId: number | null
-			personaId: number | null
 			sessionId: number | null
 			messageId: number | null
 		}
@@ -424,12 +486,12 @@ declare global {
 			 *  no longer exists — which is exactly how an orphan becomes
 			 *  visible, since 28 keeps the id rather than nulling it. */
 			attachedTo: {
-				type: "character" | "persona" | "session"
+				type: "character" | "session"
 				id: number
 				name: string | null
 			} | null
 			/**
-			 * The parent id is stale: this file names a character, persona or
+			 * The parent id is stale: this file names a character or a
 			 * session that has been deleted, so nothing can reach it any more.
 			 *
 			 * Server-computed, because "no name came back" and "there is no
@@ -902,9 +964,35 @@ declare global {
 		namespace Connections {
 			namespace List {
 				interface Params {}
-				interface Response {
-					connectionsList: Partial<SelectConnection>[]
+				/**
+				 * One endpoint in the list, WITH its models.
+				 *
+				 * The models ride on the list rather than being fetched per
+				 * card: the index is one screen of every endpoint and every
+				 * model, searchable across both, and a card that has to ask
+				 * for its rows before search can see them is a card search
+				 * gets wrong until it loads. One query on the server, one
+				 * message on the wire, one render.
+				 *
+				 * `modelsSync` is when the endpoint's listing was last
+				 * reconciled and what went wrong if it could not be — the
+				 * "checked 3 minutes ago" / "couldn't reach the host" line
+				 * under the endpoint's name.
+				 */
+				interface Row extends Partial<SelectConnection> {
+					models: Models.ModelRow[]
+					modelsSync: ModelsSync
 				}
+				interface Response {
+					connectionsList: Row[]
+				}
+			}
+			/** When an endpoint's models were last reconciled, and how it went. */
+			interface ModelsSync {
+				/** ISO time of the last attempt, or null if nothing has ever checked. */
+				at: string | null
+				/** The last attempt's failure, or null after a successful one. */
+				error: string | null
 			}
 			namespace Get {
 				interface Params {
@@ -1218,8 +1306,14 @@ declare global {
 					/** What a person sees. Defaults to `model`. */
 					name: string
 					enabled: boolean
-					/** At most one per endpoint — a database constraint, not a convention. */
-					isDefault: boolean
+					/**
+					 * ISO time since which the service has stopped listing
+					 * this model, or null while it still does. A missing model
+					 * is unavailable everywhere: refused at dispatch, refused
+					 * by the star, greyed in every picker with this as the
+					 * reason. See the column comment in schema.ts.
+					 */
+					missingSince: string | null
 					/** NULL means "the sampling config decides". */
 					contextWindow: number | null
 					/** NULL means "the endpoint's". A `completion_templates.key`. */
@@ -1234,6 +1328,22 @@ declare global {
 					 * this checkpoint and what a probe of it answered.
 					 */
 					capabilities?: Capabilities.Stored
+					/**
+					 * The transform ids this (endpoint, model) pair may be
+					 * registered as the default for, judged server-side as the
+					 * merged pair. Empty for a switched-off model. Drives the
+					 * per-model default dropdown — the client offers exactly
+					 * these, never more.
+					 */
+					satisfiableCapabilities?: string[]
+					/**
+					 * Present only on a LOCAL ONNX endpoint's rows (embeddings,
+					 * entities): the state of the model's files on this machine
+					 * and what the recommended list knows about it. Absent on
+					 * every other endpoint — a remote host's models have no disk
+					 * state here. See `LocalModelState`.
+					 */
+					local?: LocalModelState
 				}
 				interface Response {
 					connectionId?: number
@@ -1241,6 +1351,41 @@ declare global {
 					/** The endpoint's `type`, for the capability panel's key space. */
 					type?: string
 					preset?: string | null
+					/** When the endpoint's listing was last reconciled. */
+					modelsSync?: ModelsSync
+					error?: string
+				}
+			}
+			/**
+			 * Reconcile an endpoint's models against what its service lists —
+			 * or every endpoint's, when no id is given.
+			 *
+			 * Automatic syncs (no `force`) skip endpoints whose listing is
+			 * fresh, so the sidebar can ask on every open without hitting a
+			 * cloud API each time; a forced sync is the Refresh button. Each
+			 * synced endpoint is also broadcast as `connections:models` and the
+			 * whole list as `connections:list`, so every open view updates
+			 * without asking again.
+			 */
+			namespace SyncModels {
+				interface Params {
+					/** One endpoint, or every endpoint when absent. */
+					id?: number
+					/** Re-ask the host even when the last listing is fresh. */
+					force?: boolean
+				}
+				interface Result {
+					connectionId: number
+					added: number
+					restored: number
+					missing: number
+					listed: number
+					error: string | null
+					syncedAt: string
+				}
+				interface Response {
+					/** One entry per endpoint that was actually synced. */
+					results: Result[]
 					error?: string
 				}
 			}
@@ -1264,12 +1409,6 @@ declare global {
 			 * Edit one model. A PARTIAL payload: an absent key is "leave it
 			 * alone", which is what lets the row editor save a rename without
 			 * restating every override.
-			 *
-			 * ⚠ `isDefault` is deliberately not here. Moving the star is
-			 * `SetDefaultModel`, because it is a write to two rows under one
-			 * constraint and an `isDefault: true` in a partial patch would be a
-			 * second way to attempt it — one that the partial unique index would
-			 * refuse with a sentence about an index.
 			 */
 			namespace UpdateModel {
 				interface Params {
@@ -1282,17 +1421,6 @@ declare global {
 				type Response = Models.Response
 			}
 			namespace DeleteModel {
-				interface Params {
-					id: number
-					modelId: number
-				}
-				type Response = Models.Response
-			}
-			/**
-			 * Which model this endpoint means when a pair names only the
-			 * endpoint. Its own event — see `UpdateModel`.
-			 */
-			namespace SetDefaultModel {
 				interface Params {
 					id: number
 					modelId: number
@@ -1317,6 +1445,114 @@ declare global {
 					/** How many rows it created, and how many were already there. */
 					added?: number
 					skipped?: number
+				}
+			}
+
+			/**
+			 * A local ONNX model's files on this machine, and what the
+			 * recommended list says about it. Rides on `ModelRow.local` for the
+			 * two local ONNX endpoint types only.
+			 *
+			 * `state` is a fact about the disk, re-checked on every sync — never
+			 * durable state — and it is independent of whether the model is the
+			 * capability default ("active"): a default that is `not_downloaded`
+			 * is exactly what a person needs to see before the first job stalls.
+			 */
+			interface LocalModelState {
+				state: "not_downloaded" | "downloading" | "on_disk" | "error"
+				/** Bytes on disk once `on_disk`; the list's size until then. */
+				sizeBytes: number | null
+				/** 0–100 while `downloading`. */
+				percent?: number
+				downloadedBytes?: number
+				totalBytes?: number
+				/** The Hub's own sentence when `error`. */
+				error?: string | null
+				/** Resident in the lane right now (only the active model can be). */
+				loaded: boolean
+				/** True for a row a person added by Hub id — the one removable kind. */
+				addedByUser: boolean
+				/** From the recommended list (or the Hub's config for an added row). */
+				catalog?: {
+					tier?: "fast" | "balanced" | "best"
+					/** MB the list says the download is. */
+					sizeMb?: number
+					/** transformers.js DataType the download requests (q8, fp32, …). */
+					dtype?: string
+					dimensions?: number
+					maxInputTokens?: number
+					pooling?: "mean" | "cls" | "last_token"
+					prefixes?: { query?: string; document?: string }
+					labels?: string[]
+					languages?: string
+					tags?: string[]
+					license?: string
+					released?: string
+					parameterSize?: string
+					description?: string
+				}
+			}
+			/** Warm the transformers cache for one local ONNX model. Admin; local ONNX types only. */
+			namespace DownloadModel {
+				interface Params {
+					/** The CONNECTION. */
+					id: number
+					modelId: number
+				}
+				interface Response {
+					connectionId: number
+					modelId: number
+					local: LocalModelState
+					error?: string
+				}
+			}
+			/**
+			 * Stop a download. The current file finishes or fails first, then the
+			 * partial cache directory is removed — the row says so meanwhile.
+			 */
+			namespace CancelModelDownload {
+				interface Params {
+					id: number
+					modelId: number
+				}
+				interface Response extends DownloadModel.Response {}
+			}
+			/** Delete the model's cache directory and registry row. Refused for the active model. */
+			namespace RemoveModelFiles {
+				interface Params {
+					id: number
+					modelId: number
+				}
+				interface Response extends DownloadModel.Response {}
+			}
+			/**
+			 * Add a Hugging Face model that is not on the recommended list, as a
+			 * `not_downloaded` row. Validated against the Hub before a row exists:
+			 * config.json fetchable, an onnx/ export present, and — for
+			 * embeddings — a readable hidden size; for entities — an id2label.
+			 */
+			namespace AddHubModel {
+				interface Params {
+					id: number
+					/** `org/name`. */
+					hubId: string
+					/** transformers.js DataType; unset = the export's default. */
+					dtype?: string | null
+				}
+				interface Response extends Models.Response {
+					created?: Models.ModelRow
+				}
+			}
+			/**
+			 * Pushed while a local ONNX download runs, and once when it settles.
+			 * One event moves the index row, the model view and the lane panel.
+			 */
+			namespace ModelDownloadProgress {
+				interface Params {}
+				interface Response {
+					connectionId: number
+					modelId: number
+					local: LocalModelState
 				}
 			}
 		}
@@ -1400,8 +1636,12 @@ declare global {
 					/** What the adapter sends — the subtitle, when the two differ. */
 					model: string
 					enabled: boolean
-					/** Which one a registration naming no model resolves to. */
-					isDefault: boolean
+					/**
+					 * Set while the service has stopped listing this model. Shown
+					 * greyed with the reason, never dropped — a registration made
+					 * before the model vanished has to still show as what it is.
+					 */
+					missingSince: string | null
 				}
 				interface SamplingOption {
 					id: number
@@ -1441,60 +1681,39 @@ declare global {
 		}
 
 		// Personas namespace
-		namespace Personas {
+		/**
+		 * The library's folders. Owner-scoped, flat, characters only.
+		 *
+		 * ⚠ There is no `personas:*` family: a persona is a character the user
+		 * voices, so every persona surface talks to `characters:*` and reads
+		 * `isPersona` off the row.
+		 */
+		namespace CharacterFolders {
 			namespace List {
 				interface Params {}
 				interface Response {
-					// Matches the `with: { personaTags: { with: { tag: true } } }`
-					// query in personasList (personas.ts).
-					personaList: (WithAvatarMedia<Partial<SelectPersona>> & {
-						personaTags?: { tag: SelectTag }[]
+					folders: (SelectCharacterFolder & {
+						/** How many of the caller's characters are filed here. */
+						characterCount: number
 					})[]
-				}
-			}
-			namespace Get {
-				interface Params {
-					id: number
-				}
-				interface Response {
-					// embedding/embeddingModel/vectorizedAt are deliberately
-					// excluded — see the `columns` restriction in
-					// personasGet (personas.ts).
-					persona:
-						| (WithAvatarMedia<
-								Omit<
-									SelectPersona,
-									| "embedding"
-									| "embeddingModel"
-									| "vectorizedAt"
-								>
-						  > & {
-								isOwner: boolean
-								ownerName: string | null
-								tags: string[]
-						  })
-						| null
 				}
 			}
 			namespace Create {
 				interface Params {
-					// "personas:create" always derives userId from the
-					// authenticated socket (see personasCreate in
-					// personas.ts) — the client never supplies it.
-					persona: Omit<InsertPersona, "userId">
-					avatarFile?: Buffer
+					name: string
 				}
 				interface Response {
-					persona: WithAvatarMedia<SelectPersona>
+					folder: SelectCharacterFolder
 				}
 			}
 			namespace Update {
 				interface Params {
-					persona: UpdatePersona
-					avatarFile?: Buffer | null
+					id: number
+					name?: string
+					position?: number
 				}
 				interface Response {
-					persona: WithAvatarMedia<SelectPersona>
+					folder: SelectCharacterFolder
 				}
 			}
 			namespace Delete {
@@ -1502,135 +1721,10 @@ declare global {
 					id: number
 				}
 				interface Response {
-					success?: string
+					success?: boolean
 					error?: string
-				}
-			}
-			namespace ImportCard {
-				interface Params {
-					file: string // base64 encoded file (JSON or PNG)
-				}
-				interface Response {
-					status: "created" | "unchanged" | "conflict"
-					persona: SelectPersona | null
-					conflict?: {
-						existingPersona: SelectPersona
-						file: string
-					}
-					/** See Characters.ImportCard.Response.warnings. */
-					warnings?: string[]
-				}
-			}
-			namespace ImportResolve {
-				interface Params {
-					action: "overwrite" | "createNew"
-					file: string
-					existingId: number
-				}
-				interface Response {
-					persona: SelectPersona
-					/** See Characters.ImportCard.Response.warnings. */
-					warnings?: string[]
-				}
-			}
-			namespace ExportCard {
-				interface Params {
-					id: number
-					format?: "json" | "png"
-				}
-				interface Response {
-					blob: Buffer
-					filename: string
-				}
-			}
-			namespace SearchLibrary {
-				interface Params {
-					searchTerm?: string
-					source?: CardSourceId
-					category?: string
-					sort?: CardSourceSort
-					cursor?: { limit: number; offset: number }
-					/**
-					 * Client-generated, echoed back verbatim on the response —
-					 * lets the client tell which in-flight request a given
-					 * response belongs to and discard stale ones, without
-					 * blocking new searches from being sent while an older one
-					 * is still pending (which previously made a slow CharaVault
-					 * response feel like it froze the whole page).
-					 */
-					requestId?: string
-				}
-				interface Response {
-					personas: LibraryCatalogItem[]
-					hasMore: boolean
-					requestId?: string
-				}
-			}
-			namespace ImportFromLibrary {
-				interface Params {
-					source: CardSourceId
-					ref: unknown
-				}
-				interface Response {
-					persona: SelectPersona
-				}
-			}
-			namespace ListGallery {
-				interface Params {
-					personaId: number
-				}
-				interface Response {
-					images: Media[]
-					personaId: number
-				}
-			}
-			namespace UploadGalleryImage {
-				interface Params {
-					personaId: number
-					imageFile: Buffer | Uint8Array
-					mimeType: string
-				}
-				interface Response {
-					success: boolean
-					media: Media
-					personaId: number
-				}
-			}
-			namespace DeleteGalleryImage {
-				interface Params {
-					personaId: number
-					mediaId: number
-				}
-				interface Response {
-					success: boolean
-					personaId: number
-				}
-			}
-			namespace SetAvatar {
-				interface Params {
-					personaId: number
-					mediaId: number
-				}
-				interface Response {
-					persona: any
-				}
-			}
-			namespace ReorderGallery {
-				interface Params {
-					personaId: number
-					/** Full gallery in the desired new order (ids as returned by ListGallery). */
-					mediaIds: number[]
-				}
-				interface Response {
-					images: Media[]
-				}
-			}
-			namespace SetDefault {
-				interface Params {
-					personaId: number
-				}
-				interface Response {
-					success: boolean
+					/** The deleted folder's id, so a scope can be derived. */
+					id?: number
 				}
 			}
 		}
@@ -1725,6 +1819,13 @@ declare global {
 				bindings: Record<string, { spec: string; config?: number }>
 				primarySlug: string | null
 				configSelections: Record<string, number>
+				/**
+				 * Which actions sessions on this preset include, by
+				 * **identity** — `<spec slug>#<key>` (U5c review, W-A). `null`
+				 * states nothing (the companion rule decides); `[]` states
+				 * none. ⏳ A bare function key in a stored row includes the
+				 * companion's action for that function only.
+				 */
 				includedActions: string[] | null
 				/**
 				 * The creation pre-fill (23 §9): loose keys the create form
@@ -1792,6 +1893,12 @@ declare global {
 					bindings?: Record<string, { spec: string; config?: number }>
 					primarySlug?: string | null
 					configSelections?: Record<string, number>
+					/**
+					 * Identities (`<spec slug>#<key>`), validated against what
+					 * the genre is offered; an entry nothing contributes is
+					 * refused by name. ⏳ A bare function key one companion
+					 * action carries is accepted and stored as its identity.
+					 */
 					includedActions?: string[] | null
 					/**
 					 * The creation pre-fill — see `PresetRow.defaults`. `null`
@@ -1847,6 +1954,40 @@ declare global {
 				interface Params {
 					sessionType?: string
 				}
+				/**
+				 * The session's latest visible line — what "pick up where you
+				 * left off" shows without opening the session.
+				 *
+				 * Absent on a session with nothing to show. "Nothing to show"
+				 * is wider than "no rows": an in-flight generation
+				 * (`is_generating`), a message the owner hid (`is_hidden`) and
+				 * a blank body are all skipped, so a session mid-generation
+				 * still reads as its last real line rather than an empty
+				 * quote. A composer draft can never appear here at all — a
+				 * draft is a `sessions.drafts` entry, not a message row.
+				 */
+				interface LastMessage {
+					/** First ~160 characters, markdown stripped, whitespace collapsed. */
+					excerpt: string
+					/**
+					 * Who said it — the persona or character name, the
+					 * Narrator's display name for a narration, null when the
+					 * row names nobody.
+					 */
+					speakerName: string | null
+					/** The caller's side of the conversation said it (`role = 'user'`). */
+					isUser: boolean
+					/**
+					 * When the line landed, ISO-8601.
+					 *
+					 * Read off `session_messages.updated_at`, which is a real
+					 * `timestamp` defaulting to the insert instant — unlike
+					 * `created_at`, a `date` column (day granularity, a
+					 * pre-0.6 schema fact) that would make a message from a
+					 * minute ago read as hours old.
+					 */
+					createdAt: string
+				}
 				interface Response {
 					// Matches the `with: { sessionCharacters, sessionPersonas, sessionTags }`
 					// query in registerSessionsHandlers' "sessions:list" handler — the
@@ -1859,11 +2000,26 @@ declare global {
 						isGuest: boolean
 						/** The mode's display name — the card's "type" chip. */
 						genreName?: string
+						/**
+						 * How many messages the session holds — the same
+						 * notion `sessions:adminList` reports, a plain row
+						 * count over `session_messages`.
+						 */
+						messageCount?: number
+						/** The latest visible line, absent when there is none. */
+						lastMessage?: LastMessage
+						/**
+						 * What the session's run in flight is doing (R-19) —
+						 * *Jasmine is typing* — as a locale map the client
+						 * resolves. Absent when nothing is running; kept
+						 * current between lists by `sessions:runStatus`.
+						 */
+						runStatus?: import("@serene-pub/sdk").StatusText
 						sessionCharacters?: (SelectSessionCharacter & {
 							character: Partial<SelectCharacter>
 						})[]
 						sessionPersonas?: (SelectSessionPersona & {
-							persona: Partial<SelectPersona>
+							persona: Partial<SelectCharacter>
 						})[]
 						sessionTags?: { tag: SelectTag }[]
 					})[]
@@ -1888,6 +2044,19 @@ declare global {
 					personaName: string
 				}
 			}
+			/**
+			 * Server → client (R-19): a run in this session changed its status,
+			 * or ended (`status: null`). Broadcast to the session's users on
+			 * every change; the session list keeps its row current from it.
+			 */
+			namespace RunStatus {
+				interface Params {}
+				interface Response {
+					sessionId: number
+					runId: string
+					status: import("@serene-pub/sdk").StatusText | null
+				}
+			}
 			namespace Get {
 				interface Params {
 					id: number
@@ -1903,7 +2072,7 @@ declare global {
 									character: WithAvatarMedia<SelectCharacter>
 								})[]
 								sessionPersonas: (SelectSessionPersona & {
-									persona: WithAvatarMedia<SelectPersona>
+									persona: WithAvatarMedia<SelectCharacter>
 								})[]
 								sessionTags?: { tag: { name: string } }[]
 								// sessionGuests table has no `id` column (composite PK of
@@ -1925,6 +2094,18 @@ declare global {
 					beforeId?: number
 					/** The current user's in-progress composer draft, if any */
 					userDraft?: string | null
+					/**
+					 * The requested session id — present on a not-found reply so
+					 * the interest scope can still be derived.
+					 *
+					 * A reply with `session: null` has no `session.id` for
+					 * `SCOPED_EVENTS` to read, so without this the payload would
+					 * carry no scope and only a bare `sessions:get` key — one that
+					 * matches every other session's reply as well — could receive
+					 * it. Absent on a successful reply, where the id is on the
+					 * session.
+					 */
+					sessionId?: number
 				}
 			}
 			namespace SaveDraft {
@@ -2019,7 +2200,7 @@ declare global {
 					}
 					interface Response {
 						sessionId: number
-						strategies: { typeId: string; name: string }[]
+						strategies: { definitionId: string; name: string }[]
 						/** The session's rebound choice, or null when inheriting the pin. */
 						selected: string | null
 					}
@@ -2027,8 +2208,8 @@ declare global {
 				namespace SetSpeakerStrategy {
 					interface Params {
 						sessionId: number
-						/** A strategy type pin, or null to inherit the spec's. */
-						typeId: string | null
+						/** A strategy definition pin, or null to inherit the spec's. */
+						definitionId: string | null
 					}
 					interface Response {
 						sessionId: number
@@ -2042,7 +2223,7 @@ declare global {
 			 * else in it. A character/persona/lorebook a person owns becomes
 			 * viewable by every other participant — and readable by the
 			 * pipelines that build this session's prompts — the moment it is
-			 * bound in (mirrors `canViewCharacter`/`canViewPersona`). This is the
+			 * bound in (mirrors `canViewCharacter`). This is the
 			 * inverse of that access check, surfaced so a guest can see the
 			 * consequence of their contributions before making them. The seam
 			 * plugin events will plug into once account-affecting permissions
@@ -2089,11 +2270,30 @@ declare global {
 					sessionId: number
 					function: string
 					/**
-					 * The message a `kind: 'menu'` trigger was pressed on
+					 * Which declaration was pressed — `<spec slug>#<key>`
+					 * (U5c review, W1). The server checks THAT action's
+					 * audience and enablement and runs THAT spec. The client
+					 * always sends it: chips, the More menu, the palette, a
+					 * message's menu, a frame's `invoke`. A call naming none
+					 * is the legacy shape and gets the narrowest reading —
+					 * the owner floor and the companion spec — never the
+					 * union of every action sharing the function.
+					 */
+					action?: string
+					/**
+					 * ⚠ No `channel`. Audience is channel-free and the fire
+					 * never consults the listing (W2), so a channel on the
+					 * press would be accepted and unread — a field that
+					 * means nothing is a field somebody will one day trust.
+					 * The listing (`sessions:actions`) is where a channel is
+					 * asked about.
+					 */
+					/**
+					 * The message a `venue: 'message'` trigger was pressed on
 					 * (19 §4). Verified to belong to the session, then rides
 					 * the run's input as `messageId` — the id-from-outside
 					 * shape 13 §10b types as `row-ids@1`. Absent for composer
-					 * (`kind: 'button'`) triggers, which have no subject.
+					 * (`venue: 'composer'`) triggers, which have no subject.
 					 */
 					messageId?: number
 					/**
@@ -2102,6 +2302,17 @@ declare global {
 					 * `payload`, shaped by the winning spec's input contract.
 					 */
 					payload?: Record<string, unknown>
+					/**
+					 * The **form** this press answers (R-15 *Forms*; U5d): the
+					 * block's id within `messageId`, as the host stamped it at
+					 * the write. Named, the server reads the block off the row
+					 * — its function, its identity, its addressee — and holds
+					 * the press to the addressee: the person portraying them
+					 * may answer, nobody else. A `choices` press carries the
+					 * option's key as `payload.choice`. Absent on every press
+					 * that is not a form's.
+					 */
+					blockId?: string
 					/**
 					 * Names the run, so it can be cancelled and its progress
 					 * keyed.
@@ -2304,6 +2515,73 @@ declare global {
 					 * refusal message rather than a wrong generation.
 					 */
 					continueRefusal?: string
+					/**
+					 * Which forbiddable message verbs this session's genre
+					 * offers (20 §4; R-15, 2026-09-16): the genre-declared
+					 * content actions (`retry`, `continue`, `stepBack`) and the
+					 * opt-in built-ins (`delete`, `hide`, `swipe`). The floors
+					 * — stop, branch, edit — are not here because nothing can
+					 * take them away: a control for one is always present.
+					 * Absent (no access, or an older server) reads as all on.
+					 *
+					 * An affordance, like `continueRefusal`: a forbidden
+					 * built-in's control is ABSENT client-side, and the
+					 * handler refuses the verb regardless.
+					 */
+					messageVerbs?: {
+						retry: boolean
+						continue: boolean
+						stepBack: boolean
+						delete: boolean
+						hide: boolean
+						swipe: boolean
+					}
+					/**
+					 * The envoys this session may seat or hear from (plans/29
+					 * R-18; U5g): every one its genre and its installed actions
+					 * declare, display text resolved for the viewer's
+					 * language, with whether it is seated. The client renders
+					 * an envoy's message — a row carrying `metadata.speaker =
+					 * envoy:<slug>` and no `characterId` — from this list, and
+					 * the Edit Session form offers the genre's for seating.
+					 * Absent on an older server.
+					 */
+					envoys?: Envoy[]
+				}
+				/** One envoy as the client sees it — see `Response.envoys`. */
+				interface Envoy {
+					/** The address: `envoy:<slug>` names it. */
+					slug: string
+					/** Genre-declared, or brought by a contributed action. */
+					origin: "genre" | "action"
+					name: string
+					description?: string
+					/** A URL or data: URI — rendered as an image source. */
+					image?: string
+					/** `in-turn` may be picked to reply; `on-action` only posts through its action. */
+					speaks: "in-turn" | "on-action"
+					/** Seated by the genre with no choice. */
+					default: boolean
+					/** A live cast row exists for it. */
+					seated: boolean
+				}
+			}
+			/**
+			 * Seat or unseat one of the genre's envoys (R-18; U5g) — the Edit
+			 * Session form's toggle. Owner only. An action's envoy is seated
+			 * by its action's post and has no toggle.
+			 */
+			namespace SetEnvoySeat {
+				interface Params {
+					sessionId: number
+					slug: string
+					seated: boolean
+				}
+				interface Response {
+					sessionId: number
+					slug: string
+					seated: boolean
+					error?: string
 				}
 			}
 			/**
@@ -2512,6 +2790,12 @@ declare global {
 					}
 				}
 			}
+			/**
+			 * @deprecated One release (plans/30 U5c, 2026-09-16). The
+			 * contributed actions at the composer and message venues in the
+			 * pre-U5c shape; `sessions:actions` is the projection — every
+			 * venue, primary set and overflow, audience and slash name.
+			 */
 			namespace Triggers {
 				interface Params {
 					sessionId: number
@@ -2520,11 +2804,74 @@ declare global {
 					sessionId: number
 					triggers: {
 						function: string
-						kind: string
+						/** `composer` | `message` — where a person meets it (R-15). */
+						venue: string
 						icon?: string
 						name: string
 						specSlug: string
 					}[]
+				}
+			}
+			/**
+			 * A session's actions per **venue** and channel, for the caller
+			 * (plans/29 R-15; plans/30 U5c). Every venue is a primary set plus
+			 * an overflow that lists every enabled action (F38); the composer's
+			 * and extra tab's entries carry the slash name the `/` palette
+			 * calls them by; a newly installed action arrives `isNew` until the
+			 * caller reports having seen it (`sessions:actionsSeen`).
+			 *
+			 * Core's message verbs are listed like any other action, under
+			 * `specSlug: "core"`, so the client renders ONE list and hand-writes
+			 * no verb button. An `itemGated` entry names `item` in its
+			 * audience: whether the caller may act is decided per message, on
+			 * the client by `canControlMessage` and on the server at the verb.
+			 */
+			namespace Actions {
+				interface Params {
+					sessionId: number
+					/** Default `main`. */
+					channel?: string
+				}
+				interface Action {
+					key: string
+					function: string
+					specSlug: string
+					name: string
+					description?: string
+					icon?: string
+					slash: string
+					quick: boolean
+					audience: { see: string[]; act: string[] }
+					venue: string
+					channel?: string
+					origin: "core" | "companion" | "attachment"
+					floor: boolean
+					canAct: boolean
+					itemGated: boolean
+					isNew: boolean
+				}
+				interface Venue {
+					primary: Action[]
+					overflow: Action[]
+				}
+				interface Response {
+					sessionId: number
+					channel: string
+					/** Keyed by venue kind; every kind present, possibly empty. */
+					venues: Record<string, Venue>
+				}
+			}
+			/** The caller has met these actions — clears their *new* mark. */
+			namespace ActionsSeen {
+				interface Params {
+					sessionId: number
+					/** `<spec slug>#<action key>`, as `Actions.Action` identifies them. */
+					keys: string[]
+				}
+				interface Response {
+					sessionId: number
+					/** How many were newly recorded. */
+					seen: number
 				}
 			}
 			/**
@@ -2589,8 +2936,12 @@ declare global {
 					 */
 					canAddOutsidePreset?: boolean
 					functions: {
+						key: string
 						function: string
-						kind: string
+						/** Where it appears, per channel (R-15). */
+						venues: { kind: string; channel?: string }[]
+						quick: boolean
+						slash: string
 						icon?: string
 						name: string
 						specSlug: string
@@ -2613,6 +2964,14 @@ declare global {
 				interface Params {
 					sessionId: number
 					function: string
+					/**
+					 * Which declaration — `<spec slug>#<key>` (U5c review,
+					 * W1): enablement is per action, so two actions on one
+					 * function switch independently. Absent, `function`
+					 * names the action when exactly one carries it; several
+					 * is refused with their identities.
+					 */
+					action?: string
 					enabled: boolean
 				}
 				interface Response {
@@ -2820,6 +3179,12 @@ declare global {
 				interface Params {
 					sessionId: number
 					characterId?: number
+					/**
+					 * An explicit speaker that no id can name — a seated envoy,
+					 * as `envoy:<slug>` (R-18; U5g). Ignored when `characterId`
+					 * is given.
+					 */
+					speaker?: string
 					once?: boolean
 					triggered?: boolean
 				}
@@ -2933,8 +3298,6 @@ declare global {
 					topic?: string
 					/** Character to bind the lore entry to (character lore only) */
 					lorebookBindingCharacterId?: number | null
-					/** Persona to bind the lore entry to (character lore only) */
-					lorebookBindingPersonaId?: number | null
 				}
 				interface Progress {
 					phase: "drafting" | "synthesizing" | "naming" | "extracting"
@@ -2944,6 +3307,13 @@ declare global {
 						content?: string
 						raw?: string
 					}
+					/**
+					 * What the run says it is doing (R-19) — *summarising part
+					 * 2 of 5*, *merging the drafts* — a locale map the client
+					 * resolves; shown in place of the phase's own label when
+					 * present.
+					 */
+					status?: import("@serene-pub/sdk").StatusText
 				}
 				interface Response {
 					content: string
@@ -3135,6 +3505,17 @@ declare global {
 					 * three tables' names on the wire.
 					 */
 					entries: LorebookEntry[]
+					/**
+					 * The id that was asked for, present so the interest scope
+					 * can be derived.
+					 *
+					 * ⚠ Only the NOT-FOUND reply needs it: a found one is scoped
+					 * by `lorebook.id`, and there is no lorebook to read an id off
+					 * when the answer is null. Without it that reply could only
+					 * reach a BARE `lorebooks:get` key — which matches every other
+					 * book's reply too. Same treatment as `sessions:get`.
+					 */
+					lorebookId?: number
 				}
 			}
 			namespace Create {
@@ -3234,7 +3615,7 @@ declare global {
 					// handler (lorebooks.ts).
 					lorebookBindingList: (SelectLorebookBinding & {
 						character?: SelectCharacter | null
-						persona?: SelectPersona | null
+						persona?: SelectCharacter | null
 					})[]
 				}
 			}
@@ -3450,6 +3831,18 @@ declare global {
 				interface Response {
 					success?: string
 					error?: string
+					/**
+					 * The book the deleted entry was in, present so the interest
+					 * scope can be derived — `{ success }` alone named neither the
+					 * row nor its book, so this push could only ever reach a bare
+					 * key.
+					 */
+					lorebookId: number
+					/**
+					 * The row that went, present so a workspace can tell whose
+					 * delete it was without re-reading the list.
+					 */
+					entryId: number
 				}
 			}
 			namespace UpdatePositions {
@@ -3986,8 +4379,12 @@ declare global {
 						/** What the adapter sends — the tooltip, when they differ. */
 						model: string
 						enabled: boolean
-						/** Which one a slot naming no model resolves to. */
-						isDefault: boolean
+						/**
+						 * Set while the host has stopped listing it. Offered
+						 * greyed with the reason, never dropped — a slot
+						 * pointed at it has to still show what it names.
+						 */
+						missingSince: string | null
 					}>
 				}>
 				/**
@@ -4176,9 +4573,9 @@ declare global {
 				 */
 				enabled: boolean
 				/**
-				 * Which of the mode's actions sessions on this preset include.
-				 * `null` states nothing (the companion rule decides); `[]`
-				 * states none.
+				 * Which of the mode's actions sessions on this preset include,
+				 * by identity (`<spec slug>#<key>`; W-A). `null` states nothing
+				 * (the companion rule decides); `[]` states none.
 				 */
 				includedActions: string[] | null
 			}
@@ -4257,6 +4654,13 @@ declare global {
 				 */
 				canSelectConfig: boolean
 				steps: Step[]
+				/**
+				 * An envoy's settings (plans/29 R-18 (2); U5g) — no step of the
+				 * run's spine names one, so it is not counted or numbered among
+				 * `steps`. Render after them, under their own small heading
+				 * ("Also configured here"); same `Step` shape as the rest.
+				 */
+				alsoConfigured: Step[]
 				/**
 				 * The kinds of setting this pipeline contains, in render order,
 				 * each with the heading it appears under.
@@ -4387,9 +4791,42 @@ declare global {
 				interface Params {
 					runId: string
 				}
+				/**
+				 * One participant the run asked about and who portrayed them
+				 * — the receipt's pinned `portrayals` (R-21 (4)), with a name
+				 * beside each reference so the inspector's line reads "Tom ·
+				 * AI · Elara · you" rather than `character:12 · ai`.
+				 *
+				 * `name` is what the session's member list already shows: a
+				 * cast character's name, a member's display name. Nothing about
+				 * connections rides here, and a participant nobody portrays
+				 * (`none`) is never named — the line shows its reference.
+				 */
+				interface PortrayalLine {
+					/** The participant reference, as the receipt keys it. */
+					ref: string
+					/**
+					 * The participant's name — a character's, an envoy's slug,
+					 * a role's word; the reference itself when `by` is `none`.
+					 */
+					name: string
+					by: "person" | "ai" | "none"
+					/**
+					 * The person, when `by` is `person`: their display name and
+					 * whether they are the viewer. `you` is decided here so the
+					 * client never compares user ids.
+					 */
+					person?: { name: string; you: boolean }
+				}
 				interface Response {
 					run?: Runs.Response["runs"][number] & {
 						receipt: Record<string, unknown>
+						/**
+						 * Who portrayed whom, in the order the receipt pinned
+						 * them. Absent on a receipt that pinned none (a run
+						 * written before U5a, a pre-call preview).
+						 */
+						portrayals?: PortrayalLine[]
 					}
 					error?: string
 				}
@@ -4873,7 +5310,7 @@ declare global {
 					 * producers but no reader asking this, and a gate written
 					 * for a caller that does not exist is a gate nothing tests.
 					 */
-					kind: "message" | "file" | "variant" | "lore_entry"
+					kind: "message" | "file" | "variant" | "lore_entry" | "session"
 					entityId: number
 				}
 				interface Run {
@@ -4887,6 +5324,14 @@ declare global {
 					 * rather than one being filtered out here.
 					 */
 					isPreview: boolean
+					/**
+					 * What the run did to the row (R-15, 2026-09-16): `created`
+					 * / `updated` wrote its content; `edited` · `hidden` ·
+					 * `swiped` · `deleted` are the built-ins, whose receipts
+					 * have no prompt — a reader after "the run that wrote this"
+					 * skips them.
+					 */
+					actions: string[]
 				}
 				interface Response {
 					kind: Params["kind"]
@@ -4991,7 +5436,7 @@ declare global {
 				id: string
 				specId: string
 				nodeKey: string
-				typeId: string
+				definitionId: string
 				/** An SDK `SettingsSchema` — field declarations, one per payload key. */
 				schema: Record<string, unknown>
 				values: Record<string, unknown>
@@ -5052,7 +5497,10 @@ declare global {
 				interface Params {
 					slug: string
 					configId: number
-					/** Omit to leave unchanged. `null` restores the default rule. */
+					/**
+					 * Identities (`<spec slug>#<key>`; W-A). Omit to leave
+					 * unchanged. `null` restores the default rule.
+					 */
 					includedActions?: string[] | null
 					/** Omit to leave unchanged. */
 					enabled?: boolean
@@ -5400,7 +5848,7 @@ declare global {
 				}
 				interface LibraryPrompt {
 					id: number
-					/** The pool: `<nodeTypeId>#<slot>`. */
+					/** The pool: `<nodeDefinitionId>#<slot>`. */
 					poolId: string
 					/** Step name plus slot — what the page groups on. */
 					poolLabel: string
@@ -5577,7 +6025,7 @@ declare global {
 			 */
 			namespace Scripts {
 				interface Params {}
-				interface ScriptType {
+				interface ScriptKind {
 					/** Pinned id — `core:script:text/transform@1`. */
 					typeId: string
 					content: string
@@ -5611,7 +6059,7 @@ declare global {
 					usedBy: string[]
 				}
 				interface Response {
-					types?: ScriptType[]
+					types?: ScriptKind[]
 					scripts?: Script[]
 					error?: string
 				}
@@ -5727,15 +6175,15 @@ declare global {
 								key: string
 								/** The type's display name, humanized. */
 								label: string
-								/** `input` | `query` | `task` | `provider` | `consumer`. */
+								/** `inlet` | `query` | `task` | `oracle` | `outlet`. */
 								kind: string
-								typeId: string
+								definitionId: string
 								/** Which block it belongs to, if any. */
-								blockId: string | null
+								clauseId: string | null
 								/** `async` | `map` | `loop`. */
-								blockKind: string | null
+								clauseKind: string | null
 								/** Which chain within the block — parallel arms. */
-								blockChain: string | null
+								clauseChain: string | null
 								position: number
 								toggleable: boolean
 								enabledDefault: boolean
@@ -5752,39 +6200,39 @@ declare global {
 								stepKey: string | null
 							}[]
 							/**
-							 * The declared blocks, which say what a frame *means*.
+							 * The declared clauses, which say what a frame *means*.
 							 *
-							 * `map` needs what it iterates over and how many times
-							 * at most; `async` needs whether its chains actually run
+							 * `each` needs what it iterates over and how many times
+							 * at most; `gather` needs whether its chains actually run
 							 * concurrently or merely together; `loop` needs its
 							 * condition. None of that is derivable from the nodes or
 							 * the edges — `over` is a data reference the edge table
-							 * never carried — so it is read from `pipeline_blocks`
+							 * never carried — so it is read from `pipeline_clauses`
 							 * rather than inferred.
 							 */
-							blocks: {
+							clauses: {
 								id: string
 								kind: string
-								/** `parallel` | `sequential`, for async. */
+								/** `parallel` | `sequential`, for gather. */
 								mode: string | null
 								max: number | null
 								/** The port this iterates over, e.g. `batches`. */
 								over: string | null
-								/** Which block this one nests inside; null = the spine. */
-								parentBlockId: string | null
+								/** Which clause this one nests inside; null = the spine. */
+								parentClauseId: string | null
 								/**
 								 * loop only — the port whose truthiness repeats
 								 * the body ("repeats while generate.hasToolCalls").
 								 * The renderable half of the construct (20 §10).
 								 */
 								repeatWhile: string | null
-								/** route only — the routed port ("routes on parse.call"). */
+								/** junction only — the port the branches are chosen on ("junction on parse.call"). */
 								on: string | null
 								/**
-								 * route only — each branch's declared predicate,
+								 * junction only — each branch's declared predicate,
 								 * keyed by chain name. Declarations, never code.
 								 */
-								routes: Record<
+								branches: Record<
 									string,
 									{
 										path?: string
@@ -5794,9 +6242,9 @@ declare global {
 									}
 								> | null
 								/**
-								 * The `ConfigStep` that configures the block itself.
+								 * The `ConfigStep` that configures the clause itself.
 								 *
-								 * A block carries a setting of its own — whether its
+								 * A clause carries a setting of its own — whether its
 								 * chains run together — so it is a step like any
 								 * node, and the frame has to be selectable or that
 								 * step is unreachable.
@@ -5858,6 +6306,13 @@ declare global {
 						 * "current" would be a claim the row cannot support.
 						 */
 						specHashIsCurrent: boolean
+						/**
+						 * Set when the pinned document was superseded by the
+						 * one-shot rename of 2026-09-16 rather than by an edit —
+						 * the same content under new words and a new hash. The
+						 * inspector reads *renamed <date>*, not *superseded*.
+						 */
+						specHashRenamedAt: string | null
 						outcome: string
 						haltNodeKey: string | null
 						haltReason: string | null
@@ -6924,7 +7379,7 @@ declare global {
 					selectionMemory: {
 						session: SelectSession | null
 						character: SelectCharacter | null
-						persona: SelectPersona | null
+						persona: SelectCharacter | null
 						prompt: SelectPromptConfig | null
 						sampling: SelectSamplingConfig | null
 						context: SelectContextConfig | null
@@ -6939,7 +7394,7 @@ declare global {
 					selectionMemory: {
 						session: SelectSession | null
 						character: SelectCharacter | null
-						persona: SelectPersona | null
+						persona: SelectCharacter | null
 						prompt: SelectPromptConfig | null
 						sampling: SelectSamplingConfig | null
 						context: SelectContextConfig | null
@@ -6953,7 +7408,7 @@ declare global {
 						| {
 								session: SelectSession | null
 								character: SelectCharacter | null
-								persona: SelectPersona | null
+								persona: SelectCharacter | null
 								prompt: SelectPromptConfig | null
 								sampling: SelectSamplingConfig | null
 								context: SelectContextConfig | null
@@ -7010,7 +7465,6 @@ declare global {
 					tagData: {
 						tag: SelectTag
 						characters: any[]
-						personas: any[]
 						lorebooks: any[]
 					}
 				}
@@ -7314,7 +7768,6 @@ declare global {
 						theme: string
 						darkMode: boolean
 						showHomePageBanner: boolean
-						enableEasyPersonaCreation: boolean
 						enableEasyCharacterCreation: boolean
 						showAllCharacterFields: boolean
 						backgroundImagePath: string | null
@@ -7423,15 +7876,8 @@ declare global {
 					enabled: boolean
 				}
 			}
-			namespace UpdateEasyPersonaCreation {
-				interface Params {
-					enabled: boolean
-				}
-				interface Response {
-					success: boolean
-					enabled: boolean
-				}
-			}
+			// ⚠ There is no `updateEasyPersonaCreation`: a persona is a
+			// character, so the switch below governs both surfaces.
 			namespace UpdateEasyCharacterCreation {
 				interface Params {
 					enabled: boolean
@@ -7495,6 +7941,17 @@ declare global {
 					} | null
 				}
 				interface Response {
+					/**
+					 * Which session these scenes belong to.
+					 *
+					 * Present so the **interest scope** can be derived: the
+					 * list is re-sent as a cascade after every scene write, and
+					 * a tab reading another session has no use for it. Required
+					 * rather than optional because every producer knows it —
+					 * the handler takes it as a parameter, and the create,
+					 * update and delete cascades pass the written scene's.
+					 */
+					sessionId: number
 					sceneList: Sockets.Scenes.List.SceneWithEntry[]
 				}
 			}
@@ -7537,6 +7994,14 @@ declare global {
 					sessionId: number
 				}
 				interface Response {
+					/**
+					 * Which session these captured messages belong to.
+					 *
+					 * Present so the **interest scope** can be derived — see
+					 * `List.Response` above, which carries it for the same
+					 * reason and from the same producers.
+					 */
+					sessionId: number
 					scenedMessageIds: number[]
 				}
 			}
@@ -7545,6 +8010,17 @@ declare global {
 					historyEntryId: number
 				}
 				interface Progress {
+					/**
+					 * Which history entry is being compiled.
+					 *
+					 * Present so the **interest scope** can be derived: the
+					 * push fans out to the caller's whole user room, and a
+					 * second tab compiling another entry has no business
+					 * being shown this one's batches. `Response` below has
+					 * always carried it; this is the same id on the progress
+					 * frames that precede it.
+					 */
+					historyEntryId: number
 					phase: "drafting" | "synthesizing"
 					batch: number
 					totalBatches: number
@@ -7668,7 +8144,18 @@ declare global {
 					 * beside it.
 					 */
 					annotatedRows: number
+					/** True while the model is resident. */
+					loaded?: boolean
+					/** ISO time the lane last used the model, or null. */
+					lastUsedAt?: string | null
+					/** Minutes idle before the lane unloads it. */
+					ttlMinutes?: number
 				}
+			}
+			/** Unload the entity model now. It reloads on the next message that needs it. */
+			namespace UnloadModel {
+				interface Params {}
+				interface Response extends Status.Response {}
 			}
 		}
 
@@ -7744,7 +8231,39 @@ declare global {
 				interface Response {
 					/** How many rows currently carry a vector. */
 					rows: number
+					/**
+					 * The same rows by what they are — `lorebookEntries`,
+					 * `messages`, `characters`, … — so the switch confirmation can
+					 * say "every entry in N lorebooks and the history of M
+					 * sessions" instead of one bare number. Keys are the owner
+					 * kinds the server counts; a kind with zero rows is omitted.
+					 */
+					byKind?: Record<string, number>
+					/** Distinct lorebooks / sessions those rows belong to. */
+					lorebooks?: number
+					sessions?: number
 				}
+			}
+			/** The embedding lane's residency, for the endpoint header and model view. */
+			namespace Status {
+				interface Params {}
+				interface Response {
+					/** Is a `text->embedding` connection starred? */
+					starred: boolean
+					/** The identity vectors are stamped with, or null. */
+					modelId: string | null
+					loaded: boolean
+					loadError: string | null
+					lastUsedAt: string | null
+					ttlMinutes: number
+					/** The queue: rows waiting to be embedded. */
+					pending: number
+				}
+			}
+			/** Unload the embedding model now. Autostart reloads it when the queue has work. */
+			namespace UnloadModel {
+				interface Params {}
+				interface Response extends Status.Response {}
 			}
 
 			namespace StartQueue {
@@ -7911,7 +8430,6 @@ declare global {
 				id: number
 				lorebookId: number
 				characterId: number | null
-				personaId: number | null
 				binding: string
 				sceneId: number | null
 				historyEntryId: number | null
@@ -8148,6 +8666,19 @@ declare global {
 				user: string
 				response: string
 			}
+			/**
+			 * One `narrativeGraph:buildLog` push: a trace entry, plus the book
+			 * the build was asked for.
+			 *
+			 * `lorebookId` is present so the **interest scope** can be derived.
+			 * It is not on `TraceEntry` itself because that shape is also the
+			 * graph builder's `onLlmCall` argument, and the builder knows only
+			 * the call it just made — the socket layer adds the book at the
+			 * emit, which is where the build was started.
+			 */
+			interface BuildLogEntry extends TraceEntry {
+				lorebookId: number
+			}
 			namespace Build {
 				interface Params {
 					lorebookId: number
@@ -8336,12 +8867,11 @@ declare global {
 					legendaryNodes: LegendaryNodeEntry[]
 				}
 			}
-			/** Link an orphaned lorebook binding to a character/persona, or create/skip */
+			/** Link an orphaned lorebook binding to a character, or create/skip */
 			namespace LinkOrphanBinding {
 				interface Params {
 					bindingId: number
 					characterId?: number
-					personaId?: number
 					/** true = user chose to skip, leave binding orphaned */
 					skip?: boolean
 				}

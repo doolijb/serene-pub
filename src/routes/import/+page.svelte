@@ -2,10 +2,11 @@
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { getInterestContext } from "$lib/client/sockets/interest.svelte"
 	import type { SocketEventMap } from "$lib/client/sockets/typedSocket"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { goto } from "$app/navigation"
-	import { getContext, onDestroy } from "svelte"
+	import { getContext } from "svelte"
 	import {
 		resolvePickedFolder,
 		startImportSession,
@@ -15,6 +16,7 @@
 
 	const userCtx: UserCtx = getContext("userCtx")
 	const socket = useTypedSocket()
+	const interest = getInterestContext()
 
 	if (!userCtx.user?.isAdmin) goto("/")
 
@@ -108,9 +110,8 @@
 		uploadProgress = null
 
 		try {
-			importSessionId = await startImportSession(socket)
+			importSessionId = await startImportSession()
 			await stageFilesToServer(
-				socket,
 				importSessionId,
 				pickedFolder.scanFiles,
 				(staged, total) => (uploadProgress = { staged, total })
@@ -287,7 +288,6 @@
 
 		try {
 			await stageFilesToServer(
-				socket,
 				importSessionId,
 				filesToUpload,
 				(staged, total) => (uploadProgress = { staged, total })
@@ -323,11 +323,11 @@
 		})
 	}
 
-	// Socket listeners
-	// Named so `off` can name them too — and so there is anything to off at
-	// all: these had no teardown, so every visit to this page left another
-	// pair of listeners on the socket. A bare `socket.off(event)` is not the
-	// fix: it removes EVERY listener for that event across the app.
+	// The scan's and the import's answers, both BARE — an import is the
+	// instance's, not one session's — and both STANDING: each is the reply to
+	// a button this page presses much later, so the key is held for as long as
+	// the page is. The registry releases both when the page is destroyed,
+	// which is also what fixed the leak these named handlers were written for.
 	function handleImportSillytavernScan(
 		message: SocketEventMap["import:sillytavern:scan"]["response"]
 	) {
@@ -364,7 +364,10 @@
 			})
 		}
 	}
-	socket.on("import:sillytavern:scan", handleImportSillytavernScan)
+	interest.useInterest<"import:sillytavern:scan">(
+		"import:sillytavern:scan",
+		handleImportSillytavernScan
+	)
 
 	function handleImportSillytavernExecute(
 		message: SocketEventMap["import:sillytavern:execute"]["response"]
@@ -396,12 +399,10 @@
 			})
 		}
 	}
-	socket.on("import:sillytavern:execute", handleImportSillytavernExecute)
-
-	onDestroy(() => {
-		socket.off("import:sillytavern:scan", handleImportSillytavernScan)
-		socket.off("import:sillytavern:execute", handleImportSillytavernExecute)
-	})
+	interest.useInterest<"import:sillytavern:execute">(
+		"import:sillytavern:execute",
+		handleImportSillytavernExecute
+	)
 </script>
 
 {#if userCtx.user?.isAdmin}

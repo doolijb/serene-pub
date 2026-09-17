@@ -4,35 +4,46 @@
 export interface KeyboardNavigationOptions {
 	panelsCtx: PanelsCtx
 	onFocusMain?: () => void
-	onFocusLeftSidebar?: () => void
-	onFocusRightSidebar?: () => void
+	/** Alt+[ — the rail, the strip of view buttons down the left edge. */
+	onFocusRail?: () => void
+	/** Alt+] — the sidebar, whichever view is showing in it. */
+	onFocusSidebar?: () => void
 }
 
 export class KeyboardNavigationManager {
 	private panelsCtx: PanelsCtx
 	private onFocusMain?: () => void
-	private onFocusLeftSidebar?: () => void
-	private onFocusRightSidebar?: () => void
+	private onFocusRail?: () => void
+	private onFocusSidebar?: () => void
 
 	constructor(options: KeyboardNavigationOptions) {
 		this.panelsCtx = options.panelsCtx
 		this.onFocusMain = options.onFocusMain
-		this.onFocusLeftSidebar = options.onFocusLeftSidebar
-		this.onFocusRightSidebar = options.onFocusRightSidebar
+		this.onFocusRail = options.onFocusRail
+		this.onFocusSidebar = options.onFocusSidebar
 	}
 
 	handleGlobalKeyDown = (event: KeyboardEvent) => {
+		// Somebody closer to the action already claimed this key. The session's
+		// widget grid binds Alt+[ / Alt+] to "expand every group / send them
+		// all to the rail" and calls preventDefault; the shell must not ALSO
+		// yank focus to the rail on the one page where that binding is taken.
+		// This works because the listener is on `window` rather than
+		// `document`: keydown bubbles document -> window, so every page-level
+		// handler has already had its say by the time we run.
+		if (event.defaultPrevented) return
+
 		// Only handle Alt key combinations for global navigation
 		if (!event.altKey) return
 
 		switch (event.key) {
 			case "[":
 				event.preventDefault()
-				this.focusLeftSidebar()
+				this.focusRail()
 				break
 			case "]":
 				event.preventDefault()
-				this.focusRightSidebar()
+				this.focusSidebar()
 				break
 			case "/":
 				event.preventDefault()
@@ -95,37 +106,26 @@ export class KeyboardNavigationManager {
 		}
 	}
 
-	private focusLeftSidebar() {
-		// Check if left panel is already open
-		if (!this.panelsCtx.leftPanel) {
-			// Inform screen reader that no sidebar is open
-			KeyboardNavigationManager.announceToScreenReader(
-				"No left sidebar is currently open"
-			)
-			return
-		}
-
-		// Focus the left sidebar
-		this.onFocusLeftSidebar?.()
-
-		// For mobile, handle differently if mobile menu is available
-		if (!this.panelsCtx.leftPanel) {
-			this.panelsCtx.isMobileMenuOpen = true
-		}
+	/**
+	 * The rail is always there, so — unlike the sidebar below — there is no
+	 * "nothing to focus" case to announce. The shell decides which item takes
+	 * focus (the roving one), because the rail owns that cursor.
+	 */
+	private focusRail() {
+		this.onFocusRail?.()
 	}
 
-	private focusRightSidebar() {
-		// Check if right panel is already open
-		if (!this.panelsCtx.rightPanel) {
-			// Inform screen reader that no sidebar is open
+	private focusSidebar() {
+		// A collapsed sidebar has no first interactive element to land on, and
+		// silently doing nothing reads as a broken shortcut.
+		if (!this.panelsCtx.activeView) {
 			KeyboardNavigationManager.announceToScreenReader(
-				"No right sidebar is currently open"
+				"No sidebar view is open"
 			)
 			return
 		}
 
-		// Focus the right sidebar
-		this.onFocusRightSidebar?.()
+		this.onFocusSidebar?.()
 	}
 
 	private focusMainContent() {
@@ -184,14 +184,19 @@ export class KeyboardNavigationManager {
 		}
 	}
 
-	// Add listener for global keyboard events
+	// Add listener for global keyboard events.
+	//
+	// `window`, not `document`, and deliberately: keydown bubbles the focused
+	// element -> document -> window, so this is the LAST handler to see the
+	// event. That is what lets the `defaultPrevented` check above defer to a
+	// page that has already bound the same chord (see handleGlobalKeyDown).
 	addGlobalListener() {
-		document.addEventListener("keydown", this.handleGlobalKeyDown)
+		window.addEventListener("keydown", this.handleGlobalKeyDown)
 	}
 
 	// Remove listener when component is destroyed
 	removeGlobalListener() {
-		document.removeEventListener("keydown", this.handleGlobalKeyDown)
+		window.removeEventListener("keydown", this.handleGlobalKeyDown)
 	}
 
 	// Session message navigation methods
@@ -352,12 +357,18 @@ export class KeyboardNavigationManager {
 	}
 
 	static focusFirstInteractive(container: HTMLElement): boolean {
-		const focusableElements = container.querySelectorAll(
+		const focusableElements = container.querySelectorAll<HTMLElement>(
 			'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
 		)
-		const firstElement = focusableElements[0] as HTMLElement
-		if (firstElement) {
-			firstElement.focus()
+		// Skip anything that is not actually rendered. The shell keeps every
+		// open sidebar view mounted and hides the ones you are not looking at
+		// (and hides one of its two headers by breakpoint), so the first
+		// element in document order is routinely a `display: none` one —
+		// calling .focus() on which silently does nothing and leaves focus
+		// wherever it was, i.e. the shortcut appears dead.
+		for (const element of focusableElements) {
+			if (element.getClientRects().length === 0) continue
+			element.focus()
 			return true
 		}
 		return false

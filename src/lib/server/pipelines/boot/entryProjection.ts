@@ -44,7 +44,7 @@
  *
  * `entry_fields__core_entry_history__v1` — prefix, type, version. The version is
  * in the name because a version bump is how a schema changes at all
- * (`config_schema` is inside `typeContentHash`, so `syncTypeRegistry` refuses to
+ * (`config_schema` is inside `definitionContentHash`, so `syncDefinitionRegistry` refuses to
  * republish a changed schema at the same version). A bump therefore appears as a
  * *new* name, and the reconciler below drops the old one because it is no longer
  * in the desired set. Other types' constraints are untouched by construction.
@@ -58,7 +58,7 @@
  *
  * ## Where it runs
  *
- * The boot chain, after `syncTypeRegistry`, and reading **rows rather than the
+ * The boot chain, after `syncDefinitionRegistry`, and reading **rows rather than the
  * in-process declaration map** — the rows are the system of record (F3), and a
  * `transport: 'process'` type has no descriptor in this process at all (F6).
  */
@@ -75,7 +75,7 @@ const CHECK_PREFIX = "entry_fields__"
 const INDEX_PREFIX = "entry_field__"
 /**
  * The composite reference the migration added `NOT VALID`, because migrations
- * run before `syncTypeRegistry` and the registry rows the backfilled entries
+ * run before `syncDefinitionRegistry` and the registry rows the backfilled entries
  * point at did not exist yet. Same cycle as a CHECK: validate once clean.
  */
 const TYPE_FK = "lorebook_entries_type_fk"
@@ -327,8 +327,11 @@ export async function readProjectedEntryTypes(
 ): Promise<ProjectedEntryType[]> {
 	const res = await db.execute(
 		sql.raw(
-			`SELECT "type_id", "version", "config_schema" FROM "pipeline_type_registry" ` +
-				`WHERE "kind" = 'entry' ORDER BY "type_id", "version"`
+			// The registry column is `definition_id` since the 2026-09-16 rename;
+			// an entry type's id is its definition id, and this file keeps the
+			// entry-type word (NOMENCLATURE §5: not yet ruled to *kind*).
+			`SELECT "definition_id" AS "type_id", "version", "config_schema" FROM "pipeline_definition_registry" ` +
+				`WHERE "kind" = 'entry' ORDER BY "definition_id", "version"`
 		)
 	)
 	const out: ProjectedEntryType[] = []
@@ -641,8 +644,8 @@ export async function projectEntryConstraints(
 		const res = await db.execute(
 			sql.raw(
 				`SELECT COUNT(*)::int AS n FROM ${JSON.stringify(TABLE)} e ` +
-					`LEFT JOIN "pipeline_type_registry" r ` +
-					`ON r."type_id" = e."type_id" AND r."version" = e."type_version" ` +
+					`LEFT JOIN "pipeline_definition_registry" r ` +
+					`ON r."definition_id" = e."type_id" AND r."version" = e."type_version" ` +
 					`WHERE r."id" IS NULL`
 			)
 		)

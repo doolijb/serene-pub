@@ -16,7 +16,7 @@
  * person's edit starts, at a row, and ends at what came back.
  *
  * **The registry refusal.** Four published types changed content hash.
- * `syncTypeRegistry` refuses to republish a changed version, `bootstrapPipelines`
+ * `syncDefinitionRegistry` refuses to republish a changed version, `bootstrapPipelines`
  * catches that refusal, records it in `report.conflict` and **returns early** —
  * no specs seeded, no configs reconciled, pipelines dead on every upgraded
  * install while the diagnostics screen holds the only evidence. 0192's
@@ -35,7 +35,7 @@ import {
 } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import { worldLoreValues } from "$lib/server/pipelines/testing/fixtures"
-import { run } from "@serene-pub/sdk"
+import { run, splitCandidates } from "@serene-pub/sdk"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
 import { createHost } from "$lib/server/pipelines/runtime/host"
 import { buildWorld } from "$lib/server/pipelines/config/world"
@@ -173,7 +173,8 @@ const worldLoreLane = async () => {
 		(n) => n.nodeKey === WORLD_LORE_LANE
 	)
 	return {
-		names: ((node?.output?.hits ?? []) as any[]).map(
+		// The items, past the lane's band intent at the head (R-7 P5).
+		names: splitCandidates<any>(node?.output?.hits ?? []).items.map(
 			(c) => c.payload?.name as string
 		),
 		diagnostics: node?.output?.diagnostics ?? {}
@@ -223,11 +224,11 @@ describe("the declared threshold and the engine's fallback are one number", () =
 		for (const typeId of LORE_TYPES) {
 			const [row] = await db
 				.select()
-				.from(schema.pipelineTypeRegistry)
+				.from(schema.pipelineDefinitionRegistry)
 				.where(
 					and(
-						eq(schema.pipelineTypeRegistry.typeId, typeId),
-						eq(schema.pipelineTypeRegistry.version, 1)
+						eq(schema.pipelineDefinitionRegistry.definitionId, typeId),
+						eq(schema.pipelineDefinitionRegistry.version, 1)
 					)
 				)
 				.limit(1)

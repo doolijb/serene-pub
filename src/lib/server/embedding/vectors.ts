@@ -55,18 +55,17 @@ export interface EmbeddedStore {
 
 export const EMBEDDED_STORES: readonly EmbeddedStore[] = [
 	{ table: "session_messages", kind: "columns" },
+	// One `characters` store, not two: a persona is a character.
 	{ table: "characters", kind: "columns" },
-	{ table: "personas", kind: "columns" },
 	{ table: "lorebook_bindings", kind: "columns" },
 	{ table: "narrative_relationships", kind: "columns" },
 	{ table: "lorebook_entry_vectors", kind: "rows" }
 ]
 
-/** The five column-shaped stores, as drizzle tables. */
+/** The four column-shaped stores, as drizzle tables. */
 const COLUMN_STORES = [
 	schema.sessionMessages,
 	schema.characters,
-	schema.personas,
 	schema.lorebookBindings,
 	schema.narrativeRelationships
 ] as const
@@ -114,4 +113,110 @@ export async function clearEmbeddedVectors(db: Db): Promise<number> {
 		.delete(schema.lorebookEntryVectors)
 		.returning({ entryId: schema.lorebookEntryVectors.entryId })
 	return cleared + dropped.length
+}
+
+/**
+ * The same rows `countEmbeddedRows` counts, by WHAT they are — plus the two
+ * scope counts a confirmation sentence needs.
+ *
+ * ## ⚠ The breakdown decomposes `countEmbeddedRows` exactly
+ *
+ * It sums to `rows` and never exceeds it, because the screen it feeds says what
+ * a destructive re-index will cost. Which means the stores listed here are
+ * `EMBEDDED_STORES` and nothing else — in particular:
+ *
+ *   · **`scenes`** carries `embedding`/`embedding_model` and is excluded. The
+ *     graph builder produces those on its own pass and the embedding queue
+ *     does not rebuild them, so quoting them as part of a re-index overstates
+ *     the work AND names rows `clearEmbeddedVectors` never touches.
+ *   · **`world_lore_entries`, `character_lore_entries`, `history_entries`** are
+ *     the legacy entry tables, read by the deprecated path only. Live entries
+ *     are `lorebook_entries` with their vectors in `lorebook_entry_vectors`,
+ *     which IS counted, under `lorebookEntries`.
+ *
+ * A `history` kind therefore never appears while entries live in one table; if
+ * history becomes its own retrieval unit again, it decomposes out of
+ * `lorebookEntries` here rather than out of a legacy table.
+ *
+ * A kind with zero rows is omitted, so a fresh instance answers `{}` rather
+ * than seven zeroes.
+ */
+export async function embeddedBreakdown(db: Db): Promise<{
+	byKind: Record<string, number>
+	lorebooks: number
+	sessions: number
+}> {
+	const [messages, characters, relationships, bindings, entryVectors] =
+		await Promise.all([
+			db.$count(
+				schema.sessionMessages,
+				isNotNull(schema.sessionMessages.embedding)
+			),
+			db.$count(
+				schema.characters,
+				isNotNull(schema.characters.embedding)
+			),
+			db.$count(
+				schema.narrativeRelationships,
+				isNotNull(schema.narrativeRelationships.embedding)
+			),
+			db.$count(
+				schema.lorebookBindings,
+				isNotNull(schema.lorebookBindings.embedding)
+			),
+			db.$count(schema.lorebookEntryVectors)
+		])
+
+	const byKind: Record<string, number> = {}
+	const put = (kind: string, n: number) => {
+		if (Number(n) > 0) byKind[kind] = Number(n)
+	}
+	put("messages", messages)
+	put("characters", characters)
+	put("relationships", relationships)
+	// One kind, two stores. A binding is a lorebook's row and is re-embedded by
+	// the same pass as the entries beside it, so splitting them would put a
+	// word on the confirmation screen ("cast members") that the sentence it is
+	// building does not use.
+	put("lorebookEntries", Number(bindings) + Number(entryVectors))
+
+	// ⚠ Distinct ids, unioned in JS across the two lorebook-shaped stores. The
+	// table is small and the alternative is a UNION query whose two halves would
+	// have to be kept in step with the store list above by hand.
+	const [entryOwners, bindingOwners, sessionOwners] = await Promise.all([
+		db
+			.selectDistinct({ id: schema.lorebookEntries.lorebookId })
+			.from(schema.lorebookEntryVectors)
+			.innerJoin(
+				schema.lorebookEntries,
+				eq(
+					schema.lorebookEntryVectors.entryId,
+					schema.lorebookEntries.id
+				)
+			),
+		db
+			.selectDistinct({ id: schema.lorebookBindings.lorebookId })
+			.from(schema.lorebookBindings)
+			.where(isNotNull(schema.lorebookBindings.embedding)),
+		// Sessions come from MESSAGES alone: they are the only embedded store
+		// that names a session. Entries belong to a lorebook, and a lorebook can
+		// be linked to several sessions or to none, so counting sessions through
+		// one would be counting something else.
+		db
+			.selectDistinct({ id: schema.sessionMessages.sessionId })
+			.from(schema.sessionMessages)
+			.where(isNotNull(schema.sessionMessages.embedding))
+	])
+
+	const lorebookIds = new Set<number>()
+	for (const r of [...entryOwners, ...bindingOwners])
+		if (r.id != null) lorebookIds.add(r.id)
+	const sessionIds = new Set<number>()
+	for (const r of sessionOwners) if (r.id != null) sessionIds.add(r.id)
+
+	return {
+		byKind,
+		lorebooks: lorebookIds.size,
+		sessions: sessionIds.size
+	}
 }

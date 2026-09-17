@@ -220,7 +220,7 @@ const migratedPromptKey = (
  */
 async function freePromptName(
 	db: Db,
-	nodeTypeId: string,
+	nodeDefinitionId: string,
 	slot: string,
 	base: string
 ): Promise<string> {
@@ -229,7 +229,7 @@ async function freePromptName(
 		.from(schema.pipelinePrompts)
 		.where(
 			and(
-				eq(schema.pipelinePrompts.nodeTypeId, nodeTypeId),
+				eq(schema.pipelinePrompts.nodeDefinitionId, nodeDefinitionId),
 				eq(schema.pipelinePrompts.slot, slot)
 			)
 		)
@@ -309,8 +309,8 @@ export async function migrateLegacyConfigs(db: Db): Promise<MigrationReport[]> {
 			// unique index refuses and the picker could not tell apart.
 			const promptIdByPool = new Map<string, number>()
 			for (const d of promptNodes) {
-				if (!d.nodeTypeId) continue
-				const pool = promptPoolKeyFor(d.nodeTypeId, d.slot)
+				if (!d.nodeDefinitionId) continue
+				const pool = promptPoolKeyFor(d.nodeDefinitionId, d.slot)
 				if (promptIdByPool.has(pool)) continue
 
 				const promptKey = migratedPromptKey(
@@ -336,11 +336,11 @@ export async function migrateLegacyConfigs(db: Db): Promise<MigrationReport[]> {
 				for (const field of d.promptFields ?? [])
 					if (field in authored) fields[field] = authored[field]!
 				const made = await createPrompt(db, {
-					nodeTypeId: d.nodeTypeId,
+					nodeDefinitionId: d.nodeDefinitionId,
 					slot: d.slot,
 					name: await freePromptName(
 						db,
-						d.nodeTypeId,
+						d.nodeDefinitionId,
 						d.slot,
 						row.name
 					),
@@ -371,14 +371,14 @@ export async function migrateLegacyConfigs(db: Db): Promise<MigrationReport[]> {
 			// refuses, because a summarizer's synth step will not accept a row
 			// carrying only the drafting text.
 			const values = promptNodes
-				.filter((d) => d.nodeTypeId)
+				.filter((d) => d.nodeDefinitionId)
 				.map((d) => ({
 					configId: config.id,
 					nodeKey: d.nodeKey,
 					slot: d.slot,
 					path: "",
 					value: promptIdByPool.get(
-						promptPoolKeyFor(d.nodeTypeId!, d.slot)
+						promptPoolKeyFor(d.nodeDefinitionId!, d.slot)
 					)
 				}))
 				.filter((v) => v.value != null)

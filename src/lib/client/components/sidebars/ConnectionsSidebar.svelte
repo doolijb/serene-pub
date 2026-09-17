@@ -1,116 +1,138 @@
 <script lang="ts">
+	/**
+	 * The Connections sidebar — three views over one list.
+	 *
+	 * - **index**: every endpoint with its models (`ConnectionIndexView`).
+	 *   Search, one filter, the defaults strip, and the groups. Models are
+	 *   opened from here and only from here.
+	 * - **connection**: one endpoint's own settings — host, key, format,
+	 *   capabilities, stop scripts. It says how many models it has and when
+	 *   they were last checked, and offers Refresh; it does not list or edit
+	 *   them. Models are not managed from the connection view.
+	 * - **model**: one model's own settings (`ModelDetailView`).
+	 *
+	 * ## Models are synced, not imported
+	 *
+	 * The list rides on `connections:list` with every model attached, and
+	 * `connections:syncModels` reconciles rows against what each host says.
+	 * The sidebar asks for a (stale-only) sync of everything when the index
+	 * opens, of one endpoint when its view or a model's view opens, and a
+	 * forced one on Refresh. The server broadcasts the refreshed list and
+	 * model views, so every open tab moves at once.
+	 */
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import {
+		declareInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
 	import { getContext, onDestroy, onMount } from "svelte"
+	import { SvelteSet } from "svelte/reactivity"
 	import * as Icons from "@lucide/svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import OllamaForm from "$lib/client/connectionForms/OllamaForm.svelte"
 	import OpenAIForm from "$lib/client/connectionForms/OpenAIForm.svelte"
 	import LmStudioForm from "$lib/client/connectionForms/LMStudioForm.svelte"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
-	import EmptyState from "$lib/client/components/EmptyState.svelte"
 	import LlamaCppForm from "$lib/client/connectionForms/LlamaCppForm.svelte"
 	import KoboldCppForm from "$lib/client/connectionForms/KoboldCppForm.svelte"
 	import KoboldCppManagedForm from "$lib/client/connectionForms/KoboldCppManagedForm.svelte"
 	import AnthropicForm from "$lib/client/connectionForms/AnthropicForm.svelte"
 	import ImageConnectionForm from "$lib/client/connectionForms/ImageConnectionForm.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
-	import { PromptFormats } from "$lib/shared/constants/PromptFormats"
-	import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 	import {
 		CONNECTION_DEFAULTS,
 		OPENAI_COMPATIBLE_PRESETS,
 		stableStringify
 	} from "$lib/shared/utils/connectionDefaults"
 	import ConnectionCapabilities from "$lib/client/components/connections/ConnectionCapabilities.svelte"
-	import ConnectionModels from "$lib/client/components/connections/ConnectionModels.svelte"
 	import EmbeddingConnectionForm from "$lib/client/connectionForms/EmbeddingConnectionForm.svelte"
 	import EmbeddingQueuePanel from "$lib/client/components/connections/EmbeddingQueuePanel.svelte"
 	import NerConnectionForm from "$lib/client/connectionForms/NerConnectionForm.svelte"
 	import NerLanePanel from "$lib/client/components/connections/NerLanePanel.svelte"
 	import ConnectionServicePicker from "./ConnectionServicePicker.svelte"
+	import ConnectionIndexView from "$lib/client/components/connections/ConnectionIndexView.svelte"
+	import { ViewModeTracker } from "$lib/client/shell/viewMode.svelte"
+	import PanelSplit from "$lib/client/components/panels/PanelSplit.svelte"
+	import ModelDetailView from "$lib/client/components/connections/ModelDetailView.svelte"
+	import OnnxModelView from "$lib/client/components/connections/OnnxModelView.svelte"
+	import OnnxEndpointView from "$lib/client/components/connections/OnnxEndpointView.svelte"
+	import type { PairDefaultSelection } from "$lib/client/components/connections/modelSystemDefaults"
 	import {
-		CONNECTION_SECTIONS,
+		isLocalOnnxType,
+		type ModelManager
+	} from "$lib/client/components/connections/modelManagement"
+	import { timeAgo } from "$lib/client/utils/timeAgo"
+	import {
+		sectionForCapability,
 		sectionForModality
 	} from "$lib/shared/constants/connectionSections"
 	import { EMBEDDING_CAPABILITY } from "$lib/shared/constants/embeddings"
-	import {
-		isKoboldCppManagedType,
-		type ConnectionServiceItem
-	} from "$lib/shared/utils/connectionServiceItems"
+	import { NER_CAPABILITY } from "$lib/shared/constants/ner"
+	import type { ConnectionServiceItem } from "$lib/shared/utils/connectionServiceItems"
 	import {
 		NOTE_MAX_LENGTH,
-		normalizeNote,
-		notePreview
+		normalizeNote
 	} from "$lib/shared/utils/connectionNotes"
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
-		/** Deep-link: open the new-connection flow on mount (admin create page).
-		 *  Selecting a specific connection rides `panelsCtx.digest.connectionId`,
-		 *  the mechanism that already exists for it. */
+		/** Deep-link: open the new-connection flow on mount (admin create page). */
 		startNew?: boolean
+		/**
+		 * Deep-link: open straight to this connection.
+		 *
+		 * A PROP rather than `panelsCtx.digest.connectionId` for any caller
+		 * that embeds this sidebar in a page of its own (the admin change
+		 * page). The digest is one shared slot, and with the shell's tab model
+		 * an already-open-but-hidden Connections view reads it too — whichever
+		 * copy mounted first consumed it, so the embedded one showed the index
+		 * while the hidden one silently jumped to the row. A prop is addressed
+		 * to one instance and so cannot be raced. The digest stays for
+		 * external navigation that OPENS the shell's view ("open connection"
+		 * in the Ollama manager, a Jump hit).
+		 */
+		initialConnectionId?: number
 	}
 
-	let { onclose = $bindable(), startNew = false }: Props = $props()
+	let {
+		onclose = $bindable(),
+		startNew = false,
+		initialConnectionId
+	}: Props = $props()
 	let systemSettingsCtx: SystemSettingsCtx = $state(
 		getContext("systemSettingsCtx")
 	)
 	let panelsCtx: PanelsCtx = getContext("panelsCtx")
+	const userCtx: { user: SelectUser } = getContext("userCtx")
 	let koboldCppSettingsCtx: KoboldCppSettingsCtx = getContext(
 		"koboldCppSettingsCtx"
 	)
 
 	const socket = useTypedSocket()
 
+	type ListRow = Sockets.Connections.List.Row
+
 	// ── View state ──────────────────────────────────────────────────────────
-	// An index of section cards, and ONE management view behind all of them.
-	// ⚠ Two values, and a modality must never become a third: a section is an
-	// entry in `CONNECTION_SECTIONS`, not a view with a panel of its own.
-	type View = "index" | "connections"
+	/**
+	 * The three views are the same three at every width — what changes is
+	 * whether opening one REPLACES the index or sits beside it. At desk width
+	 * the index is a column that stays put, so `view` stops meaning "which
+	 * screen" and means only "what, if anything, is open on the right".
+	 */
+	const viewMode = new ViewModeTracker()
+	type View = "index" | "connection" | "model"
 	let view = $state<View>("index")
+	/** The model whose detail view is open. Set with the view. */
+	let selectedModelId = $state<number | null>(null)
+	/** Where the model view returns to. Not $state: read only on navigate. */
+	let modelReturnView: "index" | "connection" = "index"
+	/** Seeds the index filter (a `cap:<transform>` value, or null). */
+	let initialIndexFilter = $state<string | null>(null)
+	/** The group the index scrolls to on return from a connection or model. */
+	let indexFocusId = $state<number | null>(null)
 
-	/**
-	 * Which modality the management view is showing.
-	 *
-	 * An open string, and the section it names comes from `CONNECTION_SECTIONS`
-	 * — label, star capability, picker label and empty state all ride on that
-	 * one entry, so adding a modality needs no branch here.
-	 */
-	let connectionModality = $state<string>("text-gen")
-	let section = $derived(
-		sectionForModality(connectionModality) ?? CONNECTION_SECTIONS[0]
-	)
-	let isEmbeddingView = $derived(connectionModality === "embeddings")
-	/**
-	 * The two views whose star has a COST when it moves, and the switch
-	 * confirmation each one quotes.
-	 *
-	 * Not one flag: the two sentences are about different work (vectors thrown
-	 * away, annotations re-scanned) and the two counts come from different
-	 * events. What they share is the rule that a FIRST star costs nothing and
-	 * must not open a dialog, which `handleSetDefault` states once for both.
-	 */
-	let isNerView = $derived(connectionModality === "ner")
-	function openCategory(m: string) {
-		connectionModality = m
-		view = "connections"
-	}
-
-	// --- State ---
-	let connectionsList: Partial<SelectConnection>[] = $state([])
-	/**
-	 * The connections in the section being shown.
-	 *
-	 * ⚠ Filtered on the ROW's `modality` COLUMN, not on `modalityOf(type)`. The
-	 * column is what a provider slot compares against (`shapeOfModality`) and
-	 * what the picker filters by, so filing a row differently here than the
-	 * binding does would show a connection in a list it could not be used from.
-	 * The column is NOT NULL and every create path writes it from
-	 * `CONNECTION_DEFAULTS`.
-	 */
-	let viewConnections = $derived(
-		connectionsList.filter((c) => c.modality === connectionModality)
-	)
+	// ── Data ────────────────────────────────────────────────────────────────
+	let connectionsList: ListRow[] = $state([])
 	let isLoading = $state(true)
 	let connection: any = $state()
 	let originalConnection: any = $state()
@@ -124,191 +146,432 @@
 			stableStringify(connection) !== stableStringify(originalConnection)
 		)
 	})
-	let editingField: string | null = $state(null)
 	let showConfirmModal = $state(false)
 	let confirmResolve: ((v: boolean) => void) | null = null
-	let testResult: { ok: boolean; error?: string; models?: any[] } | null =
-		$state(null)
-	let refreshModelsResult: { models?: any[]; error?: string } | null =
-		$state(null)
 	let showNewConnectionModal = $state(false)
 	let newConnectionName = $state("")
 	let newConnectionService: ConnectionServiceItem | undefined = $state()
+	/** Which modality the New Connection picker opens on. */
+	let newConnectionModality = $state<string>("text-gen")
+	/**
+	 * Whether the name was hand-typed. A preset prefills the name on
+	 * selection, but a typed name is the person's and is never overwritten.
+	 */
+	let nameTouched = $state(false)
+	$effect(() => {
+		if (newConnectionService && !nameTouched) {
+			newConnectionName = newConnectionService.label
+		}
+	})
 	let showDeleteModal = $state(false)
 
-	// Screen reader announcements
-	let announcements = $state("")
-
-	// Which connection is currently shown in the form (local view state)
+	// Which connection is currently shown (local view state)
 	let selectedConnectionId = $state<number | null>(null)
 	// Set only when this panel was opened pointing AT a connection (the digest
 	// seeding in onMount), and consumed by the first connections:get for that
-	// id — see handleConnectionsGet. Not $state: nothing renders from it.
+	// id. Not $state: nothing renders from it.
 	let deepLinkedConnectionId: number | null = null
-	/**
-	 * The selected connection's note IN FULL, for the block under the picker.
-	 *
-	 * Read from the loaded record when there is one, so typing in the notes
-	 * field below updates it as you go, and from the list row otherwise —
-	 * `connections:get` is a round trip, and between clicking a connection and
-	 * its reply arriving the list row is the only copy there is.
-	 */
-	let selectedNote = $derived(
-		normalizeNote(
-			connection?.id === selectedConnectionId
-				? connection?.notes
-				: viewConnections.find((c) => c.id === selectedConnectionId)
-						?.notes
-		)
+
+	/** The list row for the open connection — the models summary lives on it. */
+	const selectedRow = $derived(
+		connectionsList.find((c) => c.id === selectedConnectionId) ?? null
 	)
-	/**
-	 * Which capability this category's star registers.
-	 *
-	 * The star used to mean "the default connection", full stop — one starred
-	 * row the app used for whatever it happened to need. There is no such
-	 * thing: one KoboldCPP row does chat, vision, image generation, speech and
-	 * transcription from one process, so starring it said nothing about which
-	 * of the five was meant. The category the user is standing in is what says
-	 * it, which is why this is derived from the modality and not from the
-	 * connection.
-	 */
-	let starCapability = $derived(section.starCapability)
-	// The instance default for THIS category's capability. Read from
-	// `capabilityDefaults` — the only place a default lives since 0181 — never
-	// from a column on the settings row.
-	let defaultConnectionId = $derived(
-		systemSettingsCtx.capabilityDefaults?.[starCapability]?.connectionId ??
-			null
-	)
-	// A Managed KoboldCPP connection can't be set default while the manager is
-	// off — the image one no less than the text one. Both name a file in the
-	// Manager's models directory and are loaded through its admin API, so with
-	// the Manager switched off neither can generate anything.
-	let managedButDisabled = $derived(
-		isKoboldCppManagedType(connection?.type) &&
-			!koboldCppSettingsCtx?.settings?.koboldCppManagerEnabled
+	const selectedMissingCount = $derived(
+		(selectedRow?.models ?? []).filter((m) => m.missingSince != null).length
 	)
 
+	function serviceLabelOf(type: string | null | undefined): string {
+		return (
+			CONNECTION_TYPE.options.find((t) => t.value === type)?.label ??
+			(type || "")
+		)
+	}
+
+	// Screen reader announcements
+	let announcements = $state("")
 	function announce(message: string) {
 		announcements = message
-		// Clear after screen reader has time to read
 		setTimeout(() => (announcements = ""), 1000)
 	}
 
-	// Focus management
-	function focusConnectionSelect() {
-		const select = document.getElementById("connection-select")
-		if (select) select.focus()
-	}
+	// ── Model sync ──────────────────────────────────────────────────────────
+	/** Endpoints with a sync in flight (reactive Set — see the memory note). */
+	const syncingIds = new SvelteSet<number>()
+	let syncingAll = $state(false)
+	/** Forced syncs — the ones whose failure earns a toast. Not $state. */
+	const forcedIds = new Set<number>()
 
-	function focusNewConnectionName() {
-		const input = document.getElementById("newConnName")
-		if (input) input.focus()
-	}
-
-	// Keyboard shortcuts
-	function handleKeydown(e: KeyboardEvent) {
-		// Ctrl/Cmd + N to create new connection
-		if ((e.ctrlKey || e.metaKey) && e.key === "n") {
-			e.preventDefault()
-			handleNew()
+	function requestSync(id?: number, force = false) {
+		if (id != null) {
+			syncingIds.add(id)
+			if (force) forcedIds.add(id)
+			socket.emit("connections:syncModels", {
+				id,
+				...(force ? { force: true } : {})
+			})
+		} else {
+			syncingAll = true
+			socket.emit("connections:syncModels", force ? { force: true } : {})
 		}
-		// Escape to close modals
-		if (e.key === "Escape") {
-			if (showNewConnectionModal) {
-				handleNewConnectionCancel()
-			} else if (showDeleteModal) {
-				handleDeleteModalCancel()
-			} else if (showConfirmModal) {
-				handleModalCancel()
+	}
+	function handleSyncModels(msg: Sockets.Connections.SyncModels.Response) {
+		// Broadcast to every tab; results name the endpoints that were
+		// actually synced (fresh ones are skipped and absent). Clearing every
+		// pending marker on any response is deliberate — a sync in another
+		// tab ending ours a moment early costs a spinner, not a fact.
+		syncingIds.clear()
+		syncingAll = false
+		if (msg.error) toaster.error({ title: msg.error })
+		for (const r of msg.results) {
+			if (!r.error || !forcedIds.has(r.connectionId)) continue
+			const name =
+				connectionsList.find((c) => c.id === r.connectionId)?.name ??
+				"the connection"
+			toaster.warning({
+				title: `Couldn't list models for ${name}`,
+				description: r.error
+			})
+		}
+		forcedIds.clear()
+	}
+	/** One row's disk state, replaced in place. An unknown id is ignored. */
+	function handleModelLocalState(
+		msg: Sockets.Connections.DownloadModel.Response
+	) {
+		if (msg.connectionId == null || msg.modelId == null) return
+		connectionsList = connectionsList.map((c) =>
+			c.id !== msg.connectionId
+				? c
+				: {
+						...c,
+						models: c.models.map((m) =>
+							m.id === msg.modelId
+								? { ...m, local: msg.local }
+								: m
+						)
+					}
+		)
+	}
+	function handleSyncModelsError(msg: { error?: string }) {
+		syncingIds.clear()
+		syncingAll = false
+		forcedIds.clear()
+		toaster.error({ title: msg.error ?? "Couldn't refresh models" })
+	}
+
+	// ── Navigation ──────────────────────────────────────────────────────────
+	/**
+	 * Land on the index with its filter seeded. A modality seed maps to the
+	 * section's capability — endpoints are not pure by modality, so there is
+	 * no modality filter left to seed.
+	 */
+	function openCategory(m: string) {
+		const section = sectionForModality(m)
+		initialIndexFilter = section ? `cap:${section.starCapability}` : null
+		view = "index"
+	}
+
+	async function openConnection(row: { id?: number }) {
+		if (row.id == null) return
+		if (!(await handleOnClose())) return
+		view = "connection"
+		selectedConnectionId = row.id
+		socket.emit("connections:get", { id: row.id })
+		requestSync(row.id)
+	}
+
+	async function openModel(
+		connectionId: number,
+		modelId: number,
+		from: "index" | "connection"
+	) {
+		if (!(await handleOnClose())) return
+		selectedConnectionId = connectionId
+		modelReturnView = from
+		selectedModelId = modelId
+		view = "model"
+		requestSync(connectionId)
+		announce("Model details opened")
+	}
+
+	function backToIndex(focusId: number | null) {
+		indexFocusId = focusId
+		view = "index"
+		// The highlight is a one-time landing cue, not a selection.
+		setTimeout(() => (indexFocusId = null), 1500)
+	}
+	async function navigateBack() {
+		if (!(await handleOnClose())) return
+		const id = selectedConnectionId
+		connection = undefined
+		originalConnection = undefined
+		selectedConnectionId = null
+		backToIndex(id)
+	}
+	function navigateBackFromModel() {
+		const id = selectedConnectionId
+		selectedModelId = null
+		if (modelReturnView === "connection") view = "connection"
+		else {
+			selectedConnectionId = null
+			backToIndex(id)
+		}
+	}
+	function handleModelRemoved() {
+		toaster.success({ title: "Model removed" })
+		navigateBackFromModel()
+	}
+	function openManager(manager: ModelManager | "ollama" | "koboldcpp") {
+		panelsCtx.openPanel({
+			key: typeof manager === "string" ? manager : manager.panel
+		})
+	}
+	function handleAddModel(row: ListRow, model: string, name: string) {
+		if (row.id == null) return
+		socket.emit("connections:createModel", {
+			id: row.id,
+			model: {
+				model: model.trim(),
+				...(name.trim() ? { name: name.trim() } : {})
 			}
-		}
-	}
-
-	function handleSelectChange(e: Event) {
-		const id = +(e.target as HTMLSelectElement).value
-		selectedConnectionId = id
-		socket.emit("connections:get", { id })
+		})
 	}
 
 	/**
-	 * Register the selected connection as this category's default.
+	 * The file presses on a LOCAL ONNX endpoint's own view.
 	 *
-	 * The compensation for deleting the auto-star, and the reason it is one
-	 * click rather than a trip to Admin → Defaults: nothing picks a connection
-	 * because it exists any more, so the first Send after creating one used to
-	 * work by accident and now fails by design. A button that says "use this
-	 * for chat" on the screen where the connection was just made is what keeps
-	 * that from reading as a regression.
+	 * Emitted from here rather than from the view because `connectionsList` is
+	 * here: every one of these answers on an event the sidebar already holds
+	 * (`connections:downloadModel`, `connections:cancelModelDownload`,
+	 * `connections:modelDownloadProgress`), which is what patches the row the
+	 * two ONNX views read. A view that emitted them and listened for itself
+	 * would be a second copy of the same subscription.
 	 *
-	 * `capability` is a REQUIRED param and is not derivable from the
-	 * connection — see the socket type. The category supplies it.
+	 * ⚠ Make active is NOT here. It is `handlePairDefault` like every other
+	 * star, so the costed confirmation stands in front of it.
 	 */
-	function commitSetDefault() {
-		if (!selectedConnectionId) return
-		socket.emit("connections:setDefault", {
-			capability: starCapability,
-			id: selectedConnectionId
+	function downloadOnnxModel(connectionId: number, modelId: number) {
+		socket.emit("connections:downloadModel", { id: connectionId, modelId })
+	}
+	function cancelOnnxDownload(connectionId: number, modelId: number) {
+		socket.emit("connections:cancelModelDownload", {
+			id: connectionId,
+			modelId
 		})
-		const selected = connectionsList.find(
-			(c) => c.id === selectedConnectionId
-		)
+	}
+	/**
+	 * The star capability of the section this endpoint's modality belongs to.
+	 *
+	 * The TYPE is the fallback, not the first answer: an endpoint's modality is
+	 * what says what its models are for (§10), and the two local ONNX types are
+	 * the only ones whose modality can be read off the type at all.
+	 */
+	function starCapabilityOf(row: ListRow | null | undefined): string | null {
+		const modality =
+			row?.modality ??
+			(row?.type === CONNECTION_TYPE.LOCAL_ONNX_NER
+				? "ner"
+				: row?.type === CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS
+					? "embeddings"
+					: null)
+		return sectionForModality(modality)?.starCapability ?? null
+	}
+
+	// ── Defaults (the star) ─────────────────────────────────────────────────
+	/**
+	 * Star presses waiting on a reindex/re-annotate confirmation.
+	 *
+	 * The confirm dialogs' buttons call `commitSetDefault()` with no
+	 * arguments, so the targets ride here — set by every path before any
+	 * dialog opens. A "default for all" press stages several; the confirms
+	 * chain (reindex, then re-annotate) before the single commit.
+	 *
+	 * ⚠ `$state` since 0.6, and it has to be: the confirmation copy names the
+	 * model it would install ("Switch embeddings to bge-small?"), which is read
+	 * back out of here. While it was a plain `let` the dialog happened to be
+	 * right only because `showReindexModal` flipped in the same tick and
+	 * dragged the derived with it — an invariant nothing states and the next
+	 * caller would not know to keep.
+	 */
+	interface PendingStarTarget {
+		capability: string
+		id: number
+		modelId: number
+		verb: string
+	}
+	let pendingStars = $state<PendingStarTarget[] | null>(null)
+
+	function commitSetDefault() {
+		const targets = pendingStars ?? []
+		pendingStars = null
+		if (!targets.length) return
+		for (const target of targets)
+			socket.emit("connections:setDefault", {
+				capability: target.capability,
+				id: target.id,
+				modelId: target.modelId
+			})
+		const selected = connectionsList.find((c) => c.id === targets[0].id)
 		if (selected)
-			announce(`${selected.name} will be used for ${section.starVerb}`)
+			announce(
+				`${selected.name} will be used for ${targets.map((t) => t.verb).join(", ")}`
+			)
 	}
 
 	/**
 	 * Moving the embedding star throws every stored vector away, so it asks
-	 * first — with the real number, not a generic warning.
-	 *
-	 * The number comes from the SERVER (`vectorization:reindexCost`), because it
-	 * is a count across six stores and the client has no way to ask otherwise.
-	 * ⚠ There is deliberately no time estimate beside it: nothing in the queue
-	 * measures throughput, and a "roughly N minutes" invented here would be the
-	 * one number on a cost-disclosure screen that was made up.
-	 *
-	 * Only when a DIFFERENT connection is already starred. The first star on a
-	 * fresh install costs nothing and must not open a scary dialog; the server
-	 * makes the same judgement on the model identity, so a second row naming the
-	 * same endpoint and model is a no-op there too.
+	 * first — with the real number from the server, not a generic warning.
+	 * Only when a DIFFERENT pair is already starred: the first star on a
+	 * fresh install costs nothing and must not open a scary dialog.
 	 */
 	let showReindexModal = $state(false)
-	let reindexRows = $state<number | null>(null)
+	/**
+	 * The whole estimate, not just the row count.
+	 *
+	 * `byKind`/`lorebooks`/`sessions` are OPTIONAL on the wire, and the
+	 * confirmation says "every entry in N lorebooks and the history of M
+	 * sessions" only when they arrive. A server that answers with the bare
+	 * `rows` still gets a correct dialog with one clause fewer.
+	 */
+	let reindexCost = $state<Sockets.Vectorization.ReindexCost.Response | null>(
+		null
+	)
+	const reindexRows = $derived(reindexCost?.rows ?? null)
 	function handleReindexCost(
 		msg: Sockets.Vectorization.ReindexCost.Response
 	) {
-		reindexRows = msg.rows
+		reindexCost = msg
 	}
+
 	/**
-	 * The same disclosure for the entity star, with the entity star's own cost.
+	 * What the confirmation is switching FROM, resolved off the list.
 	 *
-	 * Every annotation was written by whichever extractor was in force when the
-	 * lane reached that row, so a different model means every row is re-scanned
-	 * — and the number comes from the SERVER for the same reason the embedding
-	 * one does. The count rides on `ner:status` rather than an event of its own:
-	 * it is the same count that panel shows, and asking twice would be two
-	 * numbers that can differ.
+	 * Named rather than counted: "Replaces bge-small" is a sentence a person
+	 * can check against what they believe is running, and "Keep bge-small" on
+	 * the cancel button is the only wording that makes the safe choice the
+	 * obvious one.
 	 */
+	function currentDefaultModel(capability: string) {
+		const def = systemSettingsCtx.capabilityDefaults?.[capability]
+		if (!def?.connectionId) return null
+		const connection = connectionsList.find(
+			(c) => c.id === def.connectionId
+		)
+		const model = connection?.models.find(
+			(m) => m.id === def.connectionModelId
+		)
+		return model ? { model, connection } : null
+	}
+	const stagedTargetFor = (capability: string) =>
+		pendingStars?.find((t) => t.capability === capability) ?? null
+	/** The model a staged switch would install, by name. */
+	function stagedModelName(capability: string): string | null {
+		const target = stagedTargetFor(capability)
+		if (!target) return null
+		const connection = connectionsList.find((c) => c.id === target.id)
+		return (
+			connection?.models.find((m) => m.id === target.modelId)?.name ??
+			null
+		)
+	}
+	const embeddingCurrent = $derived.by(() =>
+		showReindexModal ? currentDefaultModel(EMBEDDING_CAPABILITY) : null
+	)
+	const embeddingNext = $derived.by(() =>
+		showReindexModal ? stagedModelName(EMBEDDING_CAPABILITY) : null
+	)
+	/** The same disclosure for the entity star, with its own count. */
 	let showReannotateModal = $state(false)
 	let reannotateRows = $state<number | null>(null)
+	const entityCurrent = $derived.by(() =>
+		showReannotateModal ? currentDefaultModel(NER_CAPABILITY) : null
+	)
+	const entityNext = $derived.by(() =>
+		showReannotateModal ? stagedModelName(NER_CAPABILITY) : null
+	)
+	/**
+	 * "…stays on disk" is only true of a model whose FILES this install owns.
+	 * A hosted embedding endpoint leaves nothing behind to switch back to, so
+	 * the line is dropped rather than made vaguely true.
+	 */
+	const embeddingCurrentIsLocal = $derived(
+		embeddingCurrent?.connection?.type ===
+			CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS
+	)
+	const entityCurrentIsLocal = $derived(
+		entityCurrent?.connection?.type === CONNECTION_TYPE.LOCAL_ONNX_NER
+	)
 	function handleNerStatus(msg: Sockets.Ner.Status.Response) {
 		reannotateRows = msg.annotatedRows
 	}
-	function handleSetDefault() {
-		if (!selectedConnectionId) return
-		// A first star costs nothing and must not open a scary dialog; the
-		// server makes the same judgement on the model identity, so a second row
-		// naming the same model is a no-op there too.
-		const switching =
-			defaultConnectionId != null &&
-			defaultConnectionId !== selectedConnectionId
-		if (switching && isEmbeddingView) {
-			reindexRows = null
+	/**
+	 * A per-MODEL default choice from the model view — one capability, or
+	 * every satisfiable one. Targets already pointing at this pair are
+	 * dropped up front: the server would no-op them, and a no-op must not
+	 * open a cost dialog.
+	 */
+	function handlePairDefault(
+		connectionId: number,
+		model: { id: number; name: string },
+		selection: PairDefaultSelection
+	) {
+		const capabilities =
+			selection.kind === "all"
+				? selection.capabilities
+				: [selection.capability]
+		const current = systemSettingsCtx.capabilityDefaults ?? {}
+		const targets: PendingStarTarget[] = []
+		for (const capability of capabilities) {
+			const def = current[capability]
+			if (
+				def?.connectionId === connectionId &&
+				(def?.connectionModelId ?? null) === model.id
+			)
+				continue
+			targets.push({
+				capability,
+				id: connectionId,
+				modelId: model.id,
+				verb: sectionForCapability(capability)?.starVerb ?? capability
+			})
+		}
+		if (!targets.length) return
+		pendingStars = targets
+		maybeConfirmStar()
+	}
+	/** Whether staging this target throws stored work away. */
+	function targetSwitchesPair(
+		target: PendingStarTarget,
+		capability: string
+	): boolean {
+		if (target.capability !== capability) return false
+		const current =
+			systemSettingsCtx.capabilityDefaults?.[target.capability]
+		if (current?.connectionId == null) return false
+		return (
+			current.connectionId !== target.id ||
+			(current.connectionModelId ?? null) !== target.modelId
+		)
+	}
+	const stagesNer = () =>
+		!!pendingStars?.some(
+			(t) =>
+				sectionForCapability(t.capability)?.modality === "ner" &&
+				targetSwitchesPair(t, t.capability)
+		)
+	function maybeConfirmStar() {
+		if (!pendingStars?.length) return
+		if (
+			pendingStars.some((t) =>
+				targetSwitchesPair(t, EMBEDDING_CAPABILITY)
+			)
+		) {
+			reindexCost = null
 			socket.emit("vectorization:reindexCost", {})
 			showReindexModal = true
 			return
 		}
-		if (switching && isNerView) {
+		if (stagesNer()) {
 			reannotateRows = null
 			socket.emit("ner:status", {})
 			showReannotateModal = true
@@ -316,24 +579,57 @@
 		}
 		commitSetDefault()
 	}
+	/** The reindex confirm chains into the re-annotate one when both are staged. */
+	function confirmReindexModal() {
+		showReindexModal = false
+		if (stagesNer()) {
+			reannotateRows = null
+			socket.emit("ner:status", {})
+			showReannotateModal = true
+			return
+		}
+		commitSetDefault()
+	}
+
+	// ── Create / update / delete ────────────────────────────────────────────
 	function handleNew() {
 		newConnectionName = ""
 		newConnectionService = undefined
+		nameTouched = false
+		// Seed the picker's modality from where the person is standing: the
+		// index's capability filter, or the open connection's own modality.
+		const seed =
+			view === "index"
+				? sectionForCapability(
+						(initialIndexFilter ?? "").replace(/^cap:/, "")
+					)?.modality
+				: (connection?.modality ?? selectedRow?.modality)
+		newConnectionModality = seed ?? "text-gen"
 		showNewConnectionModal = true
-		// Clear tutorial flag when user interacts with the highlighted button
-		if (panelsCtx.digest.tutorial) {
-			panelsCtx.digest.tutorial = false
-		}
-		// Focus the name input after modal opens
-		setTimeout(focusNewConnectionName, 100)
+		if (panelsCtx.digest.tutorial) panelsCtx.digest.tutorial = false
+		setTimeout(() => document.getElementById("newConnName")?.focus(), 100)
 	}
 	function handleNewConnectionConfirm() {
-		if (!newConnectionName.trim()) {
+		const name = newConnectionName.trim()
+		if (!name) {
 			toaster.error({ title: "Connection name is required" })
 			return
 		}
 		if (!newConnectionService) {
-			toaster.error({ title: "Choose an AI service to connect to" })
+			toaster.error({ title: "Choose a service to connect to" })
+			return
+		}
+		// Same rule the server enforces, checked up front so the dialog can
+		// say it beside the field instead of as a corner toast.
+		if (
+			connectionsList.some(
+				(c) =>
+					(c.name ?? "").trim().toLowerCase() === name.toLowerCase()
+			)
+		) {
+			toaster.error({
+				title: `A connection named "${name}" already exists`
+			})
 			return
 		}
 		const { type, presetValue, presetSlug } = newConnectionService
@@ -347,12 +643,12 @@
 			}
 		}
 		const newConn = {
-			name: newConnectionName.trim(),
+			name,
 			type,
 			enabled: true,
-			// Which named service this is, so capability resolution has a preset
-			// layer to consult. Undefined for a native type and for the custom
-			// entry, and undefined is the right answer there: NULL means custom.
+			// Which named service this is, so capability resolution has a
+			// preset layer to consult. Undefined for a native type and for
+			// the custom entry: NULL means custom.
 			preset: presetSlug,
 			...(type === CONNECTION_TYPE.OPENAI
 				? OPENAI_COMPATIBLE_PRESETS.find((p) => p.value === presetValue)
@@ -360,7 +656,8 @@
 				: CONNECTION_DEFAULTS[type] || {})
 		}
 		socket.emit("connections:create", { connection: newConn })
-		showNewConnectionModal = false
+		// The dialog closes on the success response, not on the emit: a
+		// refused name must leave it open with the typed values intact.
 	}
 	function handleNewConnectionCancel() {
 		showNewConnectionModal = false
@@ -375,45 +672,30 @@
 		showDeleteModal = true
 	}
 	function handleDeleteModalConfirm() {
-		if (connection) {
-			socket.emit("connections:delete", { id: connection.id })
-		}
+		if (connection) socket.emit("connections:delete", { id: connection.id })
 		showDeleteModal = false
 	}
 	function handleDeleteModalCancel() {
 		showDeleteModal = false
 	}
 	function handleOnClose(): Promise<boolean> {
-		// The embedding category has no bind-and-save-later fields (every
-		// action there saves immediately), so only the connections category's
-		// edit form needs an unsaved-changes guard.
-		if (view !== "connections" || !unsavedChanges)
+		// Only the connection view holds a draft; the model view writes
+		// through on every control.
+		if (view !== "connection" || !unsavedChanges)
 			return Promise.resolve(true)
 		showConfirmModal = true
 		return new Promise<boolean>((resolve) => {
 			confirmResolve = resolve
 		})
 	}
-	async function navigateBack() {
-		if (!(await handleOnClose())) return
-		view = "index"
-	}
 	async function handleModalDiscard() {
 		showConfirmModal = false
 		// Resolving confirmResolve is what lets Layout.svelte's closePanel()
-		// proceed to unmount this whole component (the caller awaits
-		// onLeftPanelClose(), then swaps the panel). Traced the actual
-		// "derived_inert" warning this used to log (via a console.warn hook
-		// capturing a stack trace, not guessed) to Skeleton UI's Dialog
-		// FocusTrap — closing the dialog schedules its own async
-		// return-focus bookkeeping (setReturnFocus, inside its Svelte
-		// adapter), which runs on the *library's* timing, not a Svelte
-		// effect flush — a plain tick() here doesn't wait for it. If this
-		// component (including the dialog) gets unmounted first, that
-		// bookkeeping reads a derived value whose owning effect is already
-		// gone. A double rAF reliably lands after that pending frame of
-		// work has run, same as the well-known "wait two frames for
-		// third-party layout/focus code to settle" pattern elsewhere.
+		// proceed to unmount this whole component. Skeleton's Dialog
+		// FocusTrap schedules its own async return-focus bookkeeping on
+		// close; unmounting before it runs reads a derived whose owning
+		// effect is gone ("derived_inert"). A double rAF reliably lands
+		// after that pending frame of work.
 		await new Promise<void>((resolve) =>
 			requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
 		)
@@ -423,145 +705,93 @@
 		showConfirmModal = false
 		if (confirmResolve) confirmResolve(false)
 	}
-	function handleRefreshModels() {
-		refreshModelsResult = null
-		socket.emit("connections:refreshModels", { connection })
+
+	// Keyboard shortcuts
+	function handleKeydown(e: KeyboardEvent) {
+		if ((e.ctrlKey || e.metaKey) && e.key === "n") {
+			e.preventDefault()
+			handleNew()
+		}
+		if (e.key === "Escape") {
+			if (showNewConnectionModal) handleNewConnectionCancel()
+			else if (showDeleteModal) handleDeleteModalCancel()
+			else if (showConfirmModal) handleModalCancel()
+		}
 	}
 
+	// ── Socket handlers ─────────────────────────────────────────────────────
 	function handleConnectionsList(msg: Sockets.Connections.List.Response) {
 		connectionsList = msg.connectionsList
 			.slice()
-			.sort((a, b) => a.name!.localeCompare(b.name!))
+			.sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""))
 		isLoading = false
 	}
-	// The generic **:error listener in Layout.svelte already toasts this —
-	// this just stops the spinner from spinning forever if the initial
-	// fetch fails, so it settles into the (accurate enough) empty state.
+	// Layout's generic **:error listener already toasts this — this just
+	// stops the spinner so the panel settles into the empty state.
 	function handleConnectionsListError() {
 		isLoading = false
 	}
-	function handleConnectionsRefreshModelsError() {
-		refreshModelsResult = { error: "Failed to refresh models" }
-	}
 	function handleConnectionsGet(msg: Sockets.Connections.Get.Response) {
 		// connections:get is emitToUser — broadcast to every open tab for
-		// this user, not just the requester. Without this check, another
-		// tab loading/saving a different connection silently overwrites
-		// this tab's in-progress edit.
+		// this user. Without this check, another tab loading a different
+		// connection silently overwrites this tab's in-progress edit.
 		if (msg.connection?.id !== selectedConnectionId) return
 		connection = { ...msg.connection }
 		originalConnection = { ...msg.connection }
-		// Follow a DEEP-LINKED connection into its own category. Arriving with
-		// one from the other modality is only possible that way (the picker
-		// below offers the current modality only), and left on text-gen the
-		// picker would have no <option> matching it — rendering blank — while
-		// Set Default would offer to star an image connection as the system's
-		// text default.
-		//
-		// Scoped to that one id, and cleared, deliberately: applying it to
-		// every load would let the ordinary mount-time fetch of the text
-		// default land AFTER the user has picked the Image category and yank
-		// them back to the text list.
-		if (msg.connection.id === deepLinkedConnectionId) {
+		if (msg.connection.id === deepLinkedConnectionId)
 			deepLinkedConnectionId = null
-			// The row's own COLUMN, matching what the list filters on. Taking it
-			// from the type would file a row whose column says otherwise into a
-			// section its own list does not contain.
-			connectionModality =
-				msg.connection.modality ??
-				CONNECTION_TYPE.modalityOf(msg.connection.type)
-		}
-	}
-	function handleConnectionsTest(msg: Sockets.Connections.Test.Response) {
-		if (msg.connectionId !== selectedConnectionId) return
-		testResult = {
-			ok: msg.ok,
-			error: msg.error ?? undefined,
-			models: msg.models
-		}
-	}
-	function handleConnectionsRefreshModels(
-		msg: Sockets.Connections.RefreshModels.Response
-	) {
-		if (msg.connectionId !== selectedConnectionId) return
-		refreshModelsResult = {
-			models: msg.models || [],
-			error: msg.error ?? undefined
-		}
 	}
 	function handleConnectionsUpdate(msg: Sockets.Connections.Update.Response) {
 		if (msg.connection?.id !== selectedConnectionId) return
 		// Reset the unsaved-changes baseline synchronously with the save's
-		// own ack, same shape handleConnectionsGet uses — msg.connection is
-		// now the same fully-processed (backfilled + decrypted) record
-		// connections:get produces, safe to use directly. Without this, the
-		// dirty flag only cleared via a second, incidental connections:get
-		// broadcast the server happens to also send — a race that could show
-		// the discard-changes modal right after a successful save.
+		// own ack — msg.connection is the same fully-processed record
+		// connections:get produces.
 		connection = { ...msg.connection }
 		originalConnection = { ...msg.connection }
-		toaster.success({ title: "Connection Updated" })
-		// The save succeeded AND dropped something the payload claimed — today,
-		// a preset slug the server would not store. Its own toast rather than a
-		// replacement for the success one: both are true, and a discarded preset
-		// that nobody mentions is exactly the silence this exists to break.
+		toaster.success({ title: "Connection updated" })
 		if (msg.notice)
 			toaster.warning({
 				title: "Preset not kept",
 				description: msg.notice
 			})
-		// One announce() carrying both: `announcements` is a single string, so a
-		// second call in the same tick would replace the first rather than queue
-		// behind it.
 		announce(
 			`Connection ${connection?.name} has been updated successfully${
 				msg.notice ? `. ${msg.notice}` : ""
 			}`
 		)
+		// The host or key may have changed; the models follow the save.
+		requestSync(msg.connection.id, true)
 	}
 	function handleConnectionsDelete(msg: Sockets.Connections.Delete.Response) {
-		// Only react when the delete actually targeted the connection this
-		// tab currently has open — otherwise an unrelated delete in another
-		// tab would blow away this tab's in-progress edit and show a
-		// misleading "deleted" toast for the wrong connection.
 		if (msg.id !== selectedConnectionId) return
 		const deletedName = connection?.name
-		toaster.success({ title: "Connection Deleted" })
+		toaster.success({ title: "Connection deleted" })
 		announce(`Connection ${deletedName} has been permanently deleted`)
 		connection = undefined
 		originalConnection = undefined
-		// Fall back to viewing the default if one exists
-		const fallbackId =
-			defaultConnectionId && defaultConnectionId !== msg.id
-				? defaultConnectionId
-				: null
-		selectedConnectionId = fallbackId
-		if (fallbackId) socket.emit("connections:get", { id: fallbackId })
+		selectedConnectionId = null
+		selectedModelId = null
+		view = "index"
 	}
 	function handleConnectionsCreate(msg: Sockets.Connections.Create.Response) {
-		toaster.success({ title: "Connection Created" })
-		announce(
-			`New connection ${msg.connection?.name} has been created successfully`
+		if (!msg.connection?.id) return
+		showNewConnectionModal = false
+		toaster.success({ title: "Connection created" })
+		announce(`New connection ${msg.connection?.name} has been created`)
+		// Creating lands straight on the new connection's view: a connection
+		// nobody has finished setting up is not done, and the index gives no
+		// hint what is missing. Its models are asked for at once (forced —
+		// there is no listing yet to be fresh).
+		void openConnection(msg.connection).then(() =>
+			requestSync(msg.connection.id, true)
 		)
-		// View the newly created connection
-		if (msg.connection?.id) {
-			selectedConnectionId = msg.connection.id
-			socket.emit("connections:get", { id: msg.connection.id })
-		}
 	}
 	function handleConnectionsSetDefault(
 		msg: Sockets.Connections.SetDefault.Response
 	) {
-		// Patch the local copy so the star moves on this frame rather than when
-		// the server's systemSettings:get push lands. It patches
-		// `capabilityDefaults` and NOT a settings column — patching the settings
-		// row is what this whole change removes, and a patch of the wrong copy
-		// would look like a working optimistic update that never actually
-		// applies.
-		//
-		// Merged per capability, never replaced wholesale: the response carries
-		// one capability, and writing `{[capability]: …}` alone would drop every
-		// other registration from the client's copy until the next full push.
+		// Patch the local copy so the star moves on this frame rather than
+		// when the server's systemSettings:get push lands. Merged per
+		// capability, never replaced wholesale.
 		systemSettingsCtx.capabilityDefaults = {
 			...systemSettingsCtx.capabilityDefaults,
 			[msg.capability]: {
@@ -569,15 +799,14 @@
 					connectionId: null,
 					samplingConfigId: null
 				}),
-				connectionId: msg.id ?? null
+				connectionId: msg.id ?? null,
+				connectionModelId: msg.modelId ?? null
 			}
 		}
-		if (msg.id) toaster.success({ title: "Default connection updated" })
+		if (msg.id) toaster.success({ title: "Default updated" })
 	}
 
 	// ── Stop guards on this connection (18 §4b) ─────────────────────────────
-	// Loaded per selected connection; attach/detach answer with the refreshed
-	// pair of lists, so the two can never disagree.
 	let connScripts = $state<Sockets.Connections.Scripts.Response | null>(null)
 	const handleConnScripts = (res: Sockets.Connections.Scripts.Response) => {
 		connScripts = res
@@ -585,309 +814,299 @@
 	const handleConnScriptsError = (res: { error?: string }) => {
 		if (res.error) toaster.error({ title: res.error })
 	}
+	/**
+	 * Every key this panel holds, declared ABOVE the two effects that emit.
+	 * Effects run in creation order and a request flushes the pending interest
+	 * sync, so a declaration made below either of them would miss the flush its
+	 * own first reply rides on.
+	 *
+	 * All of them are BARE and STANDING. `connections:list` and
+	 * `connections:scripts` are re-sent after every write, the star's cost
+	 * estimates are re-asked whenever a picker moves, and `connections:get` is
+	 * scoped in the shared table but not declared that way here: this panel
+	 * follows whichever connection is selected, and its
+	 * `selectedConnectionId` guard is the narrower of the two checks.
+	 */
+	useInterest<"connections:list">("connections:list", handleConnectionsList)
+	useInterest<"connections:list:error">(
+		"connections:list:error",
+		handleConnectionsListError
+	)
+	useInterest<"connections:scripts">("connections:scripts", handleConnScripts)
+	useInterest<"connections:attachScript">(
+		"connections:attachScript",
+		handleConnScripts
+	)
+	useInterest<"connections:detachScript">(
+		"connections:detachScript",
+		handleConnScripts
+	)
+	useInterest<"connections:scripts:error">(
+		"connections:scripts:error",
+		handleConnScriptsError
+	)
+	useInterest<"connections:attachScript:error">(
+		"connections:attachScript:error",
+		handleConnScriptsError
+	)
+	useInterest<"connections:detachScript:error">(
+		"connections:detachScript:error",
+		handleConnScriptsError
+	)
+	useInterest<"connections:get">("connections:get", handleConnectionsGet)
+	useInterest<"connections:update">(
+		"connections:update",
+		handleConnectionsUpdate
+	)
+	useInterest<"connections:delete">(
+		"connections:delete",
+		handleConnectionsDelete
+	)
+	useInterest<"connections:create">(
+		"connections:create",
+		handleConnectionsCreate
+	)
+	useInterest<"connections:setDefault">(
+		"connections:setDefault",
+		handleConnectionsSetDefault
+	)
+	useInterest<"connections:syncModels">(
+		"connections:syncModels",
+		handleSyncModels
+	)
+	/**
+	 * Local ONNX file progress, patched into the list the index renders.
+	 *
+	 * ⚠ Here rather than in the index view, because THIS is where
+	 * `connectionsList` lives: a download's progress moves one row's `local`
+	 * and nothing else, so patching it in place keeps the bar moving without
+	 * re-fetching every endpoint several times a second. The three events share
+	 * one response shape on purpose — a press and its progress say the same
+	 * thing about the same row.
+	 *
+	 * The server lane may not answer any of them yet. Nothing here breaks when
+	 * it does not: the rows simply keep the `local` the sync gave them.
+	 */
+	useInterest<"connections:modelDownloadProgress">(
+		"connections:modelDownloadProgress",
+		handleModelLocalState
+	)
+	useInterest<"connections:downloadModel">(
+		"connections:downloadModel",
+		handleModelLocalState
+	)
+	useInterest<"connections:cancelModelDownload">(
+		"connections:cancelModelDownload",
+		handleModelLocalState
+	)
+	useInterest<"connections:syncModels:error">(
+		"connections:syncModels:error",
+		handleSyncModelsError
+	)
+	/**
+	 * The re-index estimate. `vectorization:reindexCost` is not in
+	 * `SCOPED_EVENTS` (it prices the whole index, not one book), and the panel
+	 * asks for it again whenever the embedding model picker moves, so the key
+	 * has to outlive each request.
+	 */
+	useInterest<"vectorization:reindexCost">(
+		"vectorization:reindexCost",
+		handleReindexCost
+	)
+	/**
+	 * `ner:` is restricted interest — every handler in that family is
+	 * admin-only. The registry would refuse this key for a non-admin anyway;
+	 * asking first keeps the refusal out of the dev console for the many
+	 * non-admins who open this panel to read the list.
+	 */
 	$effect(() => {
-		if (selectedConnectionId != null) {
+		if (!userCtx.user?.isAdmin) return
+		return declareInterest<"ner:status">("ner:status", handleNerStatus)
+	})
+
+	$effect(() => {
+		if (view === "connection" && selectedConnectionId != null) {
 			connScripts = null
 			socket.emit("connections:scripts", { id: selectedConnectionId })
 		}
 	})
 
 	onMount(() => {
-		socket.on("connections:list", handleConnectionsList)
-		socket.on("connections:list:error", handleConnectionsListError)
-		socket.on("connections:scripts", handleConnScripts)
-		socket.on("connections:attachScript", handleConnScripts)
-		socket.on("connections:detachScript", handleConnScripts)
-		socket.on("connections:scripts:error", handleConnScriptsError)
-		socket.on("connections:attachScript:error", handleConnScriptsError)
-		socket.on("connections:detachScript:error", handleConnScriptsError)
-		socket.on(
-			"connections:refreshModels:error",
-			handleConnectionsRefreshModelsError
-		)
-		socket.on("connections:get", handleConnectionsGet)
-		socket.on("connections:test", handleConnectionsTest)
-		socket.on("connections:refreshModels", handleConnectionsRefreshModels)
-		socket.on("connections:update", handleConnectionsUpdate)
-		socket.on("connections:delete", handleConnectionsDelete)
-		socket.on("connections:create", handleConnectionsCreate)
-		socket.on("connections:setDefault", handleConnectionsSetDefault)
-		socket.on("vectorization:reindexCost", handleReindexCost)
-		socket.on("ner:status", handleNerStatus)
 		socket.emit("connections:list", {})
-		// Seed the view: digest.connectionId (from external nav, e.g. Ollama
-		// Manager's "open connection sidebar") always means "go straight to the
-		// connections category," taking priority over the default. Otherwise
-		// digest.connectionsModality (set by the onboarding wizard's retrieval
-		// step) opens one SECTION directly. If neither is set, land on the
-		// index/section-picker screen.
+		// The open-time sweep: every endpoint whose listing is stale is
+		// re-asked. Fresh ones are skipped server-side, so this is free
+		// most of the time.
+		requestSync()
+
+		// Seed the view: `initialConnectionId` (a page that embeds this
+		// sidebar, addressed to this copy) or digest.connectionId (from
+		// external nav, e.g. the Ollama Manager's "open connection") mean "go
+		// straight to that connection"; digest.connectionsModality (the
+		// onboarding wizard's retrieval step) seeds the index filter.
+		// Otherwise, the index.
+		//
+		// Only the digest is CONSUMED. It is one shared slot, so leaving it
+		// set would send the next copy to open to the same row; the prop is
+		// this instance's own and clearing the digest on its behalf would take
+		// a deep link away from whichever view it was actually meant for.
 		const digestId = panelsCtx.digest.connectionId ?? null
-		// The CHAT default, spelled out rather than read through
-		// `defaultConnectionId`: this runs on mount, before any category has
-		// been opened, so the derived value would be whatever `section`
-		// happens to be at that instant. Landing on the text connection is what
-		// this has always done.
-		const initialId =
-			digestId ??
-			systemSettingsCtx.capabilityDefaults?.["text->text"]
-				?.connectionId ??
-			null
-		if (digestId) {
-			panelsCtx.digest.connectionId = undefined
-			deepLinkedConnectionId = digestId
-			view = "connections"
+		const deepLinkId = initialConnectionId ?? digestId
+		if (deepLinkId) {
+			if (initialConnectionId == null) {
+				panelsCtx.digest.connectionId = undefined
+			}
+			deepLinkedConnectionId = deepLinkId
+			view = "connection"
+			selectedConnectionId = deepLinkId
+			socket.emit("connections:get", { id: deepLinkId })
 		} else if (panelsCtx.digest.connectionsModality) {
 			openCategory(panelsCtx.digest.connectionsModality)
 			panelsCtx.digest.connectionsModality = undefined
 		}
-		selectedConnectionId = initialId
-		if (initialId) {
-			socket.emit("connections:get", { id: initialId })
-		}
 		onclose = handleOnClose
-
-		if (connection?.type === "ollama" && connection.baseUrl) {
-			handleRefreshModels()
-		}
 
 		// Admin create page deep-link: open the new-connection flow at once.
 		if (startNew) handleNew()
 	})
 
 	onDestroy(() => {
-		socket.off("connections:list", handleConnectionsList)
-		socket.off("connections:list:error", handleConnectionsListError)
-		socket.off("connections:scripts", handleConnScripts)
-		socket.off("connections:attachScript", handleConnScripts)
-		socket.off("connections:detachScript", handleConnScripts)
-		socket.off("connections:scripts:error", handleConnScriptsError)
-		socket.off("connections:attachScript:error", handleConnScriptsError)
-		socket.off("connections:detachScript:error", handleConnScriptsError)
-		socket.off(
-			"connections:refreshModels:error",
-			handleConnectionsRefreshModelsError
-		)
-		socket.off("connections:get", handleConnectionsGet)
-		socket.off("connections:test", handleConnectionsTest)
-		socket.off("connections:refreshModels", handleConnectionsRefreshModels)
-		socket.off("connections:update", handleConnectionsUpdate)
-		socket.off("connections:delete", handleConnectionsDelete)
-		socket.off("connections:create", handleConnectionsCreate)
-		socket.off("connections:setDefault", handleConnectionsSetDefault)
-		socket.off("vectorization:reindexCost", handleReindexCost)
-		socket.off("ner:status", handleNerStatus)
 		onclose = undefined
 	})
 </script>
 
-{#if view === "index"}
-	<div class="text-foreground flex h-full flex-col gap-3 p-4">
-		<p class="text-muted-foreground text-sm">
-			Select a connection category to view and edit its configurations.
-		</p>
-
-		<!-- One card per SECTION, and no per-modality markup. A card written
-		     out by hand, or gated behind a switch of its own, is how a modality
-		     stops being a kind of connection and becomes a feature. -->
-		{#each CONNECTION_SECTIONS as s (s.modality)}
-			{@const Icon = (Icons as any)[s.icon] ?? Icons.Cable}
-			{@const inUse =
-				connectionsList.find(
-					(c) =>
-						c.id ===
-						(systemSettingsCtx.capabilityDefaults?.[
-							s.starCapability
-						]?.connectionId ?? null)
-				)?.name ?? null}
-			<button
-				class="card preset-filled-surface-100-900 hover:preset-tonal-primary group w-full cursor-pointer rounded-xl p-4 text-left transition-all"
-				onclick={() => openCategory(s.modality)}
-			>
-				<div class="flex items-start gap-3">
-					<div
-						class="bg-primary-500/10 text-primary-500 mt-0.5 shrink-0 rounded-lg p-2"
-					>
-						<Icon size={20} />
-					</div>
-					<div class="min-w-0 flex-1">
-						<div class="flex items-center justify-between gap-2">
-							<span class="font-semibold">{s.label}</span>
-							<Icons.ChevronRight
-								size={16}
-								class="text-muted-foreground shrink-0 transition-transform group-hover:translate-x-0.5"
-							/>
-						</div>
-						<p class="text-muted-foreground mt-0.5 text-sm">
-							{s.description}
-						</p>
-						<!-- What is starred for this section, which for
-						     Embeddings is also the whole of "are embeddings
-						     on". -->
-						{#if inUse}
-							<div class="mt-2 flex items-center gap-1.5">
-								<Icons.CheckCircle
-									size={12}
-									class="text-success-500 shrink-0"
-								/>
-								<span
-									class="text-success-600 dark:text-success-400 truncate text-xs font-medium"
-								>
-									{inUse}
-								</span>
-							</div>
-						{/if}
-					</div>
-				</div>
-			</button>
-		{/each}
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+<div
+	class="text-foreground flex h-full min-h-0 flex-col"
+	role="main"
+	aria-label="Connections"
+	onkeydown={handleKeydown}
+	use:viewMode.observe
+>
+	<div aria-live="polite" aria-atomic="true" class="sr-only">
+		{announcements}
 	</div>
-{:else}
-	<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-	<div
-		class="text-foreground flex h-full flex-col"
-		role="main"
-		aria-label="AI Connections Management"
-		onkeydown={handleKeydown}
-	>
-		<!-- Screen reader announcements -->
-		<div aria-live="polite" aria-atomic="true" class="sr-only">
-			{announcements}
-		</div>
-		<div class="flex items-center gap-2 px-4 pt-4 pb-2">
+
+	<PanelSplit
+		mode={viewMode.mode}
+		hasDetail={view !== "index"}
+		listWidth="380px"
+		emptyMessage="Pick a connection, or add one."
+		list={indexPane}
+		detail={detailPane}
+	/>
+</div>
+
+{#snippet indexPane()}
+	<ConnectionIndexView
+		{connectionsList}
+		capabilityDefaults={systemSettingsCtx.capabilityDefaults ?? {}}
+		{isLoading}
+		koboldCppManagerEnabled={koboldCppSettingsCtx?.settings
+			?.koboldCppManagerEnabled ?? false}
+		{syncingIds}
+		{syncingAll}
+		initialFilter={initialIndexFilter}
+		focusConnectionId={indexFocusId}
+		onAddNew={handleNew}
+		onOpenConnection={openConnection}
+		onOpenModel={(row, model) => openModel(row.id, model.id, "index")}
+		onRefresh={(row) => requestSync(row.id, true)}
+		onRefreshAll={() => requestSync(undefined, true)}
+		onManage={(_row, panel) => openManager(panel)}
+		onAddModel={handleAddModel}
+		onMakeDefault={(row, model, capability) =>
+			handlePairDefault(row.id, model, { kind: "one", capability })}
+	/>
+{/snippet}
+
+{#snippet detailPane()}
+	{#if view === "model" && selectedConnectionId != null && selectedModelId != null}
+		{@render modelPane(selectedConnectionId, selectedModelId)}
+	{:else}
+		{@render connectionPane()}
+	{/if}
+{/snippet}
+
+{#snippet modelPane(connectionId: number, modelId: number)}
+	<!-- A local ONNX model is a FILE on this machine and a lane that may be
+	     holding it, not a name an endpoint answers to — so it gets its own
+	     view rather than a `ModelDetailView` whose every field is blank here.
+	     Both halves come out of `connectionsList`, which is what a download's
+	     progress is patched into, so the view moves with the bar. -->
+	{@const onnxRow = connectionsList.find((c) => c.id === connectionId)}
+	{@const onnxModel = onnxRow?.models.find((m) => m.id === modelId)}
+	{#if onnxRow && onnxModel && isLocalOnnxType(onnxRow.type)}
+		<OnnxModelView
+			connection={onnxRow}
+			model={onnxModel}
+			capabilityDefaults={systemSettingsCtx.capabilityDefaults ?? {}}
+			mode={viewMode.mode}
+			isAdmin={userCtx.user?.isAdmin ?? false}
+			onBack={navigateBackFromModel}
+			onSelectDefault={(model, selection) =>
+				handlePairDefault(connectionId, model, selection)}
+		/>
+	{:else}
+		<ModelDetailView
+			{connectionId}
+			connectionName={selectedRow?.name ??
+				connection?.name ??
+				"Connection"}
+			{modelId}
+			capabilityDefaults={systemSettingsCtx.capabilityDefaults ?? {}}
+			syncing={syncingAll || syncingIds.has(connectionId)}
+			onBack={navigateBackFromModel}
+			onSelectDefault={(model, selection) =>
+				handlePairDefault(connectionId, model, selection)}
+			onRefresh={() => requestSync(connectionId, true)}
+			onOpenManager={openManager}
+			onRemoved={handleModelRemoved}
+		/>
+	{/if}
+{/snippet}
+
+{#snippet connectionPane()}
+	<div class="flex h-full min-h-0 flex-col">
+		<!-- ONE connection's own settings. Models are a summary line here
+		     and are managed from the index and the model view. -->
+		<div class="flex items-center gap-2 pb-2">
 			<button
+				type="button"
 				class="btn btn-sm preset-filled-surface-400-600 p-2"
 				onclick={navigateBack}
-				title="Back"
-				aria-label="Back to connection types"
+				title="Back to all connections"
+				aria-label="Back to all connections"
 			>
 				<Icons.ChevronLeft size={16} />
 			</button>
-			<h2 class="min-w-0 flex-1 truncate text-sm font-semibold">
-				{section.label}
-			</h2>
+			<div class="min-w-0 flex-1">
+				<h2 class="truncate text-sm font-semibold">
+					{connection?.name ?? selectedRow?.name ?? "Connection"}
+				</h2>
+				<p class="text-muted truncate text-xs">
+					{serviceLabelOf(connection?.type ?? selectedRow?.type)}
+				</p>
+			</div>
 		</div>
-		<div class="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
-			<div class="mb-2">
-				<div
-					class="flex justify-between gap-2"
-					role="toolbar"
-					aria-label="Connection actions"
-				>
-					<div class="gap-2">
-						<button
-							type="button"
-							class="btn btn-sm preset-filled-primary-500 {panelsCtx
-								.digest.tutorial
-								? 'ring-primary-500/50 animate-pulse ring-4'
-								: ''}"
-							onclick={handleNew}
-							aria-label="Create new AI connection (Ctrl+N)"
-							title="Create new AI connection (Ctrl+N)"
-						>
-							<Icons.Plus size={16} aria-hidden="true" />
-							New
-						</button>
-						<button
-							type="button"
-							class="btn btn-sm preset-filled-secondary-500"
-							onclick={handleReset}
-							disabled={!unsavedChanges}
-							aria-label={unsavedChanges
-								? "Reset unsaved changes"
-								: "No changes to reset"}
-							aria-describedby={unsavedChanges
-								? "reset-help"
-								: undefined}
-						>
-							<Icons.RefreshCcw size={16} aria-hidden="true" />
-							Reset
-						</button>
-						{#if unsavedChanges}
-							<div id="reset-help" class="sr-only">
-								Resets all unsaved changes to the selected
-								connection
-							</div>
-						{/if}
-						<button
-							type="button"
-							class="btn btn-sm preset-filled-error-500"
-							onclick={handleDelete}
-							disabled={!connection}
-							aria-label={connection
-								? `Delete connection ${connection.name}`
-								: "No connection selected to delete"}
-						>
-							<Icons.X size={16} aria-hidden="true" />
-							Delete
-						</button>
-					</div>
+		<div class="min-h-0 flex-1 overflow-y-auto">
+			{#if !connection}
+				<div class="flex items-center justify-center py-8">
+					<Icons.Loader2
+						size={20}
+						class="text-surface-400 animate-spin"
+					/>
 				</div>
-			</div>
-			<div class="mb-4" class:hidden={!viewConnections.length}>
-				<label for="connection-select" class="sr-only">
-					Select AI connection to view
-				</label>
-				<select
-					id="connection-select"
-					class="select bg-background border-muted w-full rounded border"
-					onchange={handleSelectChange}
-					value={selectedConnectionId}
-					disabled={unsavedChanges}
-					aria-label="Select AI connection to view"
-					aria-describedby="connection-help"
-				>
-					{#each viewConnections as c}
-						{@const typeLabel =
-							CONNECTION_TYPE.options.find(
-								(t) => t.value === c.type
-							)?.label ?? c.type}
-						{@const isDefault = c.id === defaultConnectionId}
-						{@const preview = notePreview(c.notes)}
-						<!-- A native `<option>` holds one line of plain text and
-						     nothing else, so the note rides in that line and in
-						     `title` rather than as a second row. `notePreview`
-						     is what keeps a pasted note from turning this into
-						     a dropdown one entry wide and a screenful long —
-						     the option itself cannot wrap, cannot clamp, and
-						     will happily render all 4000 characters. The FULL
-						     note is shown under the picker for whichever
-						     connection is selected, so nothing here depends on
-						     a tooltip being read. -->
-						<option value={c.id} title={c.notes ?? undefined}>
-							{isDefault ? "★ " : ""}{c.name} ({typeLabel}){preview
-								? ` — ${preview}`
-								: ""}
-						</option>
-					{/each}
-				</select>
-				<div id="connection-help" class="sr-only">
-					{unsavedChanges
-						? "Save or reset changes before switching connections"
-						: "Select a connection to view or edit its settings"}
-				</div>
-				{#if selectedNote}
-					<!-- The selected connection's note IN FULL, and the reason
-					     the row above can afford to truncate. Bounded height
-					     with its own scroll: a note is capped at 4000
-					     characters, which is a couple of screens of prose, and
-					     an unbounded block here would push every real control
-					     off the sidebar. `whitespace-pre-wrap` because this is
-					     the one place the user's own paragraph breaks are worth
-					     keeping — every other surface collapses them. -->
-					<p
-						class="text-muted mt-2 max-h-24 overflow-y-auto text-xs break-words whitespace-pre-wrap"
-					>
-						{selectedNote}
-					</p>
-				{/if}
-			</div>
-			{#if !!connection}
+			{:else}
 				{#key connection.id}
 					<section aria-labelledby="connection-details">
 						<h3 id="connection-details" class="sr-only">
-							Connection Details for {connection.name}
+							Settings for {connection.name}
 						</h3>
-						<div class="my-4 flex gap-2">
+						<div
+							class="mb-3 flex gap-2"
+							role="toolbar"
+							aria-label="Connection actions"
+						>
 							<button
 								type="button"
 								class="btn btn-sm preset-filled-success-500 flex-1"
@@ -896,72 +1115,171 @@
 								aria-label={unsavedChanges
 									? `Save changes to ${connection.name}`
 									: "No changes to save"}
-								aria-describedby="save-status"
 							>
 								<Icons.Save size={16} aria-hidden="true" />
-								Update
+								Save
 							</button>
-							<!-- One click to register this connection for the
-							     category's capability — "Use for Chat" here,
-							     "Use for Image generation" in the image list.
-							     Rendered in BOTH categories now: nothing picks a
-							     connection because it exists, so an image
-							     backend that is never registered anywhere is an
-							     image backend no run can reach. The named
-							     capability is what makes this honest — the old
-							     unqualified "Set Default" could only ever mean
-							     text, which is why the image half had no button
-							     at all. Everything else lives on
-							     Admin → Defaults. -->
 							<button
 								type="button"
-								class="btn btn-sm preset-filled-warning-500 shrink-0"
-								onclick={handleSetDefault}
-								disabled={!selectedConnectionId ||
-									selectedConnectionId ===
-										defaultConnectionId ||
-									managedButDisabled}
-								title={managedButDisabled
-									? "KoboldCPP Manager must be enabled to use this connection"
-									: selectedConnectionId ===
-										  defaultConnectionId
-										? `Already used for ${section.starVerb}`
-										: `Use this connection for ${section.starVerb}`}
-								aria-label={`Use this connection for ${section.starVerb}`}
+								class="btn btn-sm preset-filled-surface-400-600"
+								onclick={handleReset}
+								disabled={!unsavedChanges}
+								title="Reset unsaved changes"
+								aria-label="Reset unsaved changes"
 							>
-								<Icons.Star
-									size={14}
+								<Icons.RefreshCcw
+									size={16}
 									aria-hidden="true"
-									fill={selectedConnectionId ===
-									defaultConnectionId
-										? "currentColor"
-										: "none"}
 								/>
-								{selectedConnectionId === defaultConnectionId
-									? "In use"
-									: `Use for ${section.starVerb}`}
+							</button>
+							<button
+								type="button"
+								class="btn btn-sm preset-filled-error-500"
+								onclick={handleDelete}
+								title={`Delete ${connection.name}`}
+								aria-label={`Delete connection ${connection.name}`}
+							>
+								<Icons.Trash2 size={16} aria-hidden="true" />
 							</button>
 						</div>
-						<div id="save-status" class="sr-only">
+						<div class="sr-only" aria-live="polite">
 							{unsavedChanges
 								? "You have unsaved changes"
 								: "All changes saved"}
 						</div>
+
+						<!-- The models, as a summary: how many, whether the
+						     host still lists them all, when it was last asked.
+						     Browsed and edited from the index. -->
+						{#if selectedRow && !isLocalOnnxType(connection.type)}
+							{@const syncing =
+								syncingAll || syncingIds.has(connection.id)}
+							<div
+								class="preset-tonal-surface mb-3 flex items-center gap-2 rounded-lg px-3 py-2"
+							>
+								<Icons.Boxes
+									size={16}
+									class="text-muted shrink-0"
+									aria-hidden="true"
+								/>
+								<div class="min-w-0 flex-1">
+									<p class="text-xs font-medium">
+										{selectedRow.models.length}
+										{selectedRow.models.length === 1
+											? "model"
+											: "models"}
+										{#if selectedMissingCount}
+											<span class="text-warning-500">
+												· {selectedMissingCount} no longer
+												listed
+											</span>
+										{/if}
+									</p>
+									<p
+										class="truncate text-[11px] {selectedRow
+											.modelsSync.error
+											? 'text-warning-500'
+											: 'text-muted'}"
+										title={selectedRow.modelsSync.error ??
+											undefined}
+									>
+										{#if syncing}
+											Checking the host…
+										{:else if selectedRow.modelsSync.error}
+											Couldn't list models — {selectedRow
+												.modelsSync.error}
+										{:else if selectedRow.modelsSync.at}
+											Checked {timeAgo(
+												selectedRow.modelsSync.at
+											)}
+										{:else}
+											Not checked yet
+										{/if}
+									</p>
+								</div>
+								<button
+									type="button"
+									class="btn-icon btn-icon-sm hover:preset-tonal-primary shrink-0"
+									disabled={syncing}
+									onclick={() =>
+										requestSync(connection.id, true)}
+									title="Ask the host for its models again"
+									aria-label="Refresh models"
+								>
+									<Icons.RefreshCw
+										size={14}
+										class={syncing ? "animate-spin" : ""}
+										aria-hidden="true"
+									/>
+								</button>
+								<button
+									type="button"
+									class="btn btn-sm preset-filled-surface-400-600 shrink-0"
+									onclick={navigateBack}
+									title="Browse this connection's models in the list"
+								>
+									Models
+									<Icons.ChevronRight
+										size={14}
+										aria-hidden="true"
+									/>
+								</button>
+							</div>
+						{/if}
+
+						<!-- A local ONNX endpoint has no host to reach and no
+						     key to paste: what there IS to know about it is
+						     which model is in charge and what is on this
+						     machine. That goes above the form, and the form —
+						     name, notes, the lane's TTL — stays exactly where
+						     every other endpoint keeps it. -->
+						{#if selectedRow && isLocalOnnxType(connection.type)}
+							<OnnxEndpointView
+								connection={selectedRow}
+								capabilityDefaults={systemSettingsCtx.capabilityDefaults ??
+									{}}
+								mode={viewMode.mode}
+								isAdmin={userCtx.user?.isAdmin ?? false}
+								onOpenModel={(model) =>
+									openModel(
+										connection.id,
+										model.id,
+										"connection"
+									)}
+								onMakeActive={(model) => {
+									const capability =
+										starCapabilityOf(selectedRow)
+									if (capability)
+										handlePairDefault(
+											connection.id,
+											model,
+											{
+												kind: "one",
+												capability
+											}
+										)
+								}}
+								onDownload={(model) =>
+									downloadOnnxModel(connection.id, model.id)}
+								onRetry={(model) =>
+									downloadOnnxModel(connection.id, model.id)}
+								onCancel={(model) =>
+									cancelOnnxDownload(connection.id, model.id)}
+							/>
+							<h3 class="mb-2 text-sm font-semibold">Settings</h3>
+						{/if}
+
 						<div class="flex flex-col gap-1">
 							<label class="font-semibold" for="connection-name">
-								Connection Name
+								Connection name
 							</label>
 							<input
 								id="connection-name"
 								type="text"
 								bind:value={connection.name}
 								class="input"
-								aria-describedby="name-help"
 								aria-required="true"
 							/>
-							<div id="name-help" class="sr-only">
-								Enter a descriptive name for this AI connection
-							</div>
 						</div>
 						{#if connection.type === CONNECTION_TYPE.OLLAMA}
 							<OllamaForm bind:connection />
@@ -979,30 +1297,15 @@
 							<AnthropicForm bind:connection />
 						{:else if CONNECTION_TYPE.isImage(connection.type)}
 							<!-- One branch for every image backend: the form is
-							     generated from what the adapter declares, so a new
-							     one needs no case here and no component. -->
+							     generated from what the adapter declares. -->
 							<ImageConnectionForm bind:connection />
 						{:else if connection.modality === "embeddings"}
-							<!-- One branch for all three embedding backends,
-							     for the same reason. What differs between them
-							     is two fields, not a component; the MODEL is
-							     picked in ConnectionModels below like every
-							     other connection's. -->
 							<EmbeddingConnectionForm bind:connection />
 						{:else if connection.modality === "ner"}
-							<!-- One field, for the same reason: the local
-							     entity backend has no host and no key, and its
-							     model is picked in ConnectionModels below. -->
 							<NerConnectionForm bind:connection />
 						{/if}
 
-						<!-- Below the settings, not above them: a note is a
-						     margin note, and the nine forms' real controls are
-						     what someone opened this panel for. Mounted once
-						     here for the same reason ConnectionCapabilities is
-						     — it is a property of a connection, not of a
-						     connection TYPE, so nine pasted copies would be
-						     nine fields to keep in step. -->
+						<!-- Below the settings: a note is a margin note. -->
 						<div class="mt-4 flex flex-col gap-1">
 							<label class="font-semibold" for="connection-notes">
 								Notes
@@ -1010,8 +1313,7 @@
 							<p id="notes-help" class="text-muted text-xs">
 								For you, not for the app — "use this one for
 								prose, the other for extraction". Shown beside
-								this connection wherever you pick one. Nothing
-								reads it.
+								this connection wherever you pick one.
 							</p>
 							<textarea
 								id="connection-notes"
@@ -1027,10 +1329,6 @@
 								aria-describedby="notes-help"
 							></textarea>
 							{#if (connection.notes?.length ?? 0) > NOTE_MAX_LENGTH - 200}
-								<!-- Only near the cap, and only then. `maxlength`
-								     truncates a paste in silence, so the one
-								     moment that silence is a lie is the moment
-								     this appears. -->
 								<p class="text-warning-500 text-xs">
 									{NOTE_MAX_LENGTH -
 										(connection.notes?.length ?? 0)} characters
@@ -1040,60 +1338,27 @@
 						</div>
 
 						{#if connection.id}
-							<!-- Mounted once, here, rather than in each of the nine
-							     forms above: this is the one place all nine share,
-							     and nine pasted copies would be nine capability
-							     sections that drift AND nine connections:test
-							     subscriptions racing. It takes the id only —
-							     everything it shows is its own fetch, so nothing it
-							     does can dirty this form's unsaved-changes
-							     baseline. -->
-							<!-- The MODELS on this endpoint (0114). Mounted
-							     here for the same reason the capability panel is:
-							     this is the one place all nine forms share, and
-							     nine pasted copies would be nine model lists that
-							     drift AND nine `connections:test` subscriptions
-							     racing. It takes the id, plus whatever the last
-							     test or refresh reported — the editor owns the
-							     test, so the probed list is handed down rather
-							     than fetched a second time. -->
-							<ConnectionModels
-								connectionId={connection.id}
-								probed={refreshModelsResult?.models ??
-									testResult?.models ??
-									[]}
-							/>
 							<ConnectionCapabilities
 								connectionId={connection.id}
 							/>
 							{#if connection.modality === "embeddings"}
 								<!-- The indexing queue, as this connection's
-								     detail panel. ⚠ Only what belongs to no
-								     field goes here: the service, endpoint,
-								     key and model are ordinary connection
-								     controls above, and "off" is unstarring. -->
+								     detail panel — shown as its own when the
+								     embeddings default targets it. -->
 								<EmbeddingQueuePanel
-									isStarred={connection.id ===
-										defaultConnectionId}
+									isStarred={systemSettingsCtx
+										.capabilityDefaults?.["text->embedding"]
+										?.connectionId === connection.id}
 								/>
 							{/if}
 							{#if connection.modality === "ner"}
-								<!-- The annotation lane, same rule. A status
-								     line rather than a queue panel: this lane
-								     publishes no groups and needs no start
-								     control, so a copy of the embedding panel
-								     would be controls that do nothing. -->
 								<NerLanePanel
-									isStarred={connection.id ===
-										defaultConnectionId}
+									isStarred={systemSettingsCtx
+										.capabilityDefaults?.["text->entities"]
+										?.connectionId === connection.id}
 								/>
 							{/if}
-							<!-- Stop guards ride the connection (18 §4b): model
-							     knowledge — "this endpoint leaks template
-							     tokens" — attaches once and reaches every
-							     pipeline that runs against it. Order does not
-							     matter: stop verdicts reduce to the earliest
-							     index whatever their source. -->
+							<!-- Stop guards ride the connection (18 §4b). -->
 							<div class="mt-4 flex flex-col gap-1">
 								<span
 									class="flex items-center gap-2 font-semibold"
@@ -1202,22 +1467,9 @@
 					</section>
 				{/key}
 			{/if}
-			{#if isLoading}
-				<div class="flex items-center justify-center py-8">
-					<Icons.Loader2
-						size={20}
-						class="text-surface-400 animate-spin"
-					/>
-				</div>
-			{:else if !viewConnections.length}
-				<EmptyState
-					icon={(Icons as any)[section.icon] ?? Icons.Cable}
-					message={section.emptyMessage}
-				/>
-			{/if}
 		</div>
 	</div>
-{/if}
+{/snippet}
 
 <Dialog
 	open={showConfirmModal}
@@ -1239,13 +1491,11 @@
 					aria-describedby="confirm-desc"
 				>
 					<header class="flex justify-between">
-						<h2 id="confirm-title" class="h2">Confirm Action</h2>
+						<h2 id="confirm-title" class="h2">Discard changes?</h2>
 					</header>
 					<article>
 						<p id="confirm-desc" class="opacity-60">
-							Your connection has unsaved changes. Are you sure
-							you want to discard them? This action cannot be
-							undone.
+							Your connection has unsaved changes. Discard them?
 						</p>
 					</article>
 					<footer class="flex justify-end gap-4">
@@ -1254,7 +1504,7 @@
 							onclick={handleModalCancel}
 							aria-label="Cancel and keep unsaved changes"
 						>
-							Cancel
+							Keep editing
 						</button>
 						<button
 							class="btn preset-filled-error-500"
@@ -1289,13 +1539,10 @@
 					aria-describedby="new-conn-desc"
 				>
 					<header class="mb-[1em] flex justify-between">
-						<h2 id="new-conn-title" class="h2">
-							Create New AI Connection
-						</h2>
+						<h2 id="new-conn-title" class="h2">New connection</h2>
 					</header>
 					<div id="new-conn-desc" class="sr-only">
-						Create a new connection to an AI service for
-						conversations
+						Create a new connection to a service
 					</div>
 					<form
 						class="flex flex-col gap-2"
@@ -1306,7 +1553,7 @@
 					>
 						<div>
 							<label class="font-semibold" for="newConnName">
-								Connection Name
+								Connection name
 							</label>
 							<input
 								id="newConnName"
@@ -1315,24 +1562,20 @@
 								bind:value={newConnectionName}
 								placeholder="Enter a descriptive name..."
 								aria-required="true"
-								aria-describedby="name-help-new"
+								oninput={() => (nameTouched = true)}
 								onkeydown={(e) => {
 									if (
 										e.key === "Enter" &&
 										newConnectionName.trim()
-									) {
+									)
 										handleNewConnectionConfirm()
-									}
 								}}
 							/>
-							<div id="name-help-new" class="sr-only">
-								Enter a name to identify this AI connection
-							</div>
 						</div>
 						<div>
 							<ConnectionServicePicker
-								label={section.servicePicker}
-								initialModality={connectionModality}
+								label="Service"
+								initialModality={newConnectionModality}
 								bind:selectedItem={newConnectionService}
 							/>
 						</div>
@@ -1365,7 +1608,7 @@
 							aria-label={!newConnectionName.trim()
 								? "Enter a name to create connection"
 								: !newConnectionService
-									? "Choose an AI service to create connection"
+									? "Choose a service to create connection"
 									: `Create connection named ${newConnectionName}`}
 						>
 							Create
@@ -1377,9 +1620,7 @@
 	</Portal>
 </Dialog>
 <!-- Switching the embedding connection re-indexes everything. The number is
-     the whole point of this dialog: "all existing embeddings will need to be
-     regenerated" was what the old panel said, and it is true of one row and of
-     four hundred thousand. -->
+     the whole point of this dialog. -->
 <Dialog
 	open={showReindexModal}
 	onOpenChange={(e) => (showReindexModal = e.open)}
@@ -1399,53 +1640,107 @@
 					aria-labelledby="reindex-title"
 					aria-describedby="reindex-desc"
 				>
-					<header class="flex items-center gap-3">
-						<Icons.AlertTriangle
-							class="text-warning-500 h-5 w-5 shrink-0"
-						/>
+					<header>
 						<h2 id="reindex-title" class="h2 text-lg font-bold">
-							Change the embedding model?
+							{embeddingNext
+								? `Switch embeddings to ${embeddingNext}?`
+								: "Switch the embedding model?"}
 						</h2>
-					</header>
-					<article id="reindex-desc" class="mt-3 space-y-2 text-sm">
-						<p>
-							Vectors made by one model cannot be compared with
-							another's, so everything already embedded is thrown
-							away and built again against the new model.
+						<p class="text-muted mt-1 text-sm">
+							{#if embeddingCurrent}
+								Replaces {embeddingCurrent.model.name} as the one
+								embedding model for this install.
+							{:else if embeddingNext}
+								Sets {embeddingNext} as the embedding model for this
+								install.
+							{:else}
+								One embedding model runs for this whole install.
+							{/if}
 						</p>
-						{#if reindexRows === null}
-							<p class="text-muted">Counting…</p>
-						{:else}
-							<p class="font-medium">
-								Every embedded row is re-indexed against the new
-								model: {reindexRows.toLocaleString()}
-								{reindexRows === 1 ? "row" : "rows"}.
+					</header>
+					<!-- What it costs, boxed: three consequences, each its own
+					     line, most expensive first. NO time estimate — nothing
+					     in the queue measures throughput, so there is no honest
+					     rate to put here. -->
+					<article
+						id="reindex-desc"
+						class="preset-tonal-surface mt-4 space-y-2 rounded-lg p-3 text-sm"
+					>
+						<p class="flex items-start gap-2">
+							<Icons.AlertTriangle
+								class="text-warning-500 mt-0.5 h-4 w-4 shrink-0"
+								aria-hidden="true"
+							/>
+							<span>
+								{#if reindexRows === null}
+									<span class="text-muted">
+										Counting what is stored…
+									</span>
+								{:else}
+									<strong class="font-semibold">
+										{reindexRows.toLocaleString()}
+										stored {reindexRows === 1
+											? "vector is"
+											: "vectors are"} re-embedded
+									</strong>
+									{#if reindexCost?.lorebooks || reindexCost?.sessions || reindexCost?.byKind}
+										{#if reindexCost.lorebooks || reindexCost.sessions}
+											<span>
+												— every entry in {(
+													reindexCost.lorebooks ?? 0
+												).toLocaleString()}
+												{(reindexCost.lorebooks ??
+													0) === 1
+													? "lorebook"
+													: "lorebooks"} and the history
+												of {(
+													reindexCost.sessions ?? 0
+												).toLocaleString()}
+												{(reindexCost.sessions ?? 0) ===
+												1
+													? "session"
+													: "sessions"}.
+											</span>
+										{/if}
+									{/if}
+									<span>
+										Vectors from the old model don't match
+										the new one.
+									</span>
+								{/if}
+							</span>
+						</p>
+						<p class="text-muted">
+							Until it finishes, retrieval answers from keywords
+							only.
+						</p>
+						{#if embeddingCurrentIsLocal}
+							<p class="text-muted">
+								{embeddingCurrent?.model.name} stays on disk. Switching
+								back later re-embeds again.
 							</p>
 						{/if}
-						<p class="text-muted text-xs">
-							Retrieval falls back to keyword search while it
-							catches up. Starring the old connection again does
-							not bring the old vectors back.
-						</p>
 					</article>
 					<footer class="mt-5 flex justify-end gap-2">
 						<button
 							type="button"
 							class="btn preset-filled-surface-500"
-							onclick={() => (showReindexModal = false)}
+							onclick={() => {
+								showReindexModal = false
+								pendingStars = null
+							}}
 						>
-							Cancel
+							{embeddingCurrent
+								? `Keep ${embeddingCurrent.model.name}`
+								: "Cancel"}
 						</button>
 						<button
 							type="button"
 							class="btn preset-filled-warning-500"
-							onclick={() => {
-								showReindexModal = false
-								commitSetDefault()
-							}}
+							onclick={confirmReindexModal}
 						>
 							<Icons.RefreshCw size={16} aria-hidden="true" />
-							Switch and re-index
+							Switch and re-embed
 						</button>
 					</footer>
 				</div>
@@ -1472,45 +1767,75 @@
 					aria-labelledby="reannotate-title"
 					aria-describedby="reannotate-desc"
 				>
-					<header class="flex items-center gap-3">
-						<Icons.AlertTriangle
-							class="text-warning-500 h-5 w-5 shrink-0"
-						/>
+					<header>
 						<h2 id="reannotate-title" class="h2 text-lg font-bold">
-							Change the entity model?
+							{entityNext
+								? `Switch entity extraction to ${entityNext}?`
+								: "Switch the entity model?"}
 						</h2>
+						<p class="text-muted mt-1 text-sm">
+							{#if entityCurrent}
+								Replaces {entityCurrent.model.name} as the one entity
+								model for this install.
+							{:else if entityNext}
+								Sets {entityNext} as the entity model for this install.
+							{:else}
+								One entity model runs for this whole install.
+							{/if}
+						</p>
 					</header>
 					<article
 						id="reannotate-desc"
-						class="mt-3 space-y-2 text-sm"
+						class="preset-tonal-surface mt-4 space-y-2 rounded-lg p-3 text-sm"
 					>
-						<p>
-							Names found by one model are not the names another
-							finds, so everything already scanned is dropped and
-							read again against the new model.
+						<p class="flex items-start gap-2">
+							<Icons.AlertTriangle
+								class="text-warning-500 mt-0.5 h-4 w-4 shrink-0"
+								aria-hidden="true"
+							/>
+							<span>
+								{#if reannotateRows === null}
+									<span class="text-muted">
+										Counting what is annotated…
+									</span>
+								{:else}
+									<strong class="font-semibold">
+										{reannotateRows.toLocaleString()}
+										{reannotateRows === 1
+											? "entry or message is"
+											: "entries and messages are"} re-scanned
+										for names
+									</strong>
+									<span>
+										Names one model finds are not the names
+										another finds.
+									</span>
+								{/if}
+							</span>
 						</p>
-						{#if reannotateRows === null}
-							<p class="text-muted">Counting…</p>
-						{:else}
-							<p class="font-medium">
-								Every annotated row is re-scanned against the
-								new model: {reannotateRows.toLocaleString()}
-								{reannotateRows === 1 ? "row" : "rows"}.
+						<p class="text-muted">
+							Names your lorebook declares keep matching
+							throughout.
+						</p>
+						{#if entityCurrentIsLocal}
+							<p class="text-muted">
+								{entityCurrent?.model.name} stays on disk. Switching
+								back later re-scans again.
 							</p>
 						{/if}
-						<p class="text-muted text-xs">
-							Names your lorebook declares keep matching
-							throughout. Starring the old connection again does
-							not bring the old scan back.
-						</p>
 					</article>
 					<footer class="mt-5 flex justify-end gap-2">
 						<button
 							type="button"
 							class="btn preset-filled-surface-500"
-							onclick={() => (showReannotateModal = false)}
+							onclick={() => {
+								showReannotateModal = false
+								pendingStars = null
+							}}
 						>
-							Cancel
+							{entityCurrent
+								? `Keep ${entityCurrent.model.name}`
+								: "Cancel"}
 						</button>
 						<button
 							type="button"
@@ -1546,15 +1871,13 @@
 					aria-describedby="delete-desc"
 				>
 					<header class="flex justify-between">
-						<h2 id="delete-title" class="h2">
-							Delete AI Connection
-						</h2>
+						<h2 id="delete-title" class="h2">Delete connection</h2>
 					</header>
 					<article>
 						<p id="delete-desc" class="opacity-60">
-							Are you sure you want to delete the connection "{connection?.name}"?
-							This action cannot be undone and will permanently
-							remove this AI connection.
+							Delete "{connection?.name}" and its models? Anything
+							set to use them will need another choice. This
+							cannot be undone.
 						</p>
 					</article>
 					<footer class="flex justify-end gap-4">
@@ -1570,9 +1893,9 @@
 							type="button"
 							class="btn preset-filled-error-500"
 							onclick={handleDeleteModalConfirm}
-							aria-label="Permanently delete this AI connection"
+							aria-label="Permanently delete this connection"
 						>
-							Delete Connection
+							Delete connection
 						</button>
 					</footer>
 				</div>

@@ -1,7 +1,10 @@
 <script lang="ts">
 	import { avatarSrc, withRevisedAvatar } from "$lib/client/utils/media"
 	import { embeddingsStarred } from "$lib/shared/constants/embeddings"
-	import { messageSpeaker } from "$lib/client/utils/messageSpeaker"
+	import {
+		messageEnvoySlug,
+		messageSpeaker
+	} from "$lib/client/utils/messageSpeaker"
 	import RunProgressCard from "$lib/client/components/pipelines/RunProgressCard.svelte"
 	import { runProgress } from "$lib/client/stores/runProgress.svelte"
 	import type { RunProgress } from "$lib/shared/sockets/progress"
@@ -9,6 +12,11 @@
 	import { goto } from "$app/navigation"
 	import { Dialog, Portal, Popover } from "@skeletonlabs/skeleton-svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import {
+		declareInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
+	import { interestKey } from "$lib/shared/sockets/interest"
 	import { GroupReplyStrategies } from "$lib/shared/constants/GroupReplyStrategies"
 	import * as Icons from "@lucide/svelte"
 	import MessageComposer from "$lib/client/components/sessionMessages/MessageComposer.svelte"
@@ -17,6 +25,16 @@
 	import PluginFrame from "$lib/client/components/frames/PluginFrame.svelte"
 	import SessionMessage from "$lib/client/components/sessionMessages/SessionMessage.svelte"
 	import NextCharacterBlock from "$lib/client/components/sessionMessages/NextCharacterBlock.svelte"
+	import MessagesWidget, {
+		CONVERSATION_DEFAULTS,
+		type ConversationSettings
+	} from "$lib/client/components/sessionMessages/MessagesWidget.svelte"
+	import {
+		atOlderEdge,
+		autoscrollTarget,
+		restoredScrollTop,
+		type MessageOrder
+	} from "$lib/client/components/sessionMessages/messageOrder"
 	import ProcessSceneModal from "$lib/client/components/modals/ProcessSceneModal.svelte"
 	import SessionComposer from "$lib/client/components/sessionMessages/SessionComposer.svelte"
 	import GeneratingAnimation from "$lib/client/components/sessionMessages/GeneratingAnimation.svelte"
@@ -49,6 +67,18 @@
 		setWidgetSettingsWriter
 	} from "$lib/client/stores/widgetSettings.svelte"
 	import { CORE_WIDGETS } from "$lib/shared/widgets/types"
+	import {
+		dispatchAction,
+		type ActionDispatch,
+		type CoreVerbHandlers,
+		type InvokeArgs
+	} from "$lib/shared/widgets/invokeAction"
+	import {
+		actionIdentity,
+		isCoreActionIdentity,
+		parseActionIdentity
+	} from "$lib/shared/actions/identity"
+	import { paletteRowState } from "$lib/client/components/sessionMessages/slashPalette"
 	import { SurfaceManager } from "$lib/client/surfaces/panelManager.svelte"
 	import type { LayoutBlob } from "$lib/client/surfaces/types"
 
@@ -208,22 +238,50 @@
 	// modal/character-picker option before any message exists.
 	let narratorName = $state("Narrator")
 
-	// The contributed trigger set (19 §4, U-C5): what this mode's sessions offer
-	// beyond the intrinsic composer, read from rows. The narrate button's
-	// *presence* comes from here — retiring the narrate spec removes it with
-	// no UI code involved. Its presentation stays bespoke (the resolved
-	// narrator name), which is a client mapping on the function key, not a
-	// hardcoded button.
-	let modeTriggers: Sockets.Sessions.Triggers.Response["triggers"] = $state(
-		[]
-	)
+	// The action list (R-15, U5c): what this session offers this person, per
+	// venue, from rows. The narrate button's *presence* comes from here —
+	// retiring the narrate spec removes it with no UI code involved. Its
+	// presentation stays bespoke (the resolved narrator name), which is a
+	// client mapping on the function key, not a hardcoded button. Core's
+	// message verbs ride the same list, so the message menu and the quick
+	// row hand-write no verb button either.
+	let actionVenues = $state<Sockets.Sessions.Actions.Response["venues"]>({})
+	const venueOf = (kind: string) =>
+		actionVenues[kind] ?? { primary: [], overflow: [] }
 	/**
-	 * The contributed actions the composer shows as its own row. A genre that
-	 * contributes none gets no row at all, which is what keeps the composer of a
-	 * genre with nothing to press exactly as wide as its message field.
+	 * The composer venue's primary set — the chips. A genre that contributes
+	 * none gets no row at all, which is what keeps the composer of a genre
+	 * with nothing to press exactly as wide as its message field.
 	 */
-	let sessionActions = $derived(
-		modeTriggers.filter((t) => t.kind === "button")
+	let sessionActions = $derived(venueOf("composer").primary)
+	/** …and its overflow: every enabled action the chips leave out (F38). */
+	let composerOverflow = $derived(venueOf("composer").overflow)
+	/** The message venue, handed to every row. */
+	let messageActions = $derived(venueOf("message"))
+	/** The extra tab's — Continue and Regenerate, when the genre offers them. */
+	let extraActions = $derived([
+		...venueOf("extra").primary,
+		...venueOf("extra").overflow
+	])
+	const offersExtra = (key: string) =>
+		extraActions.some((a) => a.specSlug === "core" && a.key === key)
+	/**
+	 * What `/` offers (R-15 slash names): the composer's own venues — the
+	 * chips row and the extra tab — one entry per action, whether it sits in
+	 * the primary set or the overflow.
+	 */
+	let paletteActions = $derived(
+		[...sessionActions, ...composerOverflow, ...extraActions].map((a) => ({
+			key: a.key,
+			function: a.function,
+			specSlug: a.specSlug,
+			name: a.name,
+			slash: a.slash,
+			icon: a.icon,
+			canAct: a.canAct,
+			isNew: a.isNew,
+			venue: a.venue
+		}))
 	)
 
 	// The session's frame surfaces (20 §12): a mode-declared session-view
@@ -248,6 +306,23 @@
 	 * refusal message and never a wrong generation.
 	 */
 	const continueRefusal = $derived(sessionFrames?.continueRefusal)
+	/**
+	 * Which forbiddable message verbs this session's genre offers (R-15) —
+	 * off the action list's message venue (U5c), the ONE list every verb
+	 * control renders from: a forbidden opt-in built-in (`delete`, `hide`,
+	 * `swipe`) or a forbidden `retry` is simply not listed, and the floors
+	 * always are. Until the list has arrived, `sessions:view`'s
+	 * `messageVerbs` answers, so the controls do not flash off and on while
+	 * the page loads. An affordance, like `continueRefusal`: the handler
+	 * refuses the verb regardless.
+	 */
+	const messageVerbs = $derived(sessionFrames?.messageVerbs)
+	const offersVerb = (verb: "retry" | "swipe") => {
+		const listed = [...messageActions.primary, ...messageActions.overflow]
+		if (listed.length)
+			return listed.some((a) => a.specSlug === "core" && a.key === verb)
+		return messageVerbs?.[verb] !== false
+	}
 
 	// ── Surface grid (plan 21) ──────────────────────────────────────
 	// The modular session layout: the conversation is the primary panel, and
@@ -630,15 +705,35 @@
 		for (const id of res.open ?? []) surfaceManager.applyOpenIntent(id)
 		for (const id of res.close ?? []) surfaceManager.applyCloseIntent(id)
 	}
-	/** Frame actions ride the same audited path as every contributed button. */
+	/**
+	 * Frame and widget actions ride the same audited path as every
+	 * contributed button — with the pressed declaration's identity when the
+	 * caller named one (`invoke`; W1). One of core's verbs named that way is
+	 * routed to its real handler here too (W4): the hosts between this page
+	 * and a frame (`SessionLayout`, `WidgetHost`) are the layouts lane's and
+	 * do not yet carry `coreVerbs` down, so a frame's `invoke('continue')`
+	 * reaches this page as `action: "core#continue"` and must not be sent to
+	 * `sessions:triggerFunction`, which refuses it by name.
+	 */
 	function handleFrameAction(
 		fn: string,
 		messageId?: number,
-		payload?: Record<string, unknown>
+		payload?: Record<string, unknown>,
+		action?: string
 	) {
+		const parsed = action ? parseActionIdentity(action) : null
+		if (action && parsed && isCoreActionIdentity(action)) {
+			dispatchAction(
+				{ specSlug: parsed.specSlug, key: parsed.key, function: fn },
+				actionDispatch,
+				{ messageId, payload }
+			)
+			return
+		}
 		socket.emit("sessions:triggerFunction", {
 			sessionId,
 			function: fn,
+			...(action ? { action } : {}),
 			...(messageId != null ? { messageId } : {}),
 			...(payload && Object.keys(payload).length ? { payload } : {})
 		})
@@ -670,6 +765,21 @@
 	let personasInMode = $derived(
 		!modeShape ||
 			(!!modeShape.personas && (modeShape.personas.max ?? 1) !== 0)
+	)
+	/**
+	 * Whether a send needs a persona. The persona system existing is not
+	 * the same as one being required: a genre declaring `personas: { min:
+	 * 0 }` — the Guide, where a person asks as themselves — takes bare
+	 * prose (19 §1), which the server has always stored. The standard
+	 * chat keeps its historical requirement whatever its shape says, on
+	 * the same parity footing as the creation form's floor.
+	 */
+	let personaRequiredOnSend = $derived(
+		personasInMode &&
+			(!modeShape ||
+				(session as any)?.genreId == null ||
+				(session as any).genreId === "core:genre/chat" ||
+				(modeShape.personas?.min ?? 0) >= 1)
 	)
 	let charactersInMode = $derived(
 		!modeShape ||
@@ -707,12 +817,264 @@
 	let sessionResponseOrder:
 		| Sockets.Sessions.GetResponseOrder.Response
 		| undefined = $state()
-	let availablePersonas: Sockets.Personas.List.Response["personaList"] =
-		$state([])
 
 	// Get session id from route params
 	let sessionId: number = $derived.by(() => Number(page.params.id))
 	let sessionNotFound = $state(false)
+
+	/**
+	 * The streamed reply, for THIS session only.
+	 *
+	 * `sessionMessage` is a gated event now, so this declaration is what makes
+	 * the server broadcast it at all — and it carries the session as its
+	 * **interest scope**, so a tab sitting on another session is not sent this
+	 * one's chunks (one broadcast per chunk, two roster queries behind each).
+	 *
+	 * Declared in an effect of its own rather than through `useInterest`,
+	 * because that helper reads its key once: navigating from session 41 to 42
+	 * changes `sessionId`, and this releases `#41` as it takes `#42`.
+	 */
+	$effect(() => {
+		if (!Number.isFinite(sessionId)) return
+		return declareInterest<"sessionMessage">(
+			interestKey("sessionMessage", sessionId),
+			handleSessionMessage
+		)
+	})
+
+	/**
+	 * Every `sessions:*` reply and push this page reads, declared on the
+	 * interest registry — which owns the one listener per event name and
+	 * releases this page's subscribers when it is destroyed. That is what the
+	 * named `socket.off` calls in the old teardown were doing by hand, minus
+	 * the hazard that a bare `off(event)` would have torn down every other
+	 * view's listener with them.
+	 *
+	 * ⚠ BARE keys, deliberately: none of these events has an entry in
+	 * `SCOPED_EVENTS`, and a `#<id>` key for an event the shared table does not
+	 * scope matches NO payload at all. Each handler's own
+	 * `msg.sessionId !== sessionId` check stays the filter. The two events that
+	 * ARE scoped — `sessions:get` and `sessions:userTyping` — are declared in
+	 * the effect below, keyed on the id so a client-side navigation between
+	 * sessions releases the old scope as it takes the new one.
+	 *
+	 * Declared HERE, ahead of the session-load effect and `onMount` further
+	 * down, because effects run in declaration order: the keys are held before
+	 * either of them sends its request group (which then flushes the interest
+	 * sync itself — plan ruling 3).
+	 */
+	useInterest<"sessions:presetStatus">(
+		"sessions:presetStatus",
+		handlePresetStatus
+	)
+	useInterest<"sessions:promptTokenCount">(
+		"sessions:promptTokenCount",
+		handleSessionsPromptTokenCount
+	)
+	useInterest<"sessions:getResponseOrder">(
+		"sessions:getResponseOrder",
+		handleSessionsGetResponseOrder
+	)
+	useInterest<"sessions:addPersona">(
+		"sessions:addPersona",
+		handleSessionsAddPersona
+	)
+	useInterest<"sessions:branch">("sessions:branch", handleSessionsBranch)
+	useInterest<"sessions:getNarratorName">(
+		"sessions:getNarratorName",
+		handleSessionsGetNarratorName
+	)
+	useInterest<"sessions:sideCharacterOptions">(
+		"sessions:sideCharacterOptions",
+		handleSessionsSideCharacterOptions
+	)
+	useInterest<"sessions:actions">(
+		"sessions:actions",
+		handleSessionsActions
+	)
+	useInterest<"sessions:view">("sessions:view", handleSessionsView)
+	useInterest<"sessions:panelLayout:get">(
+		"sessions:panelLayout:get",
+		handleSessionsPanelLayoutGet
+	)
+	useInterest<"sessions:layoutPreset:save">(
+		"sessions:layoutPreset:save",
+		handleLayoutPresetSave
+	)
+	useInterest<"sessions:layoutPreset:rename">(
+		"sessions:layoutPreset:rename",
+		handleLayoutPresetRename
+	)
+	useInterest<"sessions:layoutPreset:delete">(
+		"sessions:layoutPreset:delete",
+		handleLayoutPresetDelete
+	)
+	useInterest<"sessions:layoutPreset:usage">(
+		"sessions:layoutPreset:usage",
+		handleLayoutPresetUsage
+	)
+	// No server emitter with a caller today — converted as it stands rather
+	// than removed, since the surface-intent push is the declared seam.
+	useInterest<"sessions:surfaceIntent">(
+		"sessions:surfaceIntent",
+		handleSurfaceIntent
+	)
+	useInterest<"sessions:triggerFunction">(
+		"sessions:triggerFunction",
+		handleSessionsTriggerFunction
+	)
+	useInterest<"sessions:genres">("sessions:genres", handleSessionsModesPage)
+	// Never gated (plan ruling 2 — errors are not outputs to skip), but the
+	// registry is the only listener path, so it is declared like the rest.
+	useInterest<"sessions:summarize:error">(
+		"sessions:summarize:error",
+		handleSessionSummarizeError
+	)
+
+	/**
+	 * The page-level pushes from four other families, every one BARE — and
+	 * each for its own reason, not as a batch:
+	 *
+	 * · `sessionMessage:error` and `scenes:process:error` are refusals with no
+	 *   id on them, never gated (plan ruling 2), and page-level on purpose:
+	 *   the modals tear their own listeners down on close, so a run that
+	 *   failed while minimized would otherwise report nothing at all.
+	 * · `media:changed` IS scoped — on the media row's id — and this page
+	 *   wants every one of them: it repaints whichever avatar or scene image
+	 *   changed, wherever it changed. A bare key is the request for "all
+	 *   scopes", which is exactly right here.
+	 * · `sessionMessages:delete` answers with a message ROW and no session
+	 *   beside it, so it has no `SCOPED_EVENTS` entry at all;
+	 *   `handleSessionMessagesDelete`'s own check against the rows on screen
+	 *   stays the filter.
+	 */
+	useInterest<"sessionMessage:error">(
+		"sessionMessage:error",
+		handleSessionMessageError
+	)
+	useInterest<"scenes:process:error">(
+		"scenes:process:error",
+		handleSceneProcessError
+	)
+	useInterest<"media:changed">("media:changed", handleMediaChanged)
+	useInterest<"sessionMessages:delete">(
+		"sessionMessages:delete",
+		handleSessionMessagesDelete
+	)
+
+	/**
+	 * The two scene refusals, BARE for the ordinary reason: neither carries an
+	 * id, so neither is in `SCOPED_EVENTS` and a `#<id>` key would match no
+	 * payload. Their success halves are scoped, in the effect below.
+	 */
+	useInterest<"scenes:scenedMessageIds:error">(
+		"scenes:scenedMessageIds:error",
+		handleScenesScenedMessageIdsError
+	)
+	useInterest<"scenes:list:error">("scenes:list:error", handleScenesListError)
+
+	/**
+	 * The cast event this page reads, BARE.
+	 *
+	 * `characters:update` is a page-level push with NO id filter of its own:
+	 * whichever character changed, this page folds the new row into the
+	 * session it is showing if it is in the cast — as a character, as a
+	 * persona, or as both, since a persona IS a character. It is also what
+	 * `characters:setAvatar` cascades, which is how a new portrait reaches an
+	 * open session. A bare key is therefore the point, not an omission — the
+	 * event is not in `SCOPED_EVENTS`, so a scoped key would match no payload
+	 * at all.
+	 */
+	useInterest<"characters:update">(
+		"characters:update",
+		handleCharactersUpdate
+	)
+
+	/**
+	 * The two SCOPED `sessions:*` interests, keyed on the session in the route.
+	 *
+	 * An effect rather than `useInterest` for the same reason `sessionMessage`
+	 * above is one: the helper reads its key once, and `sessionId` moves when
+	 * somebody opens another session without a page load. Releasing inside the
+	 * effect ends `#41` as `#42` is taken.
+	 *
+	 * No BARE `sessions:get` alongside them: the not-found reply carries the
+	 * requested id on `sessionId`, so `scopeOfPayload` gives it this very scope
+	 * and `handleSessionsGet` sees it on the scoped key. A bare key would have
+	 * matched every OTHER session's reply too — which on the server means the
+	 * gate passing for every id while this page is open.
+	 */
+	$effect(() => {
+		if (!Number.isFinite(sessionId)) return
+		const releases = [
+			declareInterest<"sessions:get">(
+				interestKey("sessions:get", sessionId),
+				handleSessionsGet
+			),
+			declareInterest<"sessions:userTyping">(
+				interestKey("sessions:userTyping", sessionId),
+				handleSessionsUserTyping
+			)
+		]
+		return () => {
+			for (const release of releases) release()
+		}
+	})
+
+	/**
+	 * The run-progress pushes, SCOPED to this session for the same reason and
+	 * in the same shape: every emitter puts `sessionId` on the payload (see
+	 * `SCOPED_EVENTS`), so a tab on another session is not sent this one's
+	 * ticks — and an image run emits one preview frame per tick.
+	 *
+	 * `handleRunProgress`'s own id check stays as belt and braces.
+	 */
+	$effect(() => {
+		if (!Number.isFinite(sessionId)) return
+		const releases = [
+			declareInterest<"pipelines:runStarted">(
+				interestKey("pipelines:runStarted", sessionId),
+				handleRunProgress
+			),
+			declareInterest<"pipelines:progress">(
+				interestKey("pipelines:progress", sessionId),
+				handleRunProgress
+			)
+		]
+		return () => {
+			for (const release of releases) release()
+		}
+	})
+
+	/**
+	 * The two scene reads, SCOPED to this session — both replies carry
+	 * `sessionId` (see `SCOPED_EVENTS`), so a tab on another session is not
+	 * handed this one's scene list. STANDING rather than one-shot: both are
+	 * cascade targets, re-sent when a scene is created, processed or deleted,
+	 * which is how the scene markers on the transcript stay honest.
+	 *
+	 * An effect rather than `useInterest` for the same reason the two above
+	 * are ones: `sessionId` moves when somebody opens another session without
+	 * a page load, and this releases the old scope as it takes the new one.
+	 * The requests that fill them first are in `onMount`, which runs after
+	 * this — effects run in creation order.
+	 */
+	$effect(() => {
+		if (!Number.isFinite(sessionId)) return
+		const releases = [
+			declareInterest<"scenes:scenedMessageIds">(
+				interestKey("scenes:scenedMessageIds", sessionId),
+				handleScenesScenedMessageIds
+			),
+			declareInterest<"scenes:list">(
+				interestKey("scenes:list", sessionId),
+				handleScenesList
+			)
+		]
+		return () => {
+			for (const release of releases) release()
+		}
+	})
 
 	let lastMessage: SelectSessionMessage | undefined = $derived.by(() => {
 		if (session && session.sessionMessages.length > 0) {
@@ -735,7 +1097,8 @@
 
 	let canRegenerateLastMessage: boolean = $derived.by(() => {
 		return (
-			(!lastMessage?.metadata?.isGreeting &&
+			(offersVerb("retry") &&
+				!lastMessage?.metadata?.isGreeting &&
 				!!lastMessage &&
 				!lastMessage.isGenerating &&
 				!lastMessage.isHidden &&
@@ -830,6 +1193,30 @@
 		name: string
 		binding: string
 	}[] = $state([])
+
+	/**
+	 * The cast of the session's book, SCOPED to that book — the reply carries
+	 * `lorebookId` (see `SCOPED_EVENTS`), and this page DOES know which book
+	 * it wants: `session.lorebookId`, the same id the request below sends. No
+	 * bare key alongside it, which would have matched every other book's
+	 * reply and kept the server's gate open for all of them.
+	 *
+	 * STANDING rather than one-shot: the list is a cascade target, re-sent
+	 * after a binding is created or absorbed, and the Process Scene modal
+	 * renders from it.
+	 *
+	 * An effect rather than `useInterest` because the key moves — the session
+	 * loads after this page does, and its book can be changed while it is
+	 * open. Declared above the request so the key is held before it goes out.
+	 */
+	$effect(() => {
+		const lorebookId = session?.lorebookId
+		if (!lorebookId) return
+		return declareInterest<"lorebooks:bindingList">(
+			interestKey("lorebooks:bindingList", lorebookId),
+			handleLorebookBindingList
+		)
+	})
 
 	$effect(() => {
 		if (session?.lorebookId) {
@@ -963,11 +1350,14 @@
 	})
 
 	// Check if current user can edit/control a specific message — mirrors
-	// checkMessageEditPermission server-side exactly:
+	// `canActOnMessage` (`server/messages/permissions.ts`) branch for branch:
 	// - Persona messages: only that persona's own owner, never the session
 	//   owner (a persona is another participant's own self-representation).
 	// - Character messages: the session owner, or whoever owns that character
 	//   (so a guest who brought their own character in can control it).
+	// - An envoy's line and narration: the session owner's.
+	// - A user line with no persona: its author's, by `userId`.
+	// An affordance only — the server refuses regardless.
 	let canControlMessage = (msg: SelectSessionMessage): boolean => {
 		if (!userCtx.user?.id) return false
 
@@ -992,10 +1382,20 @@
 			)
 		}
 
+		// An envoy's line (U5g): no character row behind it, the reference
+		// on the row is its identity, and it is the session owner's to act
+		// on, as narration is.
+		if (messageEnvoySlug(msg)) return !isGuest
+
 		// Narrator response messages aren't owned by any persona/character —
 		// only the session owner controls them, mirroring
-		// checkMessageEditPermission server-side.
+		// canActOnMessage server-side.
 		if (msg.isNarratorResponse) return !isGuest
+
+		// A person's own line with no persona voicing it: the author's —
+		// nobody else's, not even the owner's, on a persona line's terms.
+		if (msg.role === "user" && msg.userId != null)
+			return msg.userId === userCtx.user?.id
 
 		return false
 	}
@@ -1012,7 +1412,7 @@
 		// "the user is simply prose") — the server already stores a
 		// persona-less user message; this guard was the only thing requiring
 		// one. Under the standard mode the requirement stands, as ever.
-		if (!personaId && personasInMode) {
+		if (!personaId && personaRequiredOnSend) {
 			toaster.error({ title: "No persona selected for this session" })
 			return
 		}
@@ -1053,8 +1453,30 @@
 	// a page; this keeps the prop name every child already binds to.
 	function getMessageCharacter(
 		msg: SelectSessionMessage
-	): SelectCharacter | SelectPersona | undefined {
-		return messageSpeaker(session, msg)
+	): SelectCharacter | undefined {
+		// The envoys ride the view payload, not the session row (U5g).
+		const speaker = messageSpeaker(
+			session
+				? { ...session, envoys: sessionFrames?.envoys }
+				: session,
+			msg
+		)
+		if (speaker || msg.role !== "user" || msg.personaId != null)
+			return speaker
+		// A person speaking as themselves — no persona, as a genre with
+		// `personas: { min: 0 }` allows (the Guide). Named by the member the
+		// row belongs to: the viewer's own display name, a guest's off the
+		// member list; the character shape, so the row renders as any other.
+		const me = userCtx.user
+		const member =
+			me && msg.userId === me.id
+				? me
+				: session?.sessionGuests?.find((g) => g.userId === msg.userId)
+						?.user
+		if (!member) return undefined
+		return {
+			name: member.displayName?.trim() || member.username
+		} as unknown as SelectCharacter
 	}
 
 	function openDeleteMessageModal(message: SelectSessionMessage) {
@@ -1170,6 +1592,10 @@
 			layoutPresetUsage = null
 			presetStatus = undefined
 			presetBannerDismissed = false
+			// The interest keys for these five replies are held by the declares
+			// above (including the two re-scoped to this very id, whose effects
+			// run before this one); the first typed `emit` puts their sync packet
+			// ahead of the request group on the same socket — plan ruling 3.
 			socket.emit("sessions:get", { id: sessionId, limit: 25 })
 			socket.emit("sessions:presetStatus", { sessionId })
 			socket.emit("sessions:view", { sessionId })
@@ -1217,6 +1643,14 @@
 	})
 
 	let sessionMessagesContainer: HTMLDivElement | null = $state(null)
+	/**
+	 * The `messages` widget's effective settings, as the widget reports them.
+	 * The snippets below read the same object as a parameter; this copy is for
+	 * the scroll handling, which runs outside the render.
+	 */
+	let conversationSettings = $state<ConversationSettings>({
+		...CONVERSATION_DEFAULTS
+	})
 	let lastSeenMessageId: number | null = $state(null)
 	let lastSeenMessageContent: string = $state("")
 	let isInitialLoad = $state(true)
@@ -1231,7 +1665,9 @@
 		// Check if there's actually content to scroll to
 		if (scrollHeight > clientHeight) {
 			sessionMessagesContainer.scrollTo({
-				top: scrollHeight,
+				top: autoscrollTarget(conversationSettings.order, {
+					scrollHeight
+				}),
 				behavior: isInitialLoad ? "instant" : "smooth"
 			})
 			return
@@ -1280,6 +1716,16 @@
 				lastSeenMessageContent = currentLastMessageContent
 			}
 		}
+	})
+
+	// Turning the log over leaves the reader at a scroll position the previous
+	// sequence gave them, and the newest message is the anchor under either
+	// order — so a change of order goes back to the end it now sits at.
+	let lastOrder: MessageOrder | null = null
+	$effect(() => {
+		const order = conversationSettings.order
+		if (lastOrder !== null && order !== lastOrder) performAutoscroll()
+		lastOrder = order
 	})
 
 	function handleEditMessage(e: Event, msg: SelectSessionMessage) {
@@ -1517,8 +1963,10 @@
 			panelsCtx.openPanel({ key: "characters", toggle: false })
 			panelsCtx.digest.viewCharacterId = msg.characterId
 		} else if (msg.personaId) {
-			panelsCtx.openPanel({ key: "personas", toggle: false })
-			panelsCtx.digest.viewPersonaId = msg.personaId
+			// A persona is a character, so its card lives in the Characters
+			// view like every other.
+			panelsCtx.openPanel({ key: "characters", toggle: false })
+			panelsCtx.digest.viewCharacterId = msg.personaId
 		}
 	}
 
@@ -1565,8 +2013,9 @@
 		const target = event.target as HTMLElement
 		if (!target || loadingOlderMessages || !pagination?.hasMore) return
 
-		// Check if user scrolled to within 200px of the top
-		if (target.scrollTop <= 200) {
+		// The end the older messages are at is the top of the region under
+		// `oldest-first` and the bottom under `newest-first`.
+		if (atOlderEdge(conversationSettings.order, target)) {
 			loadOlderMessages()
 		}
 	}
@@ -1599,6 +2048,8 @@
 		msg: SelectSessionMessage,
 		isGreeting: boolean
 	): boolean {
+		// An opt-in built-in the genre switched off has no control (R-15).
+		if (!offersVerb("swipe")) return false
 		let res = false
 		if (msg.id === lastMessage?.id && !isGreeting) {
 			// If this is the last message, we always show swipe controls
@@ -1617,10 +2068,6 @@
 	// same reference to .off() — a no-arg .off() call (or one with a
 	// different function reference than what was registered) removes
 	// *every* listener for that event, not just this component's.
-	function handlePersonasList(msg: Sockets.Personas.List.Response) {
-		availablePersonas = msg.personaList
-	}
-
 	function handleSessionsUserTyping(
 		msg: Sockets.Sessions.UserTyping.Response
 	) {
@@ -1658,7 +2105,9 @@
 					(a, b) => a.id - b.id
 				)
 
-				// Restore scroll position: account for the height added above the old content
+				// Put the reader back on the message they were reading: the new
+				// rows land above the viewport under `oldest-first` and below it
+				// under `newest-first`.
 				setTimeout(() => {
 					if (sessionMessagesContainer) {
 						const prevScrollHeight = parseInt(
@@ -1669,11 +2118,14 @@
 							sessionMessagesContainer.dataset
 								.previousScrollTop || "0"
 						)
-						const addedHeight =
-							sessionMessagesContainer.scrollHeight -
-							prevScrollHeight
-						sessionMessagesContainer.scrollTop =
-							addedHeight + prevScrollTop
+						sessionMessagesContainer.scrollTop = restoredScrollTop(
+							conversationSettings.order,
+							{
+								previousScrollTop: prevScrollTop,
+								previousScrollHeight: prevScrollHeight
+							},
+							sessionMessagesContainer.scrollHeight
+						)
 						delete sessionMessagesContainer.dataset
 							.previousScrollHeight
 						delete sessionMessagesContainer.dataset
@@ -1800,21 +2252,18 @@
 				sessionCharacters: updatedSessionCharacters
 			}
 		}
-	}
 
-	function handlePersonasUpdate(msg: Sockets.Personas.Update.Response) {
-		const personaId = msg.persona?.id
-		if (!personaId || !session) return
-
-		// Update session personas if the persona is in the session
+		// …and the persona links, which name the same table. The SAME row can
+		// be in the cast and be somebody's persona, so this is a second check
+		// rather than an else.
 		const sessionPersonaIndex = session.sessionPersonas.findIndex(
-			(p: SelectSessionPersona) => p.personaId === personaId
+			(p: SelectSessionPersona) => p.personaId === charId
 		)
 		if (sessionPersonaIndex !== -1) {
 			const updatedSessionPersonas = [...session.sessionPersonas]
 			updatedSessionPersonas[sessionPersonaIndex] = {
 				...updatedSessionPersonas[sessionPersonaIndex],
-				persona: msg.persona
+				persona: msg.character
 			}
 			session = { ...session, sessionPersonas: updatedSessionPersonas }
 		}
@@ -1956,9 +2405,120 @@
 		sideCharacterOptions = msg.characters ?? []
 	}
 
-	function handleSessionsTriggers(msg: Sockets.Sessions.Triggers.Response) {
+	function handleSessionsActions(msg: Sockets.Sessions.Actions.Response) {
 		if (msg.sessionId !== sessionId) return
-		modeTriggers = msg.triggers || []
+		actionVenues = msg.venues || {}
+	}
+
+	/**
+	 * The person opened a list that showed these newcomers: the mark clears
+	 * here at once and on the server for good (`sessions:actionsSeen`).
+	 */
+	function markActionsSeen(keys: string[]) {
+		if (!keys.length) return
+		const set = new Set(keys)
+		const next: typeof actionVenues = {}
+		for (const [kind, v] of Object.entries(actionVenues))
+			next[kind] = {
+				primary: v.primary.map((a) =>
+					set.has(actionIdentity(a)) ? { ...a, isNew: false } : a
+				),
+				overflow: v.overflow.map((a) =>
+					set.has(actionIdentity(a)) ? { ...a, isNew: false } : a
+				)
+			}
+		actionVenues = next
+		socket.emit("sessions:actionsSeen", { sessionId, keys })
+	}
+
+	/** The message an invocation named, when it is one this page holds. */
+	const messageById = (id?: number) =>
+		id == null
+			? undefined
+			: session?.sessionMessages?.find((m) => m.id === id)
+
+	/**
+	 * Core's verbs, as this page implements them (W4): what a widget's
+	 * `invoke('continue')`, a frame's `{ t: "invoke", key: "core#edit" }`
+	 * and the palette's `/continue` all land on. A verb named with a message
+	 * acts on that message; `continue` and `retry` named with none act on
+	 * the newest reply (the turn controls); the rest need a subject and say
+	 * so rather than guessing one.
+	 */
+	const needsSubject = (key: string) => {
+		throw new Error(`'${key}' acts on a message — name one`)
+	}
+	const withMessage = (
+		key: string,
+		args: InvokeArgs | undefined,
+		fn: (m: SelectSessionMessage) => void
+	) => {
+		const m = messageById(args?.messageId)
+		if (!m) return needsSubject(key)
+		fn(m)
+	}
+	const coreVerbs: CoreVerbHandlers = {
+		continue: (args) =>
+			args?.messageId != null
+				? withMessage("continue", args, (m) =>
+						handleContinueMessage(new Event("invoke"), m)
+					)
+				: handleTriggerContinueConversation(new Event("invoke")),
+		retry: (args) =>
+			args?.messageId != null
+				? withMessage("retry", args, (m) =>
+						handleRegenerateMessage(new Event("invoke"), m)
+					)
+				: handleRegenerateLastMessage(new Event("invoke")),
+		edit: (args) =>
+			withMessage("edit", args, (m) =>
+				handleEditMessage(new Event("invoke"), m)
+			),
+		stop: (args) =>
+			args?.messageId != null
+				? withMessage("stop", args, (m) =>
+						handleAbortMessage(new Event("invoke"), m)
+					)
+				: handleAbortLastMessage(new Event("invoke")),
+		branch: (args) =>
+			withMessage("branch", args, (m) =>
+				handleBranchMessage(new Event("invoke"), m)
+			),
+		swipe: (args) => withMessage("swipe", args, (m) => swipeRight(m)),
+		hide: (args) =>
+			withMessage("hide", args, (m) =>
+				handleHideMessage(new Event("invoke"), m)
+			),
+		delete: (args) =>
+			withMessage("delete", args, (m) =>
+				handleDeleteMessage(new Event("invoke"), m)
+			)
+	}
+	/** ONE routing rule (`dispatchAction`): core's verbs above, the rest the audited fire. */
+	const actionDispatch: ActionDispatch = {
+		core: coreVerbs,
+		fire: (a, args) => fireTrigger(a, args)
+	}
+
+	/**
+	 * One action, invoked from the overflow or the `/` palette. Core's verbs
+	 * go to their handlers; everything else is the generic fire, identity in
+	 * hand, which routes the narrator's to its modal.
+	 */
+	function invokeAction(a: {
+		specSlug: string
+		key: string
+		function: string
+		shared?: boolean
+	}) {
+		// A shared palette row is a name, not a declaration: it cannot be one
+		// of core's verbs (those hold their names first), so it goes straight
+		// to the fire, legacy-shaped (W-D).
+		if (a.shared) {
+			fireTrigger(a)
+			return
+		}
+		dispatchAction(a, actionDispatch)
 	}
 
 	function handleSessionsModesPage(msg: Sockets.Sessions.Genres.Response) {
@@ -2006,52 +2566,79 @@
 		}
 	}
 
-	function fireTrigger(fn: string) {
+	/**
+	 * The generic fire (19 §4), named by the declaration that was pressed
+	 * (W1): the server checks THAT action's audience and enablement and runs
+	 * THAT spec. A subject message and entered values ride when there are
+	 * any.
+	 */
+	function fireTrigger(
+		a: { specSlug: string; key: string; function: string; shared?: boolean },
+		args?: InvokeArgs
+	) {
 		// The functions with a bespoke client flow: both halves of the narrator
 		// split open the same modal — whose first step *is* the choice between
 		// them — and fire the dedicated event. Everything else is the generic
 		// fire (19 §4).
-		if (fn === "narrate" || fn === "narrate-character") {
+		if (a.function === "narrate" || a.function === "narrate-character") {
 			openNarrateModal()
 			return
 		}
 		// The run is named HERE, so Cancel works during the window between the
 		// press and the first progress event — which is exactly when somebody
 		// realises they meant something else.
+		//
+		// A palette row standing for a slash name several declarations share
+		// (`shared`, W-D) names none of them: the legacy fire, so the server's
+		// binding layer selects the spec rather than this page picking the
+		// first declaration it listed.
 		socket.emit("sessions:triggerFunction", {
 			sessionId,
-			function: fn,
+			function: a.function,
+			...(a.shared ? {} : { action: actionIdentity(a) }),
+			...(args?.messageId != null ? { messageId: args.messageId } : {}),
+			...(args?.payload && Object.keys(args.payload).length
+				? { payload: args.payload }
+				: {}),
 			runId: crypto.randomUUID()
 		})
 	}
 
 	/**
-	 * A `kind: 'menu'` trigger, fired from a message's options menu (19 §4).
-	 * The message is the subject: its id rides the run's input, so the winning
-	 * spec receives which message the person meant.
+	 * A contributed action fired from a message's options menu or quick row
+	 * (19 §4). The message is the subject: its id rides the run's input, so
+	 * the winning spec receives which message the person meant.
 	 */
-	function fireMenuTrigger(fn: string, msg: SelectSessionMessage) {
-		socket.emit("sessions:triggerFunction", {
-			sessionId,
-			function: fn,
-			messageId: msg.id
-		})
+	function fireMenuTrigger(
+		a: Sockets.Sessions.Actions.Action,
+		msg: SelectSessionMessage
+	) {
+		fireTrigger(a, { messageId: msg.id })
 	}
 
 	/**
 	 * A declared block action (20 §6): a choices button or a form submit
 	 * inside a parts-native message. Same audited path as a menu trigger,
-	 * with the entered values riding as the payload.
+	 * with the entered values riding as the payload and the block's stamped
+	 * identity (W-E) naming the declaration the server holds the press to —
+	 * a block stamped by a spec that opened it to any participant admits a
+	 * guest; a block with none is the legacy shape and gets the owner floor.
 	 */
 	function fireBlockAction(
 		fn: string,
 		msg: SelectSessionMessage,
-		payload?: Record<string, unknown>
+		payload?: Record<string, unknown>,
+		action?: string,
+		blockId?: string
 	) {
 		socket.emit("sessions:triggerFunction", {
 			sessionId,
 			function: fn,
+			...(action ? { action } : {}),
 			messageId: msg.id,
+			// A form's press names its block (U5d): the server reads the
+			// block off the row and holds the press to its addressee.
+			...(blockId ? { blockId } : {}),
 			...(payload && Object.keys(payload).length ? { payload } : {})
 		})
 	}
@@ -2066,11 +2653,9 @@
 	}
 
 	onMount(() => {
-		// Fetch available personas for guest users
-		socket.emit("personas:list", {})
-
-		socket.on("personas:list", handlePersonasList)
-		socket.on("sessions:userTyping", handleSessionsUserTyping)
+		// The guest persona picker asks `characters:list` for itself, so there
+		// is nothing to fetch here.
+		// "sessions:userTyping" is a scoped interest, declared above.
 		typingPruneInterval = setInterval(() => {
 			const cutoff = Date.now() - 10_000
 			let changed = false
@@ -2083,57 +2668,27 @@
 			if (changed) typingPersonas = new Map(typingPersonas)
 		}, 1000)
 
-		socket.on("sessions:get", handleSessionsGet)
-		socket.on("sessions:presetStatus", handlePresetStatus)
-		socket.on("sessionMessage", handleSessionMessage)
-		socket.on("sessionMessage:error", handleSessionMessageError)
-		socket.on("lorebooks:bindingList", handleLorebookBindingList)
-		// Page-level, so it still fires when the review modal is closed. The
-		// generic onAny toaster already suppresses this event, and the only
-		// other listener lives in the lorebook History pane — so without this a
-		// session-started run that failed while minimized reported nothing at all.
-		socket.on("scenes:process:error", handleSceneProcessError)
-		socket.on("sessions:summarize:error", handleSessionSummarizeError)
-		socket.on("characters:update", handleCharactersUpdate)
-		socket.on("personas:update", handlePersonasUpdate)
-		socket.on("media:changed", handleMediaChanged)
-		socket.on("sessions:promptTokenCount", handleSessionsPromptTokenCount)
-		socket.on("sessionMessages:delete", handleSessionMessagesDelete)
-		socket.on("sessions:getResponseOrder", handleSessionsGetResponseOrder)
-		socket.on("sessions:addPersona", handleSessionsAddPersona)
-		socket.on("sessions:branch", handleSessionsBranch)
-		socket.on("scenes:scenedMessageIds", handleScenesScenedMessageIds)
-		socket.on(
-			"scenes:scenedMessageIds:error",
-			handleScenesScenedMessageIdsError
-		)
-		socket.on("scenes:list", handleScenesList)
-		socket.on("scenes:list:error", handleScenesListError)
-		socket.on("sessions:getNarratorName", handleSessionsGetNarratorName)
-		socket.on(
-			"sessions:sideCharacterOptions",
-			handleSessionsSideCharacterOptions
-		)
-		socket.on("sessions:triggers", handleSessionsTriggers)
-		socket.on("sessions:view", handleSessionsView)
-		socket.on("sessions:panelLayout:get", handleSessionsPanelLayoutGet)
-		socket.on("sessions:layoutPreset:save", handleLayoutPresetSave)
-		socket.on("sessions:layoutPreset:rename", handleLayoutPresetRename)
-		socket.on("sessions:layoutPreset:delete", handleLayoutPresetDelete)
-		socket.on("sessions:layoutPreset:usage", handleLayoutPresetUsage)
-		socket.on("sessions:surfaceIntent", handleSurfaceIntent)
-		socket.on("sessions:triggerFunction", handleSessionsTriggerFunction)
-		socket.on("pipelines:runStarted", handleRunProgress)
-		socket.on("pipelines:progress", handleRunProgress)
-		socket.on("sessions:genres", handleSessionsModesPage)
+		// Every listener this page needs is an interest, declared above rather
+		// than registered by hand here: "sessionMessage", "sessions:get" and
+		// the run-progress pushes scoped to this session; "scenes:list" and
+		// "scenes:scenedMessageIds" likewise; "lorebooks:bindingList" scoped
+		// to the session's book; and the bare page-level ones —
+		// "sessionMessage:error", "scenes:process:error" (page-level so a run
+		// that failed while minimized is not silent), "media:changed",
+		// "sessionMessages:delete", "characters:update" and the two scene
+		// `:error` halves.
 
+		// The keys for every `sessions:*` reply below are already held (they are
+		// declared above, and effects run in declaration order); the first typed
+		// `emit` puts their sync packet ahead of this request group on the same
+		// socket — plan ruling 3, which is what makes an ack unnecessary.
 		socket.emit("scenes:scenedMessageIds", { sessionId })
 		socket.emit("scenes:list", {
 			sessionId
 		} satisfies Sockets.Scenes.List.Params)
-		// The contributed trigger set (19 §4) — the buttons are rows — and the
-		// shape, which gates what the view renders at all (19 §2).
-		socket.emit("sessions:triggers", { sessionId })
+		// The action list (R-15) — the buttons are rows — and the shape,
+		// which gates what the view renders at all (19 §2).
+		socket.emit("sessions:actions", { sessionId })
 		socket.emit("sessions:view", { sessionId })
 		socket.emit("sessions:panelLayout:get", { sessionId })
 		socket.emit("sessions:genres", {})
@@ -2150,62 +2705,12 @@
 			if (typingPruneInterval) {
 				clearInterval(typingPruneInterval)
 			}
-			socket.off("personas:list", handlePersonasList)
-			socket.off("sessions:userTyping", handleSessionsUserTyping)
-			socket.off("sessions:get", handleSessionsGet)
-			socket.off("sessions:presetStatus", handlePresetStatus)
-			socket.off("sessionMessage", handleSessionMessage)
-			socket.off("sessionMessage:error", handleSessionMessageError)
-			socket.off("lorebooks:bindingList", handleLorebookBindingList)
-			socket.off("scenes:process:error", handleSceneProcessError)
-			socket.off("sessions:summarize:error", handleSessionSummarizeError)
-			socket.off("characters:update", handleCharactersUpdate)
-			socket.off("personas:update", handlePersonasUpdate)
-			socket.off("media:changed", handleMediaChanged)
-			socket.off(
-				"sessions:promptTokenCount",
-				handleSessionsPromptTokenCount
-			)
-			socket.off("sessionMessages:delete", handleSessionMessagesDelete)
-			socket.off(
-				"sessions:getResponseOrder",
-				handleSessionsGetResponseOrder
-			)
-			socket.off("sessions:addPersona", handleSessionsAddPersona)
-			socket.off("sessions:branch", handleSessionsBranch)
-			socket.off("scenes:scenedMessageIds", handleScenesScenedMessageIds)
-			socket.off(
-				"scenes:scenedMessageIds:error",
-				handleScenesScenedMessageIdsError
-			)
-			socket.off("scenes:list", handleScenesList)
-			socket.off("scenes:list:error", handleScenesListError)
-			socket.off(
-				"sessions:getNarratorName",
-				handleSessionsGetNarratorName
-			)
-			socket.off(
-				"sessions:sideCharacterOptions",
-				handleSessionsSideCharacterOptions
-			)
-			socket.off("sessions:triggers", handleSessionsTriggers)
-			socket.off("sessions:view", handleSessionsView)
-			socket.off("sessions:panelLayout:get", handleSessionsPanelLayoutGet)
-			socket.off("sessions:layoutPreset:save", handleLayoutPresetSave)
-			socket.off("sessions:layoutPreset:rename", handleLayoutPresetRename)
-			socket.off("sessions:layoutPreset:delete", handleLayoutPresetDelete)
-			socket.off("sessions:layoutPreset:usage", handleLayoutPresetUsage)
-			socket.off("sessions:surfaceIntent", handleSurfaceIntent)
-			socket.off(
-				"sessions:triggerFunction",
-				handleSessionsTriggerFunction
-			)
-			socket.off("pipelines:runStarted", handleRunProgress)
-			socket.off("pipelines:progress", handleRunProgress)
 			// Runs belonging to a session nobody is looking at any more. The
 			// server keeps running them; the card is what goes away.
 			runProgress.clearAll()
-			socket.off("sessions:genres", handleSessionsModesPage)
+			// Every listener is released by the interest registry as this
+			// component's effects are destroyed — there is nothing to take off
+			// the socket by hand here.
 			surfaceManager.destroy()
 		}
 	})
@@ -2283,9 +2788,7 @@
 		openSessionCtx.isOwner = false
 	})
 
-	function handleAvatarClick(
-		char: SelectCharacter | SelectPersona | undefined
-	) {
+	function handleAvatarClick(char: SelectCharacter | undefined) {
 		if (!char) return
 		const isPersona = session?.sessionPersonas?.some(
 			(cp) => cp.persona?.id === char.id
@@ -2349,6 +2852,8 @@
 							}
 						: undefined}
 					messages={session?.sessionMessages ?? []}
+					actions={actionVenues}
+					{coreVerbs}
 					onAction={handleFrameAction}
 				/>
 			</div>
@@ -2373,533 +2878,493 @@
 				onLayoutSettings={persistLayoutSettings}
 				onFrameAction={handleFrameAction}
 			>
-				{#snippet messagesChildren()}
-					<SessionContainer
-						{session}
-						{pagination}
-						{loadingOlderMessages}
-						bind:sessionMessagesContainer
-						onScroll={handleScroll}
-						{getMessageCharacter}
-						{canControlMessage}
-						{showSwipeControls}
-						{canSwipeRight}
-						{canRegenerateLastMessage}
-						onSwipeLeft={swipeLeft}
-						onSwipeRight={swipeRight}
-						onEditMessage={handleEditMessage}
-						onDeleteMessage={handleDeleteMessage}
-						onHideMessage={handleHideMessage}
-						onRegenerateMessage={handleRegenerateMessage}
-						onContinueMessage={handleContinueMessage}
-						onAbortMessage={handleAbortMessage}
-						onBranchMessage={handleBranchMessage}
-						{editSessionMessage}
-						{hasGeneratingMessage}
-						{isGuest}
-						{sceneList}
-						onHistoryEntryClick={({
-							historyEntryId,
-							lorebookId
-						}) => {
-							panelsCtx.digest.lore = {
-								lorebookId,
-								scope: "history",
-								entryId: historyEntryId
-							}
-							panelsCtx.openPanel({
-								key: "lorebooks",
-								toggle: false
-							})
-						}}
-						onSceneClick={({
-							sceneId,
-							historyEntryId,
-							lorebookId
-						}) => {
-							panelsCtx.digest.lore = {
-								lorebookId,
-								scope: "scenes",
-								entryId: historyEntryId,
-								sceneId
-							}
-							panelsCtx.openPanel({
-								key: "lorebooks",
-								toggle: false
-							})
-						}}
-						onNewHistoryEntry={({ lorebookId }) => {
-							panelsCtx.digest.lore = {
-								lorebookId,
-								scope: "history"
-							}
-							panelsCtx.openPanel({
-								key: "lorebooks",
-								toggle: false
-							})
-						}}
-						onAttachLorebook={() => {
-							panelsCtx.openPanel({
-								key: "lorebooks",
-								toggle: false
-							})
-						}}
-					>
-						{#snippet MessageComponent(props)}
-							<SessionMessage
-								{...props}
-								onCharacterNameClick={handleCharacterNameClick}
-								onAvatarClick={handleAvatarClick}
-								onImageClick={handleImageClick}
-								onCancelEditMessage={handleCancelEditMessage}
-								onSaveEditMessage={handleSaveEditMessage}
-								bind:openMsgControlsMenu
-								{isSummarizationMode}
-								isSelected={selectedMessageIds.has(
-									props.msg.id
-								)}
-								onStartSummarization={!isSummarizationMode
-									? enterSummarizationMode
-									: undefined}
-								menuTriggers={modeTriggers.filter(
-									(t) => t.kind === "menu"
-								)}
-								onFireTrigger={fireMenuTrigger}
-								onBlockAction={fireBlockAction}
-							>
-								{#snippet GeneratingAnimationComponent()}
-									{@const character =
-										props.getMessageCharacter(props.msg)}
-									{@const speakerName = props.msg
-										.isNarratorResponse
-										? props.msg.metadata?.narratorName ||
-											"Narrator"
-										: resolveCharacterName(
-												character,
-												"User"
-											)}
-									<GeneratingAnimation
-										text={`${speakerName} is typing`}
-									/>
-								{/snippet}
-								{#snippet messageControls(msg)}
-									{#if isSummarizationMode}
-										{@const isScened = scenedMessageIds.has(
-											msg.id
-										)}
-										<div
-											class="flex gap-2"
-											role="group"
-											aria-label="Selection controls"
-										>
-											{#if isScened}
-												<span
-													class="btn msg-ctrl-btn-labeled preset-filled-surface-400-600 cursor-not-allowed opacity-60"
-													title="Already captured in a scene"
-													aria-label="Already captured in a scene"
-												>
-													<Icons.Film
-														aria-hidden="true"
-													/>
-													<span
-														class="hidden lg:inline"
-													>
-														In Scene
-													</span>
-												</span>
-											{:else}
-												<button
-													class="btn msg-ctrl-btn-labeled {selectedMessageIds.has(
-														msg.id
-													)
-														? 'preset-filled-secondary-500'
-														: 'preset-filled-surface-400-600'}"
-													title={selectedMessageIds.has(
-														msg.id
-													)
-														? "Deselect message"
-														: "Select message"}
-													aria-label={selectedMessageIds.has(
-														msg.id
-													)
-														? "Deselect message"
-														: "Select message"}
-													aria-pressed={selectedMessageIds.has(
-														msg.id
-													)}
-													onclick={() =>
-														toggleSummarizationMessage(
-															msg.id
-														)}
-												>
-													{#if selectedMessageIds.has(msg.id)}
-														<Icons.CheckSquare
-															aria-hidden="true"
-														/>
-													{:else}
-														<Icons.Square
-															aria-hidden="true"
-														/>
-													{/if}
-													<span
-														class="hidden lg:inline"
-													>
-														{selectedMessageIds.has(
-															msg.id
-														)
-															? "Deselect"
-															: "Select"}
-													</span>
-												</button>
-												<button
-													class="btn msg-ctrl-btn-labeled preset-filled-surface-400-600"
-													title="Select all above up to nearest selected"
-													aria-label="Select all above up to nearest selected"
-													onclick={() =>
-														selectAllAbove(
-															props.index
-														)}
-												>
-													<Icons.ChevronsUp
-														aria-hidden="true"
-													/>
-													<span
-														class="hidden lg:inline"
-													>
-														Select All Above
-													</span>
-												</button>
-												<button
-													class="btn msg-ctrl-btn-labeled preset-filled-surface-400-600"
-													title="Select all below up to nearest selected"
-													aria-label="Select all below up to nearest selected"
-													onclick={() =>
-														selectAllBelow(
-															props.index
-														)}
-												>
-													<Icons.ChevronsDown
-														aria-hidden="true"
-													/>
-													<span
-														class="hidden lg:inline"
-													>
-														Select All Below
-													</span>
-												</button>
-											{/if}
-										</div>
-									{:else}
-										<MessageControls
-											{msg}
-											isLastMessage={props.isLastMessage}
-											canRegenerateLastMessage={props.canRegenerateLastMessage}
-											editSessionMessage={props.editSessionMessage}
-											hasGeneratingMessage={props.hasGeneratingMessage}
-											onEditMessage={props.onEditMessage}
-											onHideMessage={props.onHideMessage}
-											onDeleteMessage={props.onDeleteMessage}
-											onRegenerateMessage={props.onRegenerateMessage}
-											onContinueMessage={props.onContinueMessage}
-											{continueRefusal}
-											onAbortMessage={props.onAbortMessage}
-											onBranchMessage={props.onBranchMessage}
-											onStartSummarization={enterSummarizationMode}
-											debugMeta={systemSettingsCtx
-												.settings
-												?.contextDebuggingEnabled
-												? (msg.debugMeta ?? null)
-												: null}
-											onShowDebugMeta={systemSettingsCtx
-												.settings
-												?.contextDebuggingEnabled
-												? (meta: any) => {
-														messageReport = {
-															messageId: msg.id,
-															prompt: meta?.prompt,
-															messages:
-																meta?.messages,
-															meta
-														}
-														showDraftCompiledPromptModal = true
-													}
-												: undefined}
-											open={openMsgControlsMenu ===
-												msg.id}
-											onOpenChange={(isOpen) =>
-												(openMsgControlsMenu = isOpen
-													? msg.id
-													: undefined)}
-										/>
-									{/if}
-								{/snippet}
-							</SessionMessage>
-						{/snippet}
-						{#snippet NextCharacterComponent()}
-							{#if shouldShowNextCharacterBlock}
-								<NextCharacterBlock
-									{nextCharacter}
-									shouldShow={shouldShowNextCharacterBlock}
-									{canChooseDifferentCharacter}
-									onContinueWithNextCharacter={handleContinueWithNextCharacter}
-									onChooseDifferentCharacter={handleChooseDifferentCharacter}
-								/>
-							{/if}
-						{/snippet}
-					</SessionContainer>
-				{/snippet}
-				{#snippet composerChildren()}
-					<!-- The session's preset binds an event to a pipeline that
-					     is not here any more (ruled 2026-09-10). It runs the
-					     genre's default instead, and this is the only place a
-					     person in the session would ever find that out.
-					     Dismissible per view, never persisted — the condition
-					     outlives the tab, so a stored dismissal would be a way
-					     to hide it from yourself. Above the composer chain
-					     rather than inside it: it is true whether or not the
-					     session is in summarization mode or read-only. -->
-					{#if presetStale.length && !presetBannerDismissed}
-						<div
-							class="preset-tonal-warning flex items-start gap-3 p-3 lg:rounded-t-lg"
-							role="status"
-						>
-							<Icons.Replace size={18} class="mt-0.5 shrink-0" />
-							<div class="min-w-0 flex-1 text-sm">
-								{#if userCtx.user?.isAdmin}
-									<p>
-										This session runs the default pipeline:
-										preset
-										<strong>
-											{presetStatus?.presetName}
-										</strong>
-										binds
-									</p>
-									<ul class="my-1 flex flex-col gap-0.5">
-										{#each presetStale as b (b.event)}
-											<li class="text-xs">
-												<code class="font-mono">
-													{b.event}
-												</code>
-												to
-												<code class="font-mono">
-													{b.bound}
-												</code>
-												— which is not available.
-											</li>
-										{/each}
-									</ul>
-									<a
-										class="underline"
-										href="/admin/session-presets/{presetStatus?.presetId}#bindings"
-									>
-										Fix the binding
-									</a>
-								{:else}
-									<p>
-										This session is running the default
-										pipeline for
-										{presetStale
-											.map((b) => b.event)
-											.join(", ")}.
-									</p>
-								{/if}
-							</div>
-							<button
-								class="btn-icon btn-icon-sm preset-tonal-surface shrink-0"
-								title="Dismiss"
-								aria-label="Dismiss"
-								onclick={() => (presetBannerDismissed = true)}
-							>
-								<Icons.X size={14} />
-							</button>
-						</div>
-					{/if}
-					{#if isSummarizationMode}
-						<div
-							class="preset-tonal-secondary flex flex-wrap items-center gap-2 p-3 lg:rounded-t-lg"
-						>
-							<span class="text-sm font-semibold">
-								{selectedMessageIds.size}
-								{selectedMessageIds.size === 1
-									? "message"
-									: "messages"} selected
-							</span>
-							<div class="flex gap-2">
-								<button
-									class="btn btn-sm preset-filled-surface-400-600"
-									title="Select All"
-									onclick={() => {
-										selectedMessageIds = new Set(
-											session!.sessionMessages
-												.filter(
-													(m) =>
-														!scenedMessageIds.has(
-															m.id
-														)
-												)
-												.map((m) => m.id)
-										)
-									}}
-								>
-									<Icons.CheckSquare size={16} />
-									<span class="hidden sm:inline">
-										Select All
-									</span>
-								</button>
-								<button
-									class="btn btn-sm preset-filled-surface-400-600"
-									title="Select None"
-									onclick={() =>
-										(selectedMessageIds = new Set())}
-								>
-									<Icons.Square size={16} />
-									<span class="hidden sm:inline">
-										Select None
-									</span>
-								</button>
-							</div>
-							<div class="ml-auto flex flex-wrap gap-2">
-								<button
-									class="btn btn-sm preset-filled-surface-500"
-									title="Cancel"
-									onclick={exitSummarizationMode}
-								>
-									<Icons.X size={16} />
-									<span class="hidden sm:inline">Cancel</span>
-								</button>
-								<button
-									class="btn btn-sm preset-filled-secondary-500"
-									title="Scene"
-									disabled={selectedMessageIds.size === 0}
-									onclick={() => openSummarizeModal("scene")}
-								>
-									<Icons.Film size={16} />
-									<span class="hidden sm:inline">Scene</span>
-								</button>
-								<button
-									class="btn btn-sm preset-filled-primary-500"
-									title="World Lore"
-									disabled={selectedMessageIds.size === 0}
-									onclick={() => openSummarizeModal("world")}
-								>
-									<Icons.Globe size={16} />
-									<span class="hidden sm:inline">
-										World Lore
-									</span>
-								</button>
-								<button
-									class="btn btn-sm preset-filled-tertiary-500"
-									title="Character Lore"
-									disabled={selectedMessageIds.size === 0}
-									onclick={() =>
-										openSummarizeModal("character")}
-								>
-									<Icons.User size={16} />
-									<span class="hidden sm:inline">
-										Character Lore
-									</span>
-								</button>
-							</div>
-						</div>
-					{:else if modeMissing}
-						<!-- Read-only (19 §6, ruled): the mode disappeared, the
-					     history stays, nothing starts a new turn — and the
-					     server refuses independently at every generation
-					     choke, so this banner is honesty, not the lock. -->
-						<div
-							class="preset-tonal-warning flex items-start gap-3 rounded-t-lg p-4"
-							role="status"
-						>
-							<Icons.Lock size={20} class="mt-0.5 shrink-0" />
-							<div class="text-sm">
-								<p class="font-semibold">
-									This session is read-only.
-								</p>
-								<p>
-									Its mode ({(session as any)?.genreId}) is
-									not installed. Messages are safe to read;
-									new turns resume when the mode returns.
-								</p>
-							</div>
-						</div>
-					{:else}
-						{#each [...typingPersonas.values()] as typingPersona (typingPersona.name)}
-							<div class="flex items-center gap-2 px-2 pb-1">
-								<p
-									class="text-surface-600-400 animate-pulse text-sm"
-								>
-									{typingPersona.name} is typing...
-								</p>
-								<div
-									class="bg-primary-500 h-2 w-2 animate-bounce rounded-full"
-								></div>
-							</div>
-						{/each}
-						<SessionComposer
-							bind:newMessage
-							onSend={handleSend}
-							hideCompose={composerHidden}
-							{draftCompiledPrompt}
-							{currentUserPersona}
-							{userPersonasInSession}
-							onSwitchPersona={switchPersona}
-							session={session ?? undefined}
-							{lastMessage}
-							{editSessionMessage}
-							{isGuest}
-							{showAddPersonaCTA}
-							onAddPersonaClick={() => {
-								showAddPersonaModal = true
-							}}
-							onAbortLastMessage={handleAbortLastMessage}
-							actions={!isGuest && sessionActions.length
-								? sessionActionsRow
-								: undefined}
-							extraTabs={isGuest
-								? []
-								: [
-										{
-											value: "extraControls",
-											title: "Extra Controls",
-											control: extraControlsButton,
-											content: extraControlsContent
-										},
-										...(session?.lorebookId
-											? [
-													{
-														value: "workflow",
-														title: "Lore",
-														control: workflowButton,
-														content: workflowContent
-													}
-												]
-											: []),
-										{
-											value: "sceneImages",
-											title: "Pinned Images",
-											control: sceneImagesButton,
-											content: sceneImagesContent
-										},
-										...(systemSettingsCtx.settings
-											?.contextDebuggingEnabled
-											? [
-													{
-														value: "statistics",
-														title: "Statistics",
-														control:
-															statisticsButton,
-														content:
-															statisticsContent
-													}
-												]
-											: [])
-									]}
-						/>
-					{/if}
+				<!-- The one `messages` widget: the log, the field you write into,
+				     and the strips that belong beside the field. `MessagesWidget`
+				     reads the widget's settings and hands them back to each
+				     snippet, so the log, the composer and the scroll handling all
+				     answer to one reading of them. -->
+				{#snippet conversationChildren()}
+					<MessagesWidget
+						log={conversationLog}
+						composer={conversationComposer}
+						banners={conversationBanners}
+						nudge={shouldShowNextCharacterBlock
+							? conversationNudge
+							: undefined}
+						onSettings={(s) => (conversationSettings = s)}
+					/>
 				{/snippet}
 			</SessionLayout>
 		{/if}
 	</div>
+
+	{#snippet conversationLog(view: ConversationSettings)}
+		<SessionContainer
+			{session}
+			{pagination}
+			{loadingOlderMessages}
+			bind:sessionMessagesContainer
+			onScroll={handleScroll}
+			order={view.order}
+			showSceneMarkers={view.showSceneMarkers}
+			{getMessageCharacter}
+			{canControlMessage}
+			{showSwipeControls}
+			{canSwipeRight}
+			{canRegenerateLastMessage}
+			onSwipeLeft={swipeLeft}
+			onSwipeRight={swipeRight}
+			onEditMessage={handleEditMessage}
+			onDeleteMessage={handleDeleteMessage}
+			onHideMessage={handleHideMessage}
+			onRegenerateMessage={handleRegenerateMessage}
+			onContinueMessage={handleContinueMessage}
+			onAbortMessage={handleAbortMessage}
+			onBranchMessage={handleBranchMessage}
+			{editSessionMessage}
+			{hasGeneratingMessage}
+			{isGuest}
+			{sceneList}
+			onHistoryEntryClick={({ historyEntryId, lorebookId }) => {
+				panelsCtx.digest.lore = {
+					lorebookId,
+					scope: "history",
+					entryId: historyEntryId
+				}
+				panelsCtx.openPanel({
+					key: "lorebooks",
+					toggle: false
+				})
+			}}
+			onSceneClick={({ sceneId, historyEntryId, lorebookId }) => {
+				panelsCtx.digest.lore = {
+					lorebookId,
+					scope: "scenes",
+					entryId: historyEntryId,
+					sceneId
+				}
+				panelsCtx.openPanel({
+					key: "lorebooks",
+					toggle: false
+				})
+			}}
+			onNewHistoryEntry={({ lorebookId }) => {
+				panelsCtx.digest.lore = {
+					lorebookId,
+					scope: "history"
+				}
+				panelsCtx.openPanel({
+					key: "lorebooks",
+					toggle: false
+				})
+			}}
+		>
+			{#snippet MessageComponent(props)}
+				<SessionMessage
+					{...props}
+					onCharacterNameClick={handleCharacterNameClick}
+					onAvatarClick={handleAvatarClick}
+					onImageClick={handleImageClick}
+					onCancelEditMessage={handleCancelEditMessage}
+					onSaveEditMessage={handleSaveEditMessage}
+					bind:openMsgControlsMenu
+					{continueRefusal}
+					{isSummarizationMode}
+					isSelected={selectedMessageIds.has(props.msg.id)}
+					onStartSummarization={!isSummarizationMode
+						? enterSummarizationMode
+						: undefined}
+					{messageActions}
+					onActionsSeen={markActionsSeen}
+					onFireTrigger={fireMenuTrigger}
+					onBlockAction={fireBlockAction}
+				>
+					{#snippet GeneratingAnimationComponent()}
+						{@const character = props.getMessageCharacter(
+							props.msg
+						)}
+						{@const speakerName = props.msg.isNarratorResponse
+							? props.msg.metadata?.narratorName || "Narrator"
+							: resolveCharacterName(character, "User")}
+						<GeneratingAnimation
+							text={`${speakerName} is typing`}
+						/>
+					{/snippet}
+					{#snippet messageControls(msg)}
+						{#if isSummarizationMode}
+							{@const isScened = scenedMessageIds.has(msg.id)}
+							<div
+								class="flex gap-2"
+								role="group"
+								aria-label="Selection controls"
+							>
+								{#if isScened}
+									<span
+										class="btn msg-ctrl-btn-labeled preset-filled-surface-400-600 cursor-not-allowed opacity-60"
+										title="Already captured in a scene"
+										aria-label="Already captured in a scene"
+									>
+										<Icons.Film aria-hidden="true" />
+										<span class="hidden lg:inline">
+											In Scene
+										</span>
+									</span>
+								{:else}
+									<button
+										class="btn msg-ctrl-btn-labeled {selectedMessageIds.has(
+											msg.id
+										)
+											? 'preset-filled-secondary-500'
+											: 'preset-filled-surface-400-600'}"
+										title={selectedMessageIds.has(msg.id)
+											? "Deselect message"
+											: "Select message"}
+										aria-label={selectedMessageIds.has(
+											msg.id
+										)
+											? "Deselect message"
+											: "Select message"}
+										aria-pressed={selectedMessageIds.has(
+											msg.id
+										)}
+										onclick={() =>
+											toggleSummarizationMessage(msg.id)}
+									>
+										{#if selectedMessageIds.has(msg.id)}
+											<Icons.CheckSquare
+												aria-hidden="true"
+											/>
+										{:else}
+											<Icons.Square aria-hidden="true" />
+										{/if}
+										<span class="hidden lg:inline">
+											{selectedMessageIds.has(msg.id)
+												? "Deselect"
+												: "Select"}
+										</span>
+									</button>
+									<button
+										class="btn msg-ctrl-btn-labeled preset-filled-surface-400-600"
+										title="Select all above up to nearest selected"
+										aria-label="Select all above up to nearest selected"
+										onclick={() =>
+											selectAllAbove(props.index)}
+									>
+										<Icons.ChevronsUp aria-hidden="true" />
+										<span class="hidden lg:inline">
+											Select all above
+										</span>
+									</button>
+									<button
+										class="btn msg-ctrl-btn-labeled preset-filled-surface-400-600"
+										title="Select all below up to nearest selected"
+										aria-label="Select all below up to nearest selected"
+										onclick={() =>
+											selectAllBelow(props.index)}
+									>
+										<Icons.ChevronsDown
+											aria-hidden="true"
+										/>
+										<span class="hidden lg:inline">
+											Select all below
+										</span>
+									</button>
+								{/if}
+							</div>
+						{:else}
+							<MessageControls
+								{msg}
+								isLastMessage={props.isLastMessage}
+								canRegenerateLastMessage={props.canRegenerateLastMessage}
+								editSessionMessage={props.editSessionMessage}
+								hasGeneratingMessage={props.hasGeneratingMessage}
+								onEditMessage={props.onEditMessage}
+								onHideMessage={props.onHideMessage}
+								onDeleteMessage={props.onDeleteMessage}
+								onRegenerateMessage={props.onRegenerateMessage}
+								onContinueMessage={props.onContinueMessage}
+								{continueRefusal}
+								{messageActions}
+								canControl={props.canControlMessage(msg)}
+								canSwipe={props.canSwipeRight(
+									msg,
+									!!msg.metadata?.isGreeting
+								)}
+								onSwipeMessage={(_e, m) => props.onSwipeRight(m)}
+								onActionsSeen={markActionsSeen}
+								onFireTrigger={fireMenuTrigger}
+								onAbortMessage={props.onAbortMessage}
+								onBranchMessage={props.onBranchMessage}
+								onStartSummarization={enterSummarizationMode}
+								debugMeta={systemSettingsCtx.settings
+									?.contextDebuggingEnabled
+									? (msg.debugMeta ?? null)
+									: null}
+								onShowDebugMeta={systemSettingsCtx.settings
+									?.contextDebuggingEnabled
+									? (meta: any) => {
+											messageReport = {
+												messageId: msg.id,
+												prompt: meta?.prompt,
+												messages: meta?.messages,
+												meta
+											}
+											showDraftCompiledPromptModal = true
+										}
+									: undefined}
+								open={openMsgControlsMenu === msg.id}
+								onOpenChange={(isOpen) =>
+									(openMsgControlsMenu = isOpen
+										? msg.id
+										: undefined)}
+							/>
+						{/if}
+					{/snippet}
+				</SessionMessage>
+			{/snippet}
+		</SessionContainer>
+	{/snippet}
+
+	{#snippet conversationBanners()}
+		<!-- The session's preset binds an event to a pipeline that
+		     is not here any more (ruled 2026-09-10). It runs the
+		     genre's default instead, and this is the only place a
+		     person in the session would ever find that out.
+		     Dismissible per view, never persisted — the condition
+		     outlives the tab, so a stored dismissal would be a way
+		     to hide it from yourself. Above the composer chain
+		     rather than inside it: it is true whether or not the
+		     session is in summarization mode or read-only. -->
+		{#if presetStale.length && !presetBannerDismissed}
+			<div
+				class="preset-tonal-warning flex items-start gap-3 p-3 lg:rounded-t-lg"
+				role="status"
+			>
+				<Icons.Replace size={18} class="mt-0.5 shrink-0" />
+				<div class="min-w-0 flex-1 text-sm">
+					{#if userCtx.user?.isAdmin}
+						<p>
+							This session runs the default pipeline: preset
+							<strong>
+								{presetStatus?.presetName}
+							</strong>
+							binds
+						</p>
+						<ul class="my-1 flex flex-col gap-0.5">
+							{#each presetStale as b (b.event)}
+								<li class="text-xs">
+									<code class="font-mono">
+										{b.event}
+									</code>
+									to
+									<code class="font-mono">
+										{b.bound}
+									</code>
+									— which is not available.
+								</li>
+							{/each}
+						</ul>
+						<a
+							class="underline"
+							href="/admin/session-presets/{presetStatus?.presetId}#bindings"
+						>
+							Fix the binding
+						</a>
+					{:else}
+						<p>
+							This session is running the default pipeline for
+							{presetStale.map((b) => b.event).join(", ")}.
+						</p>
+					{/if}
+				</div>
+				<button
+					class="btn-icon btn-icon-sm preset-tonal-surface shrink-0"
+					title="Dismiss"
+					aria-label="Dismiss"
+					onclick={() => (presetBannerDismissed = true)}
+				>
+					<Icons.X size={14} />
+				</button>
+			</div>
+		{/if}
+		{#each [...typingPersonas.values()] as typingPersona (typingPersona.name)}
+			<div class="flex items-center gap-2 px-2 pb-1">
+				<p class="text-surface-600-400 animate-pulse text-sm">
+					{typingPersona.name} is typing...
+				</p>
+				<div
+					class="bg-primary-500 h-2 w-2 animate-bounce rounded-full"
+				></div>
+			</div>
+		{/each}
+	{/snippet}
+
+	{#snippet conversationNudge()}
+		<NextCharacterBlock
+			{nextCharacter}
+			shouldShow={shouldShowNextCharacterBlock}
+			{canChooseDifferentCharacter}
+			onContinueWithNextCharacter={handleContinueWithNextCharacter}
+			onChooseDifferentCharacter={handleChooseDifferentCharacter}
+		/>
+	{/snippet}
+
+	{#snippet conversationComposer(view: ConversationSettings)}
+		{#if isSummarizationMode}
+			<div
+				class="preset-tonal-secondary flex flex-wrap items-center gap-2 p-3 lg:rounded-t-lg"
+			>
+				<span class="text-sm font-semibold">
+					{selectedMessageIds.size}
+					{selectedMessageIds.size === 1 ? "message" : "messages"} selected
+				</span>
+				<div class="flex gap-2">
+					<button
+						class="btn btn-sm preset-filled-surface-400-600"
+						title="Select all"
+						onclick={() => {
+							selectedMessageIds = new Set(
+								session!.sessionMessages
+									.filter((m) => !scenedMessageIds.has(m.id))
+									.map((m) => m.id)
+							)
+						}}
+					>
+						<Icons.CheckSquare size={16} />
+						<span class="hidden sm:inline">Select all</span>
+					</button>
+					<button
+						class="btn btn-sm preset-filled-surface-400-600"
+						title="Select none"
+						onclick={() => (selectedMessageIds = new Set())}
+					>
+						<Icons.Square size={16} />
+						<span class="hidden sm:inline">Select none</span>
+					</button>
+				</div>
+				<div class="ml-auto flex flex-wrap gap-2">
+					<button
+						class="btn btn-sm preset-filled-surface-500"
+						title="Cancel"
+						onclick={exitSummarizationMode}
+					>
+						<Icons.X size={16} />
+						<span class="hidden sm:inline">Cancel</span>
+					</button>
+					<button
+						class="btn btn-sm preset-filled-secondary-500"
+						title="Scene"
+						disabled={selectedMessageIds.size === 0}
+						onclick={() => openSummarizeModal("scene")}
+					>
+						<Icons.Film size={16} />
+						<span class="hidden sm:inline">Scene</span>
+					</button>
+					<button
+						class="btn btn-sm preset-filled-primary-500"
+						title="World lore"
+						disabled={selectedMessageIds.size === 0}
+						onclick={() => openSummarizeModal("world")}
+					>
+						<Icons.Globe size={16} />
+						<span class="hidden sm:inline">World lore</span>
+					</button>
+					<button
+						class="btn btn-sm preset-filled-tertiary-500"
+						title="Character lore"
+						disabled={selectedMessageIds.size === 0}
+						onclick={() => openSummarizeModal("character")}
+					>
+						<Icons.User size={16} />
+						<span class="hidden sm:inline">Character lore</span>
+					</button>
+				</div>
+			</div>
+		{:else if modeMissing}
+			<!-- Read-only (19 §6, ruled): the mode disappeared, the
+		     history stays, nothing starts a new turn — and the
+		     server refuses independently at every generation
+		     choke, so this banner is honesty, not the lock. -->
+			<div
+				class="preset-tonal-warning flex items-start gap-3 rounded-t-lg p-4"
+				role="status"
+			>
+				<Icons.Lock size={20} class="mt-0.5 shrink-0" />
+				<div class="text-sm">
+					<p class="font-semibold">This session is read-only.</p>
+					<p>
+						Its mode ({(session as any)?.genreId}) is not installed.
+						Messages are safe to read; new turns resume when the
+						mode returns.
+					</p>
+				</div>
+			</div>
+		{:else}
+			<SessionComposer
+				bind:newMessage
+				onSend={handleSend}
+				hideCompose={composerHidden}
+				{draftCompiledPrompt}
+				{currentUserPersona}
+				{userPersonasInSession}
+				onSwitchPersona={switchPersona}
+				session={session ?? undefined}
+				{lastMessage}
+				{editSessionMessage}
+				{isGuest}
+				{showAddPersonaCTA}
+				onAddPersonaClick={() => {
+					showAddPersonaModal = true
+				}}
+				onAbortLastMessage={handleAbortLastMessage}
+				composerSkin={view.composerSkin}
+				showActions={view.showActions}
+				sendTonal={shouldShowNextCharacterBlock}
+				actions={sessionActions.length ? sessionActionsRow : undefined}
+				overflowActions={composerOverflow}
+				{paletteActions}
+				onInvokeAction={invokeAction}
+				onActionsSeen={markActionsSeen}
+				extraTabs={isGuest
+					? []
+					: [
+							{
+								value: "extraControls",
+								title: "Turn controls",
+								control: extraControlsButton,
+								content: extraControlsContent
+							},
+							...(session?.lorebookId
+								? [
+										{
+											value: "workflow",
+											title: "Lore",
+											control: workflowButton,
+											content: workflowContent
+										}
+									]
+								: []),
+							{
+								value: "sceneImages",
+								title: "Pinned images",
+								control: sceneImagesButton,
+								content: sceneImagesContent
+							},
+							...(systemSettingsCtx.settings
+								?.contextDebuggingEnabled
+								? [
+										{
+											value: "statistics",
+											title: "Statistics",
+											control: statisticsButton,
+											content: statisticsContent
+										}
+									]
+								: [])
+						]}
+			/>
+		{/if}
+	{/snippet}
 
 	{#if showProcessSceneModal && processSceneId !== null && session?.lorebookId}
 		<ProcessSceneModal
@@ -2966,12 +3431,10 @@
 		}}
 		onLorebookSet={handleLorebookSet}
 		sessionCharacters={(session?.sessionCharacters ?? []).map((cc) => ({
-			type: "character" as const,
 			id: cc.character.id,
 			name: resolveCharacterName(cc.character, cc.character.name)
 		}))}
 		sessionPersonas={(session?.sessionPersonas ?? []).map((cp) => ({
-			type: "persona" as const,
 			id: cp.persona.id,
 			name: cp.persona.name
 		}))}
@@ -3479,7 +3942,7 @@
 					class="card bg-surface-100-900 relative max-h-[95dvh] w-[min(95vw,800px)] space-y-4 overflow-hidden p-4 shadow-xl"
 				>
 					<header class="mb-2 flex items-center justify-between">
-						<h2 class="h2">Trigger Character</h2>
+						<h2 class="h2">Pick who speaks</h2>
 						<button
 							class="btn btn-sm"
 							onclick={() =>
@@ -3599,7 +4062,10 @@
 		open={showAddPersonaModal}
 		onclose={() => (showAddPersonaModal = false)}
 		onSelect={handleAddPersona}
-		personas={availablePersonas}
+		excludeIds={(session?.sessionPersonas ?? [])
+			.filter((cp) => !cp.removedAt)
+			.map((cp) => cp.personaId)
+			.filter((id): id is number => id != null)}
 		title="Add Persona to Session"
 		description="Select a persona to add to this session. You'll be able to send messages as this persona."
 	/>
@@ -3685,10 +4151,13 @@
 			     these do not exist for it. The persona half of the disabled
 			     check follows the shape too — a persona-less mode's turns
 			     need no persona on record. -->
-			{#if charactersInMode}
+			<!-- Continue and Regenerate are core's `retry`/`continue` at the
+			     extra venue (R-15, U5c): present when the genre offers the
+			     verb, off the one action list. -->
+			{#if charactersInMode && offersExtra("continue")}
 				<button
 					class="btn btn-sm preset-tonal-primary"
-					title="Continue Conversation"
+					title="Continue the conversation"
 					onclick={handleTriggerContinueConversation}
 					disabled={!session ||
 						(personasInMode &&
@@ -3698,9 +4167,11 @@
 					<Icons.MessageSquareMore size={14} />
 					Continue
 				</button>
+			{/if}
+			{#if charactersInMode}
 				<button
 					class="btn btn-sm preset-tonal-secondary"
-					title="Trigger Character"
+					title="Pick who speaks"
 					onclick={handleTriggerCharacterMessage}
 					disabled={!session ||
 						(personasInMode &&
@@ -3708,18 +4179,22 @@
 						lastMessage?.isGenerating}
 				>
 					<Icons.MessageSquarePlus size={14} />
-					Trigger Character
+					Pick who speaks
 				</button>
 			{/if}
-			<button
-				class="btn btn-sm preset-tonal-warning"
-				title="Regenerate Last Message"
-				onclick={handleRegenerateLastMessage}
-				disabled={!canRegenerateLastMessage}
-			>
-				<Icons.RefreshCw size={14} />
-				Regenerate
-			</button>
+			<!-- Absent, not disabled, when the genre does not offer retry
+			     (R-15): a dice-are-final genre has no reply to redo. -->
+			{#if offersExtra("retry")}
+				<button
+					class="btn btn-sm preset-tonal-warning"
+					title="Regenerate the last reply"
+					onclick={handleRegenerateLastMessage}
+					disabled={!canRegenerateLastMessage}
+				>
+					<Icons.RefreshCw size={14} />
+					Regenerate
+				</button>
+			{/if}
 		</div>
 	{/snippet}
 
@@ -3730,7 +4205,17 @@
 	     narrate function keeps its bespoke presentation — the resolved narrator
 	     name and its instructions modal — mapped on the function key. -->
 	{#snippet sessionActionsRow()}
-		{#each sessionActions as t (t.specSlug + t.function)}
+		<!-- Keyed by the action's identity (W3): two actions on one function
+		     — core's and a plugin's `summarize` — are two chips. -->
+		{#each sessionActions as t (actionIdentity(t))}
+			{@const chip = paletteRowState(t, {
+				generating: !session || !!lastMessage?.isGenerating
+			})}
+			{@const chipNoteId = `chip-note-${actionIdentity(t).replace(/[^a-z0-9-]/g, "-")}`}
+			<!-- Greyed, not disabled (S6): `aria-disabled` keeps the chip in
+			     the tab order and the reason reaches a screen reader through
+			     `aria-describedby`; a native `disabled` is skipped and says
+			     nothing. The click is guarded instead. -->
 			<!-- `narrate-character` deliberately falls through to the generic
 			     branch: `fireTrigger` routes it to the same modal, whose first
 			     step is the choice between the two. A second bespoke button
@@ -3739,24 +4224,42 @@
 			{#if t.function === "narrate"}
 				<button
 					class="btn btn-sm preset-tonal-success"
-					title="Trigger Narrator Response"
-					onclick={handleTriggerNarratorResponse}
-					disabled={!session || lastMessage?.isGenerating}
+					class:opacity-60={chip.disabled}
+					class:cursor-not-allowed={chip.disabled}
+					title={chip.reason
+						? `${narratorName} — ${chip.reason}`
+						: "Trigger Narrator Response"}
+					aria-disabled={chip.disabled}
+					aria-describedby={chip.reason ? chipNoteId : undefined}
+					onclick={(e) =>
+						chip.disabled
+							? e.preventDefault()
+							: handleTriggerNarratorResponse(e)}
 				>
 					<Icons.CloudSun size={14} />
 					{narratorName}
 				</button>
 			{:else}
 				{@const TriggerIconComponent = triggerIcon(t.icon)}
+				<!-- Seen by the audience's `see`, pressable by its `act` (R-15):
+				     a guest sees the genre's vocabulary and is told, not
+				     shown nothing. -->
 				<button
 					class="btn btn-sm preset-tonal-success"
-					title={t.name}
-					onclick={() => fireTrigger(t.function)}
-					disabled={!session || lastMessage?.isGenerating}
+					class:opacity-60={chip.disabled}
+					class:cursor-not-allowed={chip.disabled}
+					title={chip.reason ? `${t.name} — ${chip.reason}` : t.name}
+					aria-disabled={chip.disabled}
+					aria-describedby={chip.reason ? chipNoteId : undefined}
+					onclick={(e) =>
+						chip.disabled ? e.preventDefault() : fireTrigger(t)}
 				>
 					<TriggerIconComponent size={14} />
 					{t.name}
 				</button>
+			{/if}
+			{#if chip.reason}
+				<span id={chipNoteId} class="sr-only">{chip.reason}</span>
 			{/if}
 		{/each}
 	{/snippet}

@@ -3,6 +3,11 @@
 	import { page } from "$app/state"
 	import { goto } from "$app/navigation"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import {
+		declareInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
+	import { interestKey } from "$lib/shared/sockets/interest"
 	import { announce } from "$lib/client/accessibility/state.svelte"
 
 	const socket = useTypedSocket()
@@ -14,6 +19,17 @@
 	let personality = $state("")
 	let scenario = $state("")
 	let firstMessage = $state("")
+	let isPersona = $state(false)
+	let isDefaultPersona = $state(false)
+	/**
+	 * The character's tags as loaded, sent back UNCHANGED on save.
+	 *
+	 * ⚠ Load-bearing: `characters:update` runs `processCharacterTags` with
+	 * whatever `tags` the payload carries, and an absent array reads as an
+	 * empty one — so a save from this form (which has no tag field) would
+	 * otherwise strip every tag off the character as a side effect.
+	 */
+	let tags: string[] = $state([])
 	let isOwner = $state(true)
 	let loaded = $state(false)
 	let notFound = $state(false)
@@ -49,7 +65,13 @@
 				description: description.trim(),
 				personality: personality.trim() || null,
 				scenario: scenario.trim() || null,
-				firstMessage: firstMessage.trim() || null
+				firstMessage: firstMessage.trim() || null,
+				isPersona,
+				// Sent whichever way it is set: the handler only clears a
+				// default on an EXPLICIT false, and clearing Persona has to
+				// take the default with it.
+				isDefaultPersona: isPersona && isDefaultPersona,
+				tags
 			} as any
 		})
 	}
@@ -72,6 +94,9 @@
 		personality = msg.character.personality || ""
 		scenario = msg.character.scenario || ""
 		firstMessage = msg.character.firstMessage || ""
+		isPersona = !!msg.character.isPersona
+		isDefaultPersona = !!msg.character.isDefaultPersona
+		tags = msg.character.tags ?? []
 		isOwner = msg.character.isOwner
 	}
 	function handleCharactersUpdate(msg: any) {
@@ -83,6 +108,8 @@
 			personality = msg.character.personality || ""
 			scenario = msg.character.scenario || ""
 			firstMessage = msg.character.firstMessage || ""
+			isPersona = !!msg.character.isPersona
+			isDefaultPersona = !!msg.character.isDefaultPersona
 			announce("Character saved.")
 		}
 	}
@@ -100,20 +127,53 @@
 		announce(error)
 	}
 
+	/**
+	 * The rest, all BARE: no `SCOPED_EVENTS` entry, so a `#<id>` key would
+	 * match no payload at all. `characters:update` is also the cascade
+	 * `characters:setAvatar` re-emits, which is why it is a STANDING key rather
+	 * than a one-shot around the save. The two `:error` events are never gated
+	 * (plan ruling 2) but the registry is still the only listener path.
+	 */
+	useInterest<"characters:update">(
+		"characters:update",
+		handleCharactersUpdate
+	)
+	useInterest<"characters:update:error">(
+		"characters:update:error",
+		handleCharactersUpdateError
+	)
+	useInterest<"characters:delete">(
+		"characters:delete",
+		handleCharactersDelete
+	)
+	useInterest<"characters:delete:error">(
+		"characters:delete:error",
+		handleCharactersDeleteError
+	)
+
+	/**
+	 * This character's own `characters:get`, SCOPED to the id in the route — the
+	 * reply to `load()`. An effect rather than `useInterest` because that
+	 * helper reads its key once and the key moves with the route.
+	 *
+	 * No bare key beside it: the not-found reply carries the requested id on
+	 * `characterId` next to a null character, so it has this scope too. A bare key
+	 * would have matched every other character's reply as well, and would keep
+	 * the server's gate open for every id while this page is open.
+	 */
+	$effect(() => {
+		if (!Number.isFinite(characterId)) return
+		return declareInterest<"characters:get">(
+			interestKey("characters:get", characterId),
+			handleCharactersGet
+		)
+	})
+
 	onMount(() => {
-		socket.on("characters:get", handleCharactersGet)
-		socket.on("characters:update", handleCharactersUpdate)
-		socket.on("characters:update:error", handleCharactersUpdateError)
-		socket.on("characters:delete", handleCharactersDelete)
-		socket.on("characters:delete:error", handleCharactersDeleteError)
+		// Every `characters:*` listener is an interest, declared above; the typed
+		// `emit` inside `load()` puts its sync ahead of the request on the
+		// same socket (plan ruling 3).
 		load()
-		return () => {
-			socket.off("characters:get", handleCharactersGet)
-			socket.off("characters:update", handleCharactersUpdate)
-			socket.off("characters:update:error", handleCharactersUpdateError)
-			socket.off("characters:delete", handleCharactersDelete)
-			socket.off("characters:delete:error", handleCharactersDeleteError)
-		}
 	})
 </script>
 
@@ -192,6 +252,40 @@
 				bind:value={firstMessage}
 				disabled={saving || !isOwner}
 			></textarea>
+		</div>
+		<div class="a11y-field">
+			<label for="a11y-char-persona">
+				<input
+					id="a11y-char-persona"
+					type="checkbox"
+					bind:checked={isPersona}
+					onchange={() => {
+						// A default you cannot play is not a state worth
+						// having, here or anywhere else.
+						if (!isPersona) isDefaultPersona = false
+					}}
+					disabled={saving || !isOwner}
+				/>
+				Persona
+			</label>
+			<p class="a11y-hint">A character you play.</p>
+		</div>
+		<div class="a11y-field">
+			<label for="a11y-char-default-persona">
+				<input
+					id="a11y-char-default-persona"
+					type="checkbox"
+					bind:checked={isDefaultPersona}
+					onchange={() => {
+						if (isDefaultPersona) isPersona = true
+					}}
+					disabled={saving || !isOwner}
+				/>
+				Default persona
+			</label>
+			<p class="a11y-hint">
+				The persona a new session starts with. You have one.
+			</p>
 		</div>
 		{#if isOwner}
 			<button type="submit" class="a11y-btn" disabled={saving}>

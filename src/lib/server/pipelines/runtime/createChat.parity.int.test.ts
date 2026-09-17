@@ -10,6 +10,7 @@
  */
 import { beforeAll, describe, expect, test, vi } from "vitest"
 import * as schema from "$lib/server/db/schema"
+import { sessionEvents } from "@serene-pub/sdk"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import { eq, asc } from "drizzle-orm"
 
@@ -49,12 +50,12 @@ beforeAll(async () => {
 		.returning()
 	characterId = character.id
 	const [persona] = await db
-		.insert(schema.personas)
+		.insert(schema.characters)
 		.values({
 			userId,
+			isPersona: true,
 			name: "Bram",
-			description: "A traveller.",
-			isDefault: false
+			description: "A traveller."
 		})
 		.returning()
 	personaId = persona.id
@@ -110,7 +111,7 @@ describe("creation as a run (24 §12)", () => {
 			sessionId: viaPipeline.id,
 			userId,
 			genreId: "core:genre/chat",
-			event: "session-created",
+			event: sessionEvents.sessionCreated,
 			input: {
 				main: {},
 				sessionScope: { sessionId: viaPipeline.id, userId },
@@ -159,8 +160,8 @@ describe("creation as a run (24 §12)", () => {
 		const dispatched = await dispatchSessionEvent(db, {
 			sessionId: session.id,
 			userId,
-			genreId: "acme:input/crawl@1",
-			event: "session-created",
+			genreId: "acme:inlet/crawl@1",
+			event: sessionEvents.sessionCreated,
 			input: {}
 		})
 		expect(dispatched).toBeNull()
@@ -174,7 +175,7 @@ describe("creation as a run (24 §12)", () => {
 			await resolveSessionEventSpec(
 				db,
 				"core:genre/chat",
-				"member-added"
+				"core:event/member-added@1"
 			)
 		).toBeNull()
 	}, 120_000)

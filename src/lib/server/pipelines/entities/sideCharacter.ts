@@ -29,7 +29,7 @@
  * Core never suggests, never notifies and never writes.
  */
 
-import { and, eq } from "drizzle-orm"
+import { and, eq, isNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 
 /** The card fields a side character's prompt entry is compiled from. */
@@ -165,6 +165,21 @@ export async function resolveSideCharacter(
 				ok: false,
 				error: "That character is not available for this session."
 			}
+		// A live presence — somebody's own voice in this session, whoever's —
+		// is refused as a speaker (U5b review W6). The picker never offers
+		// one (`listSideCharacterOptions`), so a request naming one did not
+		// come through the picker; and seating one would have the model
+		// narrate a character a person is playing while the run's
+		// portrayals pin them to that person. The reply road's null seat
+		// (`runReply`) stays as the belt to this: a fact that reaches the
+		// run anyway is seated as nobody.
+		if ((await livePresenceIds(db, sessionId)).has(pickedId))
+			return {
+				ok: false,
+				error:
+					"That character is somebody's presence in this session — a person speaks as " +
+					"them, so the narrator cannot. Pick another character, or type a name."
+			}
 		card = row as SideCharacterCard
 	}
 
@@ -209,14 +224,20 @@ export async function resolveSideCharacter(
  *
  * Their own characters, minus whoever is already in the session's cast — a cast
  * member has a turn of their own, and offering them here would be two routes to
- * one voice with different rotation consequences.
+ * one voice with different rotation consequences — and minus the session's
+ * live **presences** (`session_personas`): a persona is a character somebody
+ * *plays*, and since the library merge it is one of "their own characters"
+ * like any other. Offering it here would seat the model as a person's own
+ * presence for a turn, and the run's portrayals would then pin that character
+ * to the person while the model narrates them (U5a review, W3).
  *
  * ⚠ **A removed member is offerable again**, and the `removedAt` filter is what
  * says so. `session_characters` rows are soft-deleted, and the rotation already
  * ignores a removed one — so somebody who left the party is exactly the person
  * a side-character turn is for. Filtering on the row's mere existence would
  * make "they left, and now they cannot come back for one scene" the rule, which
- * is the opposite of the feature.
+ * is the opposite of the feature. A detached presence is offerable on the same
+ * terms.
  */
 export async function listSideCharacterOptions(
 	db: Db,
@@ -230,12 +251,13 @@ export async function listSideCharacterOptions(
 		})
 		.from(schema.sessionCharacters)
 		.where(eq(schema.sessionCharacters.sessionId, sessionId))) as any[]
-	const inCast = new Set<number>(
+	const seated = new Set<number>(
 		cast
 			.filter((c) => !c.removedAt)
 			.map((c) => c.characterId)
 			.filter((id: unknown): id is number => typeof id === "number")
 	)
+	for (const id of await livePresenceIds(db, sessionId)) seated.add(id)
 
 	const rows = (await db
 		.select({
@@ -247,6 +269,32 @@ export async function listSideCharacterOptions(
 		.where(eq(schema.characters.userId, userId))) as any[]
 
 	return rows
-		.filter((r) => !inCast.has(r.id))
+		.filter((r) => !seated.has(r.id))
 		.sort((a, b) => String(a.name).localeCompare(String(b.name)))
+}
+
+/**
+ * The characters attached to the session as somebody's presence — live
+ * `session_personas` rows, whoever owns them. Read by the picker above and
+ * by the reply road, which seats no presence as a side character's speaker
+ * (the belt to the picker's braces).
+ */
+export async function livePresenceIds(
+	db: Db,
+	sessionId: number
+): Promise<Set<number>> {
+	const rows = await db
+		.select({ characterId: schema.sessionPersonas.personaId })
+		.from(schema.sessionPersonas)
+		.where(
+			and(
+				eq(schema.sessionPersonas.sessionId, sessionId),
+				isNull(schema.sessionPersonas.removedAt)
+			)
+		)
+	return new Set(
+		rows
+			.map((r) => r.characterId)
+			.filter((id): id is number => typeof id === "number")
+	)
 }

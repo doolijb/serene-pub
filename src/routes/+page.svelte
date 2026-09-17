@@ -1,22 +1,28 @@
 <script lang="ts">
 	import Avatar from "$lib/client/components/Avatar.svelte"
-	import SidebarListItem from "$lib/client/components/SidebarListItem.svelte"
-	import CharacterCardItem from "$lib/client/components/listItems/CharacterCardItem.svelte"
 	import CharacterCreator from "$lib/client/components/modals/CharacterCreatorModal.svelte"
-	import PersonaCreator from "$lib/client/components/modals/PersonaCreatorModal.svelte"
 	import BindingLinkerModal from "$lib/client/components/modals/BindingLinkerModal.svelte"
 	import OllamaIcon from "$lib/client/components/icons/OllamaIcon.svelte"
 	import FileDropzone from "$lib/client/components/FileDropzone.svelte"
 	import * as Icons from "@lucide/svelte"
-	import { getContext, onMount, onDestroy } from "svelte"
+	import { getContext, onMount } from "svelte"
 	import { goto } from "$app/navigation"
 	import { fade } from "svelte/transition"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { getInterestContext } from "$lib/client/sockets/interest.svelte"
 	import type { SocketEventMap } from "$lib/client/sockets/typedSocket"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
-	import { createViewMode } from "$lib/client/utils/viewMode.svelte"
 	import { enableAccessibility } from "$lib/client/accessibility/state.svelte"
+	import { avatarSrc } from "$lib/client/utils/media"
+	import { lastActivityAt, timeAgo } from "$lib/client/utils/timeAgo"
+	import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
+	import {
+		buildCreatePayload,
+		defaultGenreId,
+		enabledPresetsFor,
+		STANDARD_GENRE_ID
+	} from "$lib/client/components/sessionForms/createSession.svelte"
 	import LanguagePicker from "$lib/client/components/inputs/LanguagePicker.svelte"
 	// `t()` is the incremental UI-translation seam (R5): the English source
 	// string is the key, an unwrapped string renders in English, and wrapping
@@ -24,8 +30,6 @@
 	// sweep starts, because it is the first thing anybody reads and it is where
 	// the language is chosen.
 	import { t } from "$lib/client/i18n/state.svelte"
-
-	const homeViewMode = createViewMode("serene-pub:viewMode:home")
 
 	let userCtx: UserCtx = $state(getContext("userCtx"))
 	let panelsCtx: PanelsCtx = $state(getContext("panelsCtx"))
@@ -41,11 +45,20 @@
 	)
 
 	const socket = useTypedSocket()
+	const interest = getInterestContext()
 
 	// Data
 	let characters: Partial<SelectCharacter>[] = $state([])
-	let personas: Partial<SelectPersona>[] = $state([])
-	let sessions: Partial<SelectSession>[] = $state([])
+	/**
+	 * The user's personas — not a second list: a persona is a character
+	 * carrying `isPersona`, so this is a view of `characters` above.
+	 */
+	let personas = $derived(characters.filter((c) => c.isPersona))
+	// The projected row, not `Partial<SelectSession>`: the dashboard reads the
+	// list's own fields — `genreName`, `messageCount`, `lastMessage` — and the
+	// bare table type does not carry them.
+	type SessionListRow = Sockets.Sessions.List.Response["sessionList"][number]
+	let sessions: SessionListRow[] = $state([])
 	let connections: Sockets.Connections.List.Response["connectionsList"] =
 		$state([])
 
@@ -56,14 +69,12 @@
 
 	// Data-ready flags — wizard auto-shows once all initial socket data has arrived
 	let _charsLoaded = $state(false)
-	let _personasLoaded = $state(false)
 	let _sessionsLoaded = $state(false)
 	let _connectionsLoaded = $state(false)
 	let _setupLoaded = $state(false)
 
 	let dataReady = $derived(
 		_charsLoaded &&
-			_personasLoaded &&
 			_sessionsLoaded &&
 			(!userCtx.user?.isAdmin || _connectionsLoaded) &&
 			_setupLoaded
@@ -130,6 +141,16 @@
 	 * `connectionDefaults:list` → register what the answer says fits.
 	 */
 	let pendingDefaultConnectionId: number | null = null
+	/**
+	 * The model the wizard's picker named, if it named one.
+	 *
+	 * An endpoint has no model of its own — models are `connection_models` rows
+	 * and a default is an (endpoint, model) PAIR — so the wizard's choice can
+	 * only be honoured once the server has synced the endpoint's listing and
+	 * `connectionDefaults:list` reports it. This carries the person's pick
+	 * across that round trip; null means "whatever that endpoint defaults to".
+	 */
+	let pendingDefaultModel: string | null = null
 
 	/**
 	 * Register the newly created connection for everything it can do that
@@ -154,7 +175,9 @@
 		res: Sockets.ConnectionDefaults.List.Response
 	) {
 		const id = pendingDefaultConnectionId
+		const wanted = pendingDefaultModel
 		pendingDefaultConnectionId = null
+		pendingDefaultModel = null
 		if (id == null) return
 		for (const combo of res.combos) {
 			if (res.defaults[combo.id]?.connectionId != null) continue
@@ -162,17 +185,39 @@
 				(o) => o.id === id
 			)
 			if (!option?.eligible || option.reason) continue
+			// The pair, not the endpoint: the model half rides the same event
+			// because the two are one choice, and the server refuses a
+			// registration with no model half (connections have no default
+			// model). The wizard's pick wins when the synced listing carries
+			// it; with no pick, the first switched-on, listed model stands in,
+			// the way Admin → Defaults pins one when a connection is chosen.
+			// When neither exists the capability is left unregistered, so
+			// Admin → Defaults shows it as *Not set* rather than a refusal
+			// toast landing on the wizard.
+			const listed = option.models ?? []
+			const chosen = wanted
+				? listed.find((m) => m.model === wanted)
+				: listed.find((m) => m.enabled && !m.missingSince)
+			if (!chosen) continue
 			socket.emit("connectionDefaults:set", {
 				capability: combo.id,
 				half: "connection",
-				id
+				id,
+				modelId: chosen.id
 			})
 		}
 	}
-	// By NAMED reference — CharacterCreatorModal/PersonaCreatorModal instances
-	// elsewhere (e.g. the session form) register their own `characters:create`/
-	// `personas:create` listeners, and a bare `socket.off(event)` would tear
-	// those down too.
+	// Named because the interest registry releases by handler reference. The
+	// CharacterCreatorModal instances elsewhere (e.g. the session form) hold
+	// their own interest in `characters:create`; the registry counts
+	// subscribers per key and only removes the one raw listener when the last
+	// of them releases, so this page going away never takes theirs down with
+	// it.
+	//
+	// One event for both steps, because a persona IS a character. The persona
+	// step is advanced by the list instead (`handleCharactersList`): the
+	// `is_persona` flag is set in a follow-up write, so the create reply alone
+	// cannot say which step was just answered.
 	function handleCharacterCreated(res: Sockets.Characters.Create.Response) {
 		if (
 			res.character &&
@@ -181,13 +226,18 @@
 		)
 			nextWizardStep()
 	}
-	function handlePersonaCreated(res: Sockets.Personas.Create.Response) {
-		if (
-			res.persona &&
-			!allStepsComplete &&
-			currentWizardStep?.id === "persona"
-		)
-			nextWizardStep()
+
+	/**
+	 * Make a freshly created or imported character this user's persona.
+	 *
+	 * `characters:setDefaultPersona` and not a `characters:update`: it sets
+	 * both flags inside one transaction, so the partial unique index on the
+	 * default can never trip. Only ever called from the wizard's persona step,
+	 * which is reached only when the user has no persona at all — so there is
+	 * no existing default for it to displace.
+	 */
+	function adoptAsPersona(characterId: number) {
+		socket.emit("characters:setDefaultPersona", { characterId })
 	}
 	let activeConnectionName = $derived(
 		connections.find((c) => c.id === chatConnectionId)?.name ?? null
@@ -204,6 +254,162 @@
 		})
 		return list
 	})
+
+	// ══ the home dashboard ═══════════════════════════════════════════════
+	// Everything from here to `wizardPath` below serves the finished-setup
+	// screen — the one that answers "what was I doing?". None of it is read
+	// by the wizard.
+
+	/**
+	 * The greeting, on the READER's clock.
+	 *
+	 * `getHours()` is the browser's local hour on purpose: the server's
+	 * timezone is not the one the person saying "evening" is in, and this app
+	 * is routinely reached from a phone on a different continent to the box it
+	 * runs on.
+	 *
+	 * Computed once per mount rather than ticking — a dashboard that silently
+	 * changed its own greeting at 18:00 while somebody read it would be
+	 * stranger than one that is a few minutes stale.
+	 */
+	let greeting = $derived.by(() => {
+		const name =
+			userCtx.user?.displayName?.trim() ||
+			userCtx.user?.username?.trim() ||
+			""
+		// No name is not a reason to guess at one: "Welcome back." carries the
+		// same welcome without addressing a stranger by a database column.
+		if (!name) return "Welcome back."
+		const hour = new Date().getHours()
+		const part =
+			hour >= 5 && hour < 12
+				? "Morning"
+				: hour < 18
+					? "Afternoon"
+					: "Evening"
+		return `${part}, ${name}.`
+	})
+
+	/**
+	 * Sessions whose last line was somebody else's — the ones that owe the
+	 * reader a reply. The same test the per-card "Your turn" hint makes, so
+	 * the headline count and the cards can never disagree.
+	 */
+	let sessionsAwaitingYou = $derived(
+		sessions.filter((s) => s.lastMessage && !s.lastMessage.isUser).length
+	)
+
+	let waitingLine = $derived(
+		sessionsAwaitingYou > 0
+			? `${sessionsAwaitingYou} session${
+					sessionsAwaitingYou === 1 ? "" : "s"
+				} waiting on you.`
+			: "Nothing is waiting on you. The pub is quiet."
+	)
+
+	/** Up to four sessions that have actually been played, freshest first. */
+	let continueSessions = $derived.by(() =>
+		sessions
+			.filter((s) => (s.messageCount ?? 0) > 0)
+			.sort((a, b) => lastActivityAt(b) - lastActivityAt(a))
+			.slice(0, 4)
+	)
+
+	/**
+	 * A session's cover, when it has no picture of its own.
+	 *
+	 * DETERMINISTIC in the session id, never random: a card that dealt itself
+	 * a new colour on every list push would flicker on every message, and the
+	 * colour is the thing the eye uses to find the same card again.
+	 *
+	 * Theme tokens rather than literals, so the covers move with the theme.
+	 */
+	const COVER_STOPS: [string, string][] = [
+		["--color-secondary-600", "--color-surface-900"],
+		["--color-surface-500", "--color-surface-950"],
+		["--color-secondary-800", "--color-surface-900"],
+		["--color-surface-600", "--color-surface-900"],
+		["--color-secondary-700", "--color-surface-950"]
+	]
+	function coverStyle(id: number | undefined): string {
+		const [from, to] = COVER_STOPS[Math.abs(id ?? 0) % COVER_STOPS.length]
+		return `background-image: linear-gradient(160deg, var(${from}), var(${to}));`
+	}
+
+	/** The session's own picture — its first cast member's, the only image a
+	 *  session row carries. */
+	function coverSrc(session: SessionListRow): string | undefined {
+		return avatarSrc(session.sessionCharacters?.[0]?.character)
+	}
+
+	/** "Mara" for a two-hander, "3 in the scene" for a group, nothing for a
+	 *  session with no cast left. */
+	function castLabel(session: SessionListRow): string | null {
+		const cast = session.sessionCharacters ?? []
+		if (cast.length === 0) return null
+		if (cast.length === 1)
+			return resolveCharacterName(cast[0].character, "") || null
+		return `${cast.length} in the scene`
+	}
+
+	function sessionMeta(session: SessionListRow): string {
+		return [
+			session.genreName,
+			castLabel(session),
+			timeAgo(new Date(lastActivityAt(session)))
+		]
+			.filter(Boolean)
+			.join(" · ")
+	}
+
+	/**
+	 * Who the session is waiting on.
+	 *
+	 * The reader's own line last means the model owes a reply. Naming WHO is
+	 * only honest for a two-hander — in a group the next speaker is the reply
+	 * strategy's to decide, and this page does not run it — so anything else
+	 * says "Waiting on the model" rather than guessing a name.
+	 */
+	function turnHint(session: SessionListRow): string | null {
+		const last = session.lastMessage
+		if (!last) return null
+		if (!last.isUser) return "Your turn"
+		const cast = session.sessionCharacters ?? []
+		if (cast.length === 1) {
+			const name = resolveCharacterName(cast[0].character, "")
+			if (name) return `${name} is up next`
+		}
+		return "Waiting on the model"
+	}
+
+	/**
+	 * Create a character from the dashboard.
+	 *
+	 * ⚠ This opens the VIEW and pulses its New button rather than opening the
+	 * form itself. The Characters view keeps "am I creating?" in its own local
+	 * state and exposes no digest key for it — `digest.characterId` opens the
+	 * EDIT form for a row that already exists — so `tutorial`, the flag the
+	 * wizard's own last steps set, is the whole of what a caller outside that
+	 * view can reach. The view clears it on the first interaction.
+	 */
+	function openViewToCreate(key: "characters") {
+		panelsCtx.digest.tutorial = true
+		panelsCtx.openPanel({ key, toggle: false })
+	}
+
+	/**
+	 * Start a session: the Sessions view opens straight on the start screen.
+	 *
+	 * `digest.createSession` is the address for that screen — an empty object
+	 * is the plain "start one", and a caller that already knows a character, a
+	 * persona, a genre or a preset names it here.
+	 */
+	function startASession(
+		prefill: NonNullable<PanelsCtx["digest"]["createSession"]> = {}
+	) {
+		panelsCtx.digest.createSession = prefill
+		panelsCtx.openPanel({ key: "sessions", toggle: false })
+	}
 
 	// Wizard path drives welcome copy
 	let wizardPath = $derived.by(
@@ -381,18 +587,42 @@
 		socket.emit("setup:markComplete", { step })
 	}
 
+	/**
+	 * The wizard's last step: one character, the user's first persona, and the
+	 * genre and preset the instance is set up to start.
+	 *
+	 * Built through `buildCreatePayload`, the same body the start screen sends,
+	 * so the server derives one genre from one preset either way. The reply is
+	 * the wizard's own — a one-shot interest taken with the request and
+	 * released by the answer — so a session started anywhere else while the
+	 * home screen is mounted does not navigate this page.
+	 */
 	function startSessionWithCharacter(character: Partial<SelectCharacter>) {
 		if (!character.id) return
+		const genreId =
+			defaultGenreId(sessionGenres, sessionPresets) ?? STANDARD_GENRE_ID
+		const presets = enabledPresetsFor(sessionPresets, genreId)
+		const preset = presets.find((p) => p.isDefault) ?? presets[0] ?? null
 		const personaId = personas[0]?.id
-		socket.emit("sessions:create", {
-			session: {
+		const releaseError = interest.declareInterest<"sessions:create:error">(
+			"sessions:create:error",
+			handleSessionsCreateError
+		)
+		const releaseOk = interest.requestWithInterest(
+			"sessions:create",
+			buildCreatePayload({
 				name: `Session with ${character.nickname || character.name || "Character"}`,
-				isGroup: false
-			},
-			characterIds: [character.id],
-			personaIds: personaId ? [personaId] : [],
-			characterPositions: { [character.id]: 0 }
-		} as any)
+				genreId,
+				presetId: preset?.id ?? null,
+				characterIds: [character.id],
+				personaIds: personaId ? [personaId] : []
+			}),
+			handleSessionsCreate
+		)
+		releaseWizardCreate = () => {
+			releaseOk()
+			releaseError()
+		}
 	}
 
 	function checkKoboldCppConnection() {
@@ -416,18 +646,17 @@
 	}
 
 	function createSamplePersona() {
-		socket.emit("personas:create", {
-			persona: {
+		// A persona is a character: one create, with the two flags on the row.
+		// The server applies the default in its own transaction.
+		socket.emit("characters:create", {
+			character: {
 				name: "You",
 				description:
 					"This represents you in conversations. You can edit this later to add more details about yourself or create different personas for different types of sessions.",
-				isDefault: true
+				isPersona: true,
+				isDefaultPersona: true
 			} as any
 		})
-	}
-
-	function toggleBanner() {
-		socket.emit("userSettings:updateShowHomePageBanner", { enabled: false })
 	}
 
 	async function handleCharacterCardImport(details: FileAcceptDetails) {
@@ -449,38 +678,30 @@
 		const reader = new FileReader()
 		reader.onload = (e) => {
 			const base64 = (e.target?.result as string)?.split(",")[1]
-			if (base64) socket.emit("personas:importCard", { file: base64 })
+			// One card family. `handleCharactersImportCard` flags the row as
+			// this user's persona when the wizard is on the persona step.
+			if (base64) socket.emit("characters:importCard", { file: base64 })
 		}
 		reader.readAsDataURL(file)
 	}
 
-	// Every listener below is named so `off` can name it too. A bare
-	// `socket.off("characters:list")` removes EVERY listener for that event —
-	// including the sidebars' and the session form's — which then stop updating
-	// for the rest of the session.
+	// Every listener below is named because the interest registry releases by
+	// handler reference. The sidebars and the session form hold their own
+	// interest in these same events; the registry counts subscribers per key,
+	// so this page's release cannot take theirs down — the bare
+	// `socket.off("characters:list")` that would have is not reachable from
+	// here at all any more.
 	function handleCharactersList(
 		msg: SocketEventMap["characters:list"]["response"]
 	) {
 		characters = msg.characterList || []
 		_charsLoaded = true
-		if (
-			!allStepsComplete &&
-			currentWizardStep?.id === "character" &&
-			characters.length > 0
-		)
+		if (allStepsComplete) return
+		// One list answers both steps — the persona step is the same rows,
+		// narrowed to the flagged ones.
+		if (currentWizardStep?.id === "character" && characters.length > 0)
 			nextWizardStep()
-	}
-
-	function handlePersonasList(
-		msg: SocketEventMap["personas:list"]["response"]
-	) {
-		personas = msg.personaList || []
-		_personasLoaded = true
-		if (
-			!allStepsComplete &&
-			currentWizardStep?.id === "persona" &&
-			personas.length > 0
-		)
+		else if (currentWizardStep?.id === "persona" && personas.length > 0)
 			nextWizardStep()
 	}
 
@@ -490,6 +711,55 @@
 		sessions = msg.sessionList || []
 		_sessionsLoaded = true
 	}
+
+	/**
+	 * The home page's three lists, each asked for and listened for in one.
+	 *
+	 * All BARE — a list is this user's own cast or sessions, with nothing to
+	 * scope it to — and all STANDING, because the server re-emits every one of
+	 * them as a cascade after a write, which is how the wizard's "done" ticks
+	 * move without this page asking again.
+	 *
+	 * They are asked for here rather than in `onMount`, so the interest sync
+	 * naming each key leaves ahead of its request; `sessions:create` is sent
+	 * from `startSessionWithCharacter`, which declares its own one-shot key
+	 * with the request and releases it on the answer.
+	 */
+	$effect(() =>
+		interest.requestWithInterest(
+			"characters:list",
+			{},
+			handleCharactersList
+		)
+	)
+	$effect(() =>
+		interest.requestWithInterest("sessions:list", {}, handleSessionsList)
+	)
+
+	/**
+	 * What the wizard's first session starts on: every registered genre, and
+	 * the presets this user may start one with. Both BARE and standing, on the
+	 * same terms as the three lists above, and both read only through
+	 * `createSession`'s derivations so this page picks the genre and preset the
+	 * start screen would.
+	 */
+	let sessionGenres: Sockets.Sessions.Genres.Response["genres"] = $state([])
+	let sessionPresets: Sockets.SessionAdmin.PresetRow[] = $state([])
+
+	$effect(() =>
+		interest.requestWithInterest(
+			"sessions:genres",
+			{},
+			(msg) => (sessionGenres = msg.genres || [])
+		)
+	)
+	$effect(() =>
+		interest.requestWithInterest(
+			"sessionPresets:list",
+			{},
+			(msg) => (sessionPresets = msg.presets || [])
+		)
+	)
 
 	function handleConnectionsList(
 		msg: SocketEventMap["connections:list"]["response"]
@@ -609,12 +879,26 @@
 		}
 	}
 
+	/** Released by whichever of the two replies the wizard's create gets. */
+	let releaseWizardCreate: (() => void) | null = null
+
 	function handleSessionsCreate(
 		res: SocketEventMap["sessions:create"]["response"]
 	) {
+		releaseWizardCreate?.()
+		releaseWizardCreate = null
 		if (res.session) {
 			goto(`/sessions/${res.session.id}`)
 		}
+	}
+
+	function handleSessionsCreateError(res: Sockets.ErrorResponse) {
+		releaseWizardCreate?.()
+		releaseWizardCreate = null
+		toaster.error({
+			title: "Could not start the session",
+			description: res?.error || "The server refused the request."
+		})
 	}
 
 	/**
@@ -634,40 +918,33 @@
 		vectorizationModelReady = msg.modelReady ?? false
 	}
 
-	// Card imports from wizard
+	// Card imports from wizard. One family: a persona card and a character
+	// card are the same file in the same table, so the step the user is
+	// standing on is what decides whether the imported row becomes a persona.
 	function handleCharactersImportCard(msg: any) {
+		const wasPersonaDrop = wizardImportingPersonaCard
 		wizardImportingCharacterCard = false
+		wizardImportingPersonaCard = false
 		if (msg.character) {
 			toaster.success({
 				title: `Imported ${msg.character.nickname || msg.character.name}!`
 			})
-			if (!allStepsComplete && currentWizardStep?.id === "character")
-				nextWizardStep()
+			if (allStepsComplete) return
+			if (currentWizardStep?.id === "character") nextWizardStep()
+			else if (wasPersonaDrop && currentWizardStep?.id === "persona") {
+				// The list cascade that follows the flag write advances the
+				// step (handleCharactersList).
+				adoptAsPersona(msg.character.id)
+			}
 		}
 	}
 
 	function handleCharactersImportCardError(msg: any) {
 		wizardImportingCharacterCard = false
+		wizardImportingPersonaCard = false
 		toaster.error({
 			title: "Import Failed",
 			description: msg.error ?? "Could not import character card"
-		})
-	}
-
-	function handlePersonasImportCard(msg: any) {
-		wizardImportingPersonaCard = false
-		if (msg.persona) {
-			toaster.success({ title: `Imported ${msg.persona.name}!` })
-			if (!allStepsComplete && currentWizardStep?.id === "persona")
-				nextWizardStep()
-		}
-	}
-
-	function handlePersonasImportCardError(msg: any) {
-		wizardImportingPersonaCard = false
-		toaster.error({
-			title: "Import Failed",
-			description: msg.error ?? "Could not import persona card"
 		})
 	}
 
@@ -681,98 +958,156 @@
 		}
 	}
 
-	onMount(() => {
-		socket.on("characters:list", handleCharactersList)
-		socket.on("personas:list", handlePersonasList)
-		socket.on("sessions:list", handleSessionsList)
-		socket.on("connections:list", handleConnectionsList)
-		socket.on("setup:get", handleSetupGet)
-		socket.on("setup:markComplete", handleSetupMarkComplete)
-		socket.on("ollama:version", handleOllamaVersion)
-		socket.on("ollama:modelsList", handleOllamaModelsList)
-		socket.on("ollama:connectModel", handleOllamaConnectModel)
-		;(socket as any).on("koboldcpp:version", handleKoboldcppVersion)
-		;(socket as any).on(
-			"koboldcpp:version:error",
-			handleKoboldcppVersionError
-		)
-		;(socket as any).on("koboldcpp:listModels", handleKoboldcppListModels)
-		;(socket as any).on(
-			"koboldcpp:connectModel",
-			handleKoboldcppConnectModel
-		)
-		;(socket as any).on(
-			"koboldcpp:connectModel:error",
-			handleKoboldcppConnectModelError
-		)
-		socket.on("connectionDefaults:list", handleDefaultsForNewConnection)
-		socket.on("connections:create", handleConnectionsCreate)
-		socket.on("characters:create", handleCharacterCreated)
-		socket.on("personas:create", handlePersonaCreated)
-		socket.on("sessions:create", handleSessionsCreate)
-		socket.on("vectorization:listModels", handleVectorizationListModels)
-		socket.on("characters:importCard", handleCharactersImportCard)
-		;(socket as any).on(
-			"characters:importCard:error",
-			handleCharactersImportCardError
-		)
-		socket.on("personas:importCard", handlePersonasImportCard)
-		socket.on("personas:importCard:error", handlePersonasImportCardError)
-		socket.on("bindingCheck:result", handleBindingCheckResult)
+	/**
+	 * The cast PUSH and the card-import reply, both BARE.
+	 *
+	 * `characters:create` is not this page's own reply — it never sends the
+	 * request; the creator modals do, from wherever they are open — so it is a
+	 * standing key that simply advances the wizard when a character appears.
+	 * `characters:importCard` IS a reply, to the dropzone emits in
+	 * `handleCharacterCardImport` / `handlePersonaCardImport` (one family: a
+	 * persona is a character), and its `:error` half is never gated (plan
+	 * ruling 2).
+	 *
+	 * Neither event is in `SCOPED_EVENTS`, so a scoped key would match no
+	 * payload at all.
+	 */
+	interest.useInterest<"characters:create">(
+		"characters:create",
+		handleCharacterCreated
+	)
+	interest.useInterest<"characters:importCard">(
+		"characters:importCard",
+		handleCharactersImportCard
+	)
+	interest.useInterest<"characters:importCard:error">(
+		"characters:importCard:error",
+		handleCharactersImportCardError
+	)
 
-		socket.emit("characters:list", {})
-		socket.emit("personas:list", {})
-		socket.emit("sessions:list", {})
-		socket.emit("setup:get", {})
-		if (userCtx.user?.isAdmin) {
-			socket.emit("connections:list", {})
-			socket.emit("vectorization:listModels", {})
-		} else {
-			_connectionsLoaded = true
+	/**
+	 * The orphaned-binding sweep's answer, BARE. It is a push rather than a
+	 * reply — nothing here asks for it — and this page has no session to key
+	 * it to, so it has no entry in `SCOPED_EVENTS`.
+	 */
+	interest.useInterest<"bindingCheck:result">(
+		"bindingCheck:result",
+		handleBindingCheckResult
+	)
+
+	/**
+	 * The connection families this page reads, all BARE and STANDING.
+	 *
+	 * `connections:list` and `connectionDefaults:list` are re-sent after every
+	 * write, and `connections:create` answers a create this page sends from the
+	 * wizard but also one the Connections sidebar opened from here sends — so
+	 * every one of them has to outlive its request. Neither family is
+	 * restricted interest (both are mixed by design), so the keys are declared
+	 * for every user; the admin check stays where it was, on the emit.
+	 *
+	 * Declared ABOVE the effects and the mount that emit: effects run in
+	 * creation order and a request flushes the pending interest sync, so a
+	 * declaration made below one of them would miss the flush its own first
+	 * reply rides on.
+	 */
+	interest.useInterest<"connections:list">(
+		"connections:list",
+		handleConnectionsList
+	)
+	interest.useInterest<"connections:create">(
+		"connections:create",
+		handleConnectionsCreate
+	)
+	interest.useInterest<"connectionDefaults:list">(
+		"connectionDefaults:list",
+		handleDefaultsForNewConnection
+	)
+
+	/**
+	 * The two managed backends the wizard can probe.
+	 *
+	 * `ollama:` and `koboldcpp:` are RESTRICTED interest — every handler in
+	 * both families is admin-only — and this page is the home screen, which
+	 * every user lands on. The registry would refuse these keys for a
+	 * non-admin; asking first keeps the refusal out of the dev console on every
+	 * non-admin page load, and matches the wizard steps that emit them, which
+	 * only an admin ever reaches.
+	 */
+	$effect(() => {
+		if (!userCtx.user?.isAdmin) return
+		const releases = [
+			interest.declareInterest<"ollama:version">(
+				"ollama:version",
+				handleOllamaVersion
+			),
+			interest.declareInterest<"ollama:modelsList">(
+				"ollama:modelsList",
+				handleOllamaModelsList
+			),
+			interest.declareInterest<"ollama:connectModel">(
+				"ollama:connectModel",
+				handleOllamaConnectModel
+			),
+			interest.declareInterest<"koboldcpp:version">(
+				"koboldcpp:version",
+				handleKoboldcppVersion
+			),
+			interest.declareInterest<"koboldcpp:version:error">(
+				"koboldcpp:version:error",
+				handleKoboldcppVersionError
+			),
+			interest.declareInterest<"koboldcpp:listModels">(
+				"koboldcpp:listModels",
+				handleKoboldcppListModels
+			),
+			interest.declareInterest<"koboldcpp:connectModel">(
+				"koboldcpp:connectModel",
+				handleKoboldcppConnectModel
+			),
+			interest.declareInterest<"koboldcpp:connectModel:error">(
+				"koboldcpp:connectModel:error",
+				handleKoboldcppConnectModelError
+			)
+		]
+		return () => {
+			for (const release of releases) release()
 		}
 	})
 
-	onDestroy(() => {
-		socket.off("bindingCheck:result", handleBindingCheckResult)
-		socket.off("characters:list", handleCharactersList)
-		socket.off("personas:list", handlePersonasList)
-		socket.off("sessions:list", handleSessionsList)
-		socket.off("connections:list", handleConnectionsList)
-		socket.off("connections:create", handleConnectionsCreate)
-		// By NAMED reference — this page is not the only listener on
-		// `connectionDefaults:list` (Admin → Defaults renders from it), and a
-		// bare `socket.off(event)` would tear that one down too.
-		socket.off("connectionDefaults:list", handleDefaultsForNewConnection)
-		socket.off("characters:create", handleCharacterCreated)
-		socket.off("personas:create", handlePersonaCreated)
-		socket.off("sessions:create", handleSessionsCreate)
-		socket.off("ollama:version", handleOllamaVersion)
-		socket.off("ollama:modelsList", handleOllamaModelsList)
-		socket.off("ollama:connectModel", handleOllamaConnectModel)
-		;(socket as any).off("koboldcpp:version", handleKoboldcppVersion)
-		;(socket as any).off(
-			"koboldcpp:version:error",
-			handleKoboldcppVersionError
+	/**
+	 * The setup record the wizard's ticks come from, and the vectorization
+	 * readiness its RAG step reads. Both BARE — setup is the instance's, and
+	 * the model list is nobody's session.
+	 *
+	 * `setup:get` is asked for and listened for in one. `setup:markComplete`
+	 * is a STANDING key: it answers the `markSetupComplete` write above, which
+	 * this page sends but never asks about.
+	 *
+	 * `vectorization:listModels` keeps the admin check its emit had. In the
+	 * effect form the request leaves once the current user is known, rather
+	 * than never when `users:current` lands after this page mounts.
+	 */
+	$effect(() => interest.requestWithInterest("setup:get", {}, handleSetupGet))
+	interest.useInterest<"setup:markComplete">(
+		"setup:markComplete",
+		handleSetupMarkComplete
+	)
+	$effect(() => {
+		if (!userCtx.user?.isAdmin) return
+		return interest.requestWithInterest(
+			"vectorization:listModels",
+			{},
+			handleVectorizationListModels
 		)
-		;(socket as any).off("koboldcpp:listModels", handleKoboldcppListModels)
-		;(socket as any).off(
-			"koboldcpp:connectModel",
-			handleKoboldcppConnectModel
-		)
-		;(socket as any).off(
-			"koboldcpp:connectModel:error",
-			handleKoboldcppConnectModelError
-		)
-		socket.off("vectorization:listModels", handleVectorizationListModels)
-		socket.off("characters:importCard", handleCharactersImportCard)
-		;(socket as any).off(
-			"characters:importCard:error",
-			handleCharactersImportCardError
-		)
-		socket.off("personas:importCard", handlePersonasImportCard)
-		socket.off("personas:importCard:error", handlePersonasImportCardError)
-		socket.off("setup:get", handleSetupGet)
-		socket.off("setup:markComplete", handleSetupMarkComplete)
+	})
+
+	onMount(() => {
+		// Every listener this page holds is an interest, declared above.
+		if (userCtx.user?.isAdmin) {
+			socket.emit("connections:list", {})
+		} else {
+			_connectionsLoaded = true
+		}
 	})
 </script>
 
@@ -781,58 +1116,25 @@
 	<meta name="description" content="Serene Pub" />
 </svelte:head>
 
-<!-- Page background content -->
+<!-- Page background content.
+     The vertical padding belongs to this page: `<main>` supplies none, and the
+     first thing inside is the beta line, which has no breathing room of its
+     own. -->
 <div
-	class="flex flex-1 flex-col items-center justify-center gap-4 px-2 md:px-0"
+	class="flex flex-1 flex-col items-center justify-center gap-4 px-2 py-8 md:px-0"
 >
-	{#if userSettingsCtx.settings?.showHomePageBanner}
-		<div class="relative hidden w-full md:block">
-			<img
-				src={(userSettingsCtx.settings?.darkMode !== undefined
-					? userSettingsCtx.settings.darkMode
-					: true) === false
-					? "logo-w-text.png"
-					: "logo-w-text-dark.png"}
-				alt="Serene Pub Logo"
-				class="bg-primary-500/25 w-full rounded-xl"
-			/>
-			<button
-				class="text-primary-800 hover:text-primary-900 dark:text-primary-200 hover:dark:text-primary-100 absolute top-2 right-2 flex h-6 w-6 items-center justify-center rounded-full text-xl leading-none font-bold hover:bg-black/30"
-				onclick={toggleBanner}
-				title="Hide banner"
-			>
-				×
-			</button>
-		</div>
-	{/if}
-
-	<div
-		class="preset-filled-warning-100-900 mx-auto w-full rounded-lg p-2 text-center text-sm"
-	>
-		<strong>Serene Pub is in beta!</strong>
-		Expect bugs and rapid changes. This project is under heavy development.
-	</div>
-
-	<div class="flex gap-2 self-end">
-		<button
-			type="button"
-			class="btn btn-sm preset-filled-surface-400-600"
-			onclick={switchToDocumentView}
-			title="Switch to a simplified, high-contrast, keyboard- and screen-reader-friendly view (Ctrl+Shift+Y)"
-		>
-			<Icons.Accessibility size={16} />
-			Document View
-		</button>
-		<a href="/docs" class="btn btn-sm preset-filled-surface-400-600">
-			<Icons.BookOpen size={16} />
-			Documentation
-		</a>
-		{#if userCtx.user?.isAdmin}
-			<a href="/admin" class="btn btn-sm preset-filled-surface-400-600">
-				<Icons.ShieldCheck size={16} />
-				Administration
-			</a>
-		{/if}
+	<!-- ══ the beta line ═════════════════════════════════════════════════
+	     One quiet line above everything, on the dashboard and the wizard
+	     alike: it has to be readable on every visit without being the
+	     loudest thing on a page whose single accent belongs to "Start a
+	     session". The 400 stop carries the warning at speaking volume; the
+	     500 dot is the one place the ember runs at full strength. -->
+	<div class="text-warning-400 flex w-full items-center gap-2 text-xs">
+		<span
+			class="bg-warning-500 h-1.5 w-1.5 shrink-0 rounded-full"
+			aria-hidden="true"
+		></span>
+		Serene Pub is in beta. Expect bugs and rapid changes.
 	</div>
 
 	<!-- Loading state while socket data arrives -->
@@ -848,143 +1150,276 @@
 		</div>
 	{/if}
 
-	<!-- Main content — shown when all wizard steps are complete -->
-	{#if dataReady && allStepsComplete}
-		<div class="w-full">
-			<div class="mb-1 flex w-full items-center justify-between">
-				<h3 class="text-xl">Characters</h3>
-				<div
-					class="flex shrink-0 gap-1"
-					role="group"
-					aria-label="View mode"
-				>
-					<button
-						type="button"
-						class="btn btn-sm p-2 {homeViewMode.value === 'list'
-							? 'preset-filled-primary-500'
-							: 'preset-tonal-surface'}"
-						onclick={() => (homeViewMode.value = "list")}
-						title="List view"
-						aria-label="List view"
-						aria-pressed={homeViewMode.value === "list"}
-					>
-						<Icons.List size={16} aria-hidden="true" />
-					</button>
-					<button
-						type="button"
-						class="btn btn-sm p-2 {homeViewMode.value === 'cards'
-							? 'preset-filled-primary-500'
-							: 'preset-tonal-surface'}"
-						onclick={() => (homeViewMode.value = "cards")}
-						title="Card view"
-						aria-label="Card view"
-						aria-pressed={homeViewMode.value === "cards"}
-					>
-						<Icons.LayoutGrid size={16} aria-hidden="true" />
-					</button>
-				</div>
-			</div>
-			{#if homeViewMode.value === "list"}
-				<div
-					class="grid grid-cols-1 justify-between gap-2 lg:grid-cols-2"
-				>
-					{#each sortedCharacters as character (character.id)}
-						<SidebarListItem
-							onclick={() => {
-								panelsCtx.digest.sessionCharacterId =
-									character.id
-								panelsCtx.openPanel({
-									key: "sessions",
-									toggle: false
-								})
-							}}
-							contentTitle="Go to character sessions"
-							classes="!preset-filled-surface-200-800 transition-colors hover:!preset-filled-surface-300-700"
-						>
-							{#snippet content()}
-								<!-- min-w-0 threads down so a long name/description
-								     truncates instead of widening the row; `gap2`
-								     here was a typo and never applied any gap. -->
-								<div class="flex min-w-0 gap-2">
-									<Avatar char={character} />
-									<div class="flex min-w-0 flex-col gap-2">
-										<div
-											class="text-foreground truncate text-left font-semibold"
-										>
-											{character.nickname ||
-												character.name ||
-												"Unknown"}
-										</div>
-										<div
-											class="text-muted-foreground line-clamp-2 text-left text-sm"
-										>
-											{character.description ||
-												"No description"}
-										</div>
-									</div>
-								</div>
-							{/snippet}
-						</SidebarListItem>
-					{/each}
-				</div>
-			{:else}
-				<div
-					class="grid grid-cols-[repeat(auto-fill,minmax(16.625rem,1fr))] gap-3 p-[0.25em]"
-				>
-					{#each sortedCharacters as character (character.id)}
-						<CharacterCardItem
-							{character}
-							onclick={() => {
-								panelsCtx.digest.sessionCharacterId =
-									character.id
-								panelsCtx.openPanel({
-									key: "sessions",
-									toggle: false
-								})
-							}}
-							showControls={false}
-							contentTitle="Go to character sessions"
-						/>
-					{/each}
-				</div>
-			{/if}
-		</div>
+	<!-- ══ the home dashboard ═══════════════════════════════════════════
+	     Shown once setup is done. It answers one question — "what was I
+	     doing?" — so it reads top to bottom as an answer: who you are and
+	     what is owed, then the sessions to walk back into, then the cast.
 
-		{#if sessions.length > 0}
-			<div class="mb-6 w-full">
-				<h3 class="w-full text-xl">Recent Sessions</h3>
-				<div
-					class="grid grid-cols-1 justify-between gap-2 lg:grid-cols-2"
+	     `@container/home` and not viewport breakpoints: `<main>` is
+	     everything right of the rail MINUS whatever sidebar is docked, so a
+	     `md:` grid would go two-up on a 1400px window whose content column
+	     is 700px wide. The variants below read this box. -->
+	{#if dataReady && allStepsComplete}
+		<div class="@container/home flex w-full flex-col gap-8">
+			<!-- ── greeting ─────────────────────────────────────────── -->
+			<div
+				class="flex flex-wrap items-end justify-between gap-x-6 gap-y-4"
+			>
+				<div class="flex min-w-0 flex-col gap-1.5">
+					<h1
+						class="[font-family:var(--typo-heading--font-family)] text-[32px] font-semibold tracking-[-0.015em]"
+					>
+						{greeting}
+					</h1>
+					<p class="text-surface-400 text-[15px]">{waitingLine}</p>
+				</div>
+				<!-- The one filled primary on this page. Everything else here
+				     is tonal or a link, so the single call to action is the
+				     only thing wearing the accent. -->
+				<button
+					type="button"
+					class="btn preset-filled-primary-500 shrink-0"
+					onclick={() => startASession()}
 				>
-					{#each sessions.slice(0, 6) as session (session.id)}
-						<SidebarListItem
-							onclick={() => goto(`/sessions/${session.id}`)}
-							contentTitle="Open session"
-							classes="!preset-filled-surface-200-800 transition-colors hover:!preset-filled-surface-300-700"
-						>
-							{#snippet content()}
-								<div class="flex items-center gap-2">
-									{#if session.isGroup}
-										<Icons.Users
-											size={20}
-											class="text-primary-500 flex-shrink-0"
-										/>
-									{:else}
-										<Icons.MessageSquare
-											size={20}
-											class="text-primary-500 flex-shrink-0"
+					<Icons.Plus size={18} aria-hidden="true" />
+					Start a session
+				</button>
+			</div>
+
+			<!-- ── pick up where you left off ───────────────────────── -->
+			<section class="flex flex-col gap-3.5">
+				<h2
+					class="[font-family:var(--typo-heading--font-family)] text-base font-semibold"
+				>
+					Pick up where you left off
+				</h2>
+				{#if continueSessions.length > 0}
+					<div class="grid grid-cols-1 gap-4 @md/home:grid-cols-2">
+						{#each continueSessions as session (session.id)}
+							{@const src = coverSrc(session)}
+							{@const hint = turnHint(session)}
+							<div
+								class="bg-surface-950 border-surface-800 flex overflow-hidden rounded-[14px] border"
+							>
+								<div
+									class="w-[140px] shrink-0 grow-0 basis-[140px]"
+									style={src ? "" : coverStyle(session.id)}
+								>
+									{#if src}
+										<img
+											{src}
+											alt=""
+											class="h-full w-full object-cover object-top"
 										/>
 									{/if}
-									<div class="text-foreground font-semibold">
-										{session.name || "Untitled Session"}
+								</div>
+								<div
+									class="flex min-w-0 flex-1 flex-col gap-2.5 px-5 py-[18px]"
+								>
+									<div class="flex min-w-0 flex-col gap-0.5">
+										<span
+											class="truncate [font-family:var(--typo-heading--font-family)] text-[18px] font-semibold"
+										>
+											{session.name || "Untitled Session"}
+										</span>
+										<span
+											class="text-surface-400 truncate text-xs"
+										>
+											{sessionMeta(session)}
+										</span>
+									</div>
+									<p
+										class="text-surface-300 line-clamp-2 text-sm leading-[1.55] italic"
+									>
+										{session.lastMessage?.excerpt ?? ""}
+									</p>
+									<div class="flex-1"></div>
+									<div class="flex items-center gap-2.5">
+										<button
+											type="button"
+											class="btn btn-sm preset-tonal text-sm font-medium"
+											onclick={() =>
+												goto(`/sessions/${session.id}`)}
+										>
+											Continue
+										</button>
+										{#if hint}
+											<span
+												class="text-surface-500 truncate text-xs"
+											>
+												{hint}
+											</span>
+										{/if}
 									</div>
 								</div>
-							{/snippet}
-						</SidebarListItem>
-					{/each}
+							</div>
+						{/each}
+					</div>
+				{:else}
+					<div
+						class="bg-surface-950 border-surface-800 text-surface-400 rounded-[14px] border px-5 py-6 text-sm"
+					>
+						Nothing on tonight. Start a session and it will be here
+						tomorrow.
+					</div>
+				{/if}
+			</section>
+
+			<!-- ── characters ───────────────────────────────────────── -->
+			<section class="flex flex-col gap-3.5">
+				<div class="flex items-baseline justify-between gap-4">
+					<h2
+						class="[font-family:var(--typo-heading--font-family)] text-base font-semibold"
+					>
+						Characters
+					</h2>
+					{#if characters.length > 0}
+						<button
+							type="button"
+							class="text-primary-500 shrink-0 text-sm hover:underline"
+							onclick={() =>
+								panelsCtx.openPanel({
+									key: "characters",
+									toggle: false
+								})}
+						>
+							All {characters.length}
+						</button>
+					{/if}
 				</div>
+				<div
+					class="grid grid-cols-[repeat(auto-fill,minmax(148px,1fr))] gap-3.5"
+				>
+					{#each sortedCharacters.slice(0, 9) as character (character.id)}
+						{@const src = avatarSrc(character)}
+						<button
+							type="button"
+							class="flex flex-col gap-2 text-left"
+							title="Go to character sessions"
+							onclick={() => {
+								panelsCtx.digest.sessionCharacterId =
+									character.id
+								panelsCtx.openPanel({
+									key: "sessions",
+									toggle: false
+								})
+							}}
+						>
+							<div
+								class="bg-surface-950 border-surface-800 aspect-[3/4] overflow-hidden rounded-[10px] border"
+							>
+								{#if src}
+									<img
+										{src}
+										alt=""
+										class="h-full w-full object-cover object-top"
+									/>
+								{:else}
+									<div
+										class="text-surface-500 flex h-full w-full items-center justify-center"
+									>
+										<Icons.UsersRound
+											size={28}
+											aria-hidden="true"
+										/>
+									</div>
+								{/if}
+							</div>
+							<span class="truncate text-[13px] font-medium">
+								{character.nickname ||
+									character.name ||
+									"Unknown"}
+							</span>
+						</button>
+					{/each}
+					<button
+						type="button"
+						class="flex flex-col gap-2 text-left"
+						onclick={() => openViewToCreate("characters")}
+					>
+						<div
+							class="border-surface-700 text-surface-500 hover:border-surface-600 flex aspect-[3/4] items-center justify-center rounded-[10px] border border-dashed transition-colors"
+						>
+							<Icons.Plus size={28} aria-hidden="true" />
+						</div>
+						<span class="text-surface-500 truncate text-[13px]">
+							New or import
+						</span>
+					</button>
+				</div>
+			</section>
+
+			<!-- ── personas ─────────────────────────────────────────── -->
+			{#if personas.length > 0}
+				<section class="flex flex-col gap-3.5">
+					<div class="flex items-baseline justify-between gap-4">
+						<h2
+							class="[font-family:var(--typo-heading--font-family)] text-base font-semibold"
+						>
+							Personas
+						</h2>
+						<button
+							type="button"
+							class="text-primary-500 shrink-0 text-sm hover:underline"
+							onclick={() =>
+								panelsCtx.openPanel({
+									key: "characters",
+									toggle: false
+								})}
+						>
+							All {personas.length}
+						</button>
+					</div>
+					<div class="flex flex-wrap gap-2.5">
+						{#each personas as persona (persona.id)}
+							<button
+								type="button"
+								class="bg-surface-950 border-surface-800 hover:border-surface-700 flex items-center gap-2.5 rounded-full border py-2 pr-3.5 pl-2 transition-colors"
+								onclick={() => {
+									// A persona is a character, so its card
+									// opens in the Characters view.
+									panelsCtx.digest.viewCharacterId =
+										persona.id
+									panelsCtx.openPanel({
+										key: "characters",
+										toggle: false
+									})
+								}}
+							>
+								<Avatar char={persona} size="w-7 h-7" />
+								<span class="truncate text-[13px] font-medium">
+									{persona.name || "Unnamed"}
+								</span>
+								{#if persona.isDefaultPersona}
+									<span class="text-surface-500 text-[11px]">
+										default
+									</span>
+								{/if}
+							</button>
+						{/each}
+					</div>
+				</section>
+			{/if}
+
+			<!-- ── the quiet foot ───────────────────────────────────────
+			     Both are places you go once rather than things you do on
+			     this page, so they read as text at the bottom instead of
+			     competing with the session cards for the eye. Anything
+			     admin-gated belongs on the rail, not here. -->
+			<div
+				class="text-surface-500 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm"
+			>
+				<a href="/docs" class="hover:text-surface-300">Documentation</a>
+				<button
+					type="button"
+					class="hover:text-surface-300 text-left"
+					onclick={switchToDocumentView}
+					title="Switch to a simplified, high-contrast, keyboard- and screen-reader-friendly view (Ctrl+Shift+Y)"
+				>
+					Document View
+				</button>
 			</div>
-		{/if}
+		</div>
 	{/if}
 
 	<!-- Wizard — shown until all steps are complete -->
@@ -1071,11 +1506,11 @@
 								>
 									{#if wizardPath === "admin-first-time"}
 										{t(
-											"Let's get your application set up and ready to session. This only takes a few minutes."
+											"Let's get your application set up and ready for your first session. This only takes a few minutes."
 										)}
 									{:else if wizardPath === "admin-existing"}
 										{t(
-											"The application is already configured. Let's get your personal account set up so you can start sessionting."
+											"The application is already configured. Let's get your personal account set up so you can start your first session."
 										)}
 									{:else}
 										{t(
@@ -1742,7 +2177,7 @@
 									class="card preset-filled-surface-400-600 hover:preset-filled-surface-300-700 flex flex-col items-start gap-2 p-5 text-left transition-transform hover:scale-[1.02]"
 									onclick={() => {
 										closeWizard()
-										goto("/library/personas")
+										goto("/library/characters")
 									}}
 								>
 									<div
@@ -1984,13 +2419,19 @@
 								<button
 									class="btn preset-filled-primary-500"
 									onclick={() => {
+										// The chosen model is registered as the
+										// second half of the pair once the
+										// server has synced this endpoint's
+										// listing — an endpoint row holds no
+										// model of its own.
+										pendingDefaultModel =
+											selectedOllamaModel
 										socket.emit("connections:create", {
 											connection: {
 												name: `Ollama - ${selectedOllamaModel}`,
 												type: CONNECTION_TYPE.OLLAMA,
 												baseUrl:
-													"http://localhost:11434",
-												model: selectedOllamaModel
+													"http://localhost:11434"
 											}
 										})
 									}}
@@ -2119,11 +2560,18 @@
 	}}
 />
 
-<PersonaCreator
+<!-- The persona creator IS the character creator: a persona is a character
+	the user voices. `onCreated` flags the new row, which is what the wizard's
+	persona step is waiting on.
+	TODO: once CharacterCreatorModal accepts a preset (the library lane's
+	`initial` prop), pass `{ isPersona: true }` so the flag is visible in the
+	form before Save. -->
+<CharacterCreator
 	bind:open={showPersonaCreator}
 	onOpenChange={(e) => {
 		showPersonaCreator = e.open
 	}}
+	onCreated={(character) => adoptAsPersona(character.id)}
 />
 
 {#if bindingLinkerData}

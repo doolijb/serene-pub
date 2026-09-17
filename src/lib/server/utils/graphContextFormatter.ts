@@ -295,18 +295,16 @@ async function collectGraphLayers(params: {
 		params
 	const db = params.db ?? defaultDb
 
-	// Find the speaker's binding and node
-	const speakerBindingWhere = speakerCharacterId
+	// Find the speaker's binding and node. One column: the speaker is a
+	// character whether the model or a user is voicing them, and the character
+	// id is preferred only because a turn carrying both is a character's turn.
+	const speakerId = speakerCharacterId ?? speakerPersonaId
+	const speakerBindingWhere = speakerId
 		? and(
 				eq(schema.lorebookBindings.lorebookId, lorebookId),
-				eq(schema.lorebookBindings.characterId, speakerCharacterId)
+				eq(schema.lorebookBindings.characterId, speakerId)
 			)
-		: speakerPersonaId
-			? and(
-					eq(schema.lorebookBindings.lorebookId, lorebookId),
-					eq(schema.lorebookBindings.personaId, speakerPersonaId)
-				)
-			: null
+		: null
 
 	if (!speakerBindingWhere) return null
 
@@ -428,35 +426,25 @@ async function collectGraphLayers(params: {
 	 */
 	const participantNodeIds = new Set<number>()
 	if (sessionCharIds.length > 0 || sessionPersonaIds.length > 0) {
+		// ONE query over ONE column — cast and voiced characters share an id
+		// space, so two reads would return overlapping rows.
+		const participantIds = [
+			...new Set([...sessionCharIds, ...sessionPersonaIds])
+		]
 		const charConditions = [
 			eq(schema.lorebookBindings.lorebookId, lorebookId)
 		]
-		if (sessionCharIds.length > 0)
+		if (participantIds.length > 0)
 			charConditions.push(
-				inArray(schema.lorebookBindings.characterId, sessionCharIds)
+				inArray(schema.lorebookBindings.characterId, participantIds)
 			)
 		const charBindings = await db.query.lorebookBindings.findMany({
 			where: and(...charConditions),
 			columns: { id: true }
 		})
-		const personaBindings =
-			sessionPersonaIds.length > 0
-				? await db.query.lorebookBindings.findMany({
-						where: and(
-							eq(schema.lorebookBindings.lorebookId, lorebookId),
-							inArray(
-								schema.lorebookBindings.personaId,
-								sessionPersonaIds
-							)
-						),
-						columns: { id: true }
-					})
-				: []
 		// A participant's binding IS their node — no separate lookup needed
 		// (post-merge simplification, see the merge plan).
-		const participantBindingIds = [...charBindings, ...personaBindings].map(
-			(b) => b.id
-		)
+		const participantBindingIds = charBindings.map((b) => b.id)
 		for (const id of participantBindingIds) participantNodeIds.add(id)
 		const participantParentIds = participantBindingIds.filter(
 			(id) => id !== speakerNodeId

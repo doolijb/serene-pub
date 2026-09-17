@@ -111,12 +111,12 @@ describe("the scan is capable of the measurement it is used for", () => {
 			SITES.length,
 			"no text-adapter construction was found anywhere under $lib/server — " +
 				"either the tree moved or the `new …Adapter(` pattern stopped matching"
-		).toBeGreaterThanOrEqual(5)
+		).toBeGreaterThanOrEqual(4)
 		const files = new Set(SITES.map((s) => s.file))
-		// The two nobody would forget, named so the scan cannot be judged by the
+		// The one nobody would forget — every reply is sent from here since
+		// the one road (09-B B4) — named so the scan cannot be judged by the
 		// three obscure ones alone.
 		expect(files).toContain("lib/server/pipelines/runtime/dispatch.ts")
-		expect(files).toContain("lib/server/utils/generateResponse.ts")
 		// And the three that go through `runQueuedLLMCall` instead — the ones
 		// this file exists for.
 		expect(files).toContain("lib/server/utils/summarizer/index.ts")

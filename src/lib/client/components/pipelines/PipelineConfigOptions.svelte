@@ -23,7 +23,8 @@
 	 * other's responses.
 	 */
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
-	import { onDestroy, onMount } from "svelte"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
+	import { onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import ShareBar from "$lib/client/components/pipelines/ShareBar.svelte"
@@ -871,52 +872,108 @@
 		if (res?.error) toaster.error({ title: res.error })
 	}
 
+	/**
+	 * Every event this panel reads, declared on the interest registry — which
+	 * owns the one listener per event name and releases this panel's
+	 * subscribers when it is destroyed. That is what the twenty named
+	 * `socket.off` calls were doing by hand, minus the hazard that a bare
+	 * `off(event)` would have torn down every other view's listener with them.
+	 *
+	 * ⚠ `pipelines:get` is STANDING, not a one-shot around the request below:
+	 * every write handler re-emits the view on it (set, clear, select, prompt
+	 * and template writes all cascade to `pipelines:get`), so the key has to be
+	 * held for as long as the panel is mounted or a save would land and the
+	 * panel would never see the result.
+	 *
+	 * ⚠ BARE keys throughout: none of these events has an entry in
+	 * `SCOPED_EVENTS`, and a `#<slug>` key for an unscoped event matches NO
+	 * payload at all. Each handler's own `res.pipeline.slug !== slug` check
+	 * stays the filter — two of these panels on different pipelines still must
+	 * not clobber each other.
+	 *
+	 * Declared ahead of the `onMount` below, because effects run in declaration
+	 * order: the key is held before the request goes out (which flushes the
+	 * interest sync itself — plan ruling 3).
+	 */
+	useInterest<"pipelines:get">("pipelines:get", onGet)
+	useInterest<"pipelines:clonePrompt">("pipelines:clonePrompt", onCloned)
+	useInterest<"pipelines:createPrompt">("pipelines:createPrompt", onCloned)
+	useInterest<"pipelines:createContextTemplate">(
+		"pipelines:createContextTemplate",
+		onTemplateCloned
+	)
+	useInterest<"pipelines:cloneContextTemplate">(
+		"pipelines:cloneContextTemplate",
+		onTemplateCloned
+	)
+	useInterest<"pipelines:cloneVariableTemplate">(
+		"pipelines:cloneVariableTemplate",
+		onLayoutCloned
+	)
+	// The refusals. Never gated (plan ruling 2 — an error is not an output to
+	// skip), but the registry is the only listener path, so they are declared
+	// like the rest.
+	useInterest<"pipelines:createPrompt:error">(
+		"pipelines:createPrompt:error",
+		showRefusal
+	)
+	useInterest<"pipelines:setOption:error">(
+		"pipelines:setOption:error",
+		showRefusal
+	)
+	useInterest<"pipelines:clearOption:error">(
+		"pipelines:clearOption:error",
+		showRefusal
+	)
+	useInterest<"pipelines:selectConfig:error">(
+		"pipelines:selectConfig:error",
+		showRefusal
+	)
+	useInterest<"pipelines:clonePrompt:error">(
+		"pipelines:clonePrompt:error",
+		showRefusal
+	)
+	useInterest<"pipelines:updatePrompt:error">(
+		"pipelines:updatePrompt:error",
+		showRefusal
+	)
+	useInterest<"pipelines:deletePrompt:error">(
+		"pipelines:deletePrompt:error",
+		showRefusal
+	)
+	useInterest<"pipelines:createContextTemplate:error">(
+		"pipelines:createContextTemplate:error",
+		showRefusal
+	)
+	useInterest<"pipelines:cloneContextTemplate:error">(
+		"pipelines:cloneContextTemplate:error",
+		showRefusal
+	)
+	useInterest<"pipelines:updateContextTemplate:error">(
+		"pipelines:updateContextTemplate:error",
+		showRefusal
+	)
+	useInterest<"pipelines:deleteContextTemplate:error">(
+		"pipelines:deleteContextTemplate:error",
+		showRefusal
+	)
+	useInterest<"pipelines:cloneVariableTemplate:error">(
+		"pipelines:cloneVariableTemplate:error",
+		showRefusal
+	)
+	useInterest<"pipelines:updateVariableTemplate:error">(
+		"pipelines:updateVariableTemplate:error",
+		showRefusal
+	)
+	useInterest<"pipelines:deleteVariableTemplate:error">(
+		"pipelines:deleteVariableTemplate:error",
+		showRefusal
+	)
+
 	onMount(() => {
-		socket.on("pipelines:get", onGet)
-		socket.on("pipelines:clonePrompt", onCloned)
-		socket.on("pipelines:createPrompt", onCloned)
-		socket.on("pipelines:createPrompt:error", showRefusal)
-		socket.on("pipelines:setOption:error", showRefusal)
-		socket.on("pipelines:clearOption:error", showRefusal)
-		socket.on("pipelines:selectConfig:error", showRefusal)
-		socket.on("pipelines:clonePrompt:error", showRefusal)
-		socket.on("pipelines:updatePrompt:error", showRefusal)
-		socket.on("pipelines:deletePrompt:error", showRefusal)
-		socket.on("pipelines:createContextTemplate", onTemplateCloned)
-		socket.on("pipelines:createContextTemplate:error", showRefusal)
-		socket.on("pipelines:cloneContextTemplate", onTemplateCloned)
-		socket.on("pipelines:cloneContextTemplate:error", showRefusal)
-		socket.on("pipelines:updateContextTemplate:error", showRefusal)
-		socket.on("pipelines:deleteContextTemplate:error", showRefusal)
-		socket.on("pipelines:cloneVariableTemplate", onLayoutCloned)
-		socket.on("pipelines:cloneVariableTemplate:error", showRefusal)
-		socket.on("pipelines:updateVariableTemplate:error", showRefusal)
-		socket.on("pipelines:deleteVariableTemplate:error", showRefusal)
-
+		// The key above is already held; the typed `emit` flushes its interest
+		// sync ahead of this packet on the same socket (plan ruling 3).
 		socket.emit("pipelines:get", { slug, sessionId })
-	})
-
-	onDestroy(() => {
-		socket.off("pipelines:get", onGet)
-		socket.off("pipelines:clonePrompt", onCloned)
-		socket.off("pipelines:createPrompt", onCloned)
-		socket.off("pipelines:createPrompt:error", showRefusal)
-		socket.off("pipelines:setOption:error", showRefusal)
-		socket.off("pipelines:clearOption:error", showRefusal)
-		socket.off("pipelines:selectConfig:error", showRefusal)
-		socket.off("pipelines:clonePrompt:error", showRefusal)
-		socket.off("pipelines:updatePrompt:error", showRefusal)
-		socket.off("pipelines:deletePrompt:error", showRefusal)
-		socket.off("pipelines:createContextTemplate", onTemplateCloned)
-		socket.off("pipelines:createContextTemplate:error", showRefusal)
-		socket.off("pipelines:cloneContextTemplate", onTemplateCloned)
-		socket.off("pipelines:cloneContextTemplate:error", showRefusal)
-		socket.off("pipelines:updateContextTemplate:error", showRefusal)
-		socket.off("pipelines:deleteContextTemplate:error", showRefusal)
-		socket.off("pipelines:cloneVariableTemplate", onLayoutCloned)
-		socket.off("pipelines:cloneVariableTemplate:error", showRefusal)
-		socket.off("pipelines:updateVariableTemplate:error", showRefusal)
-		socket.off("pipelines:deleteVariableTemplate:error", showRefusal)
 	})
 
 	/**
@@ -1055,8 +1112,14 @@
 	 */
 	let showAll = $state<Record<string, boolean>>({})
 
-	const stepGroups = $derived(
-		visibleSteps
+	/**
+	 * One step's settings, grouped into facet rows. Shared by the numbered
+	 * spine list (`stepGroups`) and the trailing, unnumbered "Also
+	 * configured here" group (`alsoConfiguredGroups`) — an envoy's settings
+	 * are laid out exactly like a step's, they are simply not counted as one.
+	 */
+	const groupsOf = (steps: Sockets.Pipelines.Step[]) =>
+		steps
 			.map((step) => {
 				const base = granular ? allOf(step) : step.options
 				// Selectors-only drops everything but the reference/enum
@@ -1109,7 +1172,25 @@
 				}
 			})
 			.filter((g) => g.count > 0)
-	)
+
+	const stepGroups = $derived(groupsOf(visibleSteps))
+
+	/**
+	 * An envoy's settings (plans/29 R-18 (2); U5g review follow-up): not a
+	 * step of anything that runs, so it is excluded from the builder's
+	 * single-step inspector (`stepKey` set) the same way `visibleSteps`
+	 * excludes every other step but the one named.
+	 */
+	const visibleAlsoConfigured = $derived.by(() => {
+		if (!detail || stepKey != null) return []
+		if (!draftMode) return detail.alsoConfigured
+		return detail.alsoConfigured.map((s) => ({
+			...s,
+			options: s.options.map(overlay),
+			advanced: s.advanced.map(overlay)
+		}))
+	})
+	const alsoConfiguredGroups = $derived(groupsOf(visibleAlsoConfigured))
 
 	/**
 	 * A sub-heading earns its place only when the step has more than one kind
@@ -2093,12 +2174,13 @@
 			     namespace and the declared shape — so this renders the list
 			     and never decides what belongs in it. -->
 			{@const isConnection = option.control === "connection-ref"}
-			<!-- A connection slot's value is a PAIR since 0114, and the two
-			     legacy spellings (a bare id, `{ref}`) both still mean "that
-			     endpoint, its default model". `slotConnectionId` reads all of
-			     them, which is why nothing stored needed migrating; `String(
-			     option.value)` alone would render `[object Object]` for a pair
-			     and select nothing. -->
+			<!-- A connection slot's value is a PAIR since 0114, and both halves
+			     are required: connections have no default model, so the two
+			     legacy spellings (a bare id, `{ref}`) are INCOMPLETE choices
+			     that resolve as unconfigured until a model is picked.
+			     `slotConnectionId` reads all of them, which is why nothing
+			     stored needed migrating; `String(option.value)` alone would
+			     render `[object Object]` for a pair and select nothing. -->
 			{@const chosenId = isConnection
 				? slotConnectionId(option.value)
 				: null}
@@ -2108,6 +2190,8 @@
 			{@const chosenModels = isConnection
 				? (option.choices.find((c) => c.id === chosenId)?.models ?? [])
 				: []}
+			{@const chosenModel =
+				chosenModels.find((m) => m.id === chosenModelId) ?? null}
 			<select
 				id="opt-{option.id}"
 				class="select w-full"
@@ -2125,11 +2209,23 @@
 					// `connection_models` row belongs to one connection, so
 					// carrying the old model across would write a pair whose two
 					// halves name different endpoints — which the resolver
-					// refuses at dispatch, about a choice nobody made.
+					// refuses at dispatch, about a choice nobody made. The new
+					// endpoint's first switched-on model is pinned at once:
+					// connections have no default model, so leaving the pair
+					// half-written would resolve as unconfigured.
+					const nextModels =
+						option.choices?.find((c) => c.id === Number(raw))
+							?.models ?? []
+					const nextModel =
+						nextModels.find((m) => m.enabled && !m.missingSince) ??
+						null
 					set(
 						option,
 						isConnection
-							? connectionSlotValue(Number(raw))
+							? connectionSlotValue(
+									Number(raw),
+									nextModel ? nextModel.id : null
+								)
 							: Number(raw)
 					)
 				}}
@@ -2168,48 +2264,60 @@
 				     chosen endpoint HAS models, because a picker over an empty
 				     list is a control with no choice in it.
 
-				     "Its default model" is a real option and the resting one,
-				     never a blank: it is what every slot authored before the
-				     split says, and it keeps following the star when the
-				     endpoint's default moves — which is what somebody who has
-				     never thought about models wants, and what a pinned id would
-				     silently stop doing. -->
+				     Every option names a model — connections have no default
+				     model, so there is no "its default" resting option. A slot
+				     authored before the split (a bare endpoint) lands on the
+				     placeholder until somebody picks: the resolver refuses it
+				     with the fix attached rather than guessing a row. -->
 				<select
 					class="select mt-1 w-full"
 					aria-label="Model"
 					value={chosenModelId == null ? "" : String(chosenModelId)}
 					onchange={(e) => {
 						const raw = e.currentTarget.value
-						set(
-							option,
-							connectionSlotValue(
-								chosenId,
-								raw === "" ? null : Number(raw)
-							)
-						)
+						if (raw === "") return
+						set(option, connectionSlotValue(chosenId, Number(raw)))
 					}}
 				>
-					<option value="">
-						— Its default model{chosenModels.find(
-							(m) => m.isDefault
-						)
-							? ` (${chosenModels.find((m) => m.isDefault)!.name})`
-							: ""} —
-					</option>
-					<!-- Disabled models are LISTED and greyed, the same rule the
-					     connection list above follows: a slot pointed at one
-					     before somebody switched it off has to still show what it
-					     is pointed at. -->
+					{#if chosenModelId == null}
+						<option value="" disabled>— Choose a model —</option>
+					{/if}
+					<!-- Disabled and MISSING models are LISTED and greyed, the
+					     same rule the connection list above follows: a slot
+					     pointed at one before somebody switched it off, or
+					     before its host stopped listing it, has to still show
+					     what it is pointed at — and why it will refuse. -->
 					{#each chosenModels as m (m.id)}
 						<option
 							value={String(m.id)}
-							disabled={!m.enabled}
+							disabled={!m.enabled || m.missingSince != null}
 							title={m.model}
 						>
-							{m.name}{m.enabled ? "" : " — switched off"}
+							{m.name}{m.missingSince
+								? " — no longer listed by its host"
+								: m.enabled
+									? ""
+									: " — switched off"}
 						</option>
 					{/each}
 				</select>
+				{#if chosenModel?.missingSince}
+					<p
+						class="text-warning-500 mt-1 flex items-center gap-1 text-xs"
+					>
+						<Icons.TriangleAlert size={12} aria-hidden="true" />
+						This model is no longer listed by its host, so this step
+						will refuse to run. Pick another, or refresh the connection
+						once the host serves it again.
+					</p>
+				{:else if chosenModel && !chosenModel.enabled}
+					<p
+						class="text-warning-500 mt-1 flex items-center gap-1 text-xs"
+					>
+						<Icons.TriangleAlert size={12} aria-hidden="true" />
+						This model is switched off, so this step will refuse to run.
+					</p>
+				{/if}
 			{/if}
 		{:else if option.control === "list"}
 			<!-- An ordered list of rows, rendered from the ELEMENT's own
@@ -2398,6 +2506,50 @@
 	</div>
 {/snippet}
 
+{#snippet stepCard(group: (typeof stepGroups)[number])}
+	<!-- Shared by the numbered spine list and the trailing, unnumbered
+	     "Also configured here" group — an envoy's card looks exactly like a
+	     step's; it is simply not counted as one. -->
+	<section class="card preset-filled-surface-100-900 space-y-3 p-3">
+		{#if stepKey == null}
+			<!-- The sidebar shows every step, so each card needs its
+			     name. The builder shows one — its host already titles
+			     it ("Chat · step 1 of 7"), and repeating it inside the
+			     card said everything twice. -->
+			<h3 class="text-sm font-semibold">{group.label}</h3>
+		{/if}
+		{#each group.facets as facet (facet.label)}
+			{#if showFacetHeadings(group)}
+				<p
+					class="text-muted text-xs font-semibold tracking-wide uppercase"
+				>
+					{facet.label}
+				</p>
+			{/if}
+			{#each facet.rows as row (row.option.id)}
+				{@render optionRow(row.option, row.option.label)}
+			{/each}
+		{/each}
+
+		{#if group.hidden || group.canCollapse}
+			<button
+				type="button"
+				class="btn btn-sm preset-tonal-surface w-full"
+				onclick={() =>
+					(showAll[group.key] = !(showAll[group.key] ?? false))}
+			>
+				{#if group.hidden}
+					<Icons.ChevronDown size={14} />
+					{group.hidden} more
+					{group.hidden === 1 ? "setting" : "settings"}
+				{:else}
+					<Icons.ChevronUp size={14} /> Fewer settings
+				{/if}
+			</button>
+		{/if}
+	</section>
+{/snippet}
+
 {#if !detail}
 	<p class="text-muted p-4 text-sm">Loading…</p>
 {:else}
@@ -2455,6 +2607,13 @@
 					{/each}
 				{/each}
 			{/each}
+			{#each alsoConfiguredGroups as group (group.key)}
+				{#each group.facets as facet (facet.label)}
+					{#each facet.rows as row (row.option.id)}
+						{@render optionRow(row.option, row.option.label)}
+					{/each}
+				{/each}
+			{/each}
 		</div>
 	{:else}
 		<!-- Grouped by what a setting *is*, not by which step computes it. A group
@@ -2468,54 +2627,22 @@
 		<div class="inspector-pane">
 			<div class="option-groups space-y-3">
 				{#each stepGroups as group (group.key)}
-					<section
-						class="card preset-filled-surface-100-900 space-y-3 p-3"
-					>
-						{#if stepKey == null}
-							<!-- The sidebar shows every step, so each card needs its
-					     name. The builder shows one — its host already titles
-					     it ("Chat · step 1 of 7"), and repeating it inside the
-					     card said everything twice. -->
-							<h3 class="text-sm font-semibold">{group.label}</h3>
-						{/if}
-						{#each group.facets as facet (facet.label)}
-							{#if showFacetHeadings(group)}
-								<p
-									class="text-muted text-xs font-semibold tracking-wide uppercase"
-								>
-									{facet.label}
-								</p>
-							{/if}
-							{#each facet.rows as row (row.option.id)}
-								{@render optionRow(
-									row.option,
-									row.option.label
-								)}
-							{/each}
-						{/each}
-
-						{#if group.hidden || group.canCollapse}
-							<button
-								type="button"
-								class="btn btn-sm preset-tonal-surface w-full"
-								onclick={() =>
-									(showAll[group.key] = !(
-										showAll[group.key] ?? false
-									))}
-							>
-								{#if group.hidden}
-									<Icons.ChevronDown size={14} />
-									{group.hidden} more
-									{group.hidden === 1
-										? "setting"
-										: "settings"}
-								{:else}
-									<Icons.ChevronUp size={14} /> Fewer settings
-								{/if}
-							</button>
-						{/if}
-					</section>
+					{@render stepCard(group)}
 				{/each}
+
+				{#if alsoConfiguredGroups.length}
+					<!-- An envoy is nobody's step (plans/29 R-18 (2); U5g review
+					     follow-up) — set apart under its own small heading,
+					     after the numbered list rather than inside it. -->
+					<p
+						class="text-muted mt-1 text-xs font-semibold tracking-wide uppercase"
+					>
+						Also configured here
+					</p>
+					{#each alsoConfiguredGroups as group (group.key)}
+						{@render stepCard(group)}
+					{/each}
+				{/if}
 
 				{#if tuning.length}
 					<details class="card preset-filled-surface-100-900 p-3">

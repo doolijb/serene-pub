@@ -34,8 +34,22 @@ const imageConnection = {
 	name: "Local A1111",
 	modality: "image-gen",
 	baseUrl: "http://127.0.0.1:7860",
-	model: "juggernautXL.safetensors",
 	extraJson: {}
+}
+
+/**
+ * The MODEL half of the pair. The checkpoint is a property of this row, not of
+ * the endpoint, and the handler reaches it through the registered `text->image`
+ * default — the one entry point into image generation that takes a connection
+ * id from the client and so has no tier chain to walk.
+ */
+const imageModel = {
+	id: 77,
+	connectionId: 1,
+	model: "juggernautXL.safetensors",
+	name: "Juggernaut XL",
+	enabled: true,
+	missingSince: null
 }
 
 class FakeAdapter {
@@ -93,14 +107,11 @@ vi.mock("$lib/server/db", () => ({
 			connections: { findFirst: async () => imageConnection },
 			samplingConfigs: { findFirst: async () => undefined }
 		},
-		// `defaultConnectionModel` asks which model this endpoint means (0114).
-		// Answering with NOTHING is the case worth having here: an endpoint with
-		// no model rows merges to itself, so `imageConnection` above reaches the
-		// adapter exactly as it did before the split — and this file's subject,
-		// the on-disk path in `model`, is still the endpoint's own.
+		// The model row the registration names. `connectionModelById` is the
+		// only `select` this handler makes, so one canned answer serves it.
 		select: () => ({
 			from: () => ({
-				where: () => ({ limit: async () => [] })
+				where: () => ({ limit: async () => [imageModel] })
 			})
 		})
 	}
@@ -110,8 +121,16 @@ vi.mock("$lib/server/pipelines/runtime/capabilityGuard", () => ({
 	capabilityRefusal: () => null
 }))
 
+// The registration this handler reads the model half from: THIS endpoint, with
+// an explicit model. Anything else — no registration, another endpoint's, a
+// model that is gone or switched off — refuses, because connections have no
+// default model to fall back to.
 vi.mock("$lib/server/connections/capabilityDefaults", () => ({
-	capabilityDefault: async () => undefined
+	capabilityDefault: async () => ({
+		connectionId: 1,
+		connectionModelId: 77,
+		samplingConfigId: null
+	})
 }))
 
 vi.mock("$lib/server/utils/tokenCrypto", () => ({

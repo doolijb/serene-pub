@@ -58,8 +58,8 @@ export const POOL_SEPARATOR = "#"
  * stores the pool as TWO columns and indexes them as two; a stringified
  * composite would be a third spelling of the same fact that no index covers.
  */
-export const contextPoolKeyFor = (nodeTypeId: string, engine: string): string =>
-	`${poolKeyFor(nodeTypeId)}${POOL_SEPARATOR}${engine}`
+export const contextPoolKeyFor = (nodeDefinitionId: string, engine: string): string =>
+	`${poolKeyFor(nodeDefinitionId)}${POOL_SEPARATOR}${engine}`
 
 /**
  * The inverse. Takes a composite key back to the two values a write needs.

@@ -107,13 +107,40 @@ describe("the core event set", () => {
 		expect(tick.affectsUser).toBe(false)
 	})
 
-	it("leaves payload_shape null rather than inventing one", async () => {
+	it("projects payload_shape from the SDK's declaration, and leaves it null rather than inventing one", async () => {
 		// A subscription's shape-compatibility check reads this column. Writing a
 		// speculative value would make that check pass against a shape nobody
-		// declared, which is worse than it having nothing to check yet.
+		// declared, which is worse than it having nothing to check yet — so an
+		// event with no declared `payload` stays null, and one the SDK declares
+		// (the built-in writes' events, R-15) carries exactly that id.
 		const rows = await db.select().from(schema.pipelineEventRegistry)
 		expect(rows.length).toBeGreaterThan(0)
-		for (const r of rows) expect(r.payloadShape).toBeNull()
+		const byShape = new Map(
+			rows.map((r) => [
+				r.slug,
+				(r.payloadShape as { shape?: string } | null)?.shape ?? null
+			])
+		)
+		expect(byShape.get("core:event/schedule-tick")).toBeNull()
+		expect(byShape.get("core:event/message-created")).toBeNull()
+		for (const slug of [
+			"core:event/message-updated",
+			"core:event/message-deleted",
+			"core:event/message-hidden",
+			"core:event/message-edited",
+			"core:event/message-swiped",
+			"core:event/message-stopped",
+			"core:event/session-branched",
+			// The truncation marker (U5b review S1): an entry of the same
+			// list, so the same shape; caused by no outlet.
+			"core:event/session-changes-truncated"
+		])
+			expect(byShape.get(slug), slug).toBe("core:shape/session-change@1")
+		// Nothing is invented: every non-null value names a declared shape.
+		for (const r of rows) {
+			const shape = (r.payloadShape as { shape?: string } | null)?.shape
+			if (shape) expect(shape).toMatch(/^core:shape\/[a-z-]+@\d+$/)
+		}
 	})
 
 	it("re-syncs to no writes at all", async () => {
@@ -124,7 +151,7 @@ describe("the core event set", () => {
 	})
 
 	it("updates a changed description instead of refusing it", async () => {
-		// The difference from `syncTypeRegistry`, which raises on exactly this.
+		// The difference from `syncDefinitionRegistry`, which raises on exactly this.
 		// Nothing pins an event's description, so a correction has to be able to
 		// ship — otherwise it needs a version bump that means nothing to anyone.
 		await db
@@ -250,8 +277,8 @@ describe("core's specs", () => {
 					.where(
 						and(
 							eq(
-								schema.pipelinePrompts.nodeTypeId,
-								(d as any).nodeTypeId
+								schema.pipelinePrompts.nodeDefinitionId,
+								(d as any).nodeDefinitionId
 							),
 							eq(schema.pipelinePrompts.slot, d.slot)
 						)
@@ -282,7 +309,7 @@ describe("core's specs", () => {
 				.map((r: any) =>
 					JSON.stringify({
 						id: r.id,
-						nodeTypeId: r.nodeTypeId,
+						nodeDefinitionId: r.nodeDefinitionId,
 						slot: r.slot,
 						seedKey: r.seedKey,
 						name: r.name,
@@ -304,17 +331,23 @@ describe("core's specs", () => {
 		expect(await snapshot()).toEqual(before)
 	}, 120_000)
 
-	it("subscribes each spec to the event it declared", async () => {
-		const subs = await db.select().from(schema.pipelineEventSubscriptions)
-		expect(subs.length).toBeGreaterThan(0)
-		// Every subscription names an event core actually registered — the check
-		// that would fail the day a spec subscribes to something invented.
+	it("locks each session spec to an event core actually registered (R-4)", async () => {
+		// The inlet lock is the one subscription there is since R-4; a lock
+		// naming an event the registry lacks is a spec answering nothing.
+		const locks = (
+			await db
+				.select({ event: schema.pipelineSpecVersions.inputEvent })
+				.from(schema.pipelineSpecVersions)
+		)
+			.map((r) => r.event)
+			.filter((e): e is string => !!e)
+		expect(locks.length).toBeGreaterThan(0)
 		const registered = new Set(
 			(await db.select().from(schema.pipelineEventRegistry)).map(
 				(e: any) => `${e.slug}@${e.version}`
 			)
 		)
-		for (const s of subs) expect(registered.has(s.eventRef)).toBe(true)
+		for (const e of locks) expect(registered.has(e), e).toBe(true)
 	})
 })
 

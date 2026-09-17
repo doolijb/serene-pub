@@ -94,7 +94,7 @@
 			>
 				{g.group}
 			</p>
-			<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+			<div class="grid grid-cols-1 gap-3 @lg/view:grid-cols-2">
 				{#each g.fields as { key, decl } (key)}
 					<!-- The description is VISIBLE text with `aria-describedby`,
 					     not a `title`. A `title` on a label is not mapped to the

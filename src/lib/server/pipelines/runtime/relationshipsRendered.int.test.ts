@@ -57,9 +57,6 @@ let specRow: { id: number }
 const PRESENT = "Kiran"
 const ABSENT = "Wraith"
 
-/** The ranker's node in the shipped reply document. */
-const RANK = "rank"
-
 const HOUR = 3_600_000
 const NOW = Date.now()
 
@@ -184,33 +181,43 @@ const selectedConfigId = async () => {
 }
 
 /**
- * Write one of the ranker's per-band maps, or clear it back to the shipped
- * default.
+ * Write one per-source field on every band's owning node, or clear them
+ * back to the shipped defaults.
  *
- * Whole maps rather than one member: `rankingParamsFrom` passes the stored
- * object through and `withDefaults` merges it one level deep, so a partial
- * `share` would silently replace the other four bands with nothing.
+ * On the SOURCES, not the ranker (R-7 P5, 2026-09-16): each band's `share`
+ * and `maxEntries` are declared on the retrieval node that produces it and
+ * travel to `rank` as its band intent. The map below is the same one
+ * migration 0135 moved the ranker's stored maps along.
  */
+const BAND_NODE: Record<string, string> = {
+	messages: "gather.history.read",
+	worldLore: "gather.worldLore.read",
+	characterLore: "gather.characterLore.read",
+	history: "gather.historyEntries.read",
+	relationships: "gather.relationships.read"
+}
 const setBandParam = async (
 	path: "share" | "maxEntries",
 	value: Record<string, number> | null
 ) => {
 	const configId = await selectedConfigId()
-	const where = and(
-		eq(schema.pipelineConfigValues.configId, configId),
-		eq(schema.pipelineConfigValues.nodeKey, RANK),
-		eq(schema.pipelineConfigValues.slot, "params"),
-		eq(schema.pipelineConfigValues.path, path)
-	)
-	await db.delete(schema.pipelineConfigValues).where(where)
-	if (value === null) return
-	await db.insert(schema.pipelineConfigValues).values({
-		configId,
-		nodeKey: RANK,
-		slot: "params",
-		path,
-		value: value as any
-	})
+	for (const [band, nodeKey] of Object.entries(BAND_NODE)) {
+		const where = and(
+			eq(schema.pipelineConfigValues.configId, configId),
+			eq(schema.pipelineConfigValues.nodeKey, nodeKey),
+			eq(schema.pipelineConfigValues.slot, "params"),
+			eq(schema.pipelineConfigValues.path, path)
+		)
+		await db.delete(schema.pipelineConfigValues).where(where)
+		if (value === null || value[band] === undefined) continue
+		await db.insert(schema.pipelineConfigValues).values({
+			configId,
+			nodeKey,
+			slot: "params",
+			path,
+			value: value[band] as any
+		})
+	}
 }
 
 /** The band, on, with room for both ties. */

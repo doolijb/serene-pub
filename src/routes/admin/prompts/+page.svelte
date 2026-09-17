@@ -15,17 +15,17 @@
 	 * was written survives as a secondary line, which is a fact about its
 	 * history rather than a claim about its scope.
 	 */
-	import { onDestroy, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { goto } from "$app/navigation"
-	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import {
+		requestWithInterest,
+		useInterest
+	} from "$lib/client/sockets/interest.svelte"
 	import AdminList, {
 		type AdminColumn
 	} from "$lib/client/components/admin/AdminList.svelte"
 
 	type Prompt = Sockets.Pipelines.Library.LibraryPrompt
-
-	const socket = useTypedSocket()
 
 	let view = $state<Sockets.Pipelines.Library.Response>({})
 	let loading = $state(true)
@@ -38,15 +38,19 @@
 		view = res
 	}
 
-	onMount(() => {
-		socket.on("pipelines:library", handleLibrary)
-		socket.on("pipelines:libraryClonePrompt", handleClone)
-		socket.emit("pipelines:library", {})
-	})
-	onDestroy(() => {
-		socket.off("pipelines:library", handleLibrary)
-		socket.off("pipelines:libraryClonePrompt", handleClone)
-	})
+	/**
+	 * A clone made on a prompt's change page answers with the whole refreshed
+	 * view, and it arrives whenever that write happens — so the interest
+	 * stands rather than belonging to a request. BARE: the library is the
+	 * instance's, not one session's.
+	 */
+	useInterest<"pipelines:libraryClonePrompt">(
+		"pipelines:libraryClonePrompt",
+		handleClone
+	)
+
+	/** The library view, asked for and listened for in one. BARE, same reason. */
+	$effect(() => requestWithInterest("pipelines:library", {}, handleLibrary))
 
 	let rows = $derived((view.prompts ?? []) as Prompt[])
 

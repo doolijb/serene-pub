@@ -1,7 +1,8 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import { onDestroy, onMount } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import { declareInterest } from "$lib/client/sockets/interest.svelte"
+	import { interestKey } from "$lib/shared/sockets/interest"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { HISTORY_TYPE_ID } from "$lib/shared/entries/types"
 	import type { PoolSource } from "./types"
@@ -22,8 +23,6 @@
 
 	const socket = useTypedSocket()
 
-	// Named so `off` can name it too: a bare off() removes every listener for
-	// the event, including any other open lorebooks UI.
 	function handleIterateNext(_msg: Sockets.Entries.IterateNext.Response) {
 		toaster.success({ title: "The story's date has moved forward" })
 	}
@@ -45,13 +44,26 @@
 		} satisfies Sockets.Entries.IterateNext.Params)
 	}
 
-	onMount(() => {
-		socket.on("entries:iterateNext", handleIterateNext)
-	})
+	/**
+	 * `entries:iterateNext` is scoped on `payload.entry.lorebookId`, and the
+	 * rows this button iterates are the open book's own, so the key names that
+	 * book. A `PoolSource` is the wire row untyped, hence the `find` rather
+	 * than a field read: with no row carrying one — an empty list — the key is
+	 * BARE, which is the wider match and costs nothing, since `nextDate`
+	 * refuses to send anything at all in that state.
+	 */
+	let scopeLorebookId = $derived(
+		(sources.find((row) => row.lorebookId != null)?.lorebookId as
+			| number
+			| undefined) ?? null
+	)
 
-	onDestroy(() => {
-		socket.off("entries:iterateNext", handleIterateNext)
-	})
+	$effect(() =>
+		declareInterest<"entries:iterateNext">(
+			interestKey("entries:iterateNext", scopeLorebookId),
+			handleIterateNext
+		)
+	)
 </script>
 
 <button

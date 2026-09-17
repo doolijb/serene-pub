@@ -124,7 +124,7 @@ describe("SandboxManager", () => {
 	})
 
 	it("calls a lifecycle hook as (input, ctx) on both backends", async () => {
-		// The SDK typed `LifecycleHook` as taking the surface ALONE while both
+		// The SDK typed `LifecycleCallback` as taking the surface ALONE while both
 		// backends have always called every hook `__fn(__input, ctx)` — so an
 		// author who followed the type read `storage` and `log` off the input
 		// and found neither. This is the sandbox half of that contract, and it

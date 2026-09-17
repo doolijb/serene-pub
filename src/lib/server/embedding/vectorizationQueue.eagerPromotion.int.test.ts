@@ -92,21 +92,23 @@ beforeAll(async () => {
 			name: "Eager Promotion Embeddings",
 			modality: "embeddings",
 			type: CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS,
-			model: MODEL,
 			extraJson: {},
 			capabilities: {}
 		} as any)
 		.returning()
-	await testDb.insert(schema.connectionModels).values({
-		connectionId: embeddingConn.id,
-		model: MODEL,
-		name: MODEL,
-		isDefault: true
-	})
+	const [embeddingModel] = await testDb
+		.insert(schema.connectionModels)
+		.values({
+			connectionId: embeddingConn.id,
+			model: MODEL,
+			name: MODEL
+		})
+		.returning()
 	await testDb.insert(schema.connectionDefaults).values({
 		input: "text",
 		output: "embedding",
-		connectionId: embeddingConn.id
+		connectionId: embeddingConn.id,
+		connectionModelId: embeddingModel.id
 	})
 }, 60_000)
 

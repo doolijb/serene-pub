@@ -20,10 +20,10 @@
 	 * only way to start from delimiters that already work. "New template" below
 	 * creates a blank one for an author who wants to start from nothing.
 	 */
-	import { onDestroy, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { goto } from "$app/navigation"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { getInterestContext } from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import AdminList, {
 		type AdminColumn
@@ -34,6 +34,7 @@
 	type Row = SelectCompletionTemplate
 
 	const socket = useTypedSocket()
+	const interest = getInterestContext()
 
 	let rows: Row[] = $state([])
 	let loading = $state(true)
@@ -50,16 +51,38 @@
 		toaster.error({ title: res.error ?? "The server refused that." })
 	}
 
-	onMount(() => {
-		socket.on("completionTemplates:list", handleList)
-		socket.on("completionTemplates:create", handleCreate)
-		socket.on("completionTemplates:create:error", handleError)
-		socket.emit("completionTemplates:list", {})
-	})
-	onDestroy(() => {
-		socket.off("completionTemplates:list", handleList)
-		socket.off("completionTemplates:create", handleCreate)
-		socket.off("completionTemplates:create:error", handleError)
+	/**
+	 * The changelist, asked for and listened for in one, and the create this
+	 * page sends from its two buttons. All BARE — a template is the
+	 * instance's, with nothing to scope it to.
+	 *
+	 * `completionTemplates:list` is a STANDING key: the server re-emits it as
+	 * a cascade after every write to the table, which is how this list redraws
+	 * without asking again. The refusal is declared too, and never gated.
+	 *
+	 * The app-wide interest context, not `adminInterest`: `completionTemplates:`
+	 * is not a restricted interest family, and the admin gate is the one
+	 * `/admin/+layout.svelte` already makes.
+	 */
+	$effect(() => {
+		const releases = [
+			interest.declareInterest<"completionTemplates:create">(
+				"completionTemplates:create",
+				handleCreate
+			),
+			interest.declareInterest<"completionTemplates:create:error">(
+				"completionTemplates:create:error",
+				handleError
+			),
+			interest.requestWithInterest(
+				"completionTemplates:list",
+				{},
+				handleList
+			)
+		]
+		return () => {
+			for (const release of releases) release()
+		}
 	})
 
 	/** What a system block opens with — the glanceable half of a format. */

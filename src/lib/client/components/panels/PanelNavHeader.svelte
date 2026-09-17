@@ -38,7 +38,7 @@
 		    click — the lore edit screens put Save here. */
 		primaryAction?: Snippet
 		/** Rendered inside the `⋯` menu, with full text labels. Use
-		    `.popover-menu-btn` for each entry, matching PersonaListItem and the
+		    `.popover-menu-btn` for each entry, matching CharacterListItem and the
 		    message-options menu. */
 		actions?: Snippet
 		/** Menu heading + the trigger's accessible name, eg. "Lorebook". */
