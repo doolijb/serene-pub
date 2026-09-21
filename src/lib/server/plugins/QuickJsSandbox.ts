@@ -38,6 +38,7 @@ import {
 } from "./storageHost"
 import { CRYPTO_HOST_SOURCE } from "./cryptoHost"
 import { FETCH_HOST_SOURCE } from "./fetchHost"
+import { hookCtxGrants } from "./hookCtx"
 import type {
 	HookRef,
 	HookRunResult,
@@ -270,7 +271,10 @@ function classifyFailure(detail, flags, timeoutMs) {
 // map is reachable, the seeded RNG / pinned clock are installed, and the whole
 // result crosses as a JSON string. Kept in lockstep with QuickJsSandbox's
 // contract on the host side.
-function buildProgram(source, hookName, inputJson, seedLabel, nowMs) {
+// grants: what the host derived from the hook's kind (hookCtx.ts, R-3). A
+// ctx member the kind is not granted is absent, not a stub that refuses, so
+// Object.keys(ctx) says exactly what the hook may reach.
+function buildProgram(source, hookName, inputJson, seedLabel, nowMs, grants) {
 	return (
 		'(async function () {\n' +
 		'"use strict";\n' +
@@ -303,19 +307,19 @@ function buildProgram(source, hookName, inputJson, seedLabel, nowMs) {
 		// Every argument survives: the SDK declares log(level, message, detail?),
 		// and the formatter is the prelude's — spliced just below, shared by both
 		// backends so a hook cannot tell them apart by what its logs look like.
-		'  log: function () { __logs.push(__fmtLog(arguments)); },\n' +
-		'  storage: __storageHost,\n' +
+		'  log: function () { __logs.push(__fmtLog(arguments)); }' +
+		(grants.storage ? ',\n  storage: __storageHost' : '') +
 		// Byte-for-byte the SES line: init crosses as JSON, and the host
 		// function behind __fetch answers with a guest promise (bridgeFetch
 		// above). A hook must not be able to tell the two apart.
-		'  fetch: function (url, opts) { return __fetch(url, opts ? JSON.stringify(opts) : undefined); }\n' +
-		'};\n' +
+		(grants.fetch ? ',\n  fetch: function (url, opts) { return __fetch(url, opts ? JSON.stringify(opts) : undefined); }' : '') +
+		'\n};\n' +
 		__PRELUDE + '\n' +
 		// The SDK's ExtensionStorage shape, put on after the prelude because
 		// that is where the one adapter lives (see prelude.ts): promises for
 		// the members the SDK declares as promises, Uint8Array for file bytes,
 		// and the older six passed through synchronously.
-		'ctx.storage = __wrapStorage(ctx.storage);\n' +
+		(grants.storage ? 'ctx.storage = __wrapStorage(ctx.storage);\n' : '') +
 		// The abort capability, wired *before* the bundle is evaluated: the
 		// first registration wins, so a hook cannot displace its own abort. The
 		// controller is the prelude's — nothing host-side crosses here, only a
@@ -373,8 +377,10 @@ module.exports = {
 		// handle. The one async permission that now exists on this backend —
 		// fetch — reaches the network and never a database, so there is still
 		// nothing in here that could use one.
+		// Only for a kind granted storage (R-3): a task's call opens no
+		// transaction and commits no rows.
 		const tx =
-			bundle.config && bundle.config.storageDir
+			job.grants.storage && bundle.config && bundle.config.storageDir
 				? makeStorageHost(bundle.config, job.rows, job.nowMs)
 				: null
 		const runtime = qjs.newRuntime()
@@ -401,11 +407,16 @@ module.exports = {
 			// Deferreds handed to the guest that have not settled yet.
 			const openFetches = new Set()
 			try {
-				bridgeObject(
-					context,
-					"__storageHost",
-					tx ? tx.api : __DENIED_STORAGE
-				)
+				// The two permission-gated hosts are bridged only for a kind
+				// granted them — absent from the ctx AND from the globals, so a
+				// hook cannot reach past the ctx to a name the program never
+				// mentions (R-3).
+				if (job.grants.storage)
+					bridgeObject(
+						context,
+						"__storageHost",
+						tx ? tx.api : __DENIED_STORAGE
+					)
 				bridgeObject(context, "__crypto", makeCryptoHost(), [
 					"randomBytes",
 					"randomUUID"
@@ -414,16 +425,17 @@ module.exports = {
 				// the raw manifest), and the cancellation view is this call's
 				// own abort flag — read live, so the refusal covers the first
 				// request and every redirect hop after it.
-				bridgeFetch(
-					context,
-					fetchHostFor(bundle.config, function () {
-						return (Atomics.load(flags, 0) & STOP_ABORT) !== 0
-					}),
-					function () {
-						return contextLive
-					},
-					openFetches
-				)
+				if (job.grants.fetch)
+					bridgeFetch(
+						context,
+						fetchHostFor(bundle.config, function () {
+							return (Atomics.load(flags, 0) & STOP_ABORT) !== 0
+						}),
+						function () {
+							return contextLive
+						},
+						openFetches
+					)
 				const reg = context.newFunction(
 					"__registerAbort",
 					function (fnHandle) {
@@ -439,7 +451,8 @@ module.exports = {
 					job.hookName,
 					job.inputJson,
 					job.seedLabel,
-					job.nowMs
+					job.nowMs,
+					job.grants
 				)
 				const evaluated = context.evalCode(program)
 				if (evaluated.error) {
@@ -715,7 +728,12 @@ export class QuickJsSandbox implements PluginSandbox {
 			nowMs: opts.nowMs,
 			timeoutMs: opts.timeoutMs,
 			memoryLimitBytes: this.memoryLimitBytes,
-			rows: opts.rows
+			rows: opts.rows,
+			// Derived here, on the host, from the kind the caller named — the
+			// worker never sees the kind, only what it grants (R-3). Throws on
+			// a call that names none: a host bug, surfaced loudly, never a
+			// typed hook failure.
+			grants: hookCtxGrants(opts.kind)
 		}
 
 		const outcome = await this.evaluate(job, opts.timeoutMs, opts.jobId)

@@ -325,7 +325,11 @@ describe("an Adventure session", () => {
 			.returning()
 		const state = await stateFor(db, session.id)
 		expect(state.world).toEqual({})
-		expect(state.cast).toEqual({})
+		// `byId` is the cast's other index and is always present, empty or not
+		// (R17): a reader that had to check whether it exists would be a reader
+		// with two code paths for one question.
+		expect(state.cast).toEqual({ byId: {} })
+		expect(state.slots).toEqual([])
 	}, 60_000)
 })
 

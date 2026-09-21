@@ -978,6 +978,8 @@ async function fetchRecommendedYaml(): Promise<
 	Array<{
 		name: string
 		pull: string
+		/** GB, as the list quotes it; 0 when it quotes none. */
+		size: number
 		recommended_vram: number
 		details: { parameter_size: string; description: string }
 	}>
@@ -998,12 +1000,15 @@ async function fetchRecommendedYaml(): Promise<
 			cur = {
 				name: t.replace("- name:", "").trim(),
 				pull: "",
+				size: 0,
 				recommended_vram: 0,
 				details: { parameter_size: "", description: "" }
 			}
 			inDetails = false
 		} else if (cur) {
 			if (t.startsWith("pull:")) cur.pull = t.replace("pull:", "").trim()
+			else if (t.startsWith("size:"))
+				cur.size = parseFloat(t.replace("size:", "").trim()) || 0
 			else if (t.startsWith("recommended_vram:"))
 				cur.recommended_vram =
 					parseInt(t.replace("recommended_vram:", "").trim()) || 0
@@ -1216,6 +1221,9 @@ export const koboldCppRecommendedModelsHandler: Handler<
 					return {
 						...hf,
 						ollamaName: ym.name,
+						// The Hub's sibling list carries no byte counts, so the
+						// list's own GB figure is the only size a row can quote.
+						sizeBytes: ym.size ? ym.size * 1_000_000_000 : undefined,
 						recommendedVram: ym.recommended_vram || undefined,
 						parameterSize: ym.details.parameter_size || undefined,
 						description:

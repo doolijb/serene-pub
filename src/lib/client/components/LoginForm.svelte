@@ -7,6 +7,10 @@
 		refreshAuthAfterLogin
 	} from "$lib/client/sockets/loadSockets.client"
 	import { enableAccessibility } from "$lib/client/accessibility/state.svelte"
+	import { onMount } from "svelte"
+	import AtmosphereLayer from "$lib/client/atmospheres/AtmosphereLayer.svelte"
+	import { pickRandom } from "$lib/client/atmospheres/definitions"
+	import type { AtmosphereDefinition } from "$lib/client/atmospheres/types"
 
 	// Login form schema
 	const loginSchema = z.object({
@@ -28,6 +32,20 @@
 	let errors: Partial<Record<keyof LoginForm, string>> = $state({})
 	let isLoading = $state(false)
 	let showPassphrase = $state(false)
+
+	/**
+	 * One atmosphere, drawn behind the card and chosen fresh on every load —
+	 * this is the one screen in the app with nothing else on it, and the
+	 * effects paint in whatever theme is live, so it stays the same house.
+	 *
+	 * Picked in onMount rather than at module scope so the server never
+	 * renders one choice and the client another.
+	 */
+	let atmosphere: AtmosphereDefinition | undefined = $state()
+
+	onMount(() => {
+		atmosphere = pickRandom()
+	})
 
 	// Validation function
 	function validateForm() {
@@ -122,182 +140,143 @@
 </script>
 
 <div
-	class="from-surface-50 to-surface-200 dark:from-surface-900 dark:to-surface-950 flex min-h-screen items-center justify-center bg-gradient-to-br px-4 py-12 sm:px-6 lg:px-8"
+	class="bg-surface-100 dark:bg-surface-900 relative isolate flex min-h-screen items-center justify-center overflow-hidden px-4 py-12"
 >
-	<div class="w-full max-w-md">
-		<!-- Login Container Card -->
-		<div
-			class="bg-surface-0 dark:bg-surface-900 border-surface-200 dark:border-surface-800 space-y-8 rounded-2xl border p-8 shadow-2xl"
-		>
-			<!-- Logo and Header -->
-			<div class="text-center">
-				<div class="mb-6 flex justify-center">
-					<img src="/logo.png" alt="Serene Pub" class="h-30" />
-				</div>
-				<h2 class="text-foreground text-3xl font-bold tracking-tight">
-					Welcome Back
-				</h2>
-				<p class="text-muted-foreground mt-2 text-sm">
-					Sign in to your Serene Pub account
-				</p>
-			</div>
+	{#if atmosphere}
+		<AtmosphereLayer definition={atmosphere} />
+	{/if}
 
-			<!-- aria-busy so screen-reader users are told the form is working
-			     rather than just finding every control gone dead. -->
-			<form
-				class="space-y-6"
-				onsubmit={handleSubmit}
-				aria-busy={isLoading}
+	<!-- The card is the form itself: there is nothing else on this screen.
+	     aria-busy so screen-reader users are told the form is working rather
+	     than just finding every control gone dead. -->
+	<form
+		class="border-surface-200/80 bg-surface-50/80 dark:border-surface-800/80 dark:bg-surface-950/75 relative z-10 grid w-full max-w-[360px] gap-4 rounded-2xl border p-7 shadow-2xl backdrop-blur-md"
+		onsubmit={handleSubmit}
+		aria-busy={isLoading}
+		aria-label="Sign in"
+	>
+		<div class="flex items-center gap-3">
+			<img src="/logo.png" alt="" width="34" class="h-auto w-[34px]" />
+			<span
+				class="text-surface-950 dark:text-surface-50 [font-family:var(--typo-heading--font-family)] text-[20px] leading-tight font-semibold tracking-[-0.01em]"
 			>
-				<div class="space-y-4">
-					<!-- Username Field -->
-					<div>
-						<label
-							for="username"
-							class="text-foreground mb-2 block text-sm font-medium"
-						>
-							Username
-						</label>
-						<div class="relative">
-							<input
-								id="username"
-								name="username"
-								type="text"
-								autocomplete="username"
-								required
-								class="input w-full pl-10 {errors.username
-									? 'border-error-500'
-									: ''}"
-								placeholder="Enter your username"
-								bind:value={formData.username}
-								oninput={(e) =>
-									handleInputChange(
-										"username",
-										e.currentTarget.value
-									)}
-								disabled={isLoading}
-							/>
-							<Icons.User
-								class="text-muted-foreground absolute top-1/2 left-3 h-5 w-5 -translate-y-1/2"
-								aria-hidden="true"
-							/>
-						</div>
-						{#if errors.username}
-							<p class="text-error-500 mt-2 text-sm" role="alert">
-								{errors.username}
-							</p>
-						{/if}
-					</div>
+				Serene Pub
+			</span>
+		</div>
 
-					<!-- Passphrase Field -->
-					<div>
-						<label
-							for="passphrase"
-							class="text-foreground mb-2 block text-sm font-medium"
-						>
-							Passphrase
-						</label>
-						<div class="relative">
-							<input
-								id="passphrase"
-								name="passphrase"
-								type={showPassphrase ? "text" : "password"}
-								autocomplete="current-password"
-								required
-								class="input w-full pr-12 pl-10 {errors.passphrase
-									? 'border-error-500'
-									: ''}"
-								placeholder="Enter your passphrase"
-								bind:value={formData.passphrase}
-								oninput={(e) =>
-									handleInputChange(
-										"passphrase",
-										e.currentTarget.value
-									)}
-								disabled={isLoading}
-							/>
-							<Icons.Key
-								class="text-muted-foreground absolute top-1/2 left-3 h-5 w-5 -translate-y-1/2"
-								aria-hidden="true"
-							/>
-							<button
-								type="button"
-								class="text-muted-foreground hover:text-foreground absolute top-1/2 right-3 -translate-y-1/2 transition-colors"
-								onclick={() =>
-									(showPassphrase = !showPassphrase)}
-								aria-label={showPassphrase
-									? "Hide passphrase"
-									: "Show passphrase"}
-								disabled={isLoading}
-							>
-								{#if showPassphrase}
-									<Icons.EyeOff
-										class="h-5 w-5"
-										aria-hidden="true"
-									/>
-								{:else}
-									<Icons.Eye
-										class="h-5 w-5"
-										aria-hidden="true"
-									/>
-								{/if}
-							</button>
-						</div>
-						{#if errors.passphrase}
-							<p class="text-error-500 mt-2 text-sm" role="alert">
-								{errors.passphrase}
-							</p>
-						{/if}
-					</div>
-				</div>
+		<div class="grid gap-0.5">
+			<h1
+				class="text-surface-950 dark:text-surface-50 [font-family:var(--typo-heading--font-family)] text-[18px] leading-[1.3] font-semibold"
+			>
+				Welcome back.
+			</h1>
+			<p class="text-surface-600 dark:text-surface-400 text-[13px]">
+				Sign in to pick up where the story left off.
+			</p>
+		</div>
 
-				<div>
-					<button
-						type="submit"
-						disabled={isLoading}
-						class="btn preset-filled-primary-500 focus:ring-primary-500 flex w-full items-center justify-center px-4 py-3 text-sm font-medium transition-all duration-200 hover:shadow-lg focus:ring-2 focus:ring-offset-2 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
-					>
-						{#if isLoading}
-							<Icons.Loader2
-								class="mr-2 h-4 w-4 animate-spin"
-								aria-hidden="true"
-							/>
-							Signing in...
-						{:else}
-							<Icons.LogIn
-								class="mr-2 h-4 w-4"
-								aria-hidden="true"
-							/>
-							Sign in
-						{/if}
-					</button>
-				</div>
-			</form>
-
-			<div class="text-center">
-				<p class="text-muted-foreground text-xs">
-					Need help? Contact your administrator.
+		<div class="grid gap-1.5">
+			<label for="username" class="text-surface-500 text-xs">
+				Username
+			</label>
+			<input
+				id="username"
+				name="username"
+				type="text"
+				autocomplete="username"
+				required
+				class="input bg-surface-100 dark:bg-surface-900 h-10 w-full {errors.username
+					? 'border-error-500'
+					: ''}"
+				bind:value={formData.username}
+				oninput={(e) =>
+					handleInputChange("username", e.currentTarget.value)}
+				disabled={isLoading}
+			/>
+			{#if errors.username}
+				<p class="text-error-500 text-xs" role="alert">
+					{errors.username}
 				</p>
-				<!-- Also disabled mid-submit: this navigates to a different shell,
-				     and a successful login is already on its way to reloading
-				     the page. -->
+			{/if}
+		</div>
+
+		<div class="grid gap-1.5">
+			<label for="passphrase" class="text-surface-500 text-xs">
+				Passphrase
+			</label>
+			<div class="relative">
+				<input
+					id="passphrase"
+					name="passphrase"
+					type={showPassphrase ? "text" : "password"}
+					autocomplete="current-password"
+					required
+					class="input bg-surface-100 dark:bg-surface-900 h-10 w-full pr-11 {errors.passphrase
+						? 'border-error-500'
+						: ''}"
+					bind:value={formData.passphrase}
+					oninput={(e) =>
+						handleInputChange("passphrase", e.currentTarget.value)}
+					disabled={isLoading}
+				/>
 				<button
 					type="button"
-					class="text-muted-foreground hover:text-foreground mt-3 inline-flex items-center gap-1 text-xs underline disabled:cursor-not-allowed disabled:opacity-50"
-					onclick={enableAccessibility}
+					class="text-surface-500 hover:text-surface-950 dark:hover:text-surface-50 focus-visible:outline-primary-500 absolute top-1/2 right-2 grid h-7 w-7 -translate-y-1/2 place-items-center rounded-md focus-visible:outline-2 focus-visible:outline-offset-2"
+					onclick={() => (showPassphrase = !showPassphrase)}
+					aria-label={showPassphrase
+						? "Hide passphrase"
+						: "Show passphrase"}
 					disabled={isLoading}
 				>
-					<Icons.Accessibility
-						class="h-3.5 w-3.5"
-						aria-hidden="true"
-					/>
-					Switch to Document View (Accessible)
+					{#if showPassphrase}
+						<Icons.EyeOff class="h-4 w-4" aria-hidden="true" />
+					{:else}
+						<Icons.Eye class="h-4 w-4" aria-hidden="true" />
+					{/if}
 				</button>
 			</div>
+			{#if errors.passphrase}
+				<p class="text-error-500 text-xs" role="alert">
+					{errors.passphrase}
+				</p>
+			{/if}
 		</div>
-	</div>
-</div>
 
-<style lang="postcss">
-	@reference "tailwindcss";
-</style>
+		<button
+			type="submit"
+			class="btn preset-filled-primary-500 mt-1 h-10 w-full"
+			disabled={isLoading}
+		>
+			{#if isLoading}
+				<Icons.Loader2
+					class="mr-2 h-4 w-4 animate-spin"
+					aria-hidden="true"
+				/>
+				Signing in...
+			{:else}
+				Sign in
+			{/if}
+		</button>
+
+		<div
+			class="text-surface-500 mt-0.5 flex items-center justify-between text-xs"
+		>
+			<!-- Also disabled mid-submit: this navigates to a different shell,
+			     and a successful login is already on its way to reloading
+			     the page. -->
+			<button
+				type="button"
+				class="text-surface-600 hover:text-surface-950 dark:text-surface-400 dark:hover:text-surface-50 focus-visible:outline-primary-500 inline-flex items-center gap-1 underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
+				onclick={enableAccessibility}
+				disabled={isLoading}
+			>
+				<Icons.Accessibility class="h-3.5 w-3.5" aria-hidden="true" />
+				Document View
+			</button>
+			<span>
+				{__APP_VERSION__}
+				<span class="text-warning-500">beta</span>
+			</span>
+		</div>
+	</form>
+</div>

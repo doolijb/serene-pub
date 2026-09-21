@@ -121,8 +121,9 @@ beforeAll(async () => {
 				keys: "gate",
 				content: "Nobody remembers who hired them."
 			},
-			// Anchored to nothing at all: invisible in every mode, narrator
-			// included, because there is no legitimate consumer for it.
+			// Anchored to nothing at all: the narrator's since W3
+			// (2026-09-17), and no specific speaker's — a private entry
+			// nobody was bound to is the world's knowledge, not a secret.
 			{
 				lorebookId,
 				name: "Orphaned lore",
@@ -164,8 +165,18 @@ describe("character lore is private self-knowledge, and the one read enforces it
 		expect(names(await readAs(ash))).not.toContain("The gatekeeper")
 	})
 
-	it("never surfaces an entry anchored to nothing, in any mode", async () => {
-		for (const speaker of [null, ash, bran])
+	/**
+	 * W3, ruled 2026-09-17. This used to read "never surfaces it, in any
+	 * mode", on the argument that a row bound to nothing had no legitimate
+	 * consumer. The consequence was a disappearance rather than a rule: an
+	 * entry written before anyone bound it — and every entry whose binding
+	 * was later deleted — never retrieved and never listed, with nothing
+	 * saying why. It is the narrator's now, on the same terms an unbound
+	 * *binding* already was.
+	 */
+	it("gives an entry anchored to nothing to the narrator, and to nobody else", async () => {
+		expect(names(await readAs(null))).toContain("Orphaned lore")
+		for (const speaker of [ash, bran])
 			expect(names(await readAs(speaker))).not.toContain("Orphaned lore")
 	})
 

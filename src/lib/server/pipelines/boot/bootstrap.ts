@@ -63,11 +63,15 @@ export {
 import { RESPOND_VERSION } from "$lib/server/pipelines/specs/respond"
 import { loadDocument } from "$lib/server/pipelines/boot/store"
 import { syncDefinitionRegistry } from "$lib/server/pipelines/boot/registrySync"
+import { pluginDefinitionPins } from "$lib/server/plugins/pluginDefinitions"
 import {
 	projectEntryConstraints,
 	type EntryProjectionReport
 } from "$lib/server/pipelines/boot/entryProjection"
 import type { PresetReconcileReport } from "$lib/server/pipelines/boot/presetReconcile"
+import type { PlacedNodeReconcileReport } from "$lib/server/pipelines/boot/placedNodeReconcile"
+import type { BindingSubjectReport } from "$lib/server/pipelines/boot/bindingSubjects"
+import type { DeclarationLoadReport } from "$lib/server/state/declarations"
 import { seedVariableTemplates } from "$lib/server/pipelines/boot/seedVariableTemplates"
 import { seedContextTemplates } from "$lib/server/pipelines/boot/seedContextTemplates"
 import {
@@ -89,6 +93,13 @@ export interface BootstrapReport {
 		 * an incident with.
 		 */
 		republished: string[]
+		/**
+		 * Slugs this build does not publish, marked `removed` on this boot
+		 * (plans/29 R-2). Empty on every boot but the first after a cull; a
+		 * line in the boot log when it is not, because a stored spec pinning
+		 * one is about to halt legibly and an administrator should know why.
+		 */
+		removed: string[]
 	}
 	/** Core's event set, materialized so `affects_user` is queryable (11 §4). */
 	events: { inserted: number; updated: number; unchanged: number }
@@ -113,6 +124,19 @@ export interface BootstrapReport {
 	 * that fact left behind.
 	 */
 	presetBindings?: PresetReconcileReport
+	/**
+	 * Which placed nodes pin a definition this build does not run — removed
+	 * or provisional (R-2) — and the notices that fact left on their
+	 * configurations.
+	 */
+	placedNodes?: PlacedNodeReconcileReport
+	/** ⏳ Which pre-V2 binding rows were re-keyed by subject, and which were dropped. */
+	bindingSubjects?: BindingSubjectReport
+	/**
+	 * What the attribute registry loaded from this install's rows, and what it
+	 * mirrored back as last-seen (R1, R4).
+	 */
+	declarations?: DeclarationLoadReport
 }
 
 /**
@@ -125,7 +149,7 @@ export interface BootstrapReport {
  */
 export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 	const report: BootstrapReport = {
-		types: { inserted: 0, unchanged: 0, republished: [] },
+		types: { inserted: 0, unchanged: 0, republished: [], removed: [] },
 		events: { inserted: 0, updated: 0, unchanged: 0 },
 		variableTemplates: { created: 0, present: 0 },
 		contextTemplates: { created: 0, present: 0 },
@@ -138,6 +162,25 @@ export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 			pinned: 0,
 			customScopes: [],
 			rePointed: 0
+		}
+	}
+
+	// FIRST, and before anything reads a slot. The attribute registry has two
+	// sources (R1) — code, which the imports above have already registered, and
+	// the install's own `attribute_declarations` rows — and `getAttributeSlot`
+	// is the only door either goes through. A session resolving its vocabulary
+	// against a half-loaded registry would silently drop whatever had not
+	// arrived, so the load happens before the checks rather than beside the
+	// seeds. It cannot fail the boot: a row this build refuses costs that one
+	// declaration and says which in the report.
+	{
+		const { loadStoredDeclarations } = await import(
+			"$lib/server/state/declarations"
+		)
+		try {
+			report.declarations = await loadStoredDeclarations(db)
+		} catch (e) {
+			console.warn("[state] attribute declarations did not load:", e)
 		}
 	}
 
@@ -200,6 +243,15 @@ export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 		// Every type the running build knows about. Importing the contracts is
 		// what registers them, so this is a fact about the code rather than a
 		// list anyone maintains.
+		//
+		// ⚠ Minus what a PLUGIN put there. An installed package's declarations
+		// are registered in the same in-process map so its specs resolve
+		// (`plugins/pluginDefinitions.ts`); this sync publishes what it is
+		// handed as **core's** — owner NULL, `transport: 'node'` — and marks
+		// anything core no longer declares as removed. A plugin's declaration
+		// left in this list would take its own row away from it and route its
+		// node to a core binding that does not exist.
+		const fromPlugins = pluginDefinitionPins()
 		const synced = await syncDefinitionRegistry(
 			db,
 			// Script types go through the same sync, and that is the design
@@ -207,13 +259,66 @@ export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 			// and publishing rules as node definitions", so a second projection path
 			// would be a second set of rules to keep in step.
 			// `snapshotRegistry` branches on the id.
-			[...allDefinitions(), ...allScriptKinds()],
-			{ release: RESPOND_VERSION }
+			[...allDefinitions(), ...allScriptKinds()].filter(
+				(d) => !fromPlugins.has(d.id)
+			),
+			// Everything core publishes, so a core row this build does not
+			// declare is marked `removed` (the reverse-diff, R-2).
+			{ release: RESPOND_VERSION, complete: true }
 		)
 		report.types = {
 			inserted: synced.inserted.length,
 			unchanged: synced.unchanged.length,
-			republished: synced.republished
+			republished: synced.republished,
+			removed: synced.removed
+		}
+		if (synced.removed.length)
+			console.warn(
+				`[pipelines] ${synced.removed.length} definition(s) this build does not publish, ` +
+					`marked removed (rows kept for the specs pinning them): ${synced.removed.join(", ")}`
+			)
+		if (synced.deprecatedUnpublished.length)
+			console.warn(
+				`[pipelines] ${synced.deprecatedUnpublished.length} deprecated definition(s) this ` +
+					`build does not publish, left deprecated — an administrator's word: ` +
+					synced.deprecatedUnpublished.join(", ")
+			)
+
+		// After the sync, so the registry already says `provisional` for the
+		// three a plan owns: every other core definition this build publishes
+		// has a handler, or the build is refused in dev and told once in
+		// production (R-2). See `bindingCompat.ts` for what it judges.
+		const { assertCoreDefinitionsBound } = await import(
+			"$lib/server/pipelines/boot/bindingCompat"
+		)
+		assertCoreDefinitionsBound()
+
+		// The hook ctx per kind (R-3), probed rather than documented: the SDK's
+		// `assertHookSurface` reads the keys the sandboxes hand an event
+		// listener and a lifecycle callback and refuses an executor handle on
+		// either; the two pure kinds are held to carrying neither storage nor
+		// fetch. One table feeds both sandboxes (`plugins/hookCtx.ts`), so a
+		// regression here is a regression in what every plugin receives.
+		const { hookCtxKeysFor } = await import("$lib/server/plugins/hookCtx")
+		const { assertHookSurface } = await import("@serene-pub/sdk")
+		const asSurface = (keys: string[]) =>
+			Object.fromEntries(keys.map((k) => [k, true]))
+		for (const kind of ["event", "lifecycle"] as const) {
+			const probe = assertHookSurface(kind, asSurface(hookCtxKeysFor(kind)))
+			if (!probe.ok)
+				throw new Error(
+					`the ${kind} hook ctx hands out ${probe.found.join(", ")} — an executor ` +
+						`handle no hook may hold (F32, plans/29 R-3)`
+				)
+		}
+		for (const kind of ["task", "chain-link"] as const) {
+			const keys = hookCtxKeysFor(kind)
+			const leaked = keys.filter((k) => k === "storage" || k === "fetch")
+			if (leaked.length)
+				throw new Error(
+					`the ${kind} hook ctx hands out ${leaked.join(", ")} — a ${kind} is pure ` +
+						`(F11) and gets neither (plans/29 R-3)`
+				)
 		}
 	}
 
@@ -275,6 +380,35 @@ export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 		"$lib/server/pipelines/boot/presetReconcile"
 	)
 	report.presetBindings = await reconcilePresetBindings(db)
+
+	// ⏳ Beside it, and after the specs for the same reason: a binding row a
+	// previous release keyed by function is re-keyed by subject (plans/31
+	// V2) against the actions this boot just published. What could not be
+	// re-keyed is dropped and said here, once per boot it happens.
+	const { reprojectBindingSubjects } = await import(
+		"$lib/server/pipelines/boot/bindingSubjects"
+	)
+	report.bindingSubjects = await reprojectBindingSubjects(db)
+	if (report.bindingSubjects.dropped.length)
+		console.warn(
+			`[pipelines] ${report.bindingSubjects.dropped.length} binding(s) keyed by a bare function ` +
+				`could not be re-keyed by subject and were dropped: ${report.bindingSubjects.dropped.join("; ")}`
+		)
+
+	// Beside the preset reconcile and for the same reason: a stored version
+	// pins its nodes by slug, and this boot's registry sync is what marks a
+	// slug `removed` or `provisional` (R-2). A node pinning one halts the run
+	// legibly on its own; this is what tells the person whose configuration
+	// it is, as a notice on it (NOMENCLATURE §6 *cull → notice*).
+	const { reconcilePlacedNodes } = await import(
+		"$lib/server/pipelines/boot/placedNodeReconcile"
+	)
+	report.placedNodes = await reconcilePlacedNodes(db)
+	if (report.placedNodes.unbound.length)
+		console.warn(
+			`[pipelines] ${report.placedNodes.unbound.length} placed node(s) pin a definition ` +
+				`this build does not run: ${report.placedNodes.unbound.join(", ")}`
+		)
 
 	// Last, and only once. Everything it writes references a spec, a prompt or a
 	// config that the three steps above had to create first.

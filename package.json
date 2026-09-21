@@ -51,6 +51,7 @@
 		"sdk:build": "npm run build --prefix ../serene-pub-sdk",
 		"sdk:test": "npm test --prefix ../serene-pub-sdk",
 		"pipeline:ab": "node scripts/prompt-ab.js",
+		"plugin:install": "node scripts/check-db-lock.js node scripts/plugin-install.js",
 		"docs:build": "node scripts/build-docs.js",
 		"docs:site": "node scripts/build-docs.js --site"
 	},

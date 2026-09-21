@@ -185,13 +185,22 @@ export const startupTasks: StartupTask[] = [
 			// appears both as a bare id above and as a furnished entry here gets
 			// the arrangement its package declares. A genre with no shipped
 			// layout keeps the empty default, which is the built-in surface.
-			await syncLayoutPresets([
-				{ genreId: STANDARD_GENRE_ID },
-				...genres.map((g) => ({ genreId: g.genreId })),
-				...CORE_LAYOUT_PRESETS.filter((l) =>
-					genres.some((g) => g.genreId === l.genreId)
-				)
-			])
+			// Provenance for the rows this pass writes (`seeded_by_version`),
+			// the same stamp `syncWidgetStyles` takes. Deferred like every
+			// other import in this task.
+			const { appVersion } = await import(
+				"$lib/shared/constants/version"
+			)
+			await syncLayoutPresets(
+				[
+					{ genreId: STANDARD_GENRE_ID },
+					...genres.map((g) => ({ genreId: g.genreId })),
+					...CORE_LAYOUT_PRESETS.filter((l) =>
+						genres.some((g) => g.genreId === l.genreId)
+					)
+				],
+				{ version: appVersion || "0.0.0" }
+			)
 		}
 	},
 	{

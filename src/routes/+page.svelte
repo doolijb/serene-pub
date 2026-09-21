@@ -13,15 +13,19 @@
 	import type { SocketEventMap } from "$lib/client/sockets/typedSocket"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
+	import { enableManager } from "$lib/client/components/connections/managers"
 	import { enableAccessibility } from "$lib/client/accessibility/state.svelte"
 	import { avatarSrc } from "$lib/client/utils/media"
 	import { lastActivityAt, timeAgo } from "$lib/client/utils/timeAgo"
+	import {
+		applyRowChanged,
+		clearRowPatches,
+		patchedRow
+	} from "$lib/client/sessions/sessionRowPatches.svelte"
 	import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 	import {
 		buildCreatePayload,
-		defaultGenreId,
-		enabledPresetsFor,
-		STANDARD_GENRE_ID
+		oneClickStart
 	} from "$lib/client/components/sessionForms/createSession.svelte"
 	import LanguagePicker from "$lib/client/components/inputs/LanguagePicker.svelte"
 	// `t()` is the incremental UI-translation seam (R5): the English source
@@ -291,12 +295,21 @@
 	})
 
 	/**
+	 * The list with every `sessions:rowChanged` push since it applied.
+	 * Everything that quotes a row reads this, so a
+	 * message landing in a session moves its card, its "your turn" hint and
+	 * its place in the sort together.
+	 */
+	let patchedSessions: SessionListRow[] = $derived(sessions.map(patchedRow))
+
+	/**
 	 * Sessions whose last line was somebody else's — the ones that owe the
 	 * reader a reply. The same test the per-card "Your turn" hint makes, so
 	 * the headline count and the cards can never disagree.
 	 */
 	let sessionsAwaitingYou = $derived(
-		sessions.filter((s) => s.lastMessage && !s.lastMessage.isUser).length
+		patchedSessions.filter((s) => s.lastMessage && !s.lastMessage.isUser)
+			.length
 	)
 
 	let waitingLine = $derived(
@@ -309,7 +322,7 @@
 
 	/** Up to four sessions that have actually been played, freshest first. */
 	let continueSessions = $derived.by(() =>
-		sessions
+		patchedSessions
 			.filter((s) => (s.messageCount ?? 0) > 0)
 			.sort((a, b) => lastActivityAt(b) - lastActivityAt(a))
 			.slice(0, 4)
@@ -561,6 +574,24 @@
 		panelsCtx.openPanel({ key })
 	}
 
+	/**
+	 * Switch a runtime on and land on its connection.
+	 *
+	 * The two wizard doors used to open a manager panel, which only worked if
+	 * a switch in Settings → System had already been found. The managers fold
+	 * into their connection with the 2026-09-17 ruling (R2), so this does both
+	 * halves — the flag, and the row the flag is about — and opens that row.
+	 *
+	 * A row that had to be CREATED answers on `connections:create`, and the
+	 * Connections sidebar's own handler for that event is what opens it, so
+	 * the digest is seeded only when there is already an id to seed it with.
+	 */
+	function openManagedConnection(kind: "koboldcpp" | "ollama") {
+		const { connectionId } = enableManager(kind, socket, connections)
+		if (connectionId != null) panelsCtx.digest.connectionId = connectionId
+		openPanel("connections")
+	}
+
 	function switchToDocumentView() {
 		enableAccessibility()
 		goto("/document-view")
@@ -596,13 +627,26 @@
 	 * the wizard's own — a one-shot interest taken with the request and
 	 * released by the answer — so a session started anywhere else while the
 	 * home screen is mounted does not navigate this page.
+	 *
+	 * A genre that asks something this card cannot answer — a required
+	 * lorebook — is handed to the start screen instead, with the character,
+	 * genre and preset prefilled (`oneClickStart`): creating straight away
+	 * would only be refused with the lorebook sentence.
 	 */
 	function startSessionWithCharacter(character: Partial<SelectCharacter>) {
 		if (!character.id) return
-		const genreId =
-			defaultGenreId(sessionGenres, sessionPresets) ?? STANDARD_GENRE_ID
-		const presets = enabledPresetsFor(sessionPresets, genreId)
-		const preset = presets.find((p) => p.isDefault) ?? presets[0] ?? null
+		const { genreId, presetId, direct } = oneClickStart(
+			sessionGenres,
+			sessionPresets
+		)
+		if (!direct) {
+			startASession({
+				characterId: character.id,
+				genreId,
+				...(presetId != null ? { presetId } : {})
+			})
+			return
+		}
 		const personaId = personas[0]?.id
 		const releaseError = interest.declareInterest<"sessions:create:error">(
 			"sessions:create:error",
@@ -613,7 +657,7 @@
 			buildCreatePayload({
 				name: `Session with ${character.nickname || character.name || "Character"}`,
 				genreId,
-				presetId: preset?.id ?? null,
+				presetId,
 				characterIds: [character.id],
 				personaIds: personaId ? [personaId] : []
 			}),
@@ -709,7 +753,16 @@
 		msg: SocketEventMap["sessions:list"]["response"]
 	) {
 		sessions = msg.sessionList || []
+		// The list carries the server's own projection of every row, so what
+		// the pushes said before it is older than what just arrived.
+		clearRowPatches()
 		_sessionsLoaded = true
+	}
+
+	function handleRowChanged(
+		msg: SocketEventMap["sessions:rowChanged"]["response"]
+	) {
+		applyRowChanged(msg)
 	}
 
 	/**
@@ -734,6 +787,14 @@
 	)
 	$effect(() =>
 		interest.requestWithInterest("sessions:list", {}, handleSessionsList)
+	)
+	/**
+	 * The rows this page quotes, kept current between lists. BARE like the
+	 * list itself: any session on the page may have a message land in it.
+	 */
+	interest.useInterest<"sessions:rowChanged">(
+		"sessions:rowChanged",
+		handleRowChanged
 	)
 
 	/**
@@ -1716,12 +1777,13 @@
 											class="text-primary-500 mx-auto mb-4 h-14 w-14"
 										/>
 										<h2 class="mb-3 text-3xl font-bold">
-											Set Up with Ollama Manager
+											Set up with Ollama
 										</h2>
 										<p class="text-muted-foreground">
-											Open the Ollama Manager to download
-											a model and connect to it. Come back
-											here when done — this updates
+											Open your Ollama connection in the
+											Connections sidebar and use Get
+											models to pull one. Come back here
+											when done — this updates
 											automatically.
 										</p>
 									</div>
@@ -1971,7 +2033,7 @@
 									</div>
 									<p class="text-sm opacity-75">
 										A small AI model understands the meaning
-										of your lore. When you session, Serene
+										of your lore. While you write, Serene
 										Pub finds the most relevant entries and
 										quietly adds them to every message.
 									</p>
@@ -2049,8 +2111,8 @@
 									class="text-muted-foreground mx-auto max-w-sm"
 								>
 									Characters are the AI personalities you'll
-									session with. Add one to get started — you
-									can always create more later.
+									talk with. Add one to get started — you can
+									always create more later.
 								</p>
 							</div>
 							<div class="grid gap-3 sm:grid-cols-2">
@@ -2297,9 +2359,9 @@
 								<p
 									class="text-muted-foreground mx-auto max-w-sm"
 								>
-									Pick a character to session with. You can
-									always come back and session with others
-									later.
+									Pick a character to start with. You can
+									always come back and start a session with
+									others later.
 								</p>
 							</div>
 							{#if characters.length > 0}
@@ -2405,15 +2467,17 @@
 							</button>
 						{:else if connectionChoice === "ollama"}
 							{#if ollamaSettingsCtx.settings?.ollamaManagerEnabled}
+								<!-- One press, both halves: the flag and the
+								     connection the flag is about. The manager
+								     is that connection's view since the
+								     2026-09-17 ruling (R2), so there is no
+								     panel of its own left to open. -->
 								<button
 									class="btn preset-filled-primary-500"
-									onclick={() => {
-										panelsCtx.digest.tutorial = true
-										openPanel("ollama")
-									}}
+									onclick={() => openManagedConnection("ollama")}
 								>
 									<OllamaIcon class="h-4 w-4" />
-									Open Ollama Manager
+									Ollama
 								</button>
 							{:else if selectedOllamaModel}
 								<button
@@ -2444,17 +2508,15 @@
 							{#if koboldCppSettingsCtx.settings?.koboldCppManagerEnabled}
 								<button
 									class="btn preset-filled-primary-500"
-									onclick={() => {
-										panelsCtx.digest.tutorial = true
-										openPanel("koboldcpp")
-									}}
+									onclick={() =>
+										openManagedConnection("koboldcpp")}
 								>
 									<span
 										class="inline-block h-4 w-4"
 										style="background-color: currentColor; mask: url('/koboldcpp/koboldcpp-icon.svg') no-repeat center / contain; -webkit-mask: url('/koboldcpp/koboldcpp-icon.svg') no-repeat center / contain;"
 										aria-hidden="true"
 									></span>
-									Open KoboldCPP Manager
+									KoboldCPP, run by Serene Pub
 								</button>
 							{:else if isKoboldCppConnected && selectedKoboldCppModel}
 								<button

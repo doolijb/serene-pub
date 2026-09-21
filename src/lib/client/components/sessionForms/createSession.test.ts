@@ -13,9 +13,12 @@ import {
 	genreFacts,
 	genreVersion,
 	latestGenres,
+	lorebookSatisfied,
+	oneClickStart,
 	participantFloors,
 	reconcileToShape,
 	STANDARD_GENRE_ID,
+	StartSessionFlow,
 	type GenreRow,
 	type PresetRow
 } from "./createSession.svelte"
@@ -223,6 +226,123 @@ describe("participantFloors", () => {
 			characters: 1,
 			personas: 1
 		})
+	})
+})
+
+describe("lorebookSatisfied", () => {
+	it("holds a genre that requires a lorebook to having one", () => {
+		expect(lorebookSatisfied({ lorebook: "required" }, null)).toBe(false)
+		expect(lorebookSatisfied({ lorebook: "required" }, undefined)).toBe(
+			false
+		)
+		expect(lorebookSatisfied({ lorebook: "required" }, 3)).toBe(true)
+	})
+
+	it("lets an optional or absent capability start without one", () => {
+		expect(lorebookSatisfied({ lorebook: "optional" }, null)).toBe(true)
+		expect(lorebookSatisfied({}, null)).toBe(true)
+		expect(lorebookSatisfied(null, null)).toBe(true)
+	})
+})
+
+/**
+ * A one-click start — the wizard's character card — creates directly only
+ * when the genre it would start on asks nothing the card cannot answer. An
+ * administrator-starred Adventure preset made every card's Start a refusal
+ * (2026-09-17): its genre requires a lorebook, and the card knows none.
+ */
+describe("oneClickStart", () => {
+	const ADVENTURE = "core:genre/adventure"
+	const genres = [
+		genre(STANDARD_GENRE_ID, {
+			shape: { characters: { min: 0 }, lorebook: "optional" }
+		}),
+		genre(ADVENTURE, {
+			shape: { characters: { min: 1 }, lorebook: "required" }
+		})
+	]
+
+	it("creates directly on a genre that needs no lorebook", () => {
+		expect(
+			oneClickStart(genres, [preset({ id: 1, isDefault: true })])
+		).toEqual({ genreId: STANDARD_GENRE_ID, presetId: 1, direct: true })
+	})
+
+	it("hands a lorebook-requiring genre to the start screen, genre and preset named", () => {
+		expect(
+			oneClickStart(genres, [
+				preset({ id: 1 }),
+				preset({ id: 2, genreId: ADVENTURE, isDefault: true })
+			])
+		).toEqual({ genreId: ADVENTURE, presetId: 2, direct: false })
+	})
+
+	it("falls back to the standard genre, preset-less, when nothing is registered", () => {
+		expect(oneClickStart([], [])).toEqual({
+			genreId: STANDARD_GENRE_ID,
+			presetId: null,
+			direct: true
+		})
+	})
+})
+
+/**
+ * The flow's own gate, driven the way the start screen drives it: the
+ * lists land, a genre is chosen, and `canStart` answers. Adventure declares
+ * `lorebook: "required"` (core-catalog `genres.ts`); the start screen once
+ * offered Start with no lorebook picker at all, and the server refused the
+ * create in a sentence the client swallowed (2026-09-17).
+ */
+describe("StartSessionFlow.canStart", () => {
+	const ADVENTURE = "core:genre/adventure"
+	function flowOn(genreId: string, shape: GenreRow["shape"]) {
+		const flow = new StartSessionFlow()
+		flow.rawGenres = [genre(genreId, { shape })]
+		flow.rawPresets = [preset({ id: 1, genreId })]
+		flow.presetsLoaded = true
+		flow.chooseGenre(genreId)
+		flow.choosePreset(1)
+		flow.characterIds = [4]
+		flow.personaIds = [2]
+		return flow
+	}
+
+	it("refuses to start a required-lorebook genre until one is chosen", () => {
+		const flow = flowOn(ADVENTURE, {
+			characters: { min: 1 },
+			personas: { min: 1 },
+			lorebook: "required"
+		})
+		expect(flow.fields.lorebookId).toBeNull()
+		expect(flow.canStart).toBe(false)
+		flow.fields.lorebookId = 7
+		expect(flow.canStart).toBe(true)
+		expect(flow.payload("x").session.lorebookId).toBe(7)
+	})
+
+	it("starts an optional-lorebook genre without one", () => {
+		const flow = flowOn("core:genre/mystery", {
+			characters: { min: 1 },
+			personas: { min: 1 },
+			lorebook: "optional"
+		})
+		expect(flow.canStart).toBe(true)
+		expect(flow.payload("x").session.lorebookId).toBeNull()
+	})
+
+	it("detaches a held lorebook when the chosen genre has no such capability", () => {
+		const flow = flowOn(ADVENTURE, {
+			characters: { min: 1 },
+			personas: { min: 1 },
+			lorebook: "required"
+		})
+		flow.fields.lorebookId = 7
+		flow.rawGenres = [
+			...flow.rawGenres,
+			genre("core:genre/solo", { shape: { personas: { min: 1 } } })
+		]
+		flow.chooseGenre("core:genre/solo")
+		expect(flow.fields.lorebookId).toBeNull()
 	})
 })
 

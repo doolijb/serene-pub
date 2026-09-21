@@ -46,6 +46,7 @@ export {
 	ENTRY_TYPE_IDS,
 	ENTRY_TYPE_VERSION,
 	HISTORY_TYPE_ID,
+	LOCATION_TYPE_ID,
 	WORLD_LORE_TYPE_ID,
 	entriesOfType,
 	isEntryOfType,

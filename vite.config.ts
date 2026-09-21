@@ -7,6 +7,7 @@ import path from "node:path"
 import {
 	buildDocs,
 	DOC_ASSETS_DIR,
+	SDK_GUIDES_DIR,
 	DOCS_IGNORED_DIRS,
 	GUIDES_DIR
 } from "./scripts/build-docs.js"
@@ -106,14 +107,16 @@ function serenePubDocs() {
 			compiled = true
 			await compile()
 
-			const watched = [GUIDES_DIR, DOC_ASSETS_DIR]
+			const watched = [GUIDES_DIR, DOC_ASSETS_DIR, SDK_GUIDES_DIR]
 			server.watcher.add(watched)
 
 			let timer: NodeJS.Timeout | undefined
 			const onChange = (file: string) => {
 				const abs = path.resolve(file)
 				// The compiler's own writes must never re-trigger it.
-				if (DOCS_IGNORED_DIRS.some((d) => abs.startsWith(d + path.sep))) {
+				if (
+					DOCS_IGNORED_DIRS.some((d) => abs.startsWith(d + path.sep))
+				) {
 					return
 				}
 				if (!watched.some((dir) => abs.startsWith(dir + path.sep))) {

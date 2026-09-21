@@ -117,6 +117,16 @@
 		canRegenerateLastMessage: boolean
 		hasGeneratingMessage: boolean
 		isGuest: boolean
+		/**
+		 * Which channel the log is showing (20 §7; R-C) — the composer's pick.
+		 *
+		 * The rows of every other channel are drawn and hidden rather than
+		 * dropped, which is what they have always been: this used to read
+		 * `msg.channel === "main"` outright, so a genre with a second channel
+		 * had rows nothing could ever show. `main` is the default, so a session
+		 * whose genre declares one channel renders exactly what it rendered.
+		 */
+		channel?: string
 
 		// Snippet children
 		MessageComponent: Snippet<
@@ -213,6 +223,7 @@
 		canRegenerateLastMessage,
 		hasGeneratingMessage,
 		isGuest,
+		channel = "main",
 		MessageComponent
 	}: Props = $props()
 
@@ -424,8 +435,8 @@
 						)}
 						{@const isLastMessage =
 							index === session.sessionMessages.length - 1}
-						{@const onMainChannel =
-							!msg.channel || msg.channel === "main"}
+						{@const onThisChannel =
+							(msg.channel || "main") === channel}
 						{@const si = msgSceneMap.get(msg.id)}
 						{@const color = si ? SCENE_COLORS[si.colorIndex] : null}
 
@@ -530,7 +541,7 @@
 						     shut at the end — a worse artifact than the fix. -->
 						<li
 							class="sp-msg-row"
-							class:hidden={!onMainChannel}
+							class:hidden={!onThisChannel}
 							style={color
 								? `--sp-scene: ${color.text}`
 								: undefined}

@@ -13,6 +13,9 @@ import {
 } from "$lib/server/koboldcpp/modelManager"
 import { ensureManagedReady } from "$lib/server/koboldcpp/managedPreflight"
 import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
+import * as fsPromises from "fs/promises"
+import { modelsDirFor } from "$lib/server/koboldcpp/modelsDir"
+import { extensionAllowedForKind } from "$lib/server/koboldcpp/modelKind"
 
 /**
  * A KoboldCPP connection that works with Serene Pub's built-in KoboldCPP
@@ -188,57 +191,76 @@ async function testConnection(
 	}
 }
 
-// List models function — always attempts the admin API (this connection type
-// requires it to function at all, unlike the dumb type which never assumes
-// it's present).
+/**
+ * The text models this Manager can serve — what the sync persists as this
+ * endpoint's rows, and therefore what decides `missing_since`.
+ *
+ * Read off the Manager's own text models directory, NOT off koboldcpp's
+ * `/api/admin/list_options`. That endpoint lists the `--admindir` — the
+ * BINARY directory, where the .kcpps files go — and since the models moved to
+ * their own directory (`koboldCppManagerModelsDir`) it has answered `[]` for
+ * every install: a successful, empty listing, which the sync then honoured by
+ * marking the connection's one model missing. The resolver refused the run
+ * with "no longer listed by its host" before preflight ever ran, so the
+ * process auto-started for the earlier stage and the model was never loaded.
+ * Seen live 2026-09-19 on a file that was sitting in `models/llm` the whole
+ * time, and that the Models tab listed as _In use for chat_.
+ *
+ * The directory is the same source the Manager's own listing scans, so the
+ * two cannot disagree about what exists. `local_models` is consulted only for
+ * what a scan cannot know: a file the classifier put in the image lane, and a
+ * download still in flight — neither is a text model to offer. Nothing here
+ * needs the process to be running, which is also right: a cold managed
+ * instance is the normal state, not an unreachable host.
+ *
+ * An unreadable directory is an ERROR, never an empty list — the sync records
+ * it on the endpoint and touches no row (see modelSync.ts's header). No
+ * directory configured at all is the legacy shape, where koboldcpp resolved
+ * bare filenames against its own working directory; there the admin listing
+ * is still the only source and is asked as before.
+ */
 async function listModels(
 	connection: SelectConnection
 ): Promise<{ models: any[]; error?: string }> {
 	try {
 		const settings = await db.query.koboldCppSettings.findFirst()
-		const baseUrl =
-			normalizeBaseUrl(settings?.koboldCppManagerBaseUrl) ||
-			normalizeBaseUrl(connection.baseUrl) ||
-			"http://localhost:5001"
+		if (!settings)
+			return {
+				models: [],
+				error: "The KoboldCPP Manager has no settings row yet."
+			}
 
-		// The manager's directory listing, and nothing else. No `[current]`
-		// sentinel is prepended, and an unreachable admin API is never
-		// swallowed into an empty list; both are wrong for a persisted sync —
-		// the sentinel becomes a row no host lists, and an empty list on
-		// failure marks every real gguf missing because the process is down.
-		// An unreachable admin API is an ERROR here, so the sync records it on
-		// the endpoint and touches no row.
-		let availableModels: string[]
+		const dir = modelsDirFor("text", settings)
+		if (!dir) return listModelsFromAdminApi(settings, connection)
+
+		let entries: string[]
 		try {
-			const availableModelsResponse = await fetch(
-				`${baseUrl}/api/admin/list_options`,
-				{
-					method: "GET",
-					headers: {
-						"Content-Type": "application/json",
-						Authorization: `Bearer ${settings?.koboldCppManagedAdminPassword ?? ""}`
-					},
-					signal: AbortSignal.timeout(5000)
-				}
-			)
-			if (!availableModelsResponse.ok)
-				return {
-					models: [],
-					error: `KoboldCPP's admin API answered HTTP ${availableModelsResponse.status}. Is the manager running with an admin password?`
-				}
-			const body = await availableModelsResponse.json()
-			availableModels = Array.isArray(body)
-				? body.filter((f): f is string => typeof f === "string")
-				: []
+			entries = await fsPromises.readdir(dir)
 		} catch (e: any) {
 			return {
 				models: [],
-				error: `KoboldCPP's admin API could not be reached: ${e?.message ?? String(e)}`
+				error: `The Manager's models directory could not be read (${dir}): ${e?.message ?? String(e)}`
 			}
 		}
 
+		const rows = await db.query.localModels.findMany()
+		const imageLane = new Set(
+			rows.filter((m) => m.kind === "image").map((m) => m.filename)
+		)
+		const incomplete = new Set(
+			rows.filter((m) => m.status !== "complete").map((m) => m.filename)
+		)
+		const models = entries
+			.filter(
+				(name) =>
+					extensionAllowedForKind(name, "text") &&
+					!imageLane.has(name) &&
+					!incomplete.has(name)
+			)
+			.sort((a, b) => a.localeCompare(b))
+
 		return {
-			models: availableModels.map((filename) => ({
+			models: models.map((filename) => ({
 				model: filename,
 				name: filename
 			}))
@@ -246,8 +268,59 @@ async function listModels(
 	} catch (e: any) {
 		return {
 			models: [],
-			error: e.message || "Failed to fetch models from KoboldCpp"
+			error: e.message || "Failed to list the Manager's models"
 		}
+	}
+}
+
+// The legacy listing, for an install with no models directory configured:
+// koboldcpp's admin API, which lists its --admindir. An unreachable admin API
+// is an ERROR here, so the sync records it on the endpoint and touches no row;
+// no `[current]` sentinel is prepended, because it would become a row no host
+// lists.
+async function listModelsFromAdminApi(
+	settings: NonNullable<
+		Awaited<ReturnType<typeof db.query.koboldCppSettings.findFirst>>
+	>,
+	connection: SelectConnection
+): Promise<{ models: any[]; error?: string }> {
+	const baseUrl =
+		normalizeBaseUrl(settings.koboldCppManagerBaseUrl) ||
+		normalizeBaseUrl(connection.baseUrl) ||
+		"http://localhost:5001"
+	let availableModels: string[]
+	try {
+		const availableModelsResponse = await fetch(
+			`${baseUrl}/api/admin/list_options`,
+			{
+				method: "GET",
+				headers: {
+					"Content-Type": "application/json",
+					Authorization: `Bearer ${settings.koboldCppManagedAdminPassword ?? ""}`
+				},
+				signal: AbortSignal.timeout(5000)
+			}
+		)
+		if (!availableModelsResponse.ok)
+			return {
+				models: [],
+				error: `KoboldCPP's admin API answered HTTP ${availableModelsResponse.status}. Is the manager running with an admin password?`
+			}
+		const body = await availableModelsResponse.json()
+		availableModels = Array.isArray(body)
+			? body.filter((f): f is string => typeof f === "string")
+			: []
+	} catch (e: any) {
+		return {
+			models: [],
+			error: `KoboldCPP's admin API could not be reached: ${e?.message ?? String(e)}`
+		}
+	}
+	return {
+		models: availableModels.map((filename) => ({
+			model: filename,
+			name: filename
+		}))
 	}
 }
 

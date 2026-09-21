@@ -50,8 +50,10 @@ const HOOK = `module.exports = { hooks: {
 	leak: function (input, ctx) { ctx.storage.write("probe", "x"); try { ctx.storage.list("probe"); return "no-throw"; } catch (e) { return String(e && e.message); } }
 } }`
 
+// An outlet's ctx: granted `storage`, not `fetch` (hookCtx.ts, R-3).
 const opts = (input: Record<string, unknown>) => ({
 	input,
+	kind: "outlet" as const,
 	timeoutMs: 2000,
 	seedLabel: "s",
 	nowMs: 1
@@ -162,7 +164,7 @@ describe("storage permission", () => {
 				"acme/store",
 				"save",
 				{ v: "persisted" },
-				{ timeoutMs: 2000 }
+				{ kind: "outlet", timeoutMs: 2000 }
 			)
 			expect(r.ok && r.value).toBe("persisted")
 			const onDisk = path.join(
@@ -196,7 +198,7 @@ describe("storage permission", () => {
 				"acme/nostore",
 				"save",
 				{ v: "x" },
-				{ timeoutMs: 2000 }
+				{ kind: "outlet", timeoutMs: 2000 }
 			)
 			expect(r.ok).toBe(false)
 			if (!r.ok) expect(r.reason).toMatch(/permission not granted/)

@@ -37,7 +37,7 @@ import {
 const BANDS = Object.keys(DEFAULT_SIGNAL_WEIGHTS)
 
 describe("the declarations this build reads", () => {
-	it("has all three, which is what proves the catalog's side effect ran", () => {
+	it("has every one of them, which is what proves the catalog's side effect ran", () => {
 		expect(
 			entryDeclarations()
 				.map((d) => d.typeId)

@@ -131,10 +131,25 @@ async function maybeEnableAccounts(): Promise<void> {
 		return
 	}
 
-	await db
+	const updated = await db
 		.update(schema.systemSettings)
 		.set({ isAccountsEnabled: true })
 		.where(eq(schema.systemSettings.id, 1))
+		.returning({ isAccountsEnabled: schema.systemSettings.isAccountsEnabled })
+
+	// Say what actually happened, not what was attempted. An UPDATE that
+	// matches no row (the settings row not seeded yet) or one whose write did
+	// not land would otherwise print the success line below and leave an
+	// operator with no login wall and no clue — seen once on 2026-09-17
+	// alongside a failing startup task, not reproduced since.
+	if (!updated[0]?.isAccountsEnabled) {
+		console.error(
+			`[recovery] ${ENV_ENABLE_ACCOUNTS} was set but user accounts were NOT enabled: ` +
+				`the system settings row was not updated (${updated.length} row(s) matched). ` +
+				`Enable accounts from Admin → Settings, or restart with the variable still set.`
+		)
+		return
+	}
 	console.log(
 		`[recovery] user accounts enabled at first boot via ${ENV_ENABLE_ACCOUNTS}`
 	)

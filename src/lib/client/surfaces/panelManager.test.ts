@@ -1,6 +1,9 @@
 import { describe, it, expect, vi } from "vitest"
 import type { WidgetEvent } from "$lib/shared/widgets/context"
-import { SurfaceManager } from "./panelManager.svelte"
+import {
+	SurfaceManager,
+	type WitnessedMessage
+} from "./panelManager.svelte"
 
 type ModePanel = Sockets.Sessions.View.ModePanel
 
@@ -272,5 +275,138 @@ describe("SurfaceManager — the widget event source", () => {
 		m.subscribe((e) => seen.push(e))
 		expect(() => m.activateForChannel("tasks")).not.toThrow()
 		expect(seen).toHaveLength(1)
+	})
+})
+
+/**
+ * The five message/generation kinds the envelope declares and nothing produced
+ * (2026-09-17). The wire carries no events — a `sessionMessage` push is the
+ * WHOLE row every time, streaming chunks included — so the manager is handed
+ * the arrival and the row it replaced, and works out which events that is.
+ *
+ * One test per kind, plus the two silences that matter: a backlog is not a
+ * flood of arrivals, and a first sighting is not an update.
+ */
+describe("SurfaceManager — what a message arrival announces", () => {
+	const seenOn = (m: SurfaceManager) => {
+		const seen: WidgetEvent[] = []
+		m.subscribe((e) => seen.push(e))
+		return seen
+	}
+	const row = (over: Partial<WitnessedMessage> = {}): WitnessedMessage => ({
+		id: 7,
+		channel: "main",
+		content: "",
+		isGenerating: false,
+		generationOutcome: null,
+		...over
+	})
+
+	it("generation:start — a row that arrives already filling", () => {
+		const m = make()
+		const seen = seenOn(m)
+		m.witnessMessage(row({ isGenerating: true }))
+		expect(seen).toEqual([{ kind: "generation:start", messageId: 7 }])
+	})
+
+	it("message:delta — the appended text alone, never the whole content", () => {
+		const m = make()
+		const seen = seenOn(m)
+		const a = row({ content: "Hel", isGenerating: true })
+		const b = row({ content: "Hello", isGenerating: true })
+		m.witnessMessage(b, a)
+		expect(seen).toEqual([
+			{ kind: "message:delta", messageId: 7, delta: "lo", channel: "main" }
+		])
+	})
+
+	it("message:updated — an arrival that is not appended text", () => {
+		const m = make()
+		const seen = seenOn(m)
+		m.witnessMessage(
+			row({ content: "Goodbye", channel: "tasks:4" }),
+			row({ content: "Hello", channel: "tasks:4" })
+		)
+		expect(seen).toEqual([
+			{ kind: "message:updated", messageId: 7, channel: "tasks:4" }
+		])
+	})
+
+	it("generation:end — and `aborted` is the stopped outcome, not an error", () => {
+		const m = make()
+		const finished = seenOn(m)
+		m.witnessMessage(
+			row({ content: "done", isGenerating: false }),
+			row({ content: "done", isGenerating: true })
+		)
+		expect(finished).toContainEqual({
+			kind: "generation:end",
+			messageId: 7,
+			aborted: false
+		})
+
+		const m2 = make()
+		const stopped = seenOn(m2)
+		m2.witnessMessage(
+			row({ content: "half", generationOutcome: "stopped" }),
+			row({ content: "half", isGenerating: true })
+		)
+		expect(stopped).toContainEqual({
+			kind: "generation:end",
+			messageId: 7,
+			aborted: true
+		})
+	})
+
+	it("message:deleted — naming the channel the row was on", () => {
+		const m = make()
+		const seen = seenOn(m)
+		m.witnessMessageDeleted(row({ channel: "tasks" }))
+		expect(seen).toEqual([
+			{ kind: "message:deleted", messageId: 7, channel: "tasks" }
+		])
+	})
+
+	it("a deletion whose row the caller no longer holds names no channel", () => {
+		const m = make()
+		const seen = seenOn(m)
+		// Absent is "unknown", so the event reaches every widget rather than
+		// being narrowed to a channel nobody established.
+		m.witnessMessageDeleted({ id: 7 })
+		expect(seen).toEqual([{ kind: "message:deleted", messageId: 7 }])
+	})
+
+	it("never announces message:created — every widget's own feed owns that", () => {
+		const m = make()
+		const seen = seenOn(m)
+		m.witnessMessage(row({ content: "Hello" }))
+		expect(seen).toEqual([])
+	})
+
+	it("a finished row's last chunk is still a delta, not an update", () => {
+		const m = make()
+		const seen = seenOn(m)
+		m.witnessMessage(
+			row({ content: "Hello there", isGenerating: false }),
+			row({ content: "Hello", isGenerating: true })
+		)
+		expect(seen).toEqual([
+			{
+				kind: "message:delta",
+				messageId: 7,
+				delta: " there",
+				channel: "main"
+			},
+			{ kind: "generation:end", messageId: 7, aborted: false }
+		])
+	})
+
+	it("text appended to a row nobody is generating is an edit, not a delta", () => {
+		const m = make()
+		const seen = seenOn(m)
+		m.witnessMessage(row({ content: "Hello there" }), row({ content: "Hello" }))
+		expect(seen).toEqual([
+			{ kind: "message:updated", messageId: 7, channel: "main" }
+		])
 	})
 })

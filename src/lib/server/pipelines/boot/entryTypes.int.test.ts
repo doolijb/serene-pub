@@ -1,13 +1,13 @@
 /**
  * Entry types through the one registry (Part 1, step 1).
  *
- * The claim being checked is deliberately small: core's three lorebook shapes
+ * The claim being checked is deliberately small: core's lorebook shapes
  * are *declarations* that reach the database through the machinery node types
  * already use — one `snapshotRegistry`, one table, one content hash, one boot
  * sync — and come back out of it unchanged.
  *
  * Nothing reads these yet. No table moved, no retrieval path changed, and the
- * three lore tables are untouched; what this file proves is that the vocabulary
+ * legacy lore tables are untouched; what this file proves is that the vocabulary
  * survives a round trip and that the freeze rule has hold of the right half of
  * it.
  */
@@ -40,7 +40,10 @@ beforeAll(async () => {
 const PINS = [
 	"core:entry/world-lore@1",
 	"core:entry/character-lore@1",
-	"core:entry/history@1"
+	"core:entry/history@1",
+	// A place the story can be in, and can be walked out of (L3, 2026-09-17).
+	// World lore's shape; its exits are link rows, never a declared field.
+	"core:entry/location@1"
 ]
 
 const rowFor = async (typeId: string) => {
@@ -52,14 +55,14 @@ const rowFor = async (typeId: string) => {
 }
 
 describe("core's entry types reach the registry", () => {
-	it("projects all three as rows of kind 'entry'", async () => {
+	it("projects every one of them as a row of kind 'entry'", async () => {
 		const r = await syncDefinitionRegistry(db, allEntryTypes(), {
 			release: "0.6.0"
 		})
 		expect(r.inserted.sort()).toEqual([...PINS].sort())
 
 		const rows = await db.select().from(schema.pipelineDefinitionRegistry)
-		expect(rows.length).toBe(3)
+		expect(rows.length).toBe(PINS.length)
 		for (const row of rows as any[]) expect(row.kind).toBe("entry")
 	})
 

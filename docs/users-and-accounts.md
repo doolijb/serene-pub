@@ -33,7 +33,7 @@ Once accounts are enabled, the app permanently requires authentication for every
 
 ## Signing In
 
-With accounts enabled, anyone opening Serene Pub without a valid session is shown a login screen (username and passphrase, with a show/hide toggle for the passphrase field) instead of the app. There's no self-service "forgot passphrase" link on this screen — the footer simply says _"Need help? Contact your administrator."_ Getting a new passphrase requires an admin to reset it for you, as described in [Resetting a Passphrase](#resetting-a-passphrase) below.
+With accounts enabled, anyone opening Serene Pub without a valid session is shown a login screen instead of the app: username and passphrase (with a show/hide toggle for the passphrase), a **Sign in** button, a **Document View** link to the accessible shell, and the version. Behind the card an _atmosphere_ — a gentle animated background such as rain, mist or drifting glyphs — is chosen at random on each load. It follows your operating system's reduced-motion preference and freezes to a still frame when that is set. There's no self-service "forgot passphrase" link on this screen. Getting a new passphrase requires an admin to reset it for you, as described in [Resetting a Passphrase](#resetting-a-passphrase) below.
 
 ## The Users Panel
 

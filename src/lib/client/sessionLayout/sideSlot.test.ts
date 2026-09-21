@@ -3,69 +3,23 @@ import {
 	sideSlot,
 	sideFlowPx,
 	inlineSideWidths,
-	MIN_MARGIN_PX,
 	MIN_CENTER_PX,
 	type SideSlotInput
 } from "./sideSlot"
 
-/** Desktop, no margins reclaimed, overlay closed — the plain rail case. */
+/** Desktop, overlay closed — the plain rail case. */
 const base: SideSlotInput = {
 	narrow: false,
-	overlayOwns: false,
-	marginMode: false,
-	marginFree: false,
-	marginPx: 0
+	overlayOwns: false
 }
 
-describe("sideSlot — one mount, four places", () => {
+describe("sideSlot — one mount, three places", () => {
 	it("sits in the flow on a plain desktop", () => {
 		expect(sideSlot(base)).toBe("inline")
 	})
 
-	it("moves to the reclaimed margin when one is free and wide enough", () => {
-		expect(
-			sideSlot({
-				...base,
-				marginMode: true,
-				marginFree: true,
-				marginPx: MIN_MARGIN_PX + 1
-			})
-		).toBe("margin")
-	})
-
-	it("stows — never unmounts — when the margin is taken or too thin", () => {
-		// A sidebar panel opened into the margin.
-		expect(
-			sideSlot({
-				...base,
-				marginMode: true,
-				marginFree: false,
-				marginPx: 300
-			})
-		).toBe("stowed")
-		// The margin exists but is a sliver.
-		expect(
-			sideSlot({
-				...base,
-				marginMode: true,
-				marginFree: true,
-				marginPx: MIN_MARGIN_PX
-			})
-		).toBe("stowed")
-	})
-
 	it("stows below the breakpoint: no layout space, but still mounted", () => {
 		expect(sideSlot({ ...base, narrow: true })).toBe("stowed")
-		// The margin rule never outranks the breakpoint.
-		expect(
-			sideSlot({
-				...base,
-				narrow: true,
-				marginMode: true,
-				marginFree: true,
-				marginPx: 400
-			})
-		).toBe("stowed")
 	})
 
 	it("hands the mount to the overlay dialog, rather than standing down", () => {
@@ -75,6 +29,12 @@ describe("sideSlot — one mount, four places", () => {
 		expect(sideSlot({ ...base, narrow: true, overlayOwns: true })).toBe(
 			"overlay"
 		)
+	})
+
+	it("the overlay outranks the breakpoint, and the breakpoint the flow", () => {
+		// The order the three rules are written in is the answer to "a side
+		// the sheet is showing on a desktop-width window": still the overlay.
+		expect(sideSlot({ ...base, overlayOwns: true })).toBe("overlay")
 	})
 
 	it("leaves the other side stowed while one side is in the overlay", () => {
@@ -93,36 +53,36 @@ describe("sideSlot — one mount, four places", () => {
 		])
 	})
 
-	it("walks stowed → margin → overlay → stowed without ever leaving the mount", () => {
-		// The whole trip a side takes in one session: parked while a sidebar
-		// holds its margin, docked when that closes, carried into the mobile
-		// sheet on a rotate, and parked again when the sheet shuts. Every step
-		// is a CONTAINER, so the subtree that moves between them is the same
-		// one throughout — there is deliberately no value here that means "not
-		// rendered", which is what makes the no-reload law hold by
+	it("walks inline → stowed → overlay → stowed → inline without ever leaving the mount", () => {
+		// The whole trip a side takes in one session: docked beside the chat,
+		// parked when the window narrows, carried into the mobile sheet,
+		// parked again when the sheet shuts, docked again on the way back up.
+		// Every step is a CONTAINER, so the subtree that moves between them is
+		// the same one throughout — there is deliberately no value here that
+		// means "not rendered", which is what makes the no-reload law hold by
 		// construction rather than by remembering.
-		const wide = { ...base, marginMode: true, marginPx: 400 }
 		const trip: SideSlotInput[] = [
-			{ ...wide, marginFree: false },
-			{ ...wide, marginFree: true },
-			{ ...wide, marginFree: true, narrow: true, overlayOwns: true },
-			{ ...wide, marginFree: true, narrow: true }
+			base,
+			{ ...base, narrow: true },
+			{ ...base, narrow: true, overlayOwns: true },
+			{ ...base, narrow: true },
+			base
 		]
 		expect(trip.map(sideSlot)).toEqual([
+			"inline",
 			"stowed",
-			"margin",
 			"overlay",
-			"stowed"
+			"stowed",
+			"inline"
 		])
 	})
 
 	it("crossing the breakpoint and back never leaves the mount", () => {
-		const wide = { ...base, marginMode: true, marginFree: true, marginPx: 400 }
-		const narrow = { ...wide, narrow: true }
-		expect([sideSlot(wide), sideSlot(narrow), sideSlot(wide)]).toEqual([
-			"margin",
+		const narrow = { ...base, narrow: true }
+		expect([sideSlot(base), sideSlot(narrow), sideSlot(base)]).toEqual([
+			"inline",
 			"stowed",
-			"margin"
+			"inline"
 		])
 	})
 })
@@ -214,10 +174,9 @@ describe("sideFlowPx — what a side occupies in the body's row", () => {
 			railPx: [264]
 		}
 		expect([
-			sideFlowPx({ ...drawn, slot: "margin" }),
 			sideFlowPx({ ...drawn, slot: "stowed" }),
 			sideFlowPx({ ...drawn, slot: "overlay" })
-		]).toEqual([0, 0, 0])
+		]).toEqual([0, 0])
 	})
 })
 

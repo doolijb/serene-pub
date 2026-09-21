@@ -28,6 +28,9 @@
 
 import { SessionMessageProcessor } from "$lib/server/pipelines/prompt/contentProcessors"
 import { stripJsonBlocks } from "$lib/server/pipelines/prompt/jsonBlocks"
+import { resolveSeedLine } from "$lib/server/pipelines/prompt/seedLine"
+import type { ChannelVoice } from "$lib/server/messages/channels"
+import { parseChannel } from "@serene-pub/sdk"
 import { InterpolationEngine } from "$lib/server/utils/interpolation/InterpolationEngine"
 import type { ProcessedSessionMessage } from "$lib/server/pipelines/prompt/contentProcessors"
 
@@ -64,6 +67,16 @@ export interface ProcessMessagesInput {
 	 */
 	seed?: boolean
 	/**
+	 * The voice of the channel this turn was **triggered on** (R-C,
+	 * 2026-09-17) — `none` means no seed row at all.
+	 *
+	 * Arrives on the cast read, which is the one port this node and
+	 * `core:task/build-template-context@1` share, so the two halves of the
+	 * seed decision are answered from one fact. Absent for every genre that
+	 * shapes no channel, and absent for a caller that hands rows in directly.
+	 */
+	turnChannelVoice?: ChannelVoice
+	/**
 	 * Cut JSON blocks out of what the cast said, on the way into this prompt.
 	 *
 	 * A reply that carried a document teaches the next turn's planner its own
@@ -84,6 +97,16 @@ export interface ProcessedMessages {
 /** The id the seed carries, matching the legacy engines (KeywordInfillEngine:290). */
 export const SEED_MESSAGE_ID = -2
 
+/**
+ * The id a **folio block** carries (R-C, 2026-09-17) — one entry standing
+ * for every message on a channel whose genre declared `role: 'folio'`.
+ *
+ * Negative, like the seed and the draft, because it belongs to no row: the
+ * rows it folded together are reported individually in `includedIds`, which is
+ * what the receipt and the token accounting are counting.
+ */
+export const FOLIO_MESSAGE_ID = -3
+
 export function processMessages(
 	input: ProcessMessagesInput
 ): ProcessedMessages {
@@ -102,6 +125,16 @@ export function processMessages(
 	} as any
 
 	const processed: ProcessedSessionMessage[] = []
+	/**
+	 * Channels that enter the prompt as a **folio** (R-C): slug → the lines
+	 * on it, in time order. Empty for every genre that declares no channel
+	 * role, because the host puts `channelRole` on a row only when the genre
+	 * shapes channels at all (`channelShapingOf`) — so a prompt for a genre
+	 * written before R-C is assembled by exactly the code it always was.
+	 */
+	const folios = new Map<string, string[]>()
+	/** The real ids the blocks folded together, for `includedIds`. */
+	const folioIds: number[] = []
 	for (const row of input.messages) {
 		const one = processor.processItem(row, {
 			interpolationContext: context,
@@ -133,10 +166,65 @@ export function processMessages(
 			if (typeof prose === "string" && !prose) continue
 			line = { ...line, message: prose }
 		}
+		/**
+		 * A folio channel's messages are not turns. They are one text —
+		 * the manuscript the conversation is about — so they are collected
+		 * here and emitted as a single block in front of the conversation
+		 * rather than as a run of `Name:` lines the model would read as
+		 * dialogue and continue.
+		 */
+		if (row?.channelRole === "folio") {
+			// The slug is the reference; the lane is multiplicity (ruling
+			// 2026-09-09), so every lane of a folio channel is one folio.
+			const slug = parseChannel(row.channel).slug
+			const text = typeof line.message === "string" ? line.message : ""
+			if (text) {
+				const lines = folios.get(slug) ?? []
+				lines.push(text)
+				folios.set(slug, lines)
+			}
+			if (typeof row.id === "number") folioIds.push(row.id)
+			continue
+		}
 		processed.push(line)
 	}
 
-	if (input.seed !== false)
+	/**
+	 * In front of the conversation, one block per folio channel, labelled
+	 * by the channel rather than by anybody: the individual speakers are what
+	 * a folio drops. Declaration order is the map's insertion order, which
+	 * is the order the channels' messages first appeared.
+	 */
+	for (const [slug, lines] of [...folios].reverse())
+		processed.unshift({
+			id: FOLIO_MESSAGE_ID,
+			role: "user",
+			name: slug,
+			message: lines.join("\n\n")
+		})
+
+	/**
+	 * A turn triggered on a channel whose voice is `none` writes no seed row
+	 * (R-C) — the continue-prefill posture. A folio has no speaker to
+	 * announce, so a trailing `Verity:` would be requesting a line of dialogue
+	 * from a prompt whose subject is a manuscript.
+	 *
+	 * The turn's own channel when the trigger named one, and otherwise the
+	 * **last** row's: the history arrives in reading order and the row that
+	 * caused this turn is the newest one in it (the uncommitted draft, when
+	 * there is one, is appended in exactly that place).
+	 *
+	 * ⚠ The row is the fallback rather than the answer, because it is only
+	 * *usually* the answer: a turn triggered on a channel that has no rows yet
+	 * reads the voice of whatever channel spoke last. It stays as the fallback
+	 * until every trigger names its channel — a folio genre relies on it
+	 * today, and dropping it would put a `Verity:` back at the end of a
+	 * manuscript. Both are absent unless the genre shapes channels, so this
+	 * reads `undefined` and changes nothing for every genre that declares none.
+	 */
+	const triggerVoice =
+		input.turnChannelVoice ?? input.messages.at(-1)?.channelVoice
+	if (input.seed !== false && resolveSeedLine({ voice: triggerVoice }).seed)
 		processed.push({
 			id: SEED_MESSAGE_ID,
 			role: "assistant",
@@ -157,8 +245,16 @@ export function processMessages(
 
 	return {
 		messages: processed,
-		includedIds: processed
-			.filter((m) => m.id !== SEED_MESSAGE_ID)
-			.map((m) => m.id)
+		// The rows a folio block folded together are counted one by one:
+		// the block is a rendering of them, not a row of its own.
+		includedIds: [
+			...folioIds,
+			...processed
+				.filter(
+					(m) =>
+						m.id !== SEED_MESSAGE_ID && m.id !== FOLIO_MESSAGE_ID
+				)
+				.map((m) => m.id)
+		]
 	}
 }

@@ -7,7 +7,7 @@ until you want it to fill the page. This page describes the shell; each feature 
 
 The strip down the left edge is the rail. Its icons are, from the top: Home; then Sessions,
 Characters, Lorebooks and Tags; then Connections, Sampling, Pipelines and Settings, with
-Users and the model managers appearing when they apply and Help last; and at the foot, Activity,
+Users appearing when accounts are on and Help last; and at the foot, Activity,
 Admin (for administrators) and your account. Hover an icon for its name.
 
 Click an icon and its view opens in the sidebar beside the rail. The small button above your

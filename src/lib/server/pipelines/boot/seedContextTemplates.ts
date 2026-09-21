@@ -15,6 +15,7 @@
 import { and, asc, eq, isNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
+import { coreTemplateIdFor } from "$lib/server/pipelines/entities/templateIds"
 import {
 	CONTEXT_TEMPLATE_NODE_TYPE,
 	CONTEXT_TEMPLATE_SEED_KEY,
@@ -64,11 +65,19 @@ export async function seedContextTemplates(
 		// never be corrected once an install had booted, so a fresh install and
 		// an upgraded one rendered different prompts from identical settings.
 		// Matched on `seedKey`, which is NULL for anything a user wrote.
-		if (existing.source !== SHIPPED_CONTEXT_TEMPLATE) {
+		// Derived from the seed key (R19), and part of the drift check for the
+		// same reason the source is: migration 0143 names the rows that existed
+		// before this column, and this names the ones seeded after it.
+		const templateId = coreTemplateIdFor(CONTEXT_TEMPLATE_SEED_KEY)
+		if (
+			existing.source !== SHIPPED_CONTEXT_TEMPLATE ||
+			existing.templateId !== templateId
+		) {
 			await db
 				.update(schema.pipelineContextTemplates)
 				.set({
 					source: SHIPPED_CONTEXT_TEMPLATE,
+					templateId,
 					engine: CORE_TEMPLATE_ENGINE,
 					updatedAt: new Date()
 				})
@@ -83,6 +92,7 @@ export async function seedContextTemplates(
 	await db.insert(schema.pipelineContextTemplates).values({
 		nodeDefinitionId: poolKeyFor(CONTEXT_TEMPLATE_NODE_TYPE),
 		seedKey: CONTEXT_TEMPLATE_SEED_KEY,
+		templateId: coreTemplateIdFor(CONTEXT_TEMPLATE_SEED_KEY),
 		name: SHIPPED_CONTEXT_TEMPLATE_NAME,
 		source: SHIPPED_CONTEXT_TEMPLATE,
 		// Explicit rather than NULL: a template carries its engine on the value
@@ -155,7 +165,12 @@ export async function defaultContextTemplateFor(
 				eq(schema.pipelineContextTemplates.nodeDefinitionId, pool),
 				eq(schema.pipelineContextTemplates.engine, engine),
 				eq(schema.pipelineContextTemplates.isImmutable, true),
-				isNull(schema.pipelineContextTemplates.createdForSpecId)
+				isNull(schema.pipelineContextTemplates.createdForSpecId),
+				// Never a WITHDRAWN row (R19) — see `defaultPromptFor`. This is
+				// the step that picks a row nobody named, so a disabled
+				// package's template must not become a new default here. NULL
+				// on every row that is not a plugin's.
+				isNull(schema.pipelineContextTemplates.withdrawnAt)
 			)
 		)
 		.orderBy(asc(schema.pipelineContextTemplates.id))

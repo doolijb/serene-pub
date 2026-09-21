@@ -47,6 +47,29 @@ export const RAIL_GAP_PX = 6
 /** Where one group is drawn. */
 export type RailState = "expanded" | "collapsed" | "flyout"
 
+/** How a cell is drawn: the rail's three, plus the sheet's folded title bar. */
+export type CellState = RailState | "folded"
+
+/**
+ * A whole side column, resolved: the answer SessionLayout's `columnLayout`
+ * returns and that both the live view and the editor's rail preview are drawn
+ * from. Here rather than in either component because it is the shape they hand
+ * each other — SessionLayout resolves it, LayoutEditCanvas reads it.
+ */
+export interface ColumnLayout {
+	/** Where each unit is drawn, by unit key. */
+	state: Record<string, CellState>
+	/** Each unit's grid row (1-based) and its place in the collapsed order. */
+	row: Record<string, number>
+	order: Record<string, number>
+	/** `grid-template-rows` for the rows that are actually drawn. */
+	rows: string
+	/** One column: what shared a row is drawn one under the other. */
+	collapsed: boolean
+	/** The one unit currently OVER the session, if any. */
+	flyout: string | null
+}
+
 export interface RailFitInput {
 	/** Usable height of the column. */
 	columnPx: number

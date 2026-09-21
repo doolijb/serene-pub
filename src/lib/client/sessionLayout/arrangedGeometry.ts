@@ -2,7 +2,7 @@
  * The Move tab's ARRANGEMENT GEOMETRY — pure, and the one place the editor's
  * saved-arrangement maths lives.
  *
- * Four jobs, all of them about the same round trip (persisted blob → the
+ * Five jobs, all of them about the same round trip (persisted blob → the
  * editor's gridstack zones → back to the blob):
  *
  *   1. `loadArranged` / `withGeometry` — rehydrate the verbatim blob and lay it
@@ -18,6 +18,9 @@
  *   4. `itemPinned` / `unitPinned` / `withPins` — the per-group PIN, which is a
  *      field on the arranged items rather than geometry, and the one rule the
  *      whole blob's forward compatibility hangs on (absent means pinned).
+ *   5. `firstSlot` / `fits` / `makeRoom` — where a frame has a SLOT for one
+ *      more card, and how a full one gives it up. The tray has to be able to
+ *      place a widget in a zone that is out of room; see `MIN_CARD_ROWS`.
  *
  * They were extracted from SessionLayout.svelte / GridStackZone.svelte so the
  * round trip can be tested without a browser, a gridstack, or a window size.
@@ -51,12 +54,51 @@ export function isGsLayout(z: unknown): z is GsLayout {
 const isLivePos = (pos: { id: string }): boolean => !isRetiredWidget(pos.id)
 
 /**
+ * Put one saved cell back inside the frame that describes it.
+ *
+ * A captured position is only meaningful in its own `cols` × `rows` grid, and
+ * nothing guarantees it stayed there: gridstack reports whatever its engine
+ * holds, and a card that arrived from another zone can be reported at a cell
+ * this zone does not have. The EDITOR never saw that, because `seedPositions`
+ * ends with exactly this clamp — but the live view spends the cells directly as
+ * `grid-column: x + 1 / span w`, and a column past `cols` does not overflow: it
+ * makes CSS grid add IMPLICIT tracks, and the explicit `1fr` ones then resolve
+ * to 0px. One out-of-bounds cell therefore collapses every other widget in the
+ * zone to nothing. (Seen live: `scene-portraits` at x = 7 in a 7-column frame
+ * gave `grid-column: 8 / span 7`, seven implicit tracks, and a 38px `stats`.)
+ *
+ * So the clamp belongs where every reader passes, not in one renderer.
+ */
+export function clampPos(pos: GsPos, cols: number, rows: number): GsPos {
+	const maxCols = Math.max(1, Math.floor(cols))
+	const maxRows = Math.max(1, Math.floor(rows))
+	const w = Math.min(Math.max(1, pos.w), maxCols)
+	const h = Math.min(Math.max(1, pos.h), maxRows)
+	const x = Math.min(Math.max(0, pos.x), maxCols - w)
+	const y = Math.min(Math.max(0, pos.y), maxRows - h)
+	return x === pos.x && y === pos.y && w === pos.w && h === pos.h
+		? pos
+		: { ...pos, x, y, w, h }
+}
+
+/** Every cell in a zone, back inside that zone. */
+export function clampFrame(zone: GsLayout): GsLayout {
+	const items = zone.items.map((i) => clampPos(i, zone.cols, zone.rows))
+	return items.every((i, n) => i === zone.items[n]) ? zone : { ...zone, items }
+}
+
+/**
  * Defensively rehydrate the persisted per-zone geometry (verbatim blob).
  *
  * Retired ids are dropped here, which is the one place every reader of a saved
  * arrangement passes through — the live render, the editor, and the picture a
  * preset draws. An arrangement captured under an older build keeps its cells
  * and loses the cards this build has no widget for.
+ *
+ * And every cell is clamped into its own frame (see `clampPos`), for the same
+ * reason and at the same seam: a blob written by an older build — or by a zone
+ * that reported a cross-zone drop before this clamp existed — must draw as the
+ * arrangement it describes rather than shredding the zone it lands in.
  */
 export function loadArranged(saved: unknown): Arranged {
 	if (!saved || typeof saved !== "object") return {}
@@ -64,11 +106,11 @@ export function loadArranged(saved: unknown): Arranged {
 	for (const key of ["left", "middle", "right"] as const) {
 		const z = (saved as any)[key]
 		if (isGsLayout(z))
-			out[key] = {
+			out[key] = clampFrame({
 				cols: z.cols,
 				rows: z.rows,
 				items: z.items.filter(isGsPos).filter(isLivePos)
-			}
+			})
 	}
 	return out
 }
@@ -87,6 +129,104 @@ export function arrangementIsEmpty(a: Arranged): boolean {
 	return !(["left", "middle", "right"] as const).some(
 		(key) => (a[key]?.items?.length ?? 0) > 0
 	)
+}
+
+/** The three arranged zones, in the order a tie is broken without a hint. */
+export const ZONE_KEYS = ["left", "middle", "right"] as const
+export type ZoneKey = (typeof ZONE_KEYS)[number]
+
+/**
+ * The middle editor panel's place target. The middle has no zone id — its
+ * membership is the widget GRID's, and `layout.zones` never names it — so the
+ * drag-over highlight and the routing need a name for it, in the same sentinel
+ * idiom as the palette's own `__palette__` drop target.
+ *
+ * Here rather than in the editor because SessionLayout routes a drop by it and
+ * LayoutEditCanvas names the zone with it; one word, one place.
+ */
+export const MIDDLE_TARGET = "__middle__"
+
+/**
+ * Every widget this arrangement places, in any zone.
+ *
+ * "Is this widget placed?" has two answers while the editor is open, and this
+ * is the one the EDITOR has to use: the committed membership is what the live
+ * view draws, but an arrangement in progress is what the user has actually
+ * done. A card dragged from one zone into another is reported by both zones'
+ * frames long before anything is committed.
+ */
+export function arrangedIds(a: Arranged): Set<string> {
+	const ids = new Set<string>()
+	for (const key of ZONE_KEYS)
+		for (const item of a[key]?.items ?? []) ids.add(item.id)
+	return ids
+}
+
+/** A widget that was found in more than one zone, and what was done about it. */
+export interface ArrangedDuplicate {
+	id: string
+	/** The zone it was left in. */
+	kept: ZoneKey
+	/** The zones it was taken out of. */
+	dropped: ZoneKey[]
+}
+
+export interface DedupedArrangement {
+	arranged: Arranged
+	duplicates: ArrangedDuplicate[]
+}
+
+/**
+ * The commit's invariant: **a widget id lives in exactly one zone**.
+ *
+ * Nothing in the arrangement's shape enforces it — each zone reports its own
+ * items and the three are only assembled at Done — so a zone that fails to
+ * report a card LEAVING it leaves that card in two zones at once, and the
+ * commit writes it into two zones' widget lists. The live view then draws the
+ * widget twice and the editor re-opens on both copies.
+ *
+ * `preferred` is the last cross-zone drop: the one event that names a widget
+ * AND the zone that now holds it, so it is the honest answer to "which copy is
+ * the one the user made". Without it (or for any other duplicate) the first
+ * zone in `ZONE_KEYS` order wins — deterministic, and not a judgement.
+ *
+ * Pure: it returns a new arrangement and the duplicates it resolved, and says
+ * nothing. The caller logs.
+ */
+export function dedupeArranged(
+	a: Arranged,
+	preferred?: { id: string; zone: ZoneKey } | null
+): DedupedArrangement {
+	const seen = new Map<string, ZoneKey[]>()
+	for (const key of ZONE_KEYS)
+		for (const item of a[key]?.items ?? [])
+			seen.set(item.id, [...(seen.get(item.id) ?? []), key])
+
+	const duplicates: ArrangedDuplicate[] = []
+	const keeper = new Map<string, ZoneKey>()
+	for (const [id, zones] of seen) {
+		if (zones.length < 2) continue
+		const kept =
+			preferred?.id === id && zones.includes(preferred.zone)
+				? preferred.zone
+				: zones[0]
+		keeper.set(id, kept)
+		duplicates.push({ id, kept, dropped: zones.filter((z) => z !== kept) })
+	}
+	if (!duplicates.length) return { arranged: a, duplicates }
+
+	const arranged: Arranged = {}
+	for (const key of ZONE_KEYS) {
+		const zone = a[key]
+		if (!zone) continue
+		arranged[key] = {
+			...zone,
+			items: zone.items.filter(
+				(i) => (keeper.get(i.id) ?? key) === key
+			)
+		}
+	}
+	return { arranged, duplicates }
 }
 
 /**
@@ -373,4 +513,123 @@ export function reexpress(ref: GsLayout, cols: number, rows: number): GsPos[] {
 		rows,
 		ref
 	)
+}
+
+/* ── making room for one more card (2026-09-17) ─────────────────────────
+ *
+ * A zone whose cells are all taken has nowhere to seed a newcomer, and until
+ * now nothing anywhere acted on that. `seedPositions` clamps the new card's
+ * `y` back inside the grid, so it arrives ON TOP of whatever already holds the
+ * bottom rows; gridstack's engine is capped by `maxRow`, so `_fixCollisions`
+ * cannot push that card out of the way and gives up. Nothing is dropped and
+ * nothing throws — the two cards simply OVERLAP, live and saved.
+ *
+ * A card DRAGGED from another zone keeps that answer and says it out loud: the
+ * zone header's Full note is the warning and the drag snaps back, which is
+ * gridstack's own behaviour and honest. A card placed from the TRAY has no
+ * drag to snap back — the user asked for it and it has to land somewhere — so
+ * the zone makes room for it instead, here.
+ *
+ * Rows come off the BIGGEST card first, from its BOTTOM edge: it keeps its `y`
+ * and therefore its top edge, which is the edge a column is read by. Nothing
+ * is taken past `MIN_CARD_ROWS` — a card squeezed to one row is not a card —
+ * and a frame that could only make room by producing one has honestly run out:
+ * it comes back unchanged, the caller falls back to what it did before, and
+ * the Full note stays true.
+ */
+
+/** The fewest rows a card may be shrunk to while making room for another. */
+export const MIN_CARD_ROWS = 2
+
+/** Does the box at `x,y,w,h` share a cell with this item? */
+function hits(
+	i: GsPos,
+	x: number,
+	y: number,
+	w: number,
+	h: number
+): boolean {
+	return i.x < x + w && x < i.x + i.w && i.y < y + h && y < i.y + i.h
+}
+
+/**
+ * WHERE in `frame` a card of `need` cells could go — top-left-most first, or
+ * null when nowhere could.
+ *
+ * The packing question `zoneIsFull` deliberately leaves alone: free CELLS are
+ * not a free SLOT, and a frame with a quarter of its cells free in four
+ * corners has room for nothing. Every origin the rectangle could take is
+ * tried, so the answer is exact rather than an estimate — the frames are a
+ * couple of dozen cells on a side.
+ *
+ * It answers WHERE rather than whether because the caller needs both: the
+ * seeding rules (`seedPositions`) place a card with no saved cells at the foot
+ * of the x = 0 stack, which is not where `makeRoom` frees rows, so the slot
+ * has to be WRITTEN onto the newcomer rather than hoped for.
+ *
+ * `need` is clamped to the frame the way a seeded card is (`seedPositions`
+ * ends with exactly that clamp), so asking for something wider than the zone
+ * asks about the card the zone would actually draw.
+ */
+export function firstSlot(
+	frame: GsLayout,
+	need: { w: number; h: number }
+): { x: number; y: number } | null {
+	const w = Math.max(1, Math.min(Math.floor(need.w), frame.cols))
+	const h = Math.max(1, Math.min(Math.floor(need.h), frame.rows))
+	for (let y = 0; y + h <= frame.rows; y++)
+		for (let x = 0; x + w <= frame.cols; x++)
+			if (!frame.items.some((i) => hits(i, x, y, w, h))) return { x, y }
+	return null
+}
+
+/** Is there anywhere in `frame` a card of `need` cells could go? */
+export function fits(frame: GsLayout, need: { w: number; h: number }): boolean {
+	return firstSlot(frame, need) !== null
+}
+
+/**
+ * Make room in a full frame for one more card of `need` cells: shrink the
+ * largest card (by area) along its height by `need.h` rows, never below
+ * `MIN_CARD_ROWS`, then the next largest, until a `need`-sized slot exists.
+ *
+ * Returns the SAME object when a slot already exists, and the same object
+ * again when no sequence of shrinks frees one — the caller tells the two apart
+ * by identity and needs to do nothing in either case.
+ *
+ * Each pass takes at least one row off exactly one card, so the heights are a
+ * strictly decreasing sum bounded below by `MIN_CARD_ROWS` per card: the loop
+ * ends either at a slot or at the frame it was given.
+ */
+export function makeRoom(
+	frame: GsLayout,
+	need: { w: number; h: number }
+): GsLayout {
+	if (fits(frame, need)) return frame
+	const want = Math.max(1, Math.floor(need.h))
+	let items = frame.items
+	for (;;) {
+		// The largest card with rows left to give. Area decides and the
+		// earlier item wins a tie, so the same frame always makes room the
+		// same way.
+		let pick = -1
+		let largest = 0
+		items.forEach((it, n) => {
+			if (it.h <= MIN_CARD_ROWS) return
+			const area = it.w * it.h
+			if (area > largest) {
+				largest = area
+				pick = n
+			}
+		})
+		// Every card is at the floor: the zone is out of room for real.
+		if (pick < 0) return frame
+		items = items.map((it, n) =>
+			n === pick
+				? { ...it, h: Math.max(MIN_CARD_ROWS, it.h - want) }
+				: it
+		)
+		const next = { ...frame, items }
+		if (fits(next, need)) return next
+	}
 }

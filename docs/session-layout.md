@@ -30,9 +30,13 @@ who is there rather than an empty frame.
 
 ## Opening the editor
 
-Hover the top navigation bar and a small **Layout** tab appears under it; click it (or Tab to it and
-press Enter). The session stays live underneath while you edit. Press **Done** to leave the editor.
-Everything you change is saved as you go.
+Press **Layout** at the right end of the session header. The editor's toolbar takes the header's
+place across the top of the window, and the Jump pill steps aside until you leave (Ctrl K still
+opens it). An open sidebar closes too — the editor lays its zones out across the whole window, and a
+sidebar would cover the left one — and comes back, on the same tab and with everything in it, when
+you leave the editor. The session stays live underneath while you edit. Press **Done** to keep what
+you did, or **Cancel** to put back the layout you opened the editor on — panels added or removed
+included.
 
 The editor has three tabs: **Presets**, **Settings** and **Move**.
 
@@ -113,7 +117,8 @@ written as `--name`. For a rule that should only apply in dark mode, start the s
 Some genres contribute actions: things you press rather than type. An adventure session has
 **Look**, **Rest** and **Time passes**; a chat session has its narrator. They live behind one quiet
 word above the message field, **Actions**: click it and the chips open beneath it, wrapping to as
-many lines as they need, and fold away when focus leaves the row. The genre's quick actions come
+many lines as they need, and stay open until you click **Actions** again or press Escape while
+one of them has focus. The genre's quick actions come
 first as chips, then a **More** menu holding every other enabled action (with a **New** mark on any
 you have not met), then the turn controls. A genre that contributes none still shows the label for
 the turn controls; a session with nothing to offer grows no label at all. The **Show the Actions
@@ -132,8 +137,11 @@ slug>#<key>` (`acme:spec/roll#roll`, or `core#continue` for one of Serene Pub's 
 carries it. The host resolves it to the declaration and routes it: one of Serene Pub's message
 verbs — continue, regenerate, edit, stop, branch, swipe, hide, delete — to the same handler the
 message row uses, everything else through the audited fire that a chip takes, naming the
-declaration so the server checks *that* action's audience and runs *that* pipeline. A reference no
-venue lists, or a bare key several actions share, is refused rather than fired. A frame gets the
+declaration so the server checks *that* action's audience and runs *that* pipeline. That is the
+very same fire, not a copy of it: a press inside a widget starts a named run, so Cancel reaches it
+in the moment before its first progress report, and an action with a window of its own — the
+narrator's — opens that window exactly as the chip does. A reference no venue lists, or a bare key
+several actions share, is refused rather than fired. A frame gets the
 same rows as `{ t: "actions" }` over its port and invokes with `{ t: "invoke", key, messageId?,
 payload? }`. A widget that ignores the section loses nothing; one that draws its own control
 gains a contributed action without a line of host code.
@@ -161,16 +169,17 @@ widget can do nothing through you that you could not do yourself. A click elsewh
 even though it sets the same activation flag, does not count as being in the frame — the focus
 check is what tells the two apart.
 
-What is live today, and what is not yet:
+Every mount is handed the venues the same way: the page holds them once and passes them down the
+layout to each native widget and each panel frame, so `actions.v1` is populated wherever a widget
+is drawn in a session, and `invoke` resolves against the same table the message row uses. A widget
+mounted outside a session has no venues; its `actions.v1` is empty and its `invoke` refuses by
+name, which is the right answer there. A widget a plugin declares for itself is seated like any
+other, under an id prefixed with the plugin's own, so two plugins that both ship a **Map** never
+collide; a widget a genre declares keeps its plain name.
 
-- **Live**: the contract itself (`actions.v1`, `invoke`, the routing of core's verbs and the
-  identity on the fire); a frame that is handed the venues gets them and its `invoke` works end to
-  end; the session-view frame (a genre's replacement for the whole log) is handed them by the page.
-- ⏳ **Panel frames and native widgets in the layout** — the session layout's own hosts
-  (`SessionLayout`, `WidgetHost`) do not yet pass the venues or the verb handlers down to a panel,
-  so a panel frame in a zone receives no `{ t: "actions" }` and a native widget's `ctx.actions.v1`
-  is empty; their `invoke` refuses everything by name. The panel wrapper is ready to hand both on
-  the moment the layouts lane threads them.
+A widget also hears what happens to the messages it can see: one row edited, deleted or streaming
+in, and a generation starting or ending, each as an event scoped to the widget's channels. What it
+never hears is a selection, because the session tracks none that the event could describe.
 
 ## What the Messages panel offers
 
@@ -193,13 +202,20 @@ opaque inside it.
 
 ## Move
 
-The **Move** tab replaces the session with three grids — **Left**, **Middle**, **Right** — drawn where
-the panels actually live. Messages stays in the middle.
+The **Move** tab covers the session with three grids — **Left**, **Middle**, **Right** — drawn where
+the panels actually live. Messages stays in the middle. The session itself goes on running
+underneath: switching between Presets, Settings and Move — or leaving the editor — never reloads a
+panel or throws away what you had typed in one.
 
-- **Add** a panel from the tray by dragging it onto a zone, or tap it and then tap where it goes.
-  Drag a panel back to the tray to remove it.
+- **Add** a panel from the tray by dragging it onto any of the three zones — the middle included —
+  or tap it and then tap where it goes. Drag a panel back to the tray to remove it.
 - Drag panels to move them; drag their edges to resize. Each card also has fit-width, fit-height and
   dock-top/dock-bottom buttons.
+- A zone with no free cell says **Full** in its title bar. A panel **dragged** onto it still snaps
+  back to where it came from — but **adding one from the tray makes room**: the biggest card in the
+  zone gives up rows from its bottom edge, keeping its top, until the new panel fits. A zone whose
+  cards are all as short as they go stays exactly as it is, and Full still means full. This is
+  mostly about the middle, which Messages usually fills edge to edge.
 - **Anchors** pin a panel to an edge of its zone so it stays put as the window changes. Where the
   layout has to fall into a single column (see below), an anchor becomes an order instead: anchored
   to the top it goes first, to the bottom it goes last.

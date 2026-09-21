@@ -17,6 +17,13 @@
  * source of truth (F6), and a malformed declaration is a missing surface, not
  * a crash.
  *
+ * ⏳ `surfaces.panels` is the deprecated spelling of a widget declaration. It
+ * is read through the SDK's `panelToWidgetDecl`, so what leaves this module is
+ * a `WidgetDecl` and every reader past it sees the one declaration a genre's
+ * shape carries — under the **namespaced** id `<pluginId>:<panelId>`
+ * (`pluginWidgetId`), because a package's own id is the one thing here nobody
+ * else controls. Core's and a genre's widgets keep plain ids.
+ *
  * ## The CSP the frame lives under
  *
  * `default-src 'none'` plus: same-origin scripts/styles/assets (the plugin's
@@ -27,6 +34,11 @@
  */
 
 import { eq, and } from "drizzle-orm"
+import {
+	panelToWidgetDecl,
+	pluginWidgetId,
+	type WidgetDecl
+} from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import {
 	declaredPermissions,
@@ -112,10 +124,31 @@ export interface SurfaceDecl {
 export interface PluginSurfaces {
 	sessionView?: SurfaceDecl
 	page?: SurfaceDecl
-	panels: Array<SurfaceDecl & { id: string }>
+	/**
+	 * The manifest's panels, read as the ONE widget declaration
+	 * (`panelToWidgetDecl`). A panel IS a widget — same channels, same settings
+	 * schema — so this projection hands every reader the shape the host seats
+	 * rather than a second, thinner one they would each have to translate.
+	 *
+	 * ⚠ The `id` is the **namespaced** one (`<pluginId>:<panelId>`, the SDK's
+	 * `pluginWidgetId`), not the bare id the package declared. This is the
+	 * boundary the namespacing happens at, so every reader past it — the
+	 * session view, a saved layout row, `widget_settings`, `widget_styles`, a
+	 * `surface:open` intent — names the same string, and no reader has to know
+	 * that a plugin's widget ids are qualified and core's are not. A reader
+	 * that needs the package's own spelling back uses `parsePluginWidgetId`.
+	 */
+	panels: WidgetDecl[]
 }
 
-export function surfacesOf(manifest: unknown): PluginSurfaces {
+/**
+ * Read a stored manifest's `surfaces` block.
+ *
+ * `pluginId` is required because a panel's projection carries it: a
+ * `WidgetDecl`'s frame surface names the package whose document it mounts, and
+ * a decl without that is not resolvable to a URL.
+ */
+export function surfacesOf(manifest: unknown, pluginId: string): PluginSurfaces {
 	const raw =
 		manifest && typeof manifest === "object"
 			? (manifest as any).surfaces
@@ -136,15 +169,143 @@ export function surfacesOf(manifest: unknown): PluginSurfaces {
 	if (Array.isArray((raw as any).panels))
 		for (const p of (raw as any).panels) {
 			const d = decl(p)
-			if (d && typeof p.id === "string" && /^[a-z0-9_-]+$/.test(p.id))
-				out.panels.push({ ...d, id: p.id })
+			if (!d || typeof p.id !== "string" || !/^[a-z0-9_-]+$/.test(p.id))
+				continue
+			// Read tolerantly like everything else here: `channels` and
+			// `settings` are taken only in the shape they are declared in, and
+			// a malformed one is an absent field rather than a dropped panel.
+			const widget = panelToWidgetDecl(pluginId, {
+				...d,
+				id: p.id,
+				...(Array.isArray(p.channels) &&
+				p.channels.every((c: unknown) => typeof c === "string")
+					? { channels: p.channels }
+					: {}),
+				...(p.settings &&
+				typeof p.settings === "object" &&
+				!Array.isArray(p.settings)
+					? { settings: p.settings }
+					: {})
+			})
+			// The one place a plugin's panel id becomes a widget id. The SDK's
+			// projection is pure and hands back the package's own spelling; the
+			// package chose it in private, so two packages declaring `map`
+			// declare one id — and a layout row outlives the install that would
+			// have told them apart. Qualified here, once, at the boundary where
+			// the owner is still in hand.
+			out.panels.push({ ...widget, id: pluginWidgetId(pluginId, p.id) })
 		}
 	return out
 }
 
+/**
+ * Every widget an ENABLED plugin declares, by the id it is seated under.
+ *
+ * The one answer to "is this namespaced widget id real?", for the writes that
+ * have to refuse an id no widget would ever ask for — a widget style, and
+ * anything else keyed on `widget_slug`. Read from the stored manifests through
+ * `surfacesOf`, so the set is exactly what `sessions:view` puts on the wire and
+ * a validator can never accept an id the session view would not seat.
+ *
+ * A DISABLED plugin's widgets are absent, which is the same answer the session
+ * view gives: its rows are not deleted (a re-enable must bring the arrangement
+ * back), they simply stop being offered. A person cannot make a NEW style for a
+ * widget that is not there; the one they already made is untouched.
+ */
+export async function enabledPluginWidgetIds(db: Db): Promise<Set<string>> {
+	const rows = await db
+		.select({
+			pluginId: schema.plugins.pluginId,
+			manifest: schema.plugins.manifest
+		})
+		.from(schema.plugins)
+		.where(eq(schema.plugins.enabled, true))
+	const ids = new Set<string>()
+	for (const r of rows)
+		for (const w of surfacesOf(r.manifest, r.pluginId).panels)
+			ids.add(w.id)
+	return ids
+}
+
+/**
+ * Every widget id that may be SEATED in ONE session — the allow-list a
+ * per-session write keyed on `widget_slug` is held to.
+ *
+ * Three declarers, because a widget has three, and they are the same three
+ * `sessions:view` seats: core's `CORE_WIDGETS`, the session genre's own
+ * declared `shape.panels`, and every enabled plugin's widgets under the
+ * namespaced id they are seated by. The genre is read through
+ * `getSessionGenre` — the read the view itself does — so the set can never
+ * admit an id the view would not seat.
+ *
+ * ⚠ Not `widgetStyles`'s `announcedWidgetIds`, which answers the same question
+ * per INSTANCE: a style is an account-level object with no session to ask, so
+ * it takes the system style rows a genre's package seeded where this takes one
+ * genre's panels. The two sets coincide on core and on plugins; that middle
+ * term is the whole difference, and it is why this one takes a genre id.
+ */
+export async function seatableWidgetIds(
+	db: Db,
+	genreId: string
+): Promise<Set<string>> {
+	const { CORE_WIDGETS } = await import("@serene-pub/core-catalog")
+	const { getSessionGenre } = await import(
+		"$lib/server/pipelines/entities/sessionGenres"
+	)
+	const ids = new Set(CORE_WIDGETS.map((w) => w.id))
+	const genre = await getSessionGenre(db, genreId)
+	// `as any` as `sessions:view` reads it: `shape.panels` is the ⏳ pre-widget
+	// spelling the SDK's `SessionShape` never declared.
+	const declared = (genre?.shape as any)?.panels
+	if (Array.isArray(declared))
+		for (const p of declared)
+			if (p && typeof p.id === "string") ids.add(p.id)
+	for (const id of await enabledPluginWidgetIds(db)) ids.add(id)
+	return ids
+}
+
+/* ── the frame URL ──────────────────────────────────────────────────────── */
+
+/**
+ * The plugin slug grammar, from the SDK's `defineExtension` — lowercase
+ * letters, digits, dots and hyphens, `chariot.dice-tray`, **never a slash**.
+ *
+ * It is what makes a frame URL parseable at all: the id is exactly ONE
+ * segment, so everything after it is the stored file path and nothing has to
+ * count segments. A route that guessed a two-segment id instead resolved
+ * `/plugin-ui/showcase.twenty-questions/ui/tally.html` to the plugin
+ * `showcase.twenty-questions/ui` — which no dotted-slug plugin is — and served
+ * nothing.
+ */
+const PLUGIN_SLUG = /^[a-z0-9]+([.-][a-z0-9]+)*$/
+
+export const isPluginSlug = (id: string): boolean => PLUGIN_SLUG.test(id)
+
 /** The frame document URL for a stored surface entry. */
 export const frameSrc = (pluginId: string, entry: string): string =>
 	`/plugin-ui/${pluginId}/${entry}`
+
+/**
+ * The inverse of `frameSrc`, over the `/plugin-ui/` route's catch-all tail:
+ * the plugin id and the stored file path it carries, or `undefined` when it
+ * carries neither — an id outside the slug grammar, a path that traverses, or
+ * a tail too short to be both. Undefined is a 404 at the route: one shape for
+ * "no such frame", so the URL never says which half was wrong.
+ */
+export function parseFrameSrc(
+	rest: string | null | undefined
+): { pluginId: string; path: string } | undefined {
+	const segments = (rest ?? "").split("/").filter(Boolean)
+	if (segments.length < 2) return undefined
+	const [pluginId, ...rel] = segments
+	if (!isPluginSlug(pluginId)) return undefined
+	const path = rel.join("/")
+	// Checked here as well as in `readPluginFile`: the route should refuse a
+	// traversal before it ever reaches a query, and the read should refuse it
+	// again for a caller that never came through a URL.
+	if (!isSafeUiPath(path)) return undefined
+	return { pluginId, path }
+}
 
 /* ── the CSP ────────────────────────────────────────────────────────────── */
 

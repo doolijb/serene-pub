@@ -123,13 +123,13 @@ describe("simulatedGeometry — the editor's ¼ | ½ | ¼ split", () => {
 
 describe("simulatedGeometry — margins too narrow to hold a cell", () => {
 	it("culls a side that cannot fit one whole cell and gives it to the centre", () => {
-		// A quarter of 280px is 70px; minus the zone chrome that is under one
+		// A quarter of 240px is 60px; minus the zone chrome that is under one
 		// 48px cell, so the rail can hold nothing at all.
-		expect(70 - EDIT_ZONE_CHROME_PX).toBeLessThan(CELL)
-		const g = simulatedGeometry(280, CELL)
+		expect(60 - EDIT_ZONE_CHROME_PX).toBeLessThan(CELL)
+		const g = simulatedGeometry(240, CELL)
 		expect(g.left).toBe(0)
 		expect(g.right).toBe(0)
-		expect(g.centre).toBe(280)
+		expect(g.centre).toBe(240)
 	})
 
 	it("keeps a side that fits at least one cell", () => {
@@ -267,10 +267,10 @@ describe("Ultrawide — the rail ladder's multi-column branch", () => {
 	})
 
 	it("culls a margin that cannot hold one cell PER rail column", () => {
-		// A quarter of 2400 is 600px. At a 290px cell that is one whole cell
+		// A quarter of 2400 is 600px. At a 300px cell that is one whole cell
 		// after the chrome but not two — enough for the 1-column rail this
 		// width used to be drawn as, not for the 2-column one it really shows.
-		const cell = 290
+		const cell = 300
 		expect(600 - EDIT_ZONE_CHROME_PX).toBeGreaterThanOrEqual(cell)
 		expect(600 - EDIT_ZONE_CHROME_PX).toBeLessThan(2 * cell)
 		expect(simulatedGeometry(2400, cell).left).toBe(0)

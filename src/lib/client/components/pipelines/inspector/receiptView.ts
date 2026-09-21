@@ -16,7 +16,7 @@
  */
 
 import { REPLY_SENT_BY_ADAPTER } from "$lib/shared/constants/replyReceipt"
-import type { StatusText } from "@serene-pub/sdk"
+import { isStatusText, type StatusText } from "@serene-pub/sdk"
 
 /** The run row `pipelines:run` answers with, as this projection needs it. */
 export interface InspectedRun {
@@ -191,12 +191,9 @@ export function lastStatusOf(
 ): { nodeKey: string; text: StatusText } | null {
 	const last = asRecord(asRecord(run.receipt)?.lastStatus)
 	const text = asRecord(last?.text)
-	const en = asString(asRecord(text?.i18n)?.en)
-	if (!last || !text || !en) return null
-	return {
-		nodeKey: String(last.nodeKey ?? ""),
-		text: text as unknown as StatusText
-	}
+	// The SDK's own shape check (R-20): `i18n` a string or a map with `en`.
+	if (!last || !text || !isStatusText(text)) return null
+	return { nodeKey: String(last.nodeKey ?? ""), text }
 }
 
 /**

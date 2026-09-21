@@ -6,7 +6,11 @@
 	import MessageComposer from "$lib/client/components/sessionMessages/MessageComposer.svelte"
 	import MessageControls from "$lib/client/components/sessionMessages/MessageControls.svelte"
 	import { actionIcon } from "$lib/client/components/sessionMessages/actionIcon"
-	import { quickRowActions } from "$lib/client/components/sessionMessages/messageVerbState"
+	import {
+		enabledWhenState,
+		quickRowActions,
+		verdictOf
+	} from "$lib/client/components/sessionMessages/messageVerbState"
 	import { actionIdentity } from "$lib/shared/actions/identity"
 	import MessagePartsView from "$lib/client/components/sessionMessages/MessagePartsView.svelte"
 	import MessageStateLedger from "$lib/client/components/sessionMessages/MessageStateLedger.svelte"
@@ -16,6 +20,7 @@
 	import { animateHeight } from "$lib/client/utils/motion"
 	import { useWidgetContext } from "$lib/shared/widgets/context"
 	import { statusText, t } from "$lib/client/i18n/state.svelte"
+	import { staleOf } from "$lib/client/utils/formAnswer"
 
 	interface Props {
 		msg: SelectSessionMessage
@@ -82,7 +87,14 @@
 		openMsgControlsMenu: number | undefined
 		// Edit state
 		editSessionMessage: SelectSessionMessage | undefined
-		canRegenerateLastMessage: boolean
+		/**
+		 * ⏳ Unread since U5e: the verb table judges retry by the declared
+		 * `item.isNewest` / `item.greeting` / `item.hidden` predicates the
+		 * list carries. Kept on the prop chain one release so the container
+		 * and the page (which still read it for the turn controls) need no
+		 * edit; drop it here when the extra tab's Regenerate reads the list.
+		 */
+		canRegenerateLastMessage?: boolean
 		hasGeneratingMessage: boolean
 		/**
 		 * Why Continue is unavailable in this session, when it is — the
@@ -108,11 +120,12 @@
 		}
 		/** The person opened a list showing newcomers (`sessions:actionsSeen`). */
 		onActionsSeen?: (keys: string[]) => void
-		// ⚠ Both of the two below are FALLBACKS, not the primary route: when
-		// a `WidgetHost` provides a ctx these fire through `ctx.action` instead
-		// (see `fireTrigger`/`fireBlockAction`). They stay for mounts with no
-		// host, and are the first two of the ~16 callbacks the PLAN 25 migration
-		// collapses onto the envelope.
+		// ⚠ The first below is a FALLBACK: when a `WidgetHost` provides a ctx
+		// the press goes through `ctx.invoke`, which reaches the very same page
+		// function one hop later. The second is still the primary route — a
+		// form's press is not an offered action (see `fireBlockAction`). Both
+		// stay for mounts with no host, and are the first two of the ~16
+		// callbacks the PLAN 25 migration collapses onto the envelope.
 		onFireTrigger?: (
 			action: Sockets.Sessions.Actions.Action,
 			msg: SelectSessionMessage
@@ -126,13 +139,14 @@
 			action?: string,
 			blockId?: string
 		) => void
-		// Snippets
 		/**
-		 * A caller's own "who is speaking" animation. The generating state
-		 * itself is drawn as `.sp-msg-status` beside the name; this renders in
-		 * the body while a reply has streamed nothing yet.
+		 * May this viewer answer a form put to the addressee (U5d review,
+		 * W7)? The page's verdict — the resolver's rules over what the client
+		 * holds (`utils/formAnswer.ts`); a form the viewer cannot answer shows
+		 * no buttons. Absent, every form shows them and the server judges.
 		 */
-		GeneratingAnimationComponent?: Snippet<[]>
+		canAnswerForm?: (addressee: string | undefined) => boolean
+		// Snippets
 		messageControls?: Snippet<[SelectSessionMessage]>
 	}
 
@@ -145,7 +159,7 @@
 		getMessageCharacter,
 		canControlMessage,
 		showSwipeControls,
-		canSwipeRight,
+		canSwipeRight: _canSwipeRight,
 		onSwipeLeft,
 		onSwipeRight,
 		onEditMessage,
@@ -162,7 +176,7 @@
 		onSaveEditMessage,
 		openMsgControlsMenu = $bindable(),
 		editSessionMessage,
-		canRegenerateLastMessage,
+		canRegenerateLastMessage: _canRegenerateLastMessage = undefined,
 		hasGeneratingMessage,
 		continueRefusal = undefined,
 		isSummarizationMode = false,
@@ -172,7 +186,7 @@
 		onActionsSeen = undefined,
 		onFireTrigger = undefined,
 		onBlockAction = undefined,
-		GeneratingAnimationComponent,
+		canAnswerForm = undefined,
 		messageControls
 	}: Props = $props()
 
@@ -194,15 +208,13 @@
 	 * signature.
 	 *
 	 * The two routes are the SAME call, not two spellings of a similar one:
-	 * `ctx.action` reaches `WidgetHost`'s `onAction`, which SessionLayout wires
-	 * to +page's `handleFrameAction`, which emits `sessions:triggerFunction`
-	 * with `{ sessionId, function, action?, messageId, payload? }` — field
-	 * for field what `fireMenuTrigger`/`fireBlockAction` emit, so the same
-	 * server handler and the same permission check either way. ⏳ `WidgetHost`
-	 * (the layouts lane's) still calls `onAction` with three arguments, so
-	 * the identity a menu press hands `ctx.action` is dropped on that hop
-	 * and the server reads the fire as legacy (owner floor) until the lane
-	 * forwards the fourth.
+	 * the envelope's `invoke` resolves the identity against `ctx.actions.v1`
+	 * and hands the press to the host's `actionDispatch`, whose `fire` IS
+	 * +page's `fireTrigger` — the one the prop reaches through
+	 * `fireMenuTrigger`. One function, one emit, one permission check, so the
+	 * run is named and the narrator's modal opens whichever way it was
+	 * pressed. `ctx.action` (⏳) remains the block lane's fallback and lands
+	 * on the same function by way of `handleFrameAction`.
 	 */
 	/**
 	 * A contributed action fired from the options menu or the quick row
@@ -213,18 +225,16 @@
 		action: Sockets.Sessions.Actions.Action,
 		m: SelectSessionMessage
 	) {
-		// ⏳ TEMPORARY (U5c review, W1/W4): the prop first, the envelope
-		// second — the reverse of `fireBlockAction` below. `WidgetHost` (the
-		// layouts lane's) forwards `ctx.action` with three arguments, so the
-		// identity would be dropped on that hop and the server would read a
-		// guest's press of a plugin's `act: participant` message action as
-		// legacy — owner floor — and refuse it. Remove this ordering once
-		// `WidgetHost` forwards `action`'s fourth argument; if it outlives
-		// that, the envelope route is merely unexercised on the real mount,
-		// which passes the prop.
-		if (onFireTrigger) onFireTrigger(action, m)
-		else if (ctx)
-			ctx.action(action.function, m.id, undefined, actionIdentity(action))
+		// The envelope FIRST, because it is the superset: `invoke` resolves
+		// the identity against `ctx.actions.v1` — the same table this row drew
+		// the press from — and routes it through the host's
+		// `actionDispatch`, which sends a contributed action to +page's own
+		// `fireTrigger` (the run named, the narrator's modal opened) and one of
+		// core's verbs to its real handler rather than to a function
+		// `sessions:triggerFunction` refuses by name. The prop is the fallback
+		// for a mount with no host, and reaches that same page function.
+		if (ctx) ctx.invoke(actionIdentity(action), { messageId: m.id })
+		else onFireTrigger?.(action, m)
 	}
 
 	/**
@@ -240,15 +250,19 @@
 		action?: string,
 		blockId?: string
 	) {
-		// ⏳ TEMPORARY (U5d, the same shape as `fireTrigger` above): the
-		// prop first, the envelope second. `WidgetHost` (the layouts lane's)
-		// forwards `ctx.action` with three arguments, so a form's `action`
-		// AND `blockId` would be dropped on that hop and the server would
-		// read the press as legacy — refusing a guest answering a question
-		// put to their own character. Remove this ordering once `WidgetHost`
-		// forwards the fourth and fifth arguments; if it outlives that, the
-		// envelope route is merely unexercised on the real mount, which
-		// passes the prop.
+		// The prop FIRST here, on a rule the ordering above does not share: a
+		// form's press is not an offered action. The page keeps a separate fire
+		// for it (`fireBlockAction`), which sends the block's stamped identity
+		// verbatim and takes none of the action fire's bespoke client flows —
+		// a block whose function happens to be one of the narrator's must
+		// answer the form, not open the modal.
+		//
+		// The fallback stays on ⏳ `ctx.action` and not `invoke` for the same
+		// reason it always has: a block's `action` is the identity the OUTLET
+		// stamped it with (W-E), which need not be listed in any venue of this
+		// session, and `invoke` refuses a reference no venue lists. `WidgetHost`
+		// forwards all five arguments, so the identity and the block survive
+		// the hop and the server holds the press to the block's addressee.
 		if (onBlockAction) onBlockAction(fn, m, payload, action, blockId)
 		else if (ctx) ctx.action(fn, m.id, payload, action, blockId)
 	}
@@ -329,7 +343,29 @@
 	)
 	const canControl = $derived(canControlMessage(msg))
 	const showSwipes = $derived(showSwipeControls(msg, isGreeting))
-	const canSwipeRightVal = $derived(canSwipeRight(msg, isGreeting))
+	/**
+	 * The swipe arrow's gate is the swipe verb's own enabled-when (U5e,
+	 * review W3): the list's verdict, then the `item.*` predicates — the
+	 * newest row, a swipe to take — judged against this row exactly as the
+	 * ⋮ menu's Swipe entry and the server's door judge them, so the arrow
+	 * and the entry can never disagree. `canSwipeRight` (the page's older
+	 * compound) is ⏳ unread here since U5e and kept on the prop chain one
+	 * release. With no listed swipe verb (an older server) the arrow is
+	 * open to the item rule alone.
+	 */
+	const swipeWhen = $derived.by(() => {
+		const listed = [
+			...(venueActions?.primary ?? []),
+			...(venueActions?.overflow ?? [])
+		].find((a) => a.specSlug === "core" && a.key === "swipe")
+		if (!listed) return [false, undefined] as const
+		return enabledWhenState({
+			msg,
+			isLastMessage,
+			canControl,
+			...verdictOf(listed)
+		})
+	})
 	// Native model thinking (from Ollama think: true, etc.) — `thinking` is
 	// written into sessionMessages.metadata by the narrate spec's placeholder outlet
 	// but isn't part of the column's `$type<{...}>()` declaration in
@@ -444,12 +480,10 @@
 		quickRowActions(venueActions?.primary ?? [], {
 			msg,
 			isLastMessage,
-			canRegenerateLastMessage,
 			editing: !!editSessionMessage,
 			hasGeneratingMessage,
 			canControl,
-			continueRefusal,
-			canSwipe: canSwipeRightVal
+			continueRefusal
 		})
 	)
 	const showQuickActions = $derived(
@@ -703,10 +737,9 @@
 					<button
 						class="sp-msg-icon-btn"
 						aria-label="Next swipe"
+						title={swipeWhen[1] ? `Next swipe — ${swipeWhen[1]}` : undefined}
 						onclick={() => onSwipeRight(msg)}
-						disabled={!!editSessionMessage ||
-							!canSwipeRightVal ||
-							!canControl}
+						disabled={!!editSessionMessage || swipeWhen[0] || !canControl}
 					>
 						<Icons.ChevronRight size={14} aria-hidden="true" />
 					</button>
@@ -743,7 +776,6 @@
 					<MessageControls
 						{msg}
 						{isLastMessage}
-						{canRegenerateLastMessage}
 						{editSessionMessage}
 						{hasGeneratingMessage}
 						{canControl}
@@ -757,7 +789,6 @@
 						{onBranchMessage}
 						{onStartSummarization}
 						messageActions={venueActions}
-						canSwipe={canSwipeRightVal}
 						onSwipeMessage={(_e, m) => onSwipeRight(m)}
 						{onActionsSeen}
 						onFireTrigger={canFireTrigger ? fireTrigger : undefined}
@@ -931,10 +962,6 @@
 							</button>
 						</div>
 					</div>
-				{:else if msg.content === "" && msg.isGenerating}
-					{#if GeneratingAnimationComponent}
-						{@render GeneratingAnimationComponent()}
-					{/if}
 				{:else if isEditing}
 					<!-- One surface: the panel IS the field. The textarea below
 					     drops its own border, radius and fill (see `edit-field`)
@@ -988,6 +1015,9 @@
 							bodyText={msg.content ?? ""}
 							onAction={(fn, payload, action, blockId) =>
 								fireBlockAction(fn, msg, payload, action, blockId)}
+							canAnswer={canAnswerForm}
+							isStale={(block) =>
+								staleOf(block, msg, session?.sessionMessages ?? [])}
 						/>
 					</div>
 				{:else}

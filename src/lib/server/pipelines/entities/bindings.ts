@@ -1,12 +1,12 @@
 /**
  * The two rebinding seams (19 §3, §5), as writes and as a load-time step.
  *
- * **Function bindings** — "same key, several contributors → the binding
- * selects": a scope's choice of which spec serves a function. The rows are
- * only ever a choice among the eligible; `resolveFunctionSpec` re-checks
- * eligibility when it reads them, so the setter here validates for the
- * person's benefit (a refusal now beats a silent fall-through later) without
- * being the safety.
+ * **Bindings** — "several serve → the binding selects": a scope's choice of
+ * which spec serves a **subject** — an action identity or a core event id
+ * (plans/31 V2). The rows are only ever a choice among the eligible;
+ * `resolveSubjectVerdict` re-checks eligibility when it reads them, so the
+ * setter here validates for the person's benefit (a refusal now beats a
+ * silent fall-through later) without being the safety.
  *
  * **Node rebinds** — "the session scope may swap it": a scope's substitution of
  * which type fills a node position, applied to the loaded document just
@@ -20,11 +20,13 @@
  */
 
 import { and, eq } from "drizzle-orm"
+import { isEventId, sessionEvents, type EnabledWhen } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
+import { parseActionIdentity } from "$lib/shared/actions/identity"
 import {
-	listGenreTriggers,
+	listGenreActions,
 	listSpeakerStrategies,
-	resolveFunctionSpec
+	resolveSubjectSpec
 } from "$lib/server/pipelines/entities/sessionGenres"
 
 /**
@@ -33,37 +35,57 @@ import {
  */
 export type ScopeAddress = { kind: "instance" | "session"; id: number }
 
-/* --- function bindings (19 §3) ----------------------------------------- */
+/* --- bindings (19 §3; plans/31 V2) -------------------------------------- */
 
 /**
- * Bind a function to a spec at a scope, or clear it (`specSlug: null`).
+ * Bind a subject — an action identity `<spec slug>#<key>` or a core event
+ * id `core:event/…@1` — to a spec at a scope, or clear it (`specSlug: null`).
  *
- * Validates that the spec currently serves the function — the same
- * candidates `resolveFunctionSpec` computes — so a person binding through
- * the UI hears "that spec does not serve narrate for this mode" now rather
- * than watching the default win later.
+ * Validates that the spec currently serves the subject — the same
+ * candidates `resolveSubjectVerdict` computes — so a person binding through
+ * the UI hears "that spec does not serve it for this genre" now rather than
+ * watching the default win later. Nothing bare is accepted: a subject that is
+ * neither grammar is refused by name.
  */
-export async function bindFunction(
+export async function bindSubject(
 	db: Db,
 	opts: {
 		scope: ScopeAddress
 		genreId: string
-		functionKey: string
+		subject: string
 		specSlug: string | null
 		userId: number
+		/**
+		 * The session's enabled-when override for the action (R-15; U5e),
+		 * riding the same row: a predicate list to set, `null` to clear,
+		 * absent to leave as it is. Session scope only — an instance-scope
+		 * row never carries one. Validated by the caller with the SDK's
+		 * `enabledWhenFindings`; stored in list form.
+		 */
+		enabledWhen?: EnabledWhen[] | null
 	}
 ): Promise<{ error?: string }> {
-	const { scope, genreId, functionKey, specSlug, userId } = opts
+	const { scope, genreId, subject, specSlug, userId } = opts
+	if (!isEventId(subject) && !parseActionIdentity(subject))
+		return {
+			error:
+				`'${subject}' is not something a binding is about — an action's identity ` +
+				`('<spec slug>#<key>') or a core event id ('core:event/message-respond@1').`
+		}
+	const enabledWhen =
+		scope.kind === "session" && opts.enabledWhen !== undefined
+			? { enabledWhen: opts.enabledWhen }
+			: {}
 
 	const where = and(
-		eq(schema.pipelineFunctionBindings.scopeKind, scope.kind),
-		eq(schema.pipelineFunctionBindings.scopeId, scope.id),
-		eq(schema.pipelineFunctionBindings.genreId, genreId),
-		eq(schema.pipelineFunctionBindings.functionKey, functionKey)
+		eq(schema.pipelineBindings.scopeKind, scope.kind),
+		eq(schema.pipelineBindings.scopeId, scope.id),
+		eq(schema.pipelineBindings.genreId, genreId),
+		eq(schema.pipelineBindings.subject, subject)
 	)
 
 	if (specSlug == null) {
-		await db.delete(schema.pipelineFunctionBindings).where(where)
+		await db.delete(schema.pipelineBindings).where(where)
 		return {}
 	}
 
@@ -77,53 +99,55 @@ export async function bindFunction(
 	// Eligibility: bind only among what serves. Resolution re-checks this on
 	// every read; the setter checks it so the refusal happens where the
 	// person is.
-	const serves = await functionCandidates(db, genreId, functionKey)
+	const serves = await subjectCandidates(db, genreId, subject)
 	if (!serves.includes(specSlug))
 		return {
-			error: `'${specSlug}' does not serve '${functionKey}' for this mode.`
+			error: `'${specSlug}' does not serve '${subject}' for this genre.`
 		}
 
 	const existing = await db
 		.select()
-		.from(schema.pipelineFunctionBindings)
+		.from(schema.pipelineBindings)
 		.where(where)
 		.limit(1)
 	if (existing.length) {
 		await db
-			.update(schema.pipelineFunctionBindings)
-			.set({ specId: spec.id, updatedBy: userId, updatedAt: new Date() })
-			.where(eq(schema.pipelineFunctionBindings.id, existing[0].id))
+			.update(schema.pipelineBindings)
+			.set({ specId: spec.id, updatedBy: userId, updatedAt: new Date(), ...enabledWhen })
+			.where(eq(schema.pipelineBindings.id, existing[0].id))
 	} else {
-		await db.insert(schema.pipelineFunctionBindings).values({
+		await db.insert(schema.pipelineBindings).values({
 			scopeKind: scope.kind,
 			scopeId: scope.id,
 			genreId,
-			functionKey,
+			subject,
 			specId: spec.id,
-			updatedBy: userId
+			updatedBy: userId,
+			...enabledWhen
 		})
 	}
 	return {}
 }
 
 /**
- * Every spec currently serving a function for a mode — the picker behind
- * `bindFunction`'s eligibility rule, and the same candidate set
- * `resolveFunctionSpec` selects among.
+ * Every spec currently serving a subject for a genre — the picker behind
+ * `bindSubject`'s eligibility rule, and the same candidate set
+ * `resolveSubjectVerdict` selects among.
  *
  * Computed by asking the resolver's own machinery rather than restating it:
- * for `respond` the bucket, otherwise the contributors (the trigger list
- * carries exactly the specs whose active version declares the key).
+ * for an event the bucket (the input lock, plus the primary write for the
+ * primary turn), for an action identity its declarer — the action list
+ * carries exactly the specs whose active version declares the key.
  */
-export async function functionCandidates(
+export async function subjectCandidates(
 	db: Db,
 	genreId: string,
-	functionKey: string
+	subject: string
 ): Promise<string[]> {
-	if (functionKey === "respond") {
-		// The bucket, via the resolver run once per spec is wasteful — the
-		// trigger list cannot answer this one, so ask the bucket directly.
+	if (isEventId(subject)) {
+		const primary = subject === sessionEvents.messageRespond
 		const [bareType, versionStr] = genreId.split("@")
+		const isGenreId = versionStr === undefined
 		const specs = await db.select().from(schema.pipelineSpecs)
 		const versions = await db
 			.select()
@@ -138,21 +162,38 @@ export async function functionCandidates(
 				.select()
 				.from(schema.pipelineNodes)
 				.where(eq(schema.pipelineNodes.specVersionId, v.id))
-			const entry = nodes.sort((a, b) => a.position - b.position)[0]
+			if (isGenreId) {
+				if ((v as any).inputGenre !== genreId || (v as any).inputEvent !== subject) continue
+			} else {
+				if (!primary) continue
+				const entry = nodes
+					.filter((n) => n.kind === "inlet")
+					.sort((a, b) => a.position - b.position)[0]
+				if (
+					!entry ||
+					entry.definitionId !== bareType ||
+					String(entry.definitionVersion) !== versionStr
+				)
+					continue
+			}
 			if (
-				entry &&
-				entry.definitionId === bareType &&
-				String(entry.definitionVersion) === versionStr
+				primary &&
+				!nodes.some(
+					(n) => n.kind === "outlet" && n.definitionId === "core:outlet/create-message"
+				)
 			)
-				out.push(s.slug)
+				continue
+			out.push(s.slug)
 		}
 		return out
 	}
-	const triggers = await listGenreTriggers(db, genreId)
+	const identity = parseActionIdentity(subject)
+	if (!identity) return []
+	const actions = await listGenreActions(db, genreId)
 	return [
 		...new Set(
-			triggers
-				.filter((t) => t.function === functionKey)
+			actions
+				.filter((t) => t.specSlug === identity.specSlug && t.key === identity.key)
 				.map((t) => t.specSlug)
 		)
 	]
@@ -351,10 +392,10 @@ export async function setSessionSpeakerStrategy(
 		.where(eq(schema.sessions.id, opts.sessionId))
 		.limit(1)
 	if (!session) return { error: "That session no longer exists." }
-	const specSlug = await resolveFunctionSpec(
+	const specSlug = await resolveSubjectSpec(
 		db,
 		session.genreId ?? "core:genre/chat",
-		"respond",
+		sessionEvents.messageRespond,
 		{ sessionId: opts.sessionId }
 	)
 	if (!specSlug)
@@ -383,6 +424,41 @@ export async function setSessionSpeakerStrategy(
 	})
 }
 
+/**
+ * Whether this session's replies have a next-speaker node to swap at all.
+ *
+ * A narrator-driven genre — Adventure, the Lair — answers through a planner
+ * and a junction, never a `speaker` task, so its respond spec publishes no
+ * `speaker-selection@1` anywhere. The Turn order control is meaningless
+ * there, and offering it only to refuse on Apply ("has no next-speaker node
+ * — nothing to swap") is the shape of the defect this exists to close: the
+ * list handler asks this first and answers with no strategies, so the card
+ * never renders.
+ */
+export async function sessionHasSpeakerNode(
+	db: Db,
+	sessionId: number
+): Promise<boolean> {
+	try {
+		const [session] = await db
+			.select({ genreId: schema.sessions.genreId })
+			.from(schema.sessions)
+			.where(eq(schema.sessions.id, sessionId))
+			.limit(1)
+		if (!session) return false
+		const specSlug = await resolveSubjectSpec(
+			db,
+			session.genreId ?? "core:genre/chat",
+			sessionEvents.messageRespond,
+			{ sessionId }
+		)
+		if (!specSlug) return false
+		return (await speakerNodeKey(db, specSlug)) !== null
+	} catch {
+		return false
+	}
+}
+
 /** The session's rebound strategy pin, or null when it inherits the spec's. */
 export async function getSessionSpeakerStrategy(
 	db: Db,
@@ -395,10 +471,10 @@ export async function getSessionSpeakerStrategy(
 			.where(eq(schema.sessions.id, sessionId))
 			.limit(1)
 		if (!session) return null
-		const specSlug = await resolveFunctionSpec(
+		const specSlug = await resolveSubjectSpec(
 			db,
 			session.genreId ?? "core:genre/chat",
-			"respond",
+			sessionEvents.messageRespond,
 			{ sessionId }
 		)
 		if (!specSlug) return null

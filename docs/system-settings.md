@@ -12,7 +12,7 @@ Everything on this tab is separate from your own personal preferences — easy-c
 
 Access is gated in two places, not just one. The **System** tab itself only renders for admins — everyone else simply doesn't see it in the Settings panel. But every individual setting change is also checked on the server: if a non-admin account somehow triggers one of these updates, the request is rejected as unauthorized. If the tab ever renders for a non-admin session (for example, an admin's session is downgraded while the panel is open), it falls back to a plain message: "Error: You do not have permission to view or modify system settings."
 
-In a fresh, single-admin install, System Settings still exist and are already populated with sensible defaults (managers off, vectorization off, accounts off) — there's nothing you're required to configure before using the app.
+In a fresh, single-admin install, System Settings still exist and are already populated with sensible defaults (vectorization off, accounts off) — there's nothing you're required to configure before using the app.
 
 ## Accounts & Authentication
 
@@ -32,35 +32,11 @@ See [Users & Accounts](./users-and-accounts.md) for how account creation, passph
 
 Once accounts are enabled, a **Users** icon appears in the main left navigation for managing accounts — but only for admins. Non-admin users never see this entry, regardless of whether accounts are enabled.
 
-## AI Manager Toggles
+## Local runtimes (KoboldCPP, Ollama)
 
-Serene Pub can manage local LLM backends for you instead of you running them yourself. Each supported backend has its own enable switch and connection settings here; the actual model browsing, downloading, and connection setup for each happens in that backend's own sidebar. See [Connections](./connections.md) for how managed connections are used once enabled.
+There are no manager toggles here any more. Since 2026-09-17 a KoboldCPP or Ollama this pub manages is a **connection**, switched on by **Add → KoboldCPP, run by Serene Pub** / **Add → Ollama** in the Connections sidebar and off by **Remove … from this pub** in that connection's view. Its server address, port, mode (managed or external), model directories, binary and timeouts all live in that view's setup screens and **Settings** tab — see [Connections](./connections.md#koboldcpp-run-by-serene-pub). The address validation is the same wherever it is entered: a well-formed URL that either includes an explicit port or uses `localhost` as the hostname.
 
-### Ollama Manager
-
-**Enable Ollama Manager** turns on built-in management of an Ollama server. When enabled, a **Ollama Server URL** field appears (default `http://localhost:11434`) with a **Save URL** button; the URL must include a scheme and either a port or `localhost`. Saving updates the address Serene Pub uses to reach Ollama for model listing and generation.
-
-Toggling either manager shows a confirmation toast — e.g. "Ollama Manager enabled successfully" or "Ollama Manager disabled successfully" — or an error toast if the update fails. Saving a base URL shows its own toast ("Ollama URL updated successfully" / "KoboldCPP URL updated successfully") or an inline field error if it fails.
-
-### KoboldCPP Manager
-
-**Enable KoboldCPP Manager** turns on built-in management of a KoboldCPP server, mirroring the Ollama toggle. When enabled, a **KoboldCPP Server URL** field appears (default `http://localhost:5001`) with the same validation and a **Save URL** button.
-
-#### Keeping the Server URL and the Managed Port in sync
-
-This **Server URL** field is what Serene Pub actually connects to — it's independent from the **Port** setting configured in the KoboldCPP Manager sidebar's Settings tab (the port the managed subprocess itself listens on). The two are expected to stay in agreement, but nothing keeps them linked automatically. When KoboldCPP is running in **Managed** mode, this tab checks the Server URL's port against the Manager's configured Port and shows an inline warning under the field if they don't match, explaining that everything talks to the Server URL, not the Manager's Port setting — update one to match the other.
-
-### Managed vs. External Backends
-
-The System Settings tab only covers whether a manager is on and which URL it talks to. Whether KoboldCPP actually runs as a binary that Serene Pub downloads and manages for you ("managed" mode) or as a server you run and point Serene Pub at yourself ("external" mode) — along with model directories, the managed binary variant, its port, admin password, and idle/subprocess timeouts — is chosen and configured from the KoboldCPP sidebar itself, not from System Settings. See [Connections](./connections.md) for that workflow.
-
-### URL Validation
-
-Both the Ollama and KoboldCPP base URL fields use the same validation rule: the value must be a well-formed URL, and it must either include an explicit port or use `localhost` as the hostname. An invalid entry shows an inline error (e.g. "URL must include a port (e.g., http://localhost:11434)") instead of saving.
-
-### On Android
-
-**In the Android app**, this whole section is replaced by a short explanatory note instead of the toggles above: Ollama Manager and KoboldCPP Manager aren't offered at all, since both depend on locally-run binaries the Android build can't bundle. You can still connect to a remote Ollama or KoboldCPP instance from the Connections panel, and local embeddings are unavailable for the same reason — an external embeddings API works fine instead, configured from the Embeddings panel. See [Android App](./android.md) for the full list of Android-specific limitations.
+**In the Android app** neither runtime is offered, since both depend on locally running native processes; **Add** simply does not list them.
 
 ## Embeddings
 
@@ -72,7 +48,7 @@ Lorebooks have no feature switches: every capability is available in every book,
 
 ## Community Library: CharaVault
 
-A **Community Library: CharaVault** card lets an admin connect one [CharaVault](https://charavault.net) account so everyone on the instance can browse charavault.net directly from the in-app Character Library. The credential is shared instance-wide, not per-user — connecting it raises the search rate limit for every user on this Serene Pub instance, not just the admin who set it up. Unlike the local-model managers above, this integration is a plain HTTP connection with no native binary involved, so the card is available on every platform, including the Android app.
+A **Community Library: CharaVault** card lets an admin connect one [CharaVault](https://charavault.net) account so everyone on the instance can browse charavault.net directly from the in-app Character Library. The credential is shared instance-wide, not per-user — connecting it raises the search rate limit for every user on this Serene Pub instance, not just the admin who set it up. Unlike the local runtimes above, this integration is a plain HTTP connection with no native binary involved, so the card is available on every platform, including the Android app.
 
 To connect, create an App Password at charavault.net named "Serene Pub," then enter the account's **email** and that **App Password** (placeholder `cv_...`) into the two fields and click **Connect**. On success, a "CharaVault account connected" toast appears and the card switches to a **Connected as `<email>`** state with a **Disconnect** button; disconnecting shows a "CharaVault account disconnected" toast and returns the card to its empty form. Both actions have their own error toasts if the connect/disconnect request fails.
 

@@ -66,9 +66,12 @@ const routedAndLooped = () =>
 						c.task("go", () => act.v1({ what: "narrated" } as any))
 					)
 			)
+			// The predicate reads a node INSIDE the body (01 §4a): the save
+			// validates since the U5d review (W9), and a predicate computed
+			// outside a loop never changes.
 			.loop(
 				"again",
-				{ repeatWhile: ($: any) => $.decide.more, max: 3 },
+				{ repeatWhile: ($: any) => $.again.item.step.more, max: 3 },
 				(l) => l.task("step", () => act.v1({ what: "looped" } as any))
 			)
 			.build()

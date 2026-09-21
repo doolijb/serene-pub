@@ -9,6 +9,7 @@
 	import { getContext, onMount, type Snippet } from "svelte"
 	import { Menu } from "@skeletonlabs/skeleton-svelte"
 	import { actionIcon } from "$lib/client/components/sessionMessages/actionIcon"
+	import { shouldCloseActions } from "$lib/client/components/sessionMessages/actionsDisclosure"
 	import {
 		exactPaletteMatch,
 		filterPaletteActions,
@@ -18,6 +19,8 @@
 		type PaletteAction
 	} from "$lib/client/components/sessionMessages/slashPalette"
 	import { actionIdentity } from "$lib/shared/actions/identity"
+	import type { ItemValues } from "$lib/shared/actions/itemValues"
+	import { statusText } from "$lib/client/i18n/state.svelte"
 
 	let systemSettingsCtx: SystemSettingsCtx = $state(
 		getContext("systemSettingsCtx")
@@ -85,6 +88,13 @@
 		 * name and label. Empty hides the palette entirely.
 		 */
 		paletteActions?: PaletteAction[]
+		/**
+		 * The newest row's `item` document, or `null` with no row (U5e): what
+		 * a palette row with `item.*` predicates — `/retry`, `/continue` —
+		 * is judged against, so a session with nothing to regenerate greys
+		 * them with the newest-row reason as the turn controls are grey.
+		 */
+		newestItem?: ItemValues | null
 		/** Fire one action, from the overflow or the palette. */
 		onInvokeAction?: (action: PaletteAction) => void
 		/** The person opened a list showing these newcomers (`sessions:actionsSeen`). */
@@ -105,6 +115,19 @@
 		sendTonal?: boolean
 		/** Hides the Actions label and its row outright. */
 		showActions?: boolean
+		/**
+		 * The session's channels (20 §7; R-C), `main` first — off
+		 * `sessions:view`. One channel (every session whose genre declares
+		 * none) draws no control at all, which is why nothing moves for the
+		 * sessions that exist today.
+		 */
+		channels?: string[]
+		/**
+		 * Which of them the next line is written on. Bound, because the page
+		 * puts it on the send and the log reads it to decide what to show —
+		 * one answer, held where both halves can see it.
+		 */
+		channel?: string
 	}
 
 	let {
@@ -125,13 +148,33 @@
 		actions,
 		overflowActions = [],
 		paletteActions = [],
+		newestItem = null,
 		onInvokeAction,
 		onActionsSeen,
 		hideCompose = false,
 		composerSkin = "classic",
 		sendTonal = false,
-		showActions = true
+		showActions = true,
+		channels = [],
+		channel = $bindable("main")
 	}: Props = $props()
+
+	/**
+	 * What a channel is CALLED.
+	 *
+	 * ⚠ A slug, title-cased, because a slug is all a genre declares: a channel
+	 * has no display name and no locale map anywhere in the model (`ChannelDecl`
+	 * is `{ slug, role?, voice?, messageVerbs? }`). `manuscript` reads as
+	 * "Manuscript", which is right by luck rather than by declaration — the day
+	 * a channel wants a name of its own, it gets one on the declaration and
+	 * this reads it.
+	 */
+	const channelLabel = (slug: string) =>
+		slug
+			.split(/[-_]/)
+			.filter(Boolean)
+			.map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+			.join(" ")
 
 	// Unique per instance: a session page can hold more than one composer on
 	// screen at a time, and a shared id sends every `for`/`aria-describedby` to
@@ -177,6 +220,20 @@
 	)
 	let overflowNew = $derived(overflowActions.filter((a) => a.isNew))
 	let overflowOpen = $state(false)
+	/**
+	 * The verdict the overflow reads off a listed action (U5e): the same
+	 * `paletteRowState` the chips and the palette read, so the three cannot
+	 * disagree. The reason arrives as a locale map and is resolved here.
+	 */
+	const overflowRow = (a: Sockets.Sessions.Actions.Action) => ({
+		name: a.name,
+		audience: a.audience,
+		canAct: a.canAct,
+		enabled: a.enabled,
+		venue: a.venue,
+		...(a.reason ? { reason: statusText(a.reason) || a.reason.i18n.en } : {}),
+		...(a.itemPredicates?.length ? { itemPredicates: a.itemPredicates } : {})
+	})
 
 	/* ── the `/` palette (R-15 slash names, F38; U5c) ──────────────────────
 	 * Typing `/` at the start of an empty draft lists the composer's actions;
@@ -229,7 +286,8 @@
 	function invokePalette(action: PaletteAction) {
 		// The same gate the chips and the More menu apply (S5): the
 		// audience, and nothing while a reply streams.
-		if (paletteRowState(action, { generating: isGenerating }).disabled) return
+		if (paletteRowState(action, { generating: isGenerating, newest: newestItem }).disabled)
+			return
 		newMessage = ""
 		paletteDismissed = null
 		paletteHighlight = -1
@@ -383,21 +441,13 @@
 		if (previewOpen) activePaneValue = null
 	}
 
+	// The row is a disclosure, not a menu: it closes on its toggle and on
+	// Escape, never because focus left it — `actionsDisclosure.ts` has the
+	// table and the reason. There is deliberately no `onfocusout` here.
 	function closeActions(returnFocus: boolean) {
 		if (!actionsOpen) return
 		actionsOpen = false
 		if (returnFocus) actionsToggle?.focus()
-	}
-
-	/** Closes the row once focus has left the label and its chips together. */
-	function handleActionsFocusOut(e: FocusEvent) {
-		const next = e.relatedTarget
-		if (next instanceof Node && actionsRegion?.contains(next)) return
-		// The overflow menu is portalled out of the region, so focus moving
-		// into it is not focus leaving the row — and folding the row would
-		// unmount the very menu that just opened.
-		if (overflowOpen) return
-		closeActions(false)
 	}
 
 	// Escape is read at the window rather than on the region: the chips are
@@ -407,11 +457,13 @@
 	function handleWindowKeyDown(e: KeyboardEvent) {
 		if (e.key !== "Escape") return
 		if (!actionsOpen) return
-		// Escape inside the open overflow menu is the menu's to close.
-		if (overflowOpen) return
 		const active = document.activeElement
-		const inside = active instanceof Node && actionsRegion?.contains(active)
-		closeActions(!!inside)
+		const verdict = shouldCloseActions({
+			reason: "escape",
+			focusInside: active instanceof Node && !!actionsRegion?.contains(active),
+			overflowOpen
+		})
+		if (verdict.close) closeActions(verdict.returnFocus)
 	}
 </script>
 
@@ -451,11 +503,7 @@
 			<RunProgressCard sessionId={session.id} />
 		{/if}
 
-		<div
-			class="composer-disclosure"
-			bind:this={actionsRegion}
-			onfocusout={handleActionsFocusOut}
-		>
+		<div class="composer-disclosure" bind:this={actionsRegion}>
 			<div class="flex flex-wrap items-center gap-x-3 gap-y-1">
 				{#if actionsLabelShown}
 					<button
@@ -509,7 +557,12 @@
 										const a = overflowActions.find(
 											(x) => actionIdentity(x) === d.value
 										)
-										if (a) onInvokeAction?.(a)
+										// The wire's reason is a locale map; the palette's
+										// shape carries a sentence, and the fire needs neither.
+										if (a) {
+											const { reason: _reason, ...rest } = a
+											onInvokeAction?.(rest)
+										}
 									}}
 									positioning={{ placement: "top-start" }}
 								>
@@ -533,15 +586,27 @@
 											>
 												{#each overflowActions as a (actionIdentity(a))}
 													{@const Icon = actionIcon(a.icon)}
+													{@const row = paletteRowState(overflowRow(a), {
+														generating: isGenerating,
+														newest: newestItem
+													})}
+													<!-- Grey, listed, with its reason (R-15, U5e): the
+													     audience's word, the declared enabled-when's, or
+													     the busy rule — as a second line and to a screen
+													     reader, never dropped from the list. -->
 													<Menu.Item
 														value={actionIdentity(a)}
 														class="hover:preset-tonal-primary data-[highlighted]:preset-tonal-primary flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-50"
-														disabled={!a.canAct || isGenerating}
+														disabled={row.disabled}
+														title={row.reason ? `${a.name} — ${row.reason}` : undefined}
 													>
 														<Icon size={12} aria-hidden="true" />
 														<Menu.ItemText>
 															{a.name}
 															<span class="text-surface-500 ml-1 font-mono text-[0.85em]">/{a.slash}</span>
+															{#if row.reason}
+																<span class="composer-palette-note block">{row.reason}</span>
+															{/if}
 														</Menu.ItemText>
 														{#if a.isNew}
 															<span class="sp-action-new">New</span>
@@ -627,7 +692,8 @@
 							{#each paletteRows as a, i (a.slash)}
 								{@const Icon = actionIcon(a.icon)}
 								{@const rowState = paletteRowState(a, {
-									generating: isGenerating
+									generating: isGenerating,
+									newest: newestItem
 								})}
 								<li
 									id={paletteOptionId(i)}
@@ -686,6 +752,31 @@
 			</div>
 
 			<div class="composer-footer">
+				<!-- Which channel this line lands on. Drawn only when there is
+				     a choice: one channel is every session that exists today,
+				     and a picker with one option is a control that teaches
+				     nothing. -->
+				{#if channels.length > 1}
+					<div
+						class="composer-channels"
+						role="group"
+						aria-label="Which channel you are writing on"
+					>
+						{#each channels as slug (slug)}
+							<button
+								type="button"
+								class="composer-channel-btn"
+								class:preset-tonal-primary={slug === channel}
+								class:is-active={slug === channel}
+								aria-pressed={slug === channel}
+								title="Write on {channelLabel(slug)}"
+								onclick={() => (channel = slug)}
+							>
+								{channelLabel(slug)}
+							</button>
+						{/each}
+					</div>
+				{/if}
 				{#if activePersona}
 					{#if userPersonasInSession.length > 1}
 						<Popover

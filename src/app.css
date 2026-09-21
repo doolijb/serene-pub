@@ -512,6 +512,28 @@
 	}
 }
 
+/* The channel strip (R-C): which of the session's channels the next line
+   lands on. Drawn only when a genre declares more than one, so it is absent
+   from every session that has ever existed. */
+.composer-channels {
+	@apply inline-flex items-center gap-0.5;
+}
+
+.composer-channel-btn {
+	@apply inline-flex h-8 items-center justify-center rounded-full px-3 text-[13px] leading-[1.45] font-medium;
+	@apply max-lg:h-11 max-lg:px-4 pointer-coarse:h-11 pointer-coarse:px-4;
+
+	/* Unlayered, so it stands aside for the tonal preset the chosen one
+	   carries — the same arrangement `.composer-icon-btn` uses. */
+	&:not(.is-active) {
+		@apply text-surface-600 dark:text-surface-400 hover:text-surface-900 dark:hover:text-surface-50;
+	}
+
+	&:focus-visible {
+		@apply outline-primary-500 outline-2 outline-offset-2;
+	}
+}
+
 .composer-send {
 	@apply inline-flex h-8 items-center justify-center gap-1.5 rounded-full px-3 text-[13px] leading-[1.45] font-medium;
 	@apply max-lg:h-11 max-lg:px-4 pointer-coarse:h-11 pointer-coarse:px-4;

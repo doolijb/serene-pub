@@ -9,12 +9,21 @@
  */
 
 import { SandboxManager, type InvocationRecord } from "./SandboxManager"
-import { loadEnabledPlugins, writeInvocation } from "./store"
+import {
+	loadEnabledPlugins,
+	loadPluginManifests,
+	writeInvocation
+} from "./store"
+import {
+	pluginDeclarationsOf,
+	registerPluginDefinitions
+} from "./pluginDefinitions"
 import { makePluginRowPort } from "./rowStore"
 import { pluginsEnabled } from "./flag"
 import { syncPluginEngines } from "./engineHost"
 import { pluginEvents, syncPluginEventHooks } from "./eventHost"
 import { setRunStopObserver } from "$lib/server/pipelines/runtime/runRegistry"
+import { reserveAttributeOwner } from "@serene-pub/sdk"
 
 let manager: SandboxManager | null = null
 let dbRef: Db | null = null
@@ -63,7 +72,34 @@ export async function bootstrapPlugins(db: Db): Promise<void> {
 	})
 
 	if (pluginsEnabled()) {
+		// Every installed package's node definitions, back in this process's
+		// registry (D-6b). The rows in `pipeline_definition_registry` are what
+		// a panel reads and what routes a node to its owner; the executor
+		// resolves the declaration itself through the SDK's in-process
+		// registry, which holds only what this build imported — so a plugin's
+		// spec halts on `unknown type` until this has run. Read from the
+		// stored manifest, which is data: nothing here loads a plugin.
+		try {
+			for (const row of await loadPluginManifests(db)) {
+				const { declarations, refused } = pluginDeclarationsOf(
+					row.manifest,
+					row.pluginId
+				)
+				const registered = registerPluginDefinitions(declarations)
+				for (const line of [...refused, ...registered.refused])
+					console.warn(`[plugins] '${row.pluginId}': ${line}`)
+			}
+		} catch (e) {
+			console.warn("[plugins] node-definition registration failed:", e)
+		}
+
 		const descriptors = await loadEnabledPlugins(db)
+		// Before anything a plugin declares can be registered: an installed
+		// package owns its namespace, and a person's authored slot may not
+		// claim it (R2). Idempotent, and the boot reserves every *installed*
+		// id already — this is the case where one is enabled while the app is
+		// running.
+		for (const d of descriptors) reserveAttributeOwner(d.id)
 		for (const d of descriptors) {
 			try {
 				mgr.register(d)
@@ -78,7 +114,7 @@ export async function bootstrapPlugins(db: Db): Promise<void> {
 				d.id,
 				"startup",
 				{},
-				{ timeoutMs: 5_000, lifecycle: true }
+				{ kind: "lifecycle", timeoutMs: 5_000, lifecycle: true }
 			)
 			if (!r.ok && r.outcome !== "missing")
 				console.warn(
@@ -114,6 +150,34 @@ export async function bootstrapPlugins(db: Db): Promise<void> {
 			await syncPluginPresets(db)
 		} catch (e) {
 			console.warn("[plugins] session-preset sync failed:", e)
+		}
+		// Manifest-declared template rows — prompts, context templates and
+		// variable layouts under owner-namespaced template ids (R19). Best-
+		// effort and at boot for the same reasons as the presets above: a
+		// template withdrawn while the app was down has to come back when it
+		// starts, and a package whose declaration is refused costs itself that
+		// row and nobody else theirs.
+		try {
+			const { syncPluginTemplates } = await import(
+				"$lib/server/pipelines/boot/registrySync"
+			)
+			await syncPluginTemplates(db)
+		} catch (e) {
+			console.warn("[plugins] template sync failed:", e)
+		}
+		// Manifest-declared session layouts, projected into
+		// `session_layout_presets` as `origin = 'plugin'` rows (session layout
+		// v2 §4.1). Best-effort and at boot for the same reasons as the presets
+		// above: a layout withdrawn while the app was down has to come back
+		// when it starts, and a package whose layout is refused costs itself
+		// that layout and nobody else theirs.
+		try {
+			const { syncPluginLayouts } = await import(
+				"$lib/server/db/pluginLayouts"
+			)
+			await syncPluginLayouts(db)
+		} catch (e) {
+			console.warn("[plugins] session-layout sync failed:", e)
 		}
 	}
 

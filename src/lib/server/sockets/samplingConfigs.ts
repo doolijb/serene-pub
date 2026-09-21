@@ -1,6 +1,6 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { eq } from "drizzle-orm"
+import { eq, notInArray } from "drizzle-orm"
 import { user } from "./users"
 import { buildSystemSettingsGet } from "./systemSettings"
 import type { Handler } from "$lib/shared/events"
@@ -35,13 +35,22 @@ import { samplingShapeForCapability } from "$lib/shared/capabilities/samplingSha
  * default on a screen that lists no such capability.
  */
 async function capabilitiesForShape(shape: string): Promise<string[]> {
+	// The same rows `combosFor` reads (connectionDefaults.ts), minus the same
+	// two statuses and for its reason: a capability only a `provisional` or
+	// `removed` node demands is one no pipeline can run (plans/29 R-2).
 	const rows = (await db
 		.select({
 			definitionId: schema.pipelineDefinitionRegistry.definitionId,
 			version: schema.pipelineDefinitionRegistry.version,
 			slots: schema.pipelineDefinitionRegistry.slots
 		})
-		.from(schema.pipelineDefinitionRegistry)) as RegistryDefinitionRow[]
+		.from(schema.pipelineDefinitionRegistry)
+		.where(
+			notInArray(schema.pipelineDefinitionRegistry.status, [
+				"provisional",
+				"removed"
+			])
+		)) as RegistryDefinitionRow[]
 	return aggregateCombos(rows)
 		.filter((c) => samplingShapeForCapability(c.id) === shape)
 		.map((c) => c.id)

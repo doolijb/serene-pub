@@ -21,6 +21,7 @@
 	 */
 
 	import type { SettingsSchema, FieldDecl } from "@serene-pub/sdk"
+	import { i18nTextIn } from "$lib/shared/i18n/i18nText"
 	import {
 		defaultOnEnable,
 		groupSamplingFields,
@@ -49,11 +50,10 @@
 
 	const label = (decl: FieldDecl, key: string): string => {
 		const l = decl.label ?? decl.i18n
-		return typeof l === "string" ? l : (l?.en ?? key)
+		return i18nTextIn(l) ?? key
 	}
 	const describe = (decl: FieldDecl): string => {
-		const d = decl.description
-		return typeof d === "string" ? d : (d?.en ?? "")
+		return i18nTextIn(decl.description) ?? ""
 	}
 
 	/**

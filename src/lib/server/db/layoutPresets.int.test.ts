@@ -178,7 +178,13 @@ describe("syncLayoutPresets", () => {
 		await testDb.insert(schema.sessionLayoutPresets).values({
 			seedKey: "layout-v0:stale:genre/a",
 			genreId: "stale:genre/a",
+			// Seeded rows are `origin: core` since the v2 migration (0141),
+			// and the origin triple is a CHECK — a seed-keyed row cannot be
+			// written as anything else.
+			origin: "core",
 			authorUserId: null,
+			slug: "legacy-old",
+			visibility: "shared",
 			name: "Old Default",
 			layout: {}
 		})
@@ -223,30 +229,29 @@ describe("syncLayoutPresets", () => {
 		expect(after).toEqual(squatter)
 	}, 60_000)
 
-	test("an authored row holding the shipped seed key is left alone, not re-forced or collided with", async () => {
-		// `seed_key` is globally unique, so this row is the one case where a
-		// user row and the reconciler contend for the same key. It must be
-		// skipped outright: not re-forced (its content survives), and not
-		// inserted over (no unique violation aborting the boot seed).
+	test("an authored row holding the shipped seed key cannot be written at all", async () => {
+		// `seed_key` is globally unique, so this row used to be the one case
+		// where a user row and the reconciler contended for the same key — and
+		// the reconciler still skips one outright (`authorUserId !== null`),
+		// for any that predate the constraint. Since the v2 migration (0141)
+		// the shape itself is refused: the origin triple says a `user` row has
+		// no seed key, so the contention has no way to arise in the first
+		// place, and 0141's data step dropped the key from any that existed.
 		const { createTestUser } = await import("$lib/server/utils/testDb")
 		const user = await createTestUser(testDb, "layout-preset-hybrid")
-		const [hybrid] = await testDb
-			.insert(schema.sessionLayoutPresets)
-			.values({
+		await expect(
+			testDb.insert(schema.sessionLayoutPresets).values({
 				seedKey: layoutPresetSeedKey("hybrid:genre/x"),
 				genreId: "hybrid:genre/x",
+				origin: "user",
 				authorUserId: user.id,
+				slug: "mine",
 				name: "Mine",
 				layout: { mine: true }
 			})
-			.returning()
+		).rejects.toThrow()
+		// …and the genre still seeds normally afterwards.
 		await expect(sync(["hybrid:genre/x"])).resolves.toBeUndefined()
-		const [after] = await testDb
-			.select()
-			.from(schema.sessionLayoutPresets)
-			.where(eq(schema.sessionLayoutPresets.id, hybrid.id))
-		expect(after).toEqual(hybrid)
-		// No shadow seeded row was created either.
 		const seeded = await testDb
 			.select()
 			.from(schema.sessionLayoutPresets)
@@ -256,6 +261,6 @@ describe("syncLayoutPresets", () => {
 					isNull(schema.sessionLayoutPresets.authorUserId)
 				)
 			)
-		expect(seeded).toHaveLength(0)
+		expect(seeded).toHaveLength(1)
 	}, 60_000)
 })

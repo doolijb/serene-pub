@@ -90,16 +90,35 @@ export function populateLorebookEntryBindings<T extends LorebookEntry>(
  * row — its lore is visible only to the Narrator (currentCharacterId ===
  * null, i.e. no-perspective mode), since no specific character can know
  * about a background character's private knowledge, but the omniscient
- * Narrator can. An entry with no lorebookBindingId at all (not bound to
- * any row) stays invisible in every mode — there's no legitimate consumer
- * for it, narrator included.
+ * Narrator can.
+ *
+ * **An UNBOUND character-lore entry — one with no `lorebookBindingId` at all
+ * — is visible to the narrator and to the listing query, and invisible to
+ * every specific speaker: a private entry nobody was bound to is the world's
+ * knowledge, not a secret.** (W3, ruled 2026-09-17.)
+ *
+ * It read `false` for everyone, narrator included, on the reasoning that such
+ * a row had no legitimate consumer. That turned out to be a disappearance
+ * rather than a rule: a character-lore entry written before anyone bound it —
+ * every suspect a Whodunit session lists, every row whose binding was deleted
+ * — never retrieved and never listed, with nothing anywhere saying why. The
+ * omniscient read is the honest home for it, and it is exactly the same
+ * answer this function already gives a background/NPC binding, which is the
+ * shape an unbound row is one step short of.
  */
 export function isCharacterLoreEntryVisible(
 	entry: LorebookEntry<typeof CHARACTER_LORE_TYPE_ID>,
 	session: BasePromptSession,
 	currentCharacterId: number | null
 ): boolean {
-	if (!entry.lorebookBindingId) return false
+	// Unbound: the world's knowledge, so the narrator's — never a speaker's.
+	// The lorebook checks below still apply: an entry belonging to another
+	// book is not this session's to read, whoever is asking.
+	if (!entry.lorebookBindingId) {
+		if (currentCharacterId !== null) return false
+		const book = session.lorebook
+		return !!book && session.lorebookId === entry.lorebookId
+	}
 	const lorebook = session.lorebook
 	if (!lorebook) return false
 	if (session.lorebookId !== entry.lorebookId) return false

@@ -118,14 +118,31 @@ async function world() {
 			content: "Green with age."
 		})
 		.returning()
-	const message = async () => {
+	/**
+	 * One message, optionally somebody's.
+	 *
+	 * ⚠ The speaker matters under the turn lock (R9): a change to a cast member
+	 * anchors to THAT character's latest reply, so a ledger line for Verity is
+	 * filed against Verity's message and not against whatever was said last.
+	 * The world's rows follow the newest message whoever wrote it, which is why
+	 * a speakerless one is still a legitimate anchor for weather.
+	 */
+	const message = async (characterId?: number) => {
 		const [legacy] = await testDb
 			.insert(schema.sessionMessages)
-			.values({ sessionId: session.id, role: "assistant", content: "…" })
+			.values({
+				sessionId: session.id,
+				role: "assistant",
+				characterId: characterId ?? null,
+				content: "…"
+			})
 			.returning()
-		await testDb
-			.insert(schema.messages)
-			.values({ id: legacy.id, sessionId: session.id, role: "assistant" })
+		await testDb.insert(schema.messages).values({
+			id: legacy.id,
+			sessionId: session.id,
+			characterId: characterId ?? null,
+			role: "assistant"
+		})
 		return legacy
 	}
 	return { user, stranger, verity, lorebook, session, key, message }
@@ -152,7 +169,7 @@ describe("state:ledger", () => {
 	test("answers with the rows a message changed, oldest first", async () => {
 		declareSlots()
 		const w = await world()
-		const first = await w.message()
+		const first = await w.message(w.verity.id)
 		const { stateSet, stateGive, stateLedger } = await import("./state")
 		const socket = fakeSocket(w.user.id)
 		await stateSet.handler(

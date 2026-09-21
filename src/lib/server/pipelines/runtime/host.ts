@@ -27,6 +27,7 @@ import {
 	ENTRY_TYPE_IDS,
 	WORLD_LORE_TYPE_ID,
 	entryInsert,
+	isEntryTypeId,
 	nextPosition,
 	toEntryRow
 } from "$lib/server/utils/lorebookEntries"
@@ -43,6 +44,7 @@ import type {
 	MediaRef,
 	MessageBlock,
 	NodeRef,
+	ParticipantRef,
 	Portrayals,
 	RunLineage
 } from "@serene-pub/sdk"
@@ -51,21 +53,27 @@ import {
 	slotRef,
 	isBuiltInSpec,
 	isParticipantRef,
+	parseParticipantRef,
 	FORM_ADDRESSED_INLET_ID,
+	assignBlockHead,
 	assignBlockIds,
 	checkMessageBlocks,
+	foreignBlockActions,
 	formBlocksOf,
 	formFireOf,
 	formAnswerSchema,
 	stampBlockActions,
 	undeclaredBlockFunctions,
-	worldBlockFunctions
+	effectsLineVerdict,
+	i18nText
 } from "@serene-pub/sdk"
 import { randomUUID } from "node:crypto"
 import { CORE_BLOCKS_PART } from "$lib/server/messages/blocks"
+import { loreWriteRefusal } from "$lib/server/messages/writes"
 import { slotModelId } from "$lib/shared/connections/slotRef"
 import type { RunProgress } from "$lib/shared/sockets/progress"
 import type { RunArtifact } from "$lib/server/pipelines/runtime/receipts"
+import { participantRowId } from "$lib/server/pipelines/runtime/portrayals"
 import { resolvePersonaName } from "$lib/shared/utils/resolveCharacterName"
 import { streamingModeFrom } from "$lib/server/connections/streaming"
 import type { LiveRow, SessionIo } from "$lib/server/pipelines/runtime/liveRow"
@@ -85,10 +93,41 @@ import {
 	channelWhere,
 	isAllChannels,
 	parseChannel,
-	resolveChannel
+	resolveChannel,
+	sessionChannelShaping,
+	stalenessHead,
+	type ChannelRole,
+	type ChannelVoice
 } from "$lib/server/messages/channels"
 
 // db is the global Db — see db/types.d.ts
+
+/**
+ * A fire an outlet committed for the host to dispatch after the receipt
+ * (U5d review, W2) — everything `fireAction` needs, plus the child's run id,
+ * chosen at the commit so the committing run's receipt can name it, and the
+ * spec the fire routes to, so a refusal can be receipted against it.
+ */
+export interface PendingFire {
+	runId: string
+	specId: string
+	/** The identity the fire names — the block's stamped `action`, else the sole declarer of its `fn` (plans/31 V2). */
+	action: string
+	messageId: number
+	blockId: string
+	payload: Record<string, unknown>
+	/** The participant the fire is made as — the form's addressee. */
+	as: ParticipantRef
+	/**
+	 * The cycle cap that refused the fire at the commit (01 §8; U5d review
+	 * S-b), when one did. The commit only records it: the would-be child's
+	 * row is written by `dispatchFires`, **after** the committing run's own
+	 * receipt, so the tree's rows land in dispatch order — a refusal
+	 * receipted inside the commit landed the child before its parent.
+	 * A fire carrying this is never dispatched.
+	 */
+	refused?: string
+}
 
 export interface HostScope {
 	/**
@@ -160,6 +199,19 @@ export interface HostScope {
 	 */
 	verb?: "regenerate" | "swipe" | "continue"
 	/**
+	 * Which channel this turn was **triggered on** — the stored string, lane
+	 * included (`main`, `manuscript`, `phone:3`). Absent means `main`, which
+	 * is every session whose genre declares no channel of its own.
+	 *
+	 * ⚠ A property of the run and not of a row, which is why it is here: the
+	 * turn's channel is decided by the trigger, and the newest message is
+	 * only *usually* on it. The one thing the host does with it is answer
+	 * what that channel's declared `voice` is (`turnChannelVoice` on the cast
+	 * read), from the shaping it already caches — so the seed line is the one
+	 * the channel calls for even before that channel has any rows.
+	 */
+	channel?: string
+	/**
 	 * What the verb's row held before its handler cleared it — a
 	 * regenerate's (U5b review W3). Recorded as `previous` on the
 	 * `message-updated` the finishing write emits, so the next reply's inlet
@@ -170,6 +222,16 @@ export interface HostScope {
 	 */
 	previous?: { content: string }
 	/**
+	 * The form this run was fired to ANSWER (U5f, R-15 *Staleness and
+	 * order*) — a press on a `choices`/`form` block, by a person or by the
+	 * answer pipeline. `fireAction` puts it here the way `verb` rides, and
+	 * `create-message` stamps it on every row the run writes as
+	 * `metadata.answersForm`, so the row reads as the answer to that form
+	 * and never as the conversation moving on from the form's row
+	 * (`stalenessHead`). Absent on every run that is not a form's answer.
+	 */
+	answersForm?: { messageId: number; blockId: string }
+	/**
 	 * The document this run is executing, by slug — `runSpec` always names
 	 * it. Read by the built-in writes' commits, which refuse to perform under
 	 * any document but the built-in's own (U5b review W8): the item rule was
@@ -179,10 +241,33 @@ export interface HostScope {
 	 */
 	specId?: string
 	/**
+	 * **Who owns the document this run is executing** — the plugin's slug
+	 * (`showcase.battleship`), or absent when the spec is core's (D-6).
+	 *
+	 * Resolved at `runSpec` from the spec ROW's `source_plugin_id`, never from
+	 * the id's namespace segment. The difference is the whole point: a
+	 * namespace is a claim a manifest makes about itself, and ownership is a
+	 * fact this instance wrote when it installed the package. A document that
+	 * named itself `core:spec/…` would read as core's from its id and as a
+	 * plugin's from its row, and only one of those was checked at install.
+	 *
+	 * `readonly`, and read by the host's own seams rather than exposed on a
+	 * node's `ctx`: nodes stay blind to who owns the document running them, the
+	 * same posture `portrayals` takes. No commit case charges work to it yet —
+	 * the plugin-data outlet stays unbound — so today its one reader is
+	 * `assertBuiltInSpec`, which refuses a built-in write to any owned
+	 * document.
+	 *
+	 * ⚠ Not `NodeRef`. A node's owner is its DEFINITION's owner, which is a
+	 * different question with a different answer inside one run: a plugin's
+	 * spec is mostly core's nodes.
+	 */
+	readonly ownerPluginId?: string
+	/**
 	 * What the running document contributes — its `contributes.actions[]`
 	 * (U5d). Read by the message writes to stamp a block's `action` with the
 	 * identity of the declaration it fires (`stampBlockActions`) and to
-	 * refuse a block naming a function this document declares no action for,
+	 * refuse a block naming a key this document declares no action for,
 	 * or one whose action is `world` (the effects line). Absent on a host
 	 * wired by hand, where no block is stamped.
 	 */
@@ -208,6 +293,16 @@ export interface HostScope {
 	 * host wired by hand, where an addressed form is written and waits.
 	 */
 	addressed?: Array<{ payload: FormAddressedPayload; form: FormBlock }>
+	/**
+	 * The fires this run committed and did not run (U5d review, W2): an
+	 * `answer-form` commit checks the oracle's answer, asks the cycle caps,
+	 * chooses the child's run id and **collects** the fire here; `runSpec`
+	 * dispatches each through `fireAction` once this run's receipt is saved
+	 * — outside any node timeout, as this run's child, with this run's `io`
+	 * and stop signal. Mutated in place like `addressed`, for the same
+	 * reason. Absent on a host wired by hand, where nothing fires.
+	 */
+	fires?: PendingFire[]
 	/**
 	 * Where streamed tokens go while a Provider is still generating, for a
 	 * caller that is not filling a message row — the comparison tool, a test.
@@ -465,6 +560,40 @@ const refId = (v: unknown): number | null => {
  * resolved slot, so the next person does not have to know that the coincidence
  * is deliberate.
  */
+/**
+ * A character-lore visibility subject no lorebook binding can carry — what a
+ * WIRED `speaker` that names nobody in the cast reads as (W1, 2026-09-17).
+ *
+ * `isCharacterLoreEntryVisible` takes `number | null` and reads `null` as the
+ * omniscient narrator, so "this voice is nobody" cannot be spelled `null`
+ * without meaning "this voice knows everything" — which is the leak the
+ * `speaker` port closes. Character ids are serials, `participantRowId` returns
+ * only positive integers, and a binding's `characterId` is a foreign key to
+ * one, so a negative subject matches no binding and is equal to no persona:
+ * every branch of the rule then answers exactly what it answers for a speaker
+ * nobody wrote private lore about.
+ */
+const NO_SUCH_CHARACTER = -1
+
+/**
+ * Whose private lore a `lorebook_entries` read is for.
+ *
+ * The run's scope, unless the query wired `speaker` — the per-speaker port
+ * (W1) the two lore queries declare. See the long note at the read for why a
+ * wired-but-unresolvable reference is `NO_SUCH_CHARACTER` rather than `null`.
+ */
+const loreVisibilitySubject = (q: Record<string, any>): number | null => {
+	const ref = q.speaker
+	// Absent, null, or an empty string: the port is unwired (or wired to a
+	// node that published nothing this turn), and the scope decides as it
+	// always did.
+	if (ref === undefined || ref === null || ref === "") return q.currentCharacterId ?? null
+	if (!isParticipantRef(ref)) return NO_SUCH_CHARACTER
+	const parsed = parseParticipantRef(ref)
+	if (parsed.kind !== "character") return NO_SUCH_CHARACTER
+	return participantRowId(parsed.id) ?? NO_SUCH_CHARACTER
+}
+
 const connectionDescriptorModelId = (v: unknown): number | null =>
 	slotModelId(v)
 
@@ -655,7 +784,218 @@ let embeddingModule: Promise<typeof import("$lib/server/embedding")> | null =
 	null
 const embeddingApi = () => (embeddingModule ??= import("$lib/server/embedding"))
 
-export function createHost(db: Db, scope: HostScope = {}): HostServices {
+/**
+ * One end of a lore link, as a spec can hand it over.
+ *
+ * Three spellings, because three are what a spec actually has: a bare id, the
+ * `{ status, ids }` write result an outlet publishes (every `write-result@1`
+ * port resolves to the whole result, so `$.save.entryId` IS this), and a
+ * `{ id }` row. Anything else is a name, and names are resolved against the
+ * book.
+ */
+const linkEndId = (raw: unknown): number | null => {
+	if (typeof raw === "number") return Number.isFinite(raw) ? raw : null
+	if (typeof raw === "string")
+		return /^\d+$/.test(raw.trim()) ? Number(raw.trim()) : null
+	if (!raw || typeof raw !== "object") return null
+	const o = raw as Record<string, unknown>
+	const ids = (o.ids ?? null) as Record<string, unknown> | null
+	for (const v of [ids?.entryId, ids?.id, o.entryId, o.id])
+		if (typeof v === "number" && Number.isFinite(v)) return v
+	return null
+}
+
+/**
+ * The other end of a lore link — an entry id, or a **name** resolved within
+ * this lorebook (L2, 2026-09-17).
+ *
+ * A name is the half that makes the one-write law survivable: F7 allows one
+ * write-class outlet per pipeline, so a run that creates a room cannot also
+ * link it, and the *next* run has only the name to go on. It is also the half
+ * that can be wrong in two ways, and both are refused with a sentence rather
+ * than repaired:
+ *
+ *  · **Nothing answers to it.** Creating the missing entry here would make a
+ *    link outlet a second entry writer, which is the write law again with the
+ *    name changed.
+ *  · **Two entries answer to it.** Picking one would link the wrong room, and
+ *    it would do it silently — a duplicate name is the author's to resolve,
+ *    and the refusal is what tells them it exists.
+ *
+ * Case and surrounding space are ignored, which is the one normalisation the
+ * app already performs on a link's own type (`entries:counts`). One lorebook,
+ * both ends: an edge whose ends live in two books belongs to neither and the
+ * row carries one `lorebook_id`, so a cross-book end is refused exactly as the
+ * socket handlers refuse one — held again here because a pipeline does not
+ * come through them.
+ */
+async function resolveLoreLinkEnd(
+	tx: Db,
+	lorebookId: number,
+	raw: unknown,
+	where: string
+): Promise<number> {
+	const id = linkEndId(raw)
+	if (id !== null) {
+		const [row] = await tx
+			.select({ id: schema.lorebookEntries.id })
+			.from(schema.lorebookEntries)
+			.where(
+				and(
+					eq(schema.lorebookEntries.id, id),
+					eq(schema.lorebookEntries.lorebookId, lorebookId)
+				)
+			)
+			.limit(1)
+		if (!row)
+			throw new HostScopeError(
+				`${where}: entry ${id} is not in this session's lorebook, so there is nothing here to link it to. Both ends of a link live in one book.`
+			)
+		return row.id
+	}
+	const name = typeof raw === "string" ? raw.trim() : ""
+	if (!name)
+		throw new HostScopeError(
+			`${where}: there is nothing to link to — wire an entry id, the write result of the entry that made it, or the name of an entry in this session's lorebook.`
+		)
+	const matches = await tx
+		.select({
+			id: schema.lorebookEntries.id,
+			title: schema.lorebookEntries.title
+		})
+		.from(schema.lorebookEntries)
+		.where(
+			and(
+				eq(schema.lorebookEntries.lorebookId, lorebookId),
+				sql`lower(trim(${schema.lorebookEntries.title})) = ${name.toLowerCase()}`
+			)
+		)
+		.orderBy(asc(schema.lorebookEntries.id))
+		.limit(2)
+	if (!matches.length)
+		throw new HostScopeError(
+			`${where}: no entry in this session's lorebook is called “${name}”. Write it first — a link outlet never creates the entry it names.`
+		)
+	if (matches.length > 1)
+		throw new HostScopeError(
+			`${where}: “${name}” is the name of more than one entry in this session's lorebook, and picking one would link the wrong one silently. Rename one of them, or wire the entry's id.`
+		)
+	return matches[0]!.id
+}
+
+/** One link a spec asked for, taken apart. */
+interface LoreLinkRequest {
+	to: unknown
+	linkType?: unknown
+	label?: unknown
+}
+
+/**
+ * The links an outlet was handed: a list of names, ids, or
+ * `{ to, linkType?, label? }`. Anything that is not a list is none, and an
+ * entry with no `to` is dropped here so the refusal below names the wiring
+ * rather than an empty object.
+ */
+const loreLinkRequests = (raw: unknown): LoreLinkRequest[] => {
+	if (!Array.isArray(raw)) return []
+	const out: LoreLinkRequest[] = []
+	for (const item of raw) {
+		if (item === null || item === undefined) continue
+		if (typeof item === "object" && !Array.isArray(item)) {
+			const o = item as Record<string, unknown>
+			// A `{ to, … }` request, or a bare write result / row, which is
+			// itself the other end.
+			out.push(
+				"to" in o
+					? { to: o.to, linkType: o.linkType, label: o.label }
+					: { to: o }
+			)
+		} else out.push({ to: item })
+	}
+	return out
+}
+
+/**
+ * The kind of link a row carries when nothing said.
+ *
+ * `leads to` is a **travel** kind (`TRAVEL_LINK_TYPES`), which is the one set
+ * anything reads semantically: it is what turns a pair of entries into a place
+ * you can walk between. Free text in the row and free text here — the app's
+ * list is a vocabulary of suggestions, never a constraint.
+ */
+const DEFAULT_LORE_LINK_TYPE = "leads to"
+
+/** Write one lore link. Returns the row's id. */
+async function writeLoreLink(
+	tx: Db,
+	lorebookId: number,
+	fromEntryId: number,
+	req: LoreLinkRequest,
+	where: string
+): Promise<number> {
+	const toEntryId = await resolveLoreLinkEnd(tx, lorebookId, req.to, where)
+	const linkType =
+		(typeof req.linkType === "string" ? req.linkType.trim() : "") ||
+		DEFAULT_LORE_LINK_TYPE
+	const label = typeof req.label === "string" ? req.label.trim() : ""
+	const [row] = await tx
+		.insert(schema.narrativeRelationships)
+		.values({
+			lorebookId,
+			// An entry-ended edge: the two CHECK constraints require exactly
+			// one of node/entry per side, so both node columns stay null.
+			fromNodeId: null,
+			toNodeId: null,
+			fromEntryId,
+			toEntryId,
+			relationshipType: linkType,
+			description: label
+		})
+		.returning({ id: schema.narrativeRelationships.id })
+	return row!.id
+}
+
+/** A session's per-channel prompt shaping, by slug — see `channelShapingOf`. */
+type ChannelShaping = Map<string, { role: ChannelRole; voice?: ChannelVoice }>
+
+/**
+ * Core's host, and the one fact it says about itself that `HostServices` has no
+ * field for: which plugin owns the document being run (D-6).
+ *
+ * An app-side widening rather than an SDK field, because the answer is an
+ * instance's — it comes from a row this install wrote — and `HostServices` is
+ * the contract a *test* host implements too. Read-only: nothing may set a run's
+ * owner after the scope was built.
+ */
+export interface CoreHostServices extends HostServices {
+	readonly ownerPluginId?: string
+}
+
+export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
+	/**
+	 * The genre's per-channel prompt shaping (R-C), read **once per host**.
+	 *
+	 * A fact about the genre, and a genre does not change under a run, so a
+	 * turn that reads history several times pays for one registry lookup
+	 * rather than one per read. `null` — the answer for every genre that
+	 * declares only bare slugs — is cached like any other answer, so the
+	 * ordinary session pays once and then nothing.
+	 */
+	const shapingBySession = new Map<
+		number,
+		Promise<ChannelShaping | null>
+	>()
+	const channelShaping = (
+		sessionId: number
+	): Promise<ChannelShaping | null> => {
+		let cached = shapingBySession.get(sessionId)
+		if (!cached) {
+			cached = sessionChannelShaping(db, sessionId)
+			shapingBySession.set(sessionId, cached)
+		}
+		return cached
+	}
+
 	/**
 	 * A row this run wrote, announced to everyone in the session. The trigger
 	 * announces nothing of its own. A no-op with no socket server on the scope
@@ -717,8 +1057,24 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 	 * this is the same refusal at the write, for a document that reached the
 	 * host without passing through it. A host with no document named (wired
 	 * by hand) is not judged here: there is no document to judge.
+	 *
+	 * **Ownership decides before the id does** (D-6). `isBuiltInSpec` matches
+	 * five literal core ids, which is a fact about the string; an owned
+	 * document is refused whatever its id says, because the owner is a fact
+	 * this instance wrote when it installed the package and the id is a claim
+	 * the package makes about itself. The two only disagree for a document
+	 * naming itself `core:spec/builtin-*` out of a plugin's folder — which
+	 * `readPluginPackage` already refuses at install — and this is the same
+	 * refusal at the write, for a row that reached the database another way.
 	 */
 	const assertBuiltInSpec = (node: NodeRef) => {
+		if (scope.ownerPluginId !== undefined)
+			throw new HostScopeError(
+				`${node.key} (${node.definitionId}) is a built-in write and '${scope.specId}' is owned ` +
+					`by the plugin '${scope.ownerPluginId}'. Only core's own built-in specs may perform ` +
+					`one — the write's permission was judged by the handler that started that spec, ` +
+					`and by nothing a package can supply.`
+			)
 		if (scope.specId === undefined || isBuiltInSpec(scope.specId)) return
 		throw new HostScopeError(
 			`${node.key} (${node.definitionId}) is a built-in write and '${scope.specId}' is not a ` +
@@ -756,13 +1112,18 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 	 * Message blocks, written (20 §6; R-15 *Forms*; U5d) — the `blocks`
 	 * in-port of `create-message` and `update-message`, one path for both.
 	 *
-	 * The tree is validated with the SDK's gate; a block naming a function
-	 * this document declares no action for is refused with the function
-	 * named (nothing would ever hold a press to an audience for it); a block
+	 * The tree is validated with the SDK's gate; a block naming a key this
+	 * document declares no action for is refused with the key named
+	 * (nothing would ever hold a press to an audience for it); a block
 	 * naming a `world` action is refused — the effects line: an
 	 * out-of-fiction effect never rides a message where a character could be
 	 * asked to answer it. What passes is stamped with the writing spec's
-	 * action identity and a block id, and stored as ONE `core:blocks` part.
+	 * action identity, a block id and the **channel head** (U5f, R-15
+	 * *Staleness and order*: the greatest message id on the row's channel
+	 * at this write among rows that are not answers to this row's own
+	 * forms — the row itself, for a fresh create — read through
+	 * `stalenessHead`, the one definition the fire door compares against; a
+	 * head a spec wrote is dropped), and stored as ONE `core:blocks` part.
 	 *
 	 * Then the forms: for every block with an `addressee`, the run's
 	 * **pinned** portrayals answer who portrays them this turn (R-21 (4)) —
@@ -774,12 +1135,16 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 	 * left unstamped — several actions on one function — is refused here,
 	 * since a form nobody can be held to is a form nobody can answer.
 	 *
-	 * Returns what it stored, so a caller's receipt can say so.
+	 * Returns what it stored, so a caller's receipt can say so. `replace`
+	 * (U5d review, S5) is the update write's: the row's existing `core:blocks`
+	 * part is replaced rather than a second appended — a message's block
+	 * tree is a value a write sets.
 	 */
 	const writeBlocks = async (
 		node: NodeRef,
-		row: { id: number; sessionId: number },
-		raw: unknown
+		row: { id: number; sessionId: number; channel: string },
+		raw: unknown,
+		opts: { replace?: boolean } = {}
 	): Promise<MessageBlock[] | null> => {
 		if (raw === undefined || raw === null) return null
 		if (!Array.isArray(raw)) {
@@ -804,36 +1169,134 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						`'${scope.specId}' declares no action for — a block's press is held to an ` +
 						`action's audience, so declare one under contributes.actions[] first`
 				)
-			const world = worldBlockFunctions(blocks, spec)
-			if (world.length)
-				throw new HostScopeError(
-					`${node.key}: the blocks name ${world.map((f) => `'${f}'`).join(", ")}, whose ` +
-						`action changes something outside the story (effects: 'world'). Such an action ` +
-						`is the owner's, from the composer or the review gate — never a question a ` +
-						`message carries (the effects line, R-15)`
-				)
+			/**
+			 * The effects line at the write (01 §13: `core:verdict/effects-line`,
+			 * heard as a `block`), with its one exception (L1, ruled
+			 * 2026-09-17): a block addressed to the **owner** passes, because
+			 * the owner is already the whole of a `world` action's `act`
+			 * audience and pressing the button is the owner acting. The
+			 * refusal is therefore about the blocks that are still questions
+			 * somebody in the fiction could be asked.
+			 */
+			const line = effectsLineVerdict.judge({ kind: "block", blocks, spec })
+			if (!line.ok) throw new HostScopeError(`${node.key}: ${i18nText(line.sentence)}`)
 			blocks = stampBlockActions(blocks, spec)
+			// A block pointing at ANOTHER spec's declaration on purpose (Ask's
+			// options fire Answer): held to the installed declaration — it
+			// must exist for the session's genre, it may not be `world`, and
+			// the option's `fn` must be THAT action's function (U5d review,
+			// S2): an identity is which declaration judges the press, and a
+			// press whose function disagrees with it would be judged by one
+			// declaration and routed by another.
+			const foreign = foreignBlockActions(blocks, spec)
+			if (foreign.length) {
+				const fnsByIdentity = new Map<string, Set<string>>()
+				/**
+				 * Who each foreign identity was put to (L1): every addressee
+				 * of every block naming it, handed to the same verdict this
+				 * spec's own declarations were judged by. An identity named
+				 * by two blocks is admitted only if BOTH are the owner's —
+				 * one question a character could be asked is one too many —
+				 * which is the verdict's rule over the list, not this door's.
+				 */
+				const addresseesByIdentity = new Map<string, unknown[]>()
+				for (const form of formBlocksOf(blocks)) {
+					const refs = form.kind === "choices" ? form.actions : [form]
+					for (const ref of refs) {
+						if (ref.action === undefined) continue
+						const set = fnsByIdentity.get(ref.action) ?? new Set<string>()
+						set.add(ref.fn)
+						fnsByIdentity.set(ref.action, set)
+						const put = addresseesByIdentity.get(ref.action) ?? []
+						put.push(form.addressee)
+						addresseesByIdentity.set(ref.action, put)
+					}
+				}
+				const { listGenreActions, STANDARD_GENRE_ID } = await import(
+					"$lib/server/pipelines/entities/sessionGenres"
+				)
+				const { parseActionIdentity } = await import("$lib/shared/actions/identity")
+				const [session] = await db
+					.select({ genreId: schema.sessions.genreId })
+					.from(schema.sessions)
+					.where(eq(schema.sessions.id, row.sessionId))
+					.limit(1)
+				const offered = await listGenreActions(db, session?.genreId ?? STANDARD_GENRE_ID)
+				for (const identity of foreign) {
+					const parsed = parseActionIdentity(identity)
+					const found =
+						parsed &&
+						offered.find((a) => a.specSlug === parsed.specSlug && a.key === parsed.key)
+					if (!found)
+						throw new HostScopeError(
+							`${node.key}: the blocks name the action '${identity}', which nothing ` +
+								`published for this session's genre declares — a block fires a declared ` +
+								`action or nothing`
+						)
+					const crossed = effectsLineVerdict.judge({
+						kind: "identity",
+						identity,
+						effects: found.effects,
+						addressees: addresseesByIdentity.get(identity) ?? []
+					})
+					if (!crossed.ok)
+						throw new HostScopeError(`${node.key}: ${i18nText(crossed.sentence)}`)
+					const disagreeing = [...(fnsByIdentity.get(identity) ?? [])].filter(
+						(fn) => fn !== found.key
+					)
+					if (disagreeing.length)
+						throw new HostScopeError(
+							`${node.key}: the blocks name '${identity}' with fn ${disagreeing
+								.map((fn) => `'${fn}'`)
+								.join(", ")}, but that action's key is '${found.key}' — a block's fn is ` +
+								`the named action's key, or the identity is the wrong one`
+						)
+				}
+			}
 		}
 		blocks = assignBlockIds(blocks, () => randomUUID())
+		if (formBlocksOf(blocks).length) {
+			// The channel head at issue (U5f): the row is on the channel, so
+			// the head is at least the row; a later line on it — one that is
+			// not an answer to a form on this row — moves the head and stales
+			// every unanswered form issued before.
+			const head =
+				(await stalenessHead(db, row.sessionId, row.channel, row.id)) ?? row.id
+			blocks = assignBlockHead(blocks, head)
+		}
+		// An addressed form is held to ONE identity per option — every option
+		// of a question, not the first (U5d review, W6): the oracle may pick
+		// any of them, and the one it picks is what fires. Since V2 a key
+		// names at most one action of a spec, so an option left unstamped
+		// here is one the spec declares nothing for (a host wired by hand).
 		for (const form of formBlocksOf(blocks)) {
 			if (!form.addressee) continue
-			const action = form.kind === "choices" ? form.actions[0]?.action : form.action
-			if (!action)
+			const refs = form.kind === "choices" ? form.actions : [form]
+			const unstamped = refs.filter((ref) => ref.action === undefined)
+			if (unstamped.length)
 				throw new HostScopeError(
-					`${node.key}: the form '${form.id}' is addressed to ${form.addressee} but its ` +
-						`function is declared by several actions of '${scope.specId ?? "this document"}', so ` +
-						`no one identity could be stamped — a form nobody can be held to is a form nobody ` +
-						`can answer; name the action on the block, or declare the function once`
+					`${node.key}: the form '${form.id}' is addressed to ${form.addressee} but ` +
+						`${unstamped.map((r) => `'${r.fn}'`).join(", ")} names no action of ` +
+						`'${scope.specId ?? "this document"}', so no identity could be stamped — a form ` +
+						`nobody can be held to is a form nobody can answer; name the action on the block, ` +
+						`or declare the key`
 				)
 		}
-		const { appendParts } = await import("$lib/server/messages/store")
-		await appendParts(db, row.id, [
-			{ type: CORE_BLOCKS_PART, data: { blocks } }
-		])
+		if (opts.replace) {
+			const { replaceBlocksPart } = await import("$lib/server/messages/blocks")
+			await replaceBlocksPart(db, row.id, blocks)
+		} else {
+			const { appendParts } = await import("$lib/server/messages/store")
+			await appendParts(db, row.id, [
+				{ type: CORE_BLOCKS_PART, data: { blocks } }
+			])
+		}
 		for (const form of formBlocksOf(blocks)) {
 			if (!form.addressee || !form.id) continue
 			const who = scope.portrayals?.[form.addressee]
 			if (who?.by !== "ai") continue
+			// The first option's identity names the declaration on the event;
+			// the option the answer picks is what fires (`formFireOf`).
 			const action = form.kind === "choices" ? form.actions[0]!.action! : form.action!
 			scope.addressed?.push({
 				payload: {
@@ -856,7 +1319,14 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 	 * copy of those queries beside the switch — is the drift this file's
 	 * whole shape exists to prevent.
 	 */
-	const host: HostServices = {
+	const host: CoreHostServices = {
+		// Read-only, and a data property rather than a method because it is a
+		// fact about the run and not a service the executor calls. The executor
+		// reaches only for the four named methods, so carrying it costs the
+		// wire nothing.
+		get ownerPluginId() {
+			return scope.ownerPluginId
+		},
 		async read(table, query, node) {
 			const q = (query ?? {}) as Record<string, any>
 
@@ -946,9 +1416,18 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					// reading order" is what every caller wants, and doing it here
 					// means no binding has to remember which end it got.
 					const ordered = rows.reverse()
+					/**
+					 * The genre's per-channel prompt shaping (R-C), resolved
+					 * once per host and `null` for every genre that declares
+					 * none. Carried onto the rows here because this is the one
+					 * place a message and its session are both in hand — a
+					 * task node downstream has the row and no way to ask what
+					 * its channel means.
+					 */
+					const shaping = await channelShaping(sessionId)
 					const history = (
 						spansLanes ? byLaneThenTime(ordered) : ordered
-					).map(toMessage)
+					).map((r) => toMessage(r, shaping))
 
 					// The uncommitted draft goes last, where the real message
 					// would be. `id: -1` marks it as belonging to no row.
@@ -971,16 +1450,20 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 								draftLane.lane === DEFAULT_LANE))
 					)
 						history.push(
-							toMessage({
-								id: -1,
-								sessionId,
-								role: "user",
-								channel: DEFAULT_CHANNEL,
-								content: scope.draftMessage.content,
-								personaId: scope.draftMessage.personaId ?? null,
-								characterId: null,
-								isHidden: false
-							})
+							toMessage(
+								{
+									id: -1,
+									sessionId,
+									role: "user",
+									channel: DEFAULT_CHANNEL,
+									content: scope.draftMessage.content,
+									personaId:
+										scope.draftMessage.personaId ?? null,
+									characterId: null,
+									isHidden: false
+								},
+								shaping
+							)
 						)
 
 					return history
@@ -1160,6 +1643,75 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					if (!session?.lorebookId) return []
 
 					/**
+					 * The five optional narrowings, added for
+					 * `core:query/lorebook-entries@1` — the **listing** door.
+					 *
+					 * Every one of them is a no-op when the caller omits it, so
+					 * the retrieval path (`loreFor`, `lorebook-triggers@1`,
+					 * which pass `sessionId` and `currentCharacterId` and
+					 * nothing else) reads exactly the SQL it always did: the
+					 * whole book, no `LIMIT`, disabled and archived rows
+					 * included. That last part is load-bearing rather than
+					 * incidental — the keyword scan reports a disabled entry on
+					 * `skipped` with a reason, which is how a person is told
+					 * why their lore did not come in, and a filter here would
+					 * turn that sentence into silence.
+					 *
+					 * The listing asks for the other posture — `enabled: true`,
+					 * `archived: false` — because it answers *does this exist*
+					 * and *pick one of these*, where a switched-off room must
+					 * not exist and a shelved suspect must not be picked.
+					 * `archived`'s own column comment is the rule: *don't
+					 * retrieve it and don't show it to me.*
+					 */
+					const wheres = [
+						eq(
+							schema.lorebookEntries.lorebookId,
+							session.lorebookId
+						)
+					]
+					// Bare type ids, no `@version`: a type's rows are its rows
+					// across versions, and `type_version` is its own column.
+					// An id no type declares matches nothing, which is the
+					// honest answer to a typo.
+					const wantedTypes = Array.isArray(q.entryTypes)
+						? q.entryTypes.filter(
+								(t: unknown) =>
+									typeof t === "string" && t.length > 0
+							)
+						: []
+					if (wantedTypes.length)
+						wheres.push(
+							inArray(schema.lorebookEntries.typeId, wantedTypes)
+						)
+					/**
+					 * Exact, case-insensitive, both ends trimmed — never a
+					 * substring and never a pattern. The question this answers
+					 * is "is there an entry called X", and a match that also
+					 * returned "X Door" would answer one nobody asked; the
+					 * search-shaped reading of this is the keyword scan, which
+					 * already exists.
+					 *
+					 * `title` is the column the `title` **field role** names on
+					 * both types that declare one (`core-catalog/entries.ts`).
+					 * History declares no title at all, so a named read lists
+					 * no history — the same `null` `toEntryRow` already
+					 * publishes for it.
+					 */
+					if (typeof q.name === "string" && q.name.trim() !== "")
+						wheres.push(
+							sql`lower(btrim(${schema.lorebookEntries.title})) = ${q.name.trim().toLowerCase()}`
+						)
+					if (typeof q.enabled === "boolean")
+						wheres.push(
+							eq(schema.lorebookEntries.enabled, q.enabled)
+						)
+					if (typeof q.archived === "boolean")
+						wheres.push(
+							eq(schema.lorebookEntries.archived, q.archived)
+						)
+
+					/**
 					 * One scan of one table, where three used to be.
 					 *
 					 * Ordered by id because the three scans it replaces had no
@@ -1169,16 +1721,24 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					 * order is the one deterministic choice that agrees with
 					 * the old arbitrary one wherever the old one was stable.
 					 */
-					const rows = await db
+					const scan = db
 						.select()
 						.from(schema.lorebookEntries)
-						.where(
-							eq(
-								schema.lorebookEntries.lorebookId,
-								session.lorebookId
-							)
-						)
+						.where(and(...wheres))
 						.orderBy(asc(schema.lorebookEntries.id))
+					/**
+					 * A ceiling on **rows read**, and the gate below may still
+					 * reduce it: a caller asking for 50 and speaking as a
+					 * character can be handed fewer, because the 50 cheapest
+					 * rows to fetch are chosen before anyone asks who may see
+					 * them. Limiting after the gate would mean reading the
+					 * whole book to honour a cap, which is the cost the cap
+					 * exists to avoid. In the case the listing exists for —
+					 * narrator-shaped, nothing gated — the count is exact.
+					 */
+					const rows = await (typeof q.limit === "number"
+						? scan.limit(q.limit)
+						: scan)
 
 					/**
 					 * Which entries have a usable vector — the ids, not the
@@ -1321,8 +1881,34 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					 * is therefore narrator-shaped by default — the callers all
 					 * pass it, and the coalesce keeps `undefined` from silently
 					 * meaning "some character".
+					 *
+					 * ## `speaker` — per-speaker scope (W1, 2026-09-17)
+					 *
+					 * The run has ONE scope and a gather runs ONCE, so every
+					 * voice of a multi-agent turn used to be handed every
+					 * character's private lore: Adventure's and Lair's `each`
+					 * voices read the same pool, and Whodunit wired no
+					 * character-lore lane at all rather than leak its suspects
+					 * to each other. `core:query/character-lore@1` and
+					 * `core:query/lorebook-triggers@1` declare a `speaker`
+					 * in-port for that — a participant reference the spec wires
+					 * INSIDE the clause — and it is the subject here, in place
+					 * of the scope's.
+					 *
+					 * ⚠ A wired `speaker` never widens the gate. Absent (the
+					 * port unwired, which is every spec written before this),
+					 * the scope decides exactly as it did. Wired and naming a
+					 * character row, that character decides. Wired and naming
+					 * anybody else — an envoy, a role, a free-form side
+					 * character the cast does not hold — the subject is
+					 * `NO_SUCH_CHARACTER`, a value no binding can carry, so the
+					 * voice reads no private lore at all. That third case is
+					 * the one that must not fall back to `null`: `null` is the
+					 * omniscient narrator, and "this voice is nobody" would
+					 * then mean "this voice knows everything", which is the
+					 * leak the port exists to close.
 					 */
-					const speaker = q.currentCharacterId ?? null
+					const speaker = loreVisibilitySubject(q)
 					const visible = (e: any) =>
 						isCharacterLoreEntryVisible(e, asSession, speaker)
 
@@ -1553,7 +2139,49 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					)
 					const envoys = await seatedEnvoys(db, sessionId)
 
+					/**
+					 * Whose name a turn triggered on THIS TURN'S channel seeds
+					 * under (R-C, 2026-09-17) — the declared `voice` of
+					 * `scope.channel`'s slug, from the shaping this host
+					 * already caches.
+					 *
+					 * It rides the cast read for one reason: it is the only
+					 * value `core:task/build-template-context@1` and
+					 * `core:task/process-messages@1` are *both* wired to, and
+					 * the two halves of the seed decision are one rule
+					 * (`prompt/seedLine.ts`). A port of its own would need a
+					 * wire on every spec that assembles a prompt, which is a
+					 * document change on each of them for a fact none of them
+					 * varies.
+					 *
+					 * ⚠ **Absent unless the trigger NAMED a channel**, and
+					 * that is the load-bearing half. A turn that named none
+					 * would resolve to `main` here and `main`'s voice would
+					 * then *override* the trigger row's — so a writing room,
+					 * whose turns are triggered on the manuscript and say so
+					 * nowhere yet, would grow back the trailing `Verity:` this
+					 * whole rule exists to remove. Silence means "nobody told
+					 * me", never "main", and `processMessages` keeps reading
+					 * the trigger row until every trigger speaks up.
+					 *
+					 * ⚠ **And absent unless the genre shapes channels**, on
+					 * the same terms as `channelRole` on a row:
+					 * `channelShaping` answers `null` for every genre that
+					 * lists only bare slugs, so the cast a pre-R-C session
+					 * reads is the object it was before this existed — no key,
+					 * not a key holding the default.
+					 */
+					const named =
+						typeof scope.channel === "string" &&
+						scope.channel.trim()
+							? parseChannel(resolveChannel(scope.channel)).slug
+							: null
+					const turnChannelVoice = named
+						? (await channelShaping(sessionId))?.get(named)?.voice
+						: undefined
+
 					return {
+						...(turnChannelVoice ? { turnChannelVoice } : {}),
 						sessionCharacters: sessionCharacters.map((cc) => ({
 							...cc,
 							absorbedAliases:
@@ -1589,7 +2217,8 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 							world: {},
 							cast: {},
 							possessions: {},
-							slots: []
+							slots: [],
+							version: 0
 						}
 					const { stateFor } = await import(
 						"$lib/server/state/resolve"
@@ -2799,6 +3428,9 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 							provider.binding.hook,
 							{ input: { tool: name, args } },
 							{
+								// A tool is the oracle's own reach outward,
+								// delegated: storage and fetch (R-3).
+								kind: "oracle",
 								timeoutMs: TOOL_HOOK_TIMEOUT_MS,
 								seedLabel: `${scope.runId ?? "run"}:tool:${name}`,
 								user:
@@ -2984,14 +3616,22 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						p.instructions.trim()
 							? p.instructions
 							: undefined
+					// `answersForm` is the host's fact (U5f): a spec's or a
+					// client's copy is dropped, and the run's own — the form
+					// `fireAction` was fired for — is stamped in its place.
+					const { answersForm: _claimed, ...givenMetadata } =
+						(p.metadata ?? {}) as Record<string, unknown>
 					const metadata: Record<string, unknown> = {
-						...(p.metadata ?? {}),
+						...givenMetadata,
 						...(narratorName ? { narratorName } : {}),
 						...(instructions
 							? { narratorInstructions: instructions }
 							: {}),
 						...(sideCharacter ? { sideCharacter } : {}),
-						...(speakerRef ? { speaker: speakerRef } : {})
+						...(speakerRef ? { speaker: speakerRef } : {}),
+						...(scope.answersForm
+							? { answersForm: scope.answersForm }
+							: {})
 					}
 
 					/**
@@ -3058,14 +3698,75 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 							)
 						row = claimed
 					} else {
+						const characterId = narration
+							? null
+							: (refId(p.characterId) ?? null)
+						/**
+						 * A person's own line — through their presence, or as
+						 * themselves.
+						 *
+						 * A character that is the RUN OWNER's presence in this
+						 * session — a persona — writes the PERSON's row, not a
+						 * character's (personas merged into characters, 0132:
+						 * a persona is a character row with `is_persona`, and
+						 * the message's role columns keep the `persona_id`
+						 * name). The `adventure-answer` road names the pressed
+						 * option's addressee as `characterId`; committed as a
+						 * character row it resolves against the cast, where a
+						 * persona never is, and the line rendered as "Unknown"
+						 * (2026-09-17). A `speaker` of `user:<id>` naming the
+						 * run owner, with no character at all, is the same
+						 * person answering as themselves — a persona-less line
+						 * is its author's: `role: user` under their id, no
+						 * persona (handover 2026-09-17 §4).
+						 *
+						 * The presence is decided from the run's PINNED
+						 * portrayals (R-21 (4)), the one membership read every
+						 * run already pays: `person` for `character:<id>` is
+						 * exactly "a live `session_personas` row whose owner
+						 * is a member", with the holder's id on it. Three
+						 * things keep both readings to the person's OWN press:
+						 * the holder — or the `user:` reference — must be the
+						 * run owner (a press is admitted only to the presence's
+						 * person, `fireAction`); the run must be a ROOT — a
+						 * dispatched run is the system's, and the AI's answer
+						 * as a character who became a member's presence
+						 * mid-answer stays the AI's line (W3); and a generating
+						 * placeholder is the model's row, never a person's. A
+						 * spec that names `personaId` itself has already said
+						 * so and is left alone; a host with no portrayals
+						 * (hand-wired, a preview) writes what it was given.
+						 */
+						const ownPress =
+							p.personaId == null &&
+							!scope.lineage &&
+							!generating &&
+							scope.userId != null
+						const presence =
+							ownPress && characterId !== null
+								? scope.portrayals?.[`character:${characterId}`]
+								: undefined
+						const asPersona =
+							presence?.by === "person" &&
+							presence.userId === String(scope.userId)
+						const speakerParsed = speakerRef
+							? parseParticipantRef(speakerRef)
+							: null
+						const asSelf =
+							ownPress &&
+							characterId === null &&
+							speakerParsed?.kind === "user" &&
+							participantRowId(speakerParsed.id) === scope.userId
 						row = await insertLegacy(db, {
 							sessionId,
 							userId: scope.userId ?? null,
-							characterId: narration
-								? null
-								: (refId(p.characterId) ?? null),
-							personaId: p.personaId ?? null,
-							role: p.role ?? "assistant",
+							characterId: asPersona ? null : characterId,
+							personaId: asPersona
+								? characterId
+								: (p.personaId ?? null),
+							role:
+								p.role ??
+								(asPersona || asSelf ? "user" : "assistant"),
 							// Canonical, so `text-messages:1` and `text-messages`
 							// cannot land in the column as two lanes.
 							channel: canonicalChannel(p.channel),
@@ -3294,10 +3995,12 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						if (finished) {
 							record(node, "message", finished.id, "updated")
 							// Blocks a reply ends with — a question put to
-							// the cast — appended once the text has landed,
-							// and announced with the parts so the buttons
-							// show without a reload.
-							const blocks = await writeBlocks(node, finished, p.blocks)
+							// the cast — set once the text has landed (the
+							// row's one block tree, S5), and announced with
+							// the parts so the buttons show without a reload.
+							const blocks = await writeBlocks(node, finished, p.blocks, {
+								replace: true
+							})
 							if (blocks) await announceWithParts(finished.id)
 							else await announce(finished)
 							// A verb's rewrite is a change to history a
@@ -3353,7 +4056,9 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 							`${node.key}: no message ${id} to update`
 						)
 					record(node, "message", row.id, "updated")
-					const blocks = await writeBlocks(node, row, p.blocks)
+					// The row's one block tree, replaced (S5) — an edit that
+					// hands the row new blocks means these blocks.
+					const blocks = await writeBlocks(node, row, p.blocks, { replace: true })
 					if (blocks) await announceWithParts(row.id)
 					else await announce(row)
 					return { id: row.id, sessionId: row.sessionId }
@@ -3693,13 +4398,23 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 				// ── The form's answer (R-15 *Forms*; U5d, 2026-09-17) ──────
 				//
 				// Commits an oracle's answer to a form **exactly as a click
-				// would**: the block's action fires through `fireAction` —
-				// the road `sessions:triggerFunction` takes — as the
-				// addressee, with the run owner as the acting user, the
-				// addressee as the audience, and this run as the parent. The
-				// fire's run is nested inside this commit (the outlet's
-				// timeout is sized for it): the click's handler awaits its
-				// run and reports the outcome, and so does this.
+				// would** — by making the click's fire, not by running it. The
+				// commit checks the answer against the form, asks the cycle
+				// caps, chooses the child's run id and **collects** the fire on
+				// the scope (`fires`, W2); `runSpec` dispatches it through
+				// `fireAction` — the road `sessions:triggerFunction` takes — as
+				// the addressee, once this run's receipt is saved, outside any
+				// node timeout and as this run's child. A grandchild parked at
+				// review parks nothing here.
+				//
+				// Every outcome of the answer is a **halt**, never a throw (W1):
+				// an oracle that missed the form, a form that is gone, a cap
+				// that refused — each is a legible end of this run with the
+				// sentence on its receipt, and a cap's refusal is receipted for
+				// the would-be child as well (`refusalReceipt`, written by
+				// `dispatchFires` after this run's own row — S-b), so the
+				// tree's reader sees where it stopped. Only a wiring fault
+				// throws.
 				case "core:outlet/answer-form": {
 					const sessionId = scope.sessionId
 					if (sessionId === undefined)
@@ -3735,14 +4450,19 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 							`${node.key} was given no form to answer — wire 'messageId', 'blockId' and ` +
 								`'addressee' from the form-addressed inlet`
 						)
+					/** The legible end: this run halts on the sentence, and nothing fires. */
+					const halted = (reason: string) => ({
+						id: messageId,
+						sessionId,
+						halt: `${node.key}: ${reason}`
+					})
 					// The block, off the ROW — never off the port, whose copy
 					// a reviewer or a script could have shaped.
 					const { loadFormBlock } = await import("$lib/server/messages/blocks")
 					const block = await loadFormBlock(db, messageId, blockId)
 					if (!block)
-						throw new HostScopeError(
-							`${node.key}: no form '${blockId}' on message ${messageId} — it was removed ` +
-								`before the answer arrived`
+						return halted(
+							`no form '${blockId}' on message ${messageId} — it was removed before the answer arrived`
 						)
 					const [subject] = await db
 						.select({ sessionId: schema.sessionMessages.sessionId })
@@ -3751,9 +4471,13 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						.limit(1)
 					assertScoped(node, subject?.sessionId, scope.sessionId)
 					if (block.addressee !== addressee)
-						throw new HostScopeError(
-							`${node.key}: the form '${blockId}' is addressed to ${block.addressee ?? "nobody"}, ` +
-								`not ${addressee}`
+						return halted(
+							`the form '${blockId}' is addressed to ${block.addressee ?? "nobody"}, not ${addressee}`
+						)
+					// Answered once (W7): the row says who already did.
+					if (block.answered)
+						return halted(
+							`the form '${blockId}' was already answered by ${block.answered.by}`
 						)
 					// The answer against the form's schema (R-15): the oracle's
 					// document, checked here before anything fires. A `form`
@@ -3762,64 +4486,85 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					const fire = formFireOf(block, p.answer)
 					if (!fire) {
 						const schemaText = JSON.stringify(formAnswerSchema(block))
-						throw new HostScopeError(
-							`${node.key}: the answer ${JSON.stringify(p.answer)} does not fit the form — ` +
-								`its schema is ${schemaText}`
+						return halted(
+							`the answer ${JSON.stringify(p.answer)} does not fit the form — its schema is ${schemaText}`
 						)
 					}
 					if (block.kind === "form") {
 						const { checkValues } = await import("@serene-pub/sdk")
 						const faults = checkValues(block.fields, fire.payload)
 						if (faults.length)
-							throw new HostScopeError(
-								`${node.key}: the answer does not fit the form — ` +
+							return halted(
+								`the answer does not fit the form — ` +
 									faults.map((f) => `${f.message} (${f.fix})`).join("; ")
 							)
 					}
-					// The effects line, belt to the validator's braces: the
-					// writing spec's declaration, when this host knows it.
-					// `fireAction` refuses a `world` action again by the
-					// installed declaration.
-					const { fireAction } = await import(
-						"$lib/server/pipelines/runtime/fireAction"
+					// Which spec the fire routes to — named on the fire so a
+					// refusal can be receipted against it, by the same rule
+					// `fireAction` routes with (plans/31 V2): the identity the
+					// block stamped, else the genre's sole declarer of its `fn`,
+					// and that identity's declarer if it still serves.
+					const { resolveSubjectVerdict, listGenreActions, soleDeclarer, STANDARD_GENRE_ID } =
+						await import("$lib/server/pipelines/entities/sessionGenres")
+					const { parseActionIdentity, actionIdentity } = await import(
+						"$lib/shared/actions/identity"
 					)
-					const { childLineage } = await import(
-						"$lib/server/pipelines/runtime/lineage"
-					)
-					const outcome = await fireAction(db, {
+					const [session] = await db
+						.select({ genreId: schema.sessions.genreId })
+						.from(schema.sessions)
+						.where(eq(schema.sessions.id, sessionId))
+						.limit(1)
+					const genreId = session?.genreId ?? STANDARD_GENRE_ID
+					let identity = fire.action ?? null
+					if (!identity) {
+						const sole = soleDeclarer(await listGenreActions(db, genreId), fire.fn)
+						if (!sole)
+							return halted(
+								`the form's '${fire.fn}' names no single action of this session's genre — ` +
+									`a block fires a declared action or nothing`
+							)
+						identity = actionIdentity(sole)
+					}
+					const routed = await resolveSubjectVerdict(db, genreId, identity, {
 						sessionId,
-						function: fire.fn,
-						action: fire.action,
+						spec: parseActionIdentity(identity)?.specSlug ?? null
+					})
+					if (!routed.spec)
+						return halted(`nothing serves '${identity}' for this session's genre`)
+					const childRunId = randomUUID()
+					const pending: PendingFire = {
+						runId: childRunId,
+						specId: routed.spec,
+						action: identity,
 						messageId,
 						blockId,
 						payload: fire.payload,
-						actor: { userId: scope.userId, as: addressee },
-						io: scope.io,
-						parentSignal: scope.signal,
-						lineage: scope.runId
-							? childLineage({ runId: scope.runId, lineage: scope.lineage })
-							: undefined
-					})
-					if (outcome.kind === "refused")
-						throw new HostScopeError(`${node.key}: ${outcome.error}`)
-					if (outcome.kind === "stopped")
-						throw new HostScopeError(
-							`${node.key}: the answer's action was stopped by ${outcome.by}`
-						)
-					if (outcome.receipt.outcome !== "ok") {
-						const { haltExplanation } = await import(
-							"$lib/server/pipelines/runtime/runTurn"
-						)
-						throw new HostScopeError(
-							`${node.key}: the answer's action did not land — ` +
-								(haltExplanation(outcome.receipt) ?? "the run produced nothing")
-						)
+						as: addressee
 					}
+					// The cycle caps, asked at the door (01 §8; W1): a refusal
+					// halts this run on the cap, and the would-be child's row —
+					// lineage filled, the routed spec named — is written by
+					// `dispatchFires` after this run's receipt (S-b), so the
+					// parent's row lands before the child's. The commit only
+					// records the refusal on the fire.
+					if (scope.runId) {
+						const { childLineage, admitDescendant } = await import(
+							"$lib/server/pipelines/runtime/lineage"
+						)
+						const lineage = childLineage({ runId: scope.runId, lineage: scope.lineage })
+						const cap = admitDescendant(lineage)
+						if (cap) {
+							scope.fires?.push({ ...pending, refused: cap })
+							return halted(cap)
+						}
+					}
+					scope.fires?.push(pending)
 					return {
 						id: messageId,
 						sessionId,
 						answer: fire.payload,
-						fired: { runId: outcome.runId, specId: outcome.specId }
+						firedAction: identity,
+						firedRunId: childRunId
 					}
 				}
 
@@ -3834,12 +4579,26 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						string,
 						any
 					>
+					/**
+					 * The row, read as `update-message` reads its own
+					 * `target` one case up: a row id from the inlet, or the
+					 * write result of an earlier outlet in this run — the
+					 * reply's placeholder, whose `ids.id` is a row id by the
+					 * time this node runs (R-17). The media reference's own
+					 * `messageId` still answers for a caller outside the graph.
+					 */
+					const targetRef = p.target
 					const messageId =
-						media.messageId ?? p.messageId ?? p.target?.id
-					if (typeof messageId !== "number")
+						refId(media.messageId ?? p.messageId) ??
+						refId(
+							targetRef && typeof targetRef === "object" && "ids" in targetRef
+								? (targetRef as { ids?: { id?: unknown } }).ids?.id
+								: targetRef
+						)
+					if (messageId === null)
 						throw new HostScopeError(
-							`${node.key} was given no message id to attach to — the id comes ` +
-								`from outside the run (13 §10b), on the payload's messageId.`
+							`${node.key} was given no message id to attach to — wire 'target' from the ` +
+								`inlet's row id, or from the outlet that created the row.`
 						)
 					// A REFERENCE first, bytes only as the legacy path.
 					//
@@ -3885,7 +4644,16 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						// the message it landed on changed.
 						record(node, "file", found.data.assetId, "attached")
 						record(node, "message", messageId, "updated")
-						return { id: messageId }
+						// The write-result's `id` is the MESSAGE row on both
+						// paths (ruled at the U6 review): it is what a later
+						// `target: $.attach.main` chains to. The asset rides
+						// under its own key.
+						return {
+							id: messageId,
+							messageId,
+							assetId: found.data.assetId,
+							sessionId: target.sessionId
+						}
 					}
 
 					const { createSessionAsset } = await import(
@@ -3938,9 +4706,12 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 								}
 					])
 					record(node, "message", messageId, "updated")
+					// The message row as `id` here too — see the reference
+					// path above — with the asset it stored under `assetId`.
 					return {
-						id: asset.id,
+						id: messageId,
 						messageId,
+						assetId: asset.id,
 						sessionId: target.sessionId
 					}
 				}
@@ -3949,10 +4720,13 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					/**
 					 * The finished summary, written as a lore entry.
 					 *
-					 * Which *kind* of entry comes from the pipeline that ran —
-					 * the four summarize namespaces exist precisely so this is
-					 * decided by which one the user pressed, not by a flag
-					 * threaded through the run.
+					 * Which *kind* of entry comes from the pipeline that ran,
+					 * and since L3 (2026-09-17) that is finally true: the
+					 * `entryType` param says which, and an unknown id is
+					 * refused rather than filed as world lore. The four
+					 * summarize namespaces still exist so the *press* decides
+					 * which pipeline runs; this is that decision reaching the
+					 * row.
 					 */
 					const sessionId = scope.sessionId
 					if (sessionId === undefined)
@@ -3965,6 +4739,24 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 						.from(schema.sessions)
 						.where(eq(schema.sessions.id, sessionId))
 						.limit(1)
+
+					/**
+					 * Declared writes (R-B): a genre whose lorebook is a
+					 * *reference* writes nothing into it, whatever spec is
+					 * bound here. This is the only pipeline outlet that
+					 * writes lore, so it is the only place the law needs
+					 * stating — and it is stated at the write rather than by
+					 * hiding the affordance, because the affordance is not
+					 * what a user-attached pipeline goes through.
+					 *
+					 * Before the lorebook check: "this genre never writes
+					 * here" is true whether or not a book is attached, and
+					 * telling somebody to attach one would send them to a
+					 * screen that cannot help.
+					 */
+					const noLore = await loreWriteRefusal(db, sessionId)
+					if (noLore) throw new HostScopeError(`${node.key}: ${noLore}`)
+
 					if (!session?.lorebookId)
 						throw new HostScopeError(
 							`${node.key}: this session has no lorebook, so there is nowhere to save the summary. Attach one first.`
@@ -3972,6 +4764,24 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 
 					const name = String(p.name ?? "").trim() || "Untitled"
 					const content = String(p.content ?? "")
+
+					/**
+					 * Which kind of entry this pipeline writes (L3).
+					 *
+					 * Refused and never coerced: a typo that silently files
+					 * rooms as world lore is the defect this replaces, and the
+					 * refusal names the declared types so the fix is in the
+					 * sentence. Absent is world lore, the agnostic shape, so
+					 * every spec written before the param keeps doing exactly
+					 * what it did.
+					 */
+					const typeId =
+						String(p.params?.entryType ?? "").trim() ||
+						WORLD_LORE_TYPE_ID
+					if (!isEntryTypeId(typeId))
+						throw new HostScopeError(
+							`${node.key}: '${typeId}' is not a declared entry type, so there is nothing to file this under. The declared types are ${ENTRY_TYPE_IDS.join(", ")}.`
+						)
 
 					/**
 					 * ⚠ `position` is allocated rather than left at the old
@@ -3986,31 +4796,132 @@ export function createHost(db: Db, scope: HostScope = {}): HostServices {
 					 * race it.
 					 */
 					const lorebookId = session.lorebookId
-					const [row] = await db.transaction(async (tx) => {
-						await tx.execute(
-							sql`select pg_advisory_xact_lock(${lorebookId})`
-						)
-						return tx
-							.insert(schema.lorebookEntries)
-							.values(
-								entryInsert({
-									typeId: WORLD_LORE_TYPE_ID,
-									lorebookId,
-									name,
-									content,
-									position: await nextPosition(
+					/**
+					 * The links, in the SAME transaction as the row (L2, F7).
+					 *
+					 * A pipeline has one write-class outlet, so a spec cannot
+					 * create an entry here and then link it with
+					 * `core:outlet/link-lore-entries@1` — those are two writes.
+					 * Writing them together is the way round that costs
+					 * nothing, and it is the honest one: a room whose exits
+					 * name an entry that is not there fails **with** the room
+					 * rather than leaving half a room behind, because the
+					 * refusal is raised inside the transaction.
+					 */
+					const links = loreLinkRequests(p.links)
+					const { row, linkIds } = await db.transaction(
+						async (tx) => {
+							await tx.execute(
+								sql`select pg_advisory_xact_lock(${lorebookId})`
+							)
+							const [created] = await tx
+								.insert(schema.lorebookEntries)
+								.values(
+									entryInsert({
+										typeId,
+										lorebookId,
+										name,
+										content,
+										position: await nextPosition(
+											tx,
+											lorebookId,
+											typeId
+										)
+									})
+								)
+								.returning()
+							const ids: number[] = []
+							for (const link of links)
+								ids.push(
+									await writeLoreLink(
 										tx,
 										lorebookId,
-										WORLD_LORE_TYPE_ID
+										created!.id,
+										link,
+										node.key
 									)
-								})
-							)
-							.returning()
-					})
+								)
+							return { row: created!, linkIds: ids }
+						}
+					)
 					// Invisible to the run until now: a summarize pipeline wrote
 					// an entry and the run row said it had produced nothing.
 					record(node, "lore_entry", row.id, "created")
-					return { id: row.id, lorebookId }
+					for (const id of linkIds)
+						record(node, "lore_link", id, "created")
+					return {
+						id: row.id,
+						lorebookId,
+						...(linkIds.length ? { linkIds } : {})
+					}
+				}
+
+				case "core:outlet/link-lore-entries": {
+					/**
+					 * One link between two entries of this session's lorebook
+					 * (L2, 2026-09-17) — a room's exit, who keeps what, what
+					 * stands near what.
+					 *
+					 * The same session scoping, the same lorebook and the same
+					 * `writes.lore` refusal as the entry write beside it: a
+					 * link is a change to the book, so a genre whose lorebook
+					 * is a *reference* writes none, whatever spec is bound
+					 * here. Stated at the write rather than by hiding the
+					 * affordance, because the affordance is not what a
+					 * user-attached pipeline goes through.
+					 */
+					const sessionId = scope.sessionId
+					if (sessionId === undefined)
+						throw new HostScopeError(
+							`${node.key} has no session to link lore in — the run was started without a session scope`
+						)
+
+					const noLore = await loreWriteRefusal(db, sessionId)
+					if (noLore) throw new HostScopeError(`${node.key}: ${noLore}`)
+
+					const [session] = await db
+						.select()
+						.from(schema.sessions)
+						.where(eq(schema.sessions.id, sessionId))
+						.limit(1)
+					if (!session?.lorebookId)
+						throw new HostScopeError(
+							`${node.key}: this session has no lorebook, so there is nothing to link. Attach one first.`
+						)
+
+					const lorebookId = session.lorebookId
+					// Both ends under the book's own lock, for the reason the
+					// entry write takes it: an end resolved by name must not be
+					// renumbered or renamed out from under the insert.
+					const { fromId, linkId } = await db.transaction(
+						async (tx) => {
+							await tx.execute(
+								sql`select pg_advisory_xact_lock(${lorebookId})`
+							)
+							const from = await resolveLoreLinkEnd(
+								tx,
+								lorebookId,
+								p.from,
+								node.key
+							)
+							return {
+								fromId: from,
+								linkId: await writeLoreLink(
+									tx,
+									lorebookId,
+									from,
+									{
+										to: p.to,
+										linkType: p.params?.linkType,
+										label: p.label
+									},
+									node.key
+								)
+							}
+						}
+					)
+					record(node, "lore_link", linkId, "created")
+					return { id: linkId, fromEntryId: fromId, lorebookId }
 				}
 
 				case "core:outlet/graph-proposal": {
@@ -4118,7 +5029,20 @@ function cosine(a?: number[], b?: number[]): number {
 	return dot / (Math.sqrt(na) * Math.sqrt(nb))
 }
 
-function toMessage(r: any) {
+function toMessage(r: any, shaping?: ChannelShaping | null) {
+	const channel = r.channel ?? DEFAULT_CHANNEL
+	/**
+	 * How this row's channel enters a prompt (R-C, 2026-09-17), when its genre
+	 * says anything about it.
+	 *
+	 * ⚠ **Absent unless the genre shapes channels**, and that is deliberate:
+	 * `channelShapingOf` answers `null` for every genre that lists only bare
+	 * slugs, so a row read for a pre-R-C session is byte-identical to the row
+	 * that was read before this existed — no key, not a key holding the
+	 * default. The assembled prompt cannot drift for a genre that declared
+	 * nothing, because there is nothing new on the row to read.
+	 */
+	const shape = shaping?.get(parseChannel(channel).slug)
 	return {
 		id: r.id,
 		role: r.role,
@@ -4130,7 +5054,9 @@ function toMessage(r: any) {
 		// is scoped to one channel, but a whole-channel read spans that
 		// channel's lanes (ruling 2026-09-09), so this is what tells the five
 		// private conversations under one slug apart without a second read.
-		channel: r.channel ?? DEFAULT_CHANNEL,
+		channel,
+		...(shape ? { channelRole: shape.role } : {}),
+		...(shape?.voice ? { channelVoice: shape.voice } : {}),
 		createdAt: r.createdAt
 	}
 }

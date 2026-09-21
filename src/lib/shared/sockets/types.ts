@@ -807,6 +807,30 @@ declare global {
 					plugins: PluginRow[]
 				}
 			}
+			/**
+			 * The dev install (D-6): a folder on the server's own disk, read
+			 * as `serene-pub build` wrote it. Never a URL — see the handler.
+			 */
+			namespace InstallLocal {
+				interface Params {
+					/** The package root — the folder holding `dist/plugin/`. */
+					dir: string
+				}
+				interface Response {
+					pluginId: string
+					/** Spec slugs saved, owned by the plugin. */
+					specs: string[]
+					/** Config seed keys written. */
+					configs: string[]
+					/** Genre ids whose declaration this install supplied. */
+					genres: string[]
+					/** Client files stored. */
+					files: number
+					/** Anything refused or worth saying, one sentence each. */
+					warnings: string[]
+					plugins: PluginRow[]
+				}
+			}
 			namespace SetEnabled {
 				interface Params {
 					pluginId: string
@@ -2057,6 +2081,39 @@ declare global {
 					status: import("@serene-pub/sdk").StatusText | null
 				}
 			}
+			/**
+			 * Server → client: this session's list row moved — a message
+			 * landed, was edited, hidden, deleted, swiped, regenerated or
+			 * streamed. Broadcast to the session's users so the sidebar row,
+			 * the session detail panel and the home page's "continue" card
+			 * quote the session as it is now without re-reading the whole
+			 * list.
+			 *
+			 * The same three facts `sessions:list` projects for the row, from
+			 * the same projection (`server/sessions/rowProjection.ts`), so a
+			 * patched row and a freshly listed one say the same thing.
+			 */
+			namespace RowChanged {
+				interface Params {}
+				interface Response {
+					sessionId: number
+					/**
+					 * Every row the session holds — the list's own notion,
+					 * which counts hidden and in-flight rows too.
+					 */
+					messageCount: number
+					/**
+					 * The latest visible line, or `null` when there is none
+					 * now. NULL is the answer, never an absent field: deleting
+					 * or hiding the last visible message has to CLEAR the
+					 * quote, and a field that could mean "unchanged" could not
+					 * say that.
+					 */
+					lastMessage: List.LastMessage | null
+					/** The session row's `updated_at`, as the list sends it. */
+					updatedAt: string
+				}
+			}
 			namespace Get {
 				interface Params {
 					id: number
@@ -2130,7 +2187,15 @@ declare global {
 					tags?: string[]
 				}
 				interface Response {
-					session: SelectSession
+					session?: SelectSession
+					/**
+					 * A refusal, in a sentence the person can act on — the
+					 * genre's shape not met, a genre this build does not
+					 * register. Emitted on `sessions:create:error` and
+					 * returned as the ack, like `connections:scripts`;
+					 * never beside `session`.
+					 */
+					error?: string
 				}
 			}
 			/**
@@ -2162,34 +2227,60 @@ declare global {
 			 * eligible — never contain; clearing is reset-is-delete.
 			 */
 			namespace Bindings {
-				/** Which specs serve a function for this session's mode, and the pick. */
+				/**
+				 * Which specs serve a **subject** for this session's genre, and
+				 * the pick (plans/31 V2). A subject is an action's identity
+				 * `<spec slug>#<key>` — whose only candidate is its declarer —
+				 * or a core event id `core:event/…@1`, whose candidates are the
+				 * bucket a preset or a session binding selects among.
+				 */
 				namespace Candidates {
 					interface Params {
 						sessionId: number
-						function: string
+						subject: string
 					}
 					interface Response {
 						sessionId: number
-						function: string
+						subject: string
 						/** Every eligible spec slug. */
 						candidates: string[]
 						/** What resolution currently lands on, scope included. */
 						resolved: string | null
 					}
 				}
-				/** Bind a function at session scope (owner) or instance scope (admin). */
+				/**
+				 * Bind a subject at session scope (owner) or instance scope
+				 * (admin). The event name keeps its word; the field is the
+				 * subject (plans/31 V2 retired `function`).
+				 */
 				namespace BindFunction {
 					interface Params {
 						sessionId: number
-						function: string
+						subject: string
 						/** null clears the binding — inherit again. */
 						specSlug: string | null
 						/** Default 'session'. 'instance' requires admin. */
 						scope?: "session" | "instance"
+						/**
+						 * The session's **enabled-when override** for this
+						 * action (plans/29 R-15; U5e): a predicate or a list
+						 * of them — `{ on, equals | truthy, reason }` over the
+						 * session's published values — that replaces the
+						 * action's own and the genre's default while set.
+						 * `null` clears it; absent leaves it as it is. Session
+						 * scope only, only for an action subject, and only with
+						 * a `specSlug` (the override rides the binding row).
+						 * Validated with the SDK's findings; a fault is the
+						 * `error`.
+						 */
+						enabledWhen?:
+							| Record<string, unknown>
+							| Record<string, unknown>[]
+							| null
 					}
 					interface Response {
 						sessionId: number
-						function: string
+						subject: string
 						error?: string
 					}
 				}
@@ -2268,18 +2359,25 @@ declare global {
 			namespace TriggerFunction {
 				interface Params {
 					sessionId: number
-					function: string
 					/**
-					 * Which declaration was pressed — `<spec slug>#<key>`
-					 * (U5c review, W1). The server checks THAT action's
-					 * audience and enablement and runs THAT spec. The client
-					 * always sends it: chips, the More menu, the palette, a
-					 * message's menu, a frame's `invoke`. A call naming none
-					 * is the legacy shape and gets the narrowest reading —
-					 * the owner floor and the companion spec — never the
-					 * union of every action sharing the function.
+					 * Which declaration was pressed — its identity `<spec
+					 * slug>#<key>` (U5c review, W1; the one key since plans/31
+					 * V2). The server checks THAT action's audience and
+					 * enablement and runs THAT spec. The client sends it from
+					 * every surface that has a declaration in hand: chips, the
+					 * More menu, the palette, a message's menu, a frame's
+					 * `invoke`. One of `action` and `key` is required.
 					 */
 					action?: string
+					/**
+					 * ⏳ A bare action **key**, for a press that has no
+					 * declaration to name: a block stored before identities,
+					 * a frame's bare `{ t: 'action', fn }`. The server resolves
+					 * it to the genre's sole declarer of that key and refuses
+					 * it — naming the identities — when several declare it.
+					 * One release.
+					 */
+					key?: string
 					/**
 					 * ⚠ No `channel`. Audience is channel-free and the fire
 					 * never consults the listing (W2), so a channel on the
@@ -2326,7 +2424,8 @@ declare global {
 				}
 				interface Response {
 					sessionId: number
-					function: string
+					/** The identity that was fired, once resolved; the bare `key` it was sent with until then. */
+					action: string
 					success?: boolean
 					error?: string
 					/**
@@ -2365,6 +2464,20 @@ declare global {
 					 * thrown away here.
 					 */
 					cancelledBy?: string
+					/**
+					 * A run in the tree this press started is waiting at a
+					 * review gate (U5d review, R-b). Alone, the pressed run
+					 * itself parked: nothing has landed, the owner has the
+					 * card (`pipelines:reviewRequested`), and how it ends
+					 * arrives as a later push of this same event — `success`,
+					 * `error` or `cancelled` — with its terminal
+					 * `pipelines:progress` frame. Beside `success`, the
+					 * pressed run finished and a run dispatched under it is
+					 * the one waiting. Either way the ack, and the session's
+					 * trigger lock, are released now rather than when the
+					 * owner decides.
+					 */
+					parked?: boolean
 				}
 			}
 			/**
@@ -2480,6 +2593,14 @@ declare global {
 					sessionId: number
 					/** Present when the mode declares a custom session view. */
 					sessionView?: Frame
+					/**
+					 * ⏳ Every enabled plugin's `surfaces.panels`, flattened.
+					 *
+					 * @deprecated A panel IS a widget (SDK `panelToWidgetDecl`)
+					 * and the client seats widgets off `modePanels`; nothing
+					 * reads this list. Kept one release for anything outside
+					 * this repo that does.
+					 */
 					panels: Frame[]
 					/** The mode's declared surface-grid panels (21). */
 					modePanels: ModePanel[]
@@ -2535,6 +2656,23 @@ declare global {
 						delete: boolean
 						hide: boolean
 						swipe: boolean
+					}
+					/**
+					 * What this session may write beyond messages (R-B,
+					 * 2026-09-17): whether its own machinery may add lore
+					 * entries to the attached lorebook, and whether it may
+					 * open scenes. Absent (no access, or an older server)
+					 * reads as both on — the standard chat's posture.
+					 *
+					 * An affordance, like `messageVerbs`: a forbidden write's
+					 * control is ABSENT client-side, and the write sites
+					 * refuse regardless — the summarize handler, the scene
+					 * create handler and the lore-entry outlet each read the
+					 * same declaration.
+					 */
+					writes?: {
+						lore: boolean
+						scenes: boolean
 					}
 					/**
 					 * The envoys this session may seat or hear from (plans/29
@@ -2803,7 +2941,8 @@ declare global {
 				interface Response {
 					sessionId: number
 					triggers: {
-						function: string
+						/** The action's key; with `specSlug`, its identity. */
+						key: string
 						/** `composer` | `message` — where a person meets it (R-15). */
 						venue: string
 						icon?: string
@@ -2833,8 +2972,8 @@ declare global {
 					channel?: string
 				}
 				interface Action {
+					/** With `specSlug`, the action's identity `<spec slug>#<key>` — the one key (plans/31 V2). */
 					key: string
-					function: string
 					specSlug: string
 					name: string
 					description?: string
@@ -2849,6 +2988,33 @@ declare global {
 					canAct: boolean
 					itemGated: boolean
 					isNew: boolean
+					/**
+					 * The enabled-when verdict (plans/29 R-15; U5e) — the
+					 * second verdict beside `canAct`, both shown, neither
+					 * hiding the action: every predicate the server could
+					 * evaluate over the session's published values holds.
+					 * The `item.*` ones are not among them.
+					 */
+					enabled: boolean
+					/**
+					 * Why it is grey when `enabled` is false — the failing
+					 * predicate's reason, a locale map with `{vars}` the
+					 * client resolves with `statusText()`.
+					 */
+					reason?: { i18n: { en: string } & Record<string, string>; vars?: Record<string, string | number> }
+					/**
+					 * The predicates over `item.*` — the message the action is
+					 * pressed on — which the client evaluates per row with the
+					 * SDK's `evaluateEnabledWhen` and the row's `item` document
+					 * (`shared/actions/itemValues.ts`). Message venue only;
+					 * absent when there are none.
+					 */
+					itemPredicates?: {
+						on: string
+						equals?: unknown
+						truthy?: boolean
+						reason: { en: string } & Record<string, string>
+					}[]
 				}
 				interface Venue {
 					primary: Action[]
@@ -2857,7 +3023,11 @@ declare global {
 				interface Response {
 					sessionId: number
 					channel: string
-					/** Keyed by venue kind; every kind present, possibly empty. */
+					/**
+					 * Keyed by venue kind; every listed kind present, possibly
+					 * empty. `form` is never among them (U5d review, S1): an
+					 * action a form carries is pressed from the block alone.
+					 */
 					venues: Record<string, Venue>
 				}
 			}
@@ -2936,8 +3106,8 @@ declare global {
 					 */
 					canAddOutsidePreset?: boolean
 					functions: {
+						/** With `specSlug`, the action's identity `<spec slug>#<key>` — the one key (plans/31 V2). */
 						key: string
-						function: string
 						/** Where it appears, per channel (R-15). */
 						venues: { kind: string; channel?: string }[]
 						quick: boolean
@@ -2963,20 +3133,19 @@ declare global {
 			namespace SetFunction {
 				interface Params {
 					sessionId: number
-					function: string
 					/**
-					 * Which declaration — `<spec slug>#<key>` (U5c review,
-					 * W1): enablement is per action, so two actions on one
-					 * function switch independently. Absent, `function`
-					 * names the action when exactly one carries it; several
-					 * is refused with their identities.
+					 * Which declaration — its identity `<spec slug>#<key>`
+					 * (U5c review, W1; the one key since plans/31 V2):
+					 * enablement is per action. A bare key names the action
+					 * when exactly one carries it; several is refused with
+					 * their identities.
 					 */
-					action?: string
+					action: string
 					enabled: boolean
 				}
 				interface Response {
 					sessionId: number
-					function: string
+					action: string
 					enabled?: boolean
 					error?: string
 				}
@@ -3187,6 +3356,12 @@ declare global {
 					speaker?: string
 					once?: boolean
 					triggered?: boolean
+					/**
+					 * Which channel this turn is asked for on (R-C) — passed
+					 * straight to `runReply`, where it reaches the inlet's
+					 * `channel` port and the host scope. `main` when absent.
+					 */
+					channel?: string
 				}
 				interface Response {
 					success?: boolean
@@ -3365,6 +3540,14 @@ declare global {
 					sessionId: number
 					content: string
 					personaId?: number | null
+					/**
+					 * Which of the session's channels this line is written on
+					 * (20 §7; R-C) — the composer's pick, `main` when absent,
+					 * which is every session whose genre declares no channel of
+					 * its own. A channel the genre never declared is refused at
+					 * the handler, never coerced.
+					 */
+					channel?: string
 				}
 				interface Response {
 					sessionMessage?: SelectSessionMessage
@@ -4597,7 +4780,14 @@ declare global {
 			 */
 			interface ConfigNotice {
 				id: number
-				kind: "culled" | "backfilled"
+				/**
+				 * `culled` — a value this version does not declare, removed;
+				 * `backfilled` — a value that arrived at the shipped default;
+				 * `unbound` — a placed node whose definition this build does
+				 * not run (removed or provisional, plans/29 R-2): nothing was
+				 * removed, the node waits to be bound or taken out.
+				 */
+				kind: "culled" | "backfilled" | "unbound"
 				/**
 				 * What the control was called. Recovered from the version that
 				 * last declared it, and humanized from the address when that
@@ -4632,7 +4822,8 @@ declare global {
 				configs: NamedConfig[]
 				/** Every action this pipeline's mode is offered (19 §3). */
 				modeActions: {
-					function: string
+					/** The action's key; with `specSlug`, its identity. */
+					key: string
 					name: string
 					specSlug: string
 					origin: "companion" | "attachment"
@@ -7132,6 +7323,10 @@ declare global {
 			namespace RecommendedModels {
 				interface RecommendedModel extends SearchModels.ModelResult {
 					ollamaName: string
+					/** The list's quoted size in decimal bytes (the YAML's GB × 1e9);
+					 * absent when the list quotes none. The Hub's sibling list
+					 * carries no sizes, so `pullOptions[].sizeBytes` is usually empty. */
+					sizeBytes?: number
 					recommendedVram?: number
 					parameterSize?: string
 				}
@@ -9766,17 +9961,25 @@ declare global {
 					string,
 					{ entryId: number; name: string; quantity: number }[]
 				>
+				/** The session's state version (U5f) — moved by every applied change. */
+				version?: number
 			}
 
-			/** One held change, as the ledger renders it. */
+			/**
+			 * One held change, as the ledger renders it. `superseded` (U5f) is
+			 * an accept that found the slot moved since `baseVersion`: decided,
+			 * nothing applied, drawn collapsed with no buttons.
+			 */
 			interface ProposalRow {
 				id: number
 				sessionId: number
 				messageId: number | null
 				kind: "value" | "possession"
 				payload: Record<string, unknown>
-				status: "pending" | "accepted" | "rejected"
+				status: "pending" | "accepted" | "rejected" | "superseded"
 				proposedBy: string
+				/** The state version the change is a delta against; null on a pre-U5f row. */
+				baseVersion: number | null
 				createdAt: string
 			}
 
@@ -9801,8 +10004,22 @@ declare global {
 				qualifiedKey: string
 				label: string
 				description?: string
-				type: "integer" | "enum" | "text" | "boolean" | "derived"
+				type: "integer" | "enum" | "text" | "boolean" | "list" | "derived"
 				appliesTo: ("cast" | "world")[]
+				/**
+				 * A sheet entry said a session of this shape must have a value
+				 * (R7). A surface shows it; creation is what refuses.
+				 */
+				required?: boolean
+				/**
+				 * Retired (R3): everything stored stays and still resolves,
+				 * nothing new is written. A panel greys it with the label it
+				 * last had rather than dropping it — the values are somebody's
+				 * play. Present only when true.
+				 */
+				retired?: boolean
+				/** The sheet that first named it, when a sheet did. */
+				sheetId?: string
 			}
 
 			/**
@@ -9846,7 +10063,13 @@ declare global {
 				/** Value rows. */
 				slotId?: string
 				slotLabel?: string
-				value?: number | string | boolean | null
+				/**
+				 * An array for a `list` slot, one thing for every other type
+				 * (the SDK's `SlotValue`). Referenced rather than spelled out
+				 * so the wire cannot come to disagree with what a write is
+				 * checked against.
+				 */
+				value?: import("@serene-pub/sdk").SlotValue
 				/** Possession rows. */
 				entryId?: number
 				itemName?: string
@@ -9858,7 +10081,7 @@ declare global {
 			interface LedgerBaseline {
 				ownerKey: string
 				slotId: string
-				value: number | string | boolean | null
+				value: import("@serene-pub/sdk").SlotValue
 			}
 
 			namespace Get {
@@ -9977,7 +10200,10 @@ declare global {
 				interface Response {
 					sessionId: number
 					proposalId: number
-					status: "accepted" | "rejected"
+					/** `superseded` (U5f): the accept applied nothing — the slot moved since the proposal's base. */
+					status: "accepted" | "rejected" | "superseded"
+					/** `superseded` only: what moved, by name. */
+					movedSlots?: string[]
 					proposals: ProposalRow[]
 					state: ResolvedState
 				}
@@ -10016,6 +10242,132 @@ declare global {
 				interface Response {
 					sessionId: number
 				}
+			}
+
+			// ── Attributes build (U2) ───────────────────────────────────
+			//
+			// Appended rather than folded into the shapes above: `ResolvedState`
+			// is deliberately a SUBSET of what the resolver returns — the wire
+			// says what a template may read, and a template author may never
+			// see which layer a number came from. What is added here is the
+			// vocabulary a *surface* needs beside the values.
+
+			/**
+			 * One cast member as `state.cast` holds them: their values, plus
+			 * the three facts that say who they are (R17).
+			 *
+			 * The same objects are reachable two ways — `state.cast[slug]` and
+			 * `state.cast.byId[characterId]` — and a client must not build a
+			 * second index over them: the slugs are derived from the ids by the
+			 * resolver, and deriving them again is where the two start to
+			 * disagree about a name with an apostrophe in it.
+			 */
+			interface CastEntry {
+				id: number
+				key: string
+				name: string
+				[slot: string]: unknown
+			}
+
+			/**
+			 * The roles, a **sibling** of the cast and never inside it (R16).
+			 *
+			 * An absent role is an absent KEY, not a null: "nobody has spoken
+			 * yet" and "the speaker is nothing" are different sentences and a
+			 * surface has to be able to tell them apart. There is deliberately
+			 * no `narrator` — an envoy is not a character and carries no state
+			 * — and no `addressed`, which nothing derives without a model.
+			 */
+			interface WhoKeys {
+				speaker?: CastEntry
+				last?: CastEntry
+				previous?: CastEntry
+				user?: CastEntry
+				owner?: CastEntry
+				next?: CastEntry
+				/** Seated, active cast in position order. Always present, possibly empty. */
+				active: CastEntry[]
+			}
+
+			/** An attribute sheet, as a surface offers or draws one (R6). */
+			interface SheetRow {
+				sheetId: string
+				label: string
+				description?: string
+				/** `stored` is authored here; `code`/`plugin` arrive with a package. */
+				origin: "stored" | "code" | "plugin"
+				/** Offered nowhere new, kept everywhere it already is. */
+				retired?: boolean
+				/** The slots it gathers, in order — the order is content. */
+				slots: {
+					slotId: string
+					required?: boolean
+					default?: import("@serene-pub/sdk").SlotValue
+					config?: Record<string, unknown>
+				}[]
+			}
+
+			/** Which sheets one owner has, in the order they are drawn in. */
+			interface OwnerSheetRow {
+				owner: Owner
+				/** Required for `session`/`session_cast`, absent for the template layers. */
+				sessionId?: number
+				sheetId: string
+				position: number
+			}
+
+			/**
+			 * An authored declaration as the editor lists one, and as a panel
+			 * greys one whose package is gone (R4).
+			 */
+			interface DeclarationRow {
+				slotId: string
+				origin: "stored" | "code" | "plugin"
+				/** The account the row belongs to; null for core's and a package's. */
+				userId: number | null
+				retired: boolean
+				/** When this build last saw the declaration. */
+				lastSeenAt: string
+				/** The SDK's `AttributeSlotProps`, verbatim. */
+				props: Record<string, unknown>
+			}
+
+			/** One rule, and what it did — what the ledger's "why" reads. */
+			interface RuleFiring {
+				slotId: string
+				/** `world`, or the cast slug it ran against. */
+				ownerKey: string
+				rule: {
+					when?: string
+					set?: string
+					add?: string
+					remove?: string
+				}
+				result: "fired" | "skipped" | "refused"
+				reason?: string
+			}
+
+			/**
+			 * What one trip through the gate did (R11).
+			 *
+			 * A refusal is a **result** and not an error: the other changes in
+			 * the set were still legitimate, and a surface has to be able to
+			 * show "four landed, one was refused and here is the sentence".
+			 */
+			interface GateOutcome {
+				applied: number[]
+				proposed: number[]
+				refused: { reason: string }[]
+				rulesFired: RuleFiring[]
+				/** Set when a turn's rules went past the budget. Never a refusal. */
+				budgetWarning?: string
+			}
+
+			/** What a hard delete would take with it — shown BEFORE anything is (R3). */
+			interface SlotFootprint {
+				characters: number
+				worlds: number
+				values: number
 			}
 		}
 

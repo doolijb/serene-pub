@@ -16,22 +16,27 @@ Everything in the session updates live over sockets — new messages, generation
 
 Under the hood every session is a `roleplay`-type session with an `isGroup` flag that's automatically true once more than one character is attached.
 
+### The session header
+
+The bar across the top of a session says which session you are in. Its name comes first, on the same column the messages take, so it starts where the story does. Beside it is the cast: up to five faces — each one's portrait, or a disc with their initial, with the personas people speak as tinted gold — and a gold dot on whoever the rotation has queued up next. Last is the genre the session is played in. On a phone, when the session has side panels, the button that opens them sits at the right of the same bar (see [Session Layout](./session-layout.md)).
+
 ## Starting a session
 
-Click **New** at the top of the Sessions sidebar — or **Start a session** on the home screen — to open the start screen. Both land on the same screen: the home's button opens the Sessions view straight onto it, passing along anything it already knows (a character to start with, a persona to speak as), and the wizard's first session on the home screen picks the genre and preset by the same rules, so its defaults and the start screen's never disagree. Starting a session is four answers stacked down one column, each a card that collapses to a one-line summary once it is answered, with a **Change** link to reopen it:
+Click **New** at the top of the Sessions sidebar — or **Start a session** on the home screen — to open the start screen. Both land on the same screen: the home's button opens the Sessions view straight onto it, passing along anything it already knows (a character to start with, a persona to speak as), and the wizard's first session on the home screen picks the genre and preset by the same rules, so its defaults and the start screen's never disagree. When that genre requires a lorebook, the wizard's character card does not create the session itself: it opens the start screen with the character, genre and preset filled in, and the screen asks for the lorebook. Starting a session is a few answers stacked down one column, each a card that collapses to a one-line summary once it is answered, with a **Change** link to reopen it:
 
 1. **Genre** — what kind of session this is. The genre decides which systems exist for it (characters, personas, lorebooks, the composer) and stays with the session for its life. The screen opens on the genre whose default preset an administrator has starred, or the first one registered.
 2. **Preset** — the bundle an administrator has enabled for that genre, which decides which pipelines answer its events and which actions come along. It also supplies the pre-fill the fields below start from; switching presets only fills in fields you haven't typed into yet, never overwriting something you've already entered.
 3. **Who is in it** — the characters, at least as many as the genre requires, and the persona you play as. Your default persona is picked for you. With more than eight characters a filter box appears above the list.
-4. **Name** — optional. Leave it empty and the session takes the name shown in the box as a placeholder: _Session with Wren_ for one character, _Wren, Brother Alder and Sable_ for a group. Under it, **Add a scenario** reveals an optional Scenario box — scene-setting text every prompt will see. It stays closed unless you ask for it, or unless the preset's creation defaults already put text there, in which case it opens with that text in it.
+4. **Lorebook** — only for a genre whose shape has one. Where the genre requires it (Adventure does: the world lives in the lorebook), the card is marked and **Start** stays disabled until one is chosen; with exactly one lorebook it is picked for you, and the list stays on screen so the pick is visible and can be changed. Where it is optional, **None** is offered too. If you have no lorebooks and the genre needs one, the card says so — create one in Lorebooks first.
+5. **Name** — optional. Leave it empty and the session takes the name shown in the box as a placeholder: _Session with Wren_ for one character, _Wren, Brother Alder and Sable_ for a group. Under it, **Add a scenario** reveals an optional Scenario box — scene-setting text every prompt will see. It stays closed unless you ask for it, or unless the preset's creation defaults already put text there, in which case it opens with that text in it.
 
 A step with exactly one answer takes it silently and shows as its summary line rather than asking — so a stock install, one genre and one preset, opens on **Who is in it**. If an administrator has enabled no preset for a genre, the step says so and **Start** is disabled: there is nothing to start the session from.
 
-Everything else a session has — the lorebook, tags, the group reply strategy, turn order, per-pipeline settings, and the scenario again if you skipped it here — is set afterwards in the session's own settings. See [Editing session settings](#editing-session-settings-later).
+Everything else a session has — tags, the group reply strategy, turn order, per-pipeline settings, the lorebook again if you want to change it, and the scenario again if you skipped it here — is set afterwards in the session's own settings. See [Editing session settings](#editing-session-settings-later).
 
 The preset is doing more than labelling the bundle: its **event bindings** are what decide which pipeline answers each of the genre's events — the reply, the greeting on creation, each action that comes along — and which named configuration that pipeline runs with, so two presets on one genre can differ entirely in what a turn actually does. Administrators set both of those, and the pre-filled values the start screen opens with, on the preset's own page under **Admin → Session presets** (bindings under _Event bindings_, the pre-fill under _Creation defaults_).
 
-The preset is the session's second word on the matter, not its first. A session is a work rather than a preference, so a pipeline the session has chosen for itself — its own binding for the reply or for an action — wins over the preset's binding for that event, and the preset in turn wins over an administrator's instance-wide default; only then does the genre's own pipeline answer. A choice that has stopped being eligible — the pipeline it names was retired, or no longer answers this genre's reply — is skipped rather than honoured, and the next layer decides. Today nothing in the session screens makes that per-session choice; it is reachable through the session owner's socket API alone (`sessions:bindFunction`), and the lifecycle events — creation, the greeting — have no per-session choice yet, so for those the preset is still the first word.
+The preset is the session's second word on the matter, not its first. A session is a work rather than a preference, so a pipeline the session has chosen for itself — its own binding for the reply or for an action — wins over the preset's binding for that event, and the preset in turn wins over an administrator's instance-wide default; only then does the genre's own pipeline answer. A choice that has stopped being eligible — the pipeline it names was retired, or no longer answers this genre's reply — is skipped rather than honoured, and the next layer decides. A session's own choice is about a **subject**: the reply is the core event `message-respond`, and the choice selects among the pipelines that answer it for the genre; an action is named by its identity (`<spec slug>#<key>`) and is served by the pipeline that declares it, so its row is where the session's enabled-when override lives rather than a choice among alternatives. Today nothing in the session screens makes that per-session choice; it is reachable through the session owner's socket API alone (`sessions:bindFunction`, with a `subject`). A lifecycle event — creation, the greeting — can carry a per-session row too, on the same terms, though no screen offers one.
 
 If a bound pipeline later stops being available — an upgrade republished it, a plugin that shipped it was removed — the session does **not** stop working: it runs the genre's default pipeline for that event instead, and says so. Everyone in the session sees a banner naming which event fell back (administrators also get the pipeline it was bound to and a link to fix it), the run's own report says which pipeline actually ran and why, and the preset is flagged in **Admin → Session presets** until the binding resolves again.
 
@@ -42,7 +47,7 @@ If a bound pipeline later stops being available — an upgrade republished it, a
 Reopening a session's settings (via the sidebar's Edit action, or Edit session in a session's detail) opens the session's own screen: its name at the top with **Save**, then three tabs.
 
 - **Participants** — the cast and the personas, each row carrying a drag handle, an Active switch, a visibility button and a remove action; removed participants, whose message history you can reassign; guests, when accounts are enabled; and the group reply strategy once there is more than one of anybody.
-- **Settings** — the scenario and the lorebook, the session's preset, its actions, turn order, any fields the genre declares, per-pipeline settings for this session only, and tags.
+- **Settings** — the scenario and the lorebook, the session's preset, its actions, turn order (only for genres whose replies pick a speaker — a narrator-driven genre such as Adventure or the Lair has no turn to order, and the control is absent), any fields the genre declares, per-pipeline settings for this session only, and tags.
 - **Privacy** — what this session exposes of your own data, and to whom.
 
 A tab whose required field is missing carries a dot, so you can see where to look without opening it. Leaving the form with unsaved changes and trying to close the sidebar prompts a **"Your session has unsaved changes. Are you sure you want to discard them?"** confirmation before letting you navigate away.
@@ -58,6 +63,8 @@ The sidebar's per-session overflow menu includes **Delete**, which opens a confi
 ## The Sessions Sidebar
 
 The sidebar list shows every session you own or have been added to as a guest. Each row is:
+
+Each row's last line and message count stay current while you play: a new turn, an edit, a deletion or a regenerated reply in any session you are in updates the row (and the home page's continue card) as it happens, without reopening the list.
 
 - A cover: the first character's picture, with the second badged onto its corner when the session has more than one, so a group reads as a group at a glance.
 - The session name, and at the end of the same line the time the session last moved ("2 h ago") with an ember dot before it when the last thing said was not yours — the session is waiting on you.
@@ -117,9 +124,11 @@ Deactivating a character is the right tool when you want to "bench" a character 
 
 ### Turn Order & Round-Robin Replies
 
-Serene Pub decides who's due for a reply by looking at recent message history, not by tracking a persistent "whose turn is it" pointer — the whole rotation is recomputed fresh every time. Let N be the number of active characters plus personas attached to the session. Serene Pub looks at the last N messages: if every character and persona appears at least once in that window, the rotation is considered "healthy" (nobody's been silently dropped from the conversation), and any character who hasn't sent a message in the last N-1 of those messages is **due**. If more than one character is due at once, whichever has gone the longest without replying (or has never replied at all) is suggested first.
+Serene Pub decides who's due for a reply by looking at recent message history, not by tracking a persistent "whose turn is it" pointer — the whole rotation is recomputed fresh every time. Let N be the number of active characters plus personas attached to the session. Any character who hasn't sent a message in the last N-1 messages is **due**. If more than one character is due at once, whichever has gone the longest without replying is suggested first. When every character has replied within those N-1 messages, nobody is due — it's your turn.
 
-A character who has never sent a single message in the visible history is always treated as immediately due, regardless of whether the window currently looks "healthy" — this is what makes a brand-new session produce its first reply, and what keeps a character newly added mid-session from waiting around for the window to catch up.
+That lookback is the whole rule. Messages written outside the rotation — a character's answers to a form, two of your sends in a row, two manual triggers on one character — push the other cast members further back and make them due sooner; they never leave the rotation with nobody to pick.
+
+A character who has never sent a single message in the visible history is always treated as immediately due — this is what makes a brand-new session produce its first reply, and what gives a character newly added mid-session a first turn at once.
 
 Because this is recomputed from history rather than tracked as state, a persona doesn't have to wait for every other persona to speak before the next due character can go, and manually triggering a character out of turn (see Triggering Responses Manually, above) never leaves the rotation "stuck" on a character who was skipped — the very next automatic check just re-reads the updated history and picks correctly from it.
 
@@ -171,8 +180,12 @@ limit. Older turns will be trimmed."
 
 ### The composer's footer
 
-The footer holds four things, left to right:
+The footer holds up to five things, left to right:
 
+0. **The channel strip** — one small button per channel, shown **only when the session's genre has
+   more than one**, which today means the Writing Room. Whichever is lit is where your next message
+   lands and what the conversation above shows; switching hides the other channel's messages rather
+   than losing them. A session with one channel — every other genre — draws nothing here at all.
 1. **Your persona** — the avatar and name you are writing as. When more than one of your personas is
    in the session, a chevron marks it and clicking opens the switcher (see [Personas & Persona
    Switching](#personas--persona-switching)). This is the one control guests still get.
@@ -187,8 +200,9 @@ The footer holds four things, left to right:
 ### Actions
 
 Above the card sits one quiet word, **Actions**. Click it (or press Enter on it) and a row of chips
-opens beneath it; the row stays while anything in it has focus and folds away when focus leaves or
-on Escape. It wraps as far as it needs and never scrolls sideways.
+opens beneath it; the row stays open until you click **Actions** again or press Escape while
+something in it has focus — moving on to the transcript or the field leaves it where it is, so the
+list above never shifts under a click. It wraps as far as it needs and never scrolls sideways.
 
 What the genre contributes comes first as filled chips: an adventure session has **Look**, **Rest**
 and **Time passes**; a chat session has its Narrator, **Side character** and **Image**, and whatever
@@ -226,24 +240,43 @@ an **audience** (who may *see* it and who may *act* on it), and whether it is **
   one. Opening that menu (or the `/` palette) is meeting them; the mark clears for you and stays for
   everyone else until they open it too.
 - **Who may act.** A genre's action is seen by every member of the session and, unless it says
-  otherwise, used by the owner alone: a guest sees the chip greyed with *not yours to use here*
-  rather than seeing nothing (the chip stays reachable by keyboard and reads the reason aloud; it
-  simply does nothing when pressed). An action may widen that to any participant. Core's message
+  otherwise, used by the owner alone: a guest sees the chip greyed with *'Roll' is not yours to
+  use here — its audience is owner.* rather than seeing nothing (the chip stays reachable by
+  keyboard and reads the reason aloud; it simply does nothing when pressed) — the very sentence
+  the server refuses a press with, since one rule has one sentence wherever it is heard. An
+  action may widen that to any participant. Core's message
   verbs follow the per-message ownership rule under [Guest Permission
   Boundaries](#guest-permission-boundaries) — Stop is any member's, Branch is the owner's, the rest
   belong to whoever the message belongs to; a plugin's message action that names the same rule
   follows it too. The server checks the same declaration when the action fires — *the one you
-  pressed*, not every action that happens to share its function: two actions on one function (say
-  Serene Pub's own **Summarize** and a plugin's) are two things, each with its own audience, each
-  running its own pipeline, each switched on and off on its own under **Actions** in session
-  settings. The greyed chip is a courtesy and the refusal is the law. A ⋮ menu entry that is grey
+  pressed*, named by its identity (the pipeline that declares it, and its key): two actions that
+  happen to share a key (say Serene Pub's own **Summarize** and a plugin's) are two things, each
+  with its own audience, each running its own pipeline, each switched on and off on its own under
+  **Actions** in session settings. The greyed chip is a courtesy and the refusal is the law. A ⋮ menu entry that is grey
   says why the same way — *not yours to change*, *wait for the reply to finish*, *finish the edit
   first*, *unhide it first*, *only the newest reply can be regenerated*, *nothing to swipe to* —
   in its tooltip and to a screen reader, and stays reachable by keyboard.
-- **A name two actions share.** When two pipelines offer the same function under one slash name,
-  the palette lists the name once and running it leaves the choice of pipeline to the bindings —
-  the session's own, then the preset's, then the instance's, then the genre's default — rather
-  than to whichever happened to be listed first.
+- **Why is a button grey?** Because a condition the action declared does not hold right now —
+  and the grey control tells you which. Besides the audience, every action may carry an
+  **enabled-when**: a declared condition over what the session has already said about itself — a
+  world slot (a genre's *Survey* that waits for a location, say), a field, whether anything is
+  generating, or a fact about the message it is pressed on (the newest reply, hidden, a swipe to
+  take). The condition is data, never code: a genre may ship defaults per function (none of
+  Serene Pub's own genres do), the action may declare its own, and a session may override one
+  function's — the nearest wins. A control whose condition does not hold stays listed — the chip, the ⋮ menu entry, the **More**
+  menu row and the `/` palette row alike — greyed with the condition's reason in its tooltip,
+  as a second line in the palette and to a screen reader, and the same sentence is what the
+  server refuses with if the press is made anyway. The verdict follows the values: set the slot
+  and the chip lifts without a reload, and every time a run ends the server re-sends the list.
+  *Generating* counts every run of the session — an image render or a summary is the session
+  being busy, not only a reply. Regenerate, Continue and Swipe act on the **newest** reply
+  only, arrows included: swiping an earlier reply would rewrite history mid-conversation, so
+  an older row's arrow is grey with *only the newest reply can be regenerated*. ⏳ The session
+  override has no editor yet; it is set over the session bindings socket alone.
+- **One name, one action.** A slash name is one action's: two pipelines claiming the same name for
+  the same genre is refused when the second is published, whatever their keys. A plugin's names
+  are prefixed with the plugin's id, so a plugin action keyed like one of Serene Pub's verbs is a
+  different action under a different name and never shadows it.
 - **Channels.** An action declared for one channel appears on that channel's composer and messages
   only; one declared for none appears everywhere. A channel decides where an action is *listed*,
   never who may use it.
@@ -264,6 +297,71 @@ Serene Pub's own actions have bare names (`/narrate`, `/continue`, `/retry`); a 
 `/<plugin>.<action>` (`/acme.roll`), so two authors can never claim one name, and the palette
 completes the long form so nobody types it. Slash names are stable and never translated — the label
 beside them is.
+
+#### Questions put to the cast — forms
+
+Some actions are not finished when they run: they **ask**. A pipeline can end a message with a
+question and a row of choices (or a small form), addressed to one participant — the Adventure
+narrator's **Ask** puts a question with two to four options to one member of the cast: *Will you
+come to the festival? — Yes · Maybe · No*. That block is a **form**: an action still waiting for
+its answer, and the person it is addressed to is the only one who may give it.
+
+- **If a person portrays the addressee** — the character is your persona, say — the buttons are
+  yours: click one and the answer runs like any action you fired, receipted, visible in the run
+  history, and the line it writes is yours, under your persona. Anyone else pressing them is told *that question was put to Tom, and it is theirs to
+  answer*, and sees no buttons on the block in the first place — only *Awaiting an answer*. The
+  owner is no exception: asking is not answering.
+- **If the AI portrays the addressee** — Tom is in the cast and nobody has him as a persona — the
+  genre's **answer pipeline** answers for him the moment the asking run finishes: it reads Tom's
+  card and the conversation, puts the question to the model as Tom with the options spelled out,
+  asks for one JSON object naming a choice, and then presses the button exactly as a person would
+  have. Tom's *Maybe* lands as Tom's line, the run appears in the history as a child of the run
+  that asked (the inspector shows the parent), and the next reply's pipeline sees *a question was
+  answered* among the session's changes. Nothing about it is magic: every step is a node on a
+  receipt, an administrator can turn review on for the answer like any other write, and the model
+  never sees a confirmation screen — it sees the question and it answers.
+- **If the question is put to nobody in particular** — the narrator named no one, or a name that
+  resolves to nobody here (unknown, or a participant since departed) — the buttons are open to
+  whoever the action's audience names (Adventure's *Answer* admits any participant), and the
+  answer is the presser's: their persona's line when they hold one in the session, else their own.
+- **If the block names someone nobody here portrays** — a reference the narrator wrote to a
+  character outside the session — the block waits, and the owner may answer it.
+
+A question is answered **once**. The moment an answer lands the block is marked with who answered
+and what they chose, every client greys it and shows the answer in place of the buttons, and a
+second press — a person's or the model's — is refused naming who already answered.
+
+A question can also be **superseded**: every question carries the point in its channel it was asked
+at, and once the conversation on that channel has moved past it unanswered — any newer line on the
+same channel — a press on it is refused with *That question was overtaken — the conversation moved
+on before it was answered*, whether the press is yours or the answer pipeline's (whose run then
+halts on that sentence, receipted), and the block collapses to one line, *Superseded — the
+conversation moved on*, with no buttons. A question answered before the conversation moved on stays
+answered; a line on another lane of the channel changes nothing; and the first refused press
+records *a question lapsed* among the session's changes so the next reply's pipeline knows. An
+answer is not the conversation moving on: when a message puts three questions to three characters,
+each answer lands as its own line and the other questions stay open, so all three get answered.
+
+A question that asks another question is allowed to, and stops: a chain of answers is cut at four
+runs deep (and sixteen runs per asking tree), and the cut is written down as a halted run naming
+the cap rather than left to spin. While the AI is answering, the progress card of the action you
+fired shows the answer being made — *Answer a form* — and your press is acknowledged once the whole
+chain has finished.
+
+A pipeline may point a question's buttons at **another pipeline's action** on purpose — the
+Adventure narrator's *Ask* points its choices at *Answer*, which lives on its own pipeline — and
+the press is then held to *that* action's audience, which is how a question written by the owner's
+narrator can be answerable by any participant. The write checks the named action exists for the
+session's genre, is not marked `world`, and carries the key the button says it does; a button
+that disagrees with the action it names is refused at the write.
+
+**The line.** Only questions inside the story can be put to a character. An action whose result
+reaches outside it — a character card, lorebook data, settings, permissions, connections — is
+marked `world` by whoever declares it, and a `world` action can never ride a message as a
+question, can never be widened past the owner (or an administrator), and can never be answered by
+a model: it belongs in the composer or the review gate, and a pipeline that tries to put one in a
+message is refused at the write. So a character asking a question is fine, and a character
+granting another character permission is impossible by construction.
 
 ### Auto-Cascading Group Replies
 
@@ -312,7 +410,7 @@ the column.
 
   | Copied | Not copied |
   | --- | --- |
-  | the cast (active members, with their order, activity and visibility), the presences (personas), the guests, the tags | session-scope function bindings — the branch resolves its functions from the genre and preset afresh |
+  | the cast (active members, with their order, activity and visibility), the presences (personas), the guests, the tags | session-scope bindings — the branch resolves its subjects from the genre and preset afresh |
   | the messages up to and including the fork, each on its own channel, all settled | session-scope pipeline configuration overrides — a setting changed for the source session is the source's |
   | the genre, the preset and the genre's field values; the scenario, the reply strategy, the lorebook attachment | the layout — the branch opens in the preset's default layout |
   | | state anchored to messages (attribute and possession changes the ledger tied to a line) — the copies are new rows the ledger has never seen |
@@ -460,6 +558,8 @@ An Adventure session tracks seven things, and they are why the genre has widgets
 
 Nothing the model proposes takes effect on its own. Each change appears under the reply as a pending line with **Accept** and **Reject**, because a model that could set a number silently could rewrite your character between two messages with nothing you could refuse. The changes are anchored to the message that produced them, so regenerating or swiping a reply takes its changes back with it.
 
+Every change is also a delta against the state the model read: the session keeps a **state version** that every applied change moves by one, in turn order, and a proposal remembers the version it was made against. **Accept** compares. If the value it targets has not been touched since — however much else has changed — the change still holds and is applied. If that value *has* moved (you edited the bar yourself, or an earlier proposal on the same slot was accepted), the proposal is marked **superseded**: nothing is applied, and the line stays under its reply collapsed, *Superseded — Health changed since this was proposed*, with no buttons. A session that trusts the narrator gets the same rule at the write: a change whose value moved since the turn read it is refused on the run's receipt, naming the two versions, and the next turn's state-keeper proposes afresh against what it reads then. It is the one rule the questions above follow too: what the conversation, or the state, has moved past is superseded — never silently re-applied.
+
 ### Session settings
 
 Three settings, on the session, under **Edit session**:
@@ -472,17 +572,139 @@ Three settings, on the session, under **Edit session**:
 
 ### Buttons
 
-Three actions come with the genre, in the action row above the composer's tab strip:
+Four actions come with the genre, in the action row above the composer's tab strip:
 
 - **Look**: the narrator describes where you are, from the lore and the world state. It changes nothing, and it is the button to start a new adventure with, because creating a session deliberately makes no model call and the opening scene is yours to ask for.
 - **Rest**: the party stops. Stamina comes back, health comes back slowly and only somewhere safe, and the clock moves on.
 - **Time passes**: the world clock steps on one notch, and the weather may turn with it.
+- **Ask** (`/ask`): the narrator puts one question, with two to four choices, to one member of the cast — a decision that is theirs to make right now. The question lands as a narration with the choices under it, addressed to that character. If the character is your persona the buttons are yours; if the AI plays them, the genre's answer pipeline chooses for them as them and their answer lands as their line (see [Questions put to the cast](#questions-put-to-the-cast--forms)). **Answer** is the fifth action, the one the buttons fire — and only the buttons: it lives in the `form` venue, which no menu lists, so a question is answered where it was asked and nowhere else.
 
 Rest and Time passes write no message at all. That is not a failure: a clock tick is a ledger line, not a paragraph, and Look is the button for the paragraph.
 
 ### What it needs
 
 The **lorebook** is where the world lives, and an item somebody is carrying is an entry in it, so an adventure without one has nothing to describe or to hand out. The genre also makes several model calls per turn rather than one, so it is the genre to point at a local model you are not paying per token for. Each stage has its own connection and sampling settings in the pipeline panel, so the planner and the state-keeper can run on a small model while the prose runs on a large one.
+
+## Writing Room
+
+**Writing Room** is a co-writing session, and the only genre with **two channels that play different
+parts**. `Main` is the conversation with your companion — what happens next, what is wrong with the
+last page, who this character really is. `Manuscript` is the book itself: one text, grown in chunks.
+The channel strip in the composer's footer is how you move between them.
+
+The difference is not cosmetic. A message on `main` is a turn with a speaker, and the companion
+answers it as itself. The manuscript is a **folio**: its messages are folded into one block of prose
+with no names on them and put in front of the conversation, so the model reads the book as a book and
+the chat as a chat. Writing on the manuscript therefore produces a **continuation** — the next part
+of the text, with nothing announcing who is speaking — while writing on `main` produces a reply.
+
+**Who answers.** With no character seated, your companion is the genre's envoy, the **Scribe** — a
+plain writing partner with no fiction of its own. Seat one library character and the companion
+becomes that person, in their own voice, with their card and example dialogue. One character at
+most, and no persona: you are the author, not a participant.
+
+**The bible.** The lorebook here is your story bible — places, people, rules, the things that must
+stay true — and it is optional. It is read on every turn by keyword, and **Add to bible** is how it
+grows: the model proposes one entry and holds it at the review gate, where you edit the name and the
+content before anything is written.
+
+**Session settings.** Four, and every one of them is read by a shipped prompt: **Point of view**
+(first, close third, omniscient), **Tense** (past or present), **Chunk length** (roughly how many
+words a continuation adds; 300 by default), and the **Author's note** — standing instructions for
+the manuscript, read on every turn, so keep it short.
+
+**Buttons.** In the composer: **Continue** (another chunk at the chunk length), **Brainstorm** (three
+or four different things that could happen next), **Add to bible**, and **Export**. On a chunk of the
+manuscript — its ⋮ menu, and only on the newest one: **Rewrite** (the same passage told another way),
+**Expand** (the same beats with more room), **Tighten** (every beat kept, fewer words) and **Critique
+this passage**, which answers in the conversation rather than over the prose. The three that rewrite
+replace the chunk they were pressed on; nothing about a passage is lost, because **Delete is off on
+the manuscript** — a paragraph of the book is not a paragraph of chat.
+
+**Export** posts the whole manuscript as one Markdown block in the conversation, which you can select
+and copy. It is not a file: Serene Pub has no download path for a session's own content yet, and one
+is not invented here. A very long manuscript is refused rather than truncated — a message block holds
+64 KiB.
+
+**What it does not do yet.** The manuscript is not its own panel: the conversation and the book share
+one log, switched by the channel strip, because the message log cannot yet be pointed at a single
+channel. There is no word count. Both are noted where they are missing rather than faked.
+
+## Lair
+
+**Lair** turns Adventure inside out: you are the dungeon, and the party delving into it is the AI.
+Nothing you type is a line of dialogue. The composer's text reaches the planner as **direction** from
+whoever runs this place — *the torches gutter as they reach the stair*, *the cleric is more frightened
+than she lets on* — and the reply is the dungeon's account of what the party did about it. There is no
+persona in a Lair: the master is not in the scene. It takes at least one character (the party) and a
+lorebook (the dungeon, one location entry per room, each naming its exits), and it writes to both the
+lorebook and the timeline, because building rooms is the game.
+
+**Two ways to take a turn.** The **Turn style** setting is read mid-session, so you can change it
+between one room and the next. In **cast** style the planner decides what the party does, the
+narrator writes the beat, and each character the planner named speaks in their own voice; the turns
+are joined into one reply, as Adventure's are. In **narrator** style the party does not speak for
+themselves: the one narrator writes the whole moment, dialogue included, which is exactly the thing
+Adventure's narrator is told never to do.
+
+**The party knocks.** When the planner sends the party through an exit that leads to a room the
+dungeon does not have yet, the turn stops and puts the question to you instead of narrating a room
+nobody built: **build this room**, or **let the narrator improvise** what lies beyond the door.
+Either answer writes the room into the lorebook — improvise drafts it, build opens it empty in the
+dungeon's own layout — and either way it stops at a review gate first, where you name it and edit
+the text before it lands (put the exits in the text: *Exits: north → the Old Well*). **Build room**
+in the composer is the same write without a knock. Lore is written here on purpose, and it is still
+yours to approve, not the model's to file. Because the question is put to you, the room's buttons
+can write to the world; a question put to a character never can.
+
+**Steering.** Besides Build room, the action row has **Whisper** (a standing private note to one
+character, read by that character's voice on its next turn — private the way a stage whisper is,
+which is to say every agent that reads the scene's state can see it), **Nudge** (a direction the
+planner reads next turn that produces no message at all), **Trigger trap** and **Reveal** (narrator-only
+turns with a fixed brief). The party carries Adventure's **Health**, **Stamina**, **Mood** and
+**Trust**; the world carries its **Location** and, new here, the **Floor** and the party's **Gold**.
+The state-keeper proposes changes after each turn exactly as in Adventure, held for you to accept
+unless **Trust the narrator** is on.
+
+**What it does not do yet.** The right-hand column shows the world state rather than a map of the
+rooms you have built; a map widget is pending. Whether an exit already leads somewhere is the
+planner's judgement from the lore it was shown, so a wrong answer costs one knock, never a turn.
+
+## Whodunit
+
+**Whodunit** is a case, a room of suspects and one detective. You play the detective as your persona;
+the suspects are at least two characters, and the case lives in a required lorebook: the scene, the
+history, and what each suspect knows and will not volunteer. The narrator writes the scene in the third
+person and never speaks for anyone; each suspect answers in their own voice.
+
+**Hidden information is the genre.** A suspect's voice is built from the case's world lore, the
+history, the conversation, their own card, and **their own private entries** — the character lore
+bound to them — and never from the private entries of the other suspects. Nothing one suspect knows
+reaches another through lore. Two things follow from how this is built today. A private entry that
+is bound to nobody is treated as the world's knowledge, and the narrator sees it. And everything in
+a suspect's **card** is visible to every voice, because the cast is rendered into every prompt; keep
+what a suspect must not know about the others out of their card description and in the lorebook,
+bound to them.
+
+**Who did it is a fact before the first turn.** When the session is created, the culprit is picked
+from the suspects by a rule keyed to the session, the way a shuffled deck is fixed once shuffled:
+no model chooses, nothing is stored where a widget would draw it, and no suspect's voice is told
+they are guilty. When you accuse, the same rule picks again, the two names are compared, and the
+comparison decides **solved** or **failed** before any prose is written. The narrator is then told
+the verdict and the culprit and writes the reveal. Adding or removing a suspect mid-case reshuffles
+the deck, so settle the cast before the questioning starts.
+
+**Buttons.** **Question** puts a question to one suspect you pick, and that suspect answers from what
+they alone know. **Search** is a narrator turn over the scene that may turn up a clue; the world's
+**Clues found** count rises through the state-keeper, held for you to accept unless **Trust the
+narrator** is on. **Accuse** asks you to name a suspect, and is offered only while the **Case** is
+open: your accusation is compared with the culprit and the case closes as **solved** or **failed**,
+and the narrator writes the ending naming the culprit. Each suspect also carries a
+**Suspicion** score the state-keeper moves as the questioning goes.
+
+**Session settings.** **Tone** as Adventure's; **Candour**, which is how much a suspect volunteers —
+*open* answers what you asked, *guarded* answers the narrowest reading of it and nothing more; and
+**Trust the narrator**.
 
 ## Guide
 
@@ -496,7 +718,7 @@ An **envoy** is a speaker a **genre** brings with it: a cast member that exists 
 
 - **Seating.** Creating a session seats every envoy the genre marks as its default, with no choice offered; a preset may pre-seat others. In **Edit Session → Participants**, an **Envoys** card lists the genre's envoys with a switch to seat or unseat each one (the session owner's; guests see it read-only — a refused toggle springs back with the reason). An envoy an action brings — a dice plugin's *Roll* reporting as "the Dice Master" — is seated the moment its action posts and has no switch. A **branch** keeps the seats the source had; a genre **upgrade** seats the defaults the new version brings, and never re-seats one you unseated. An envoy is not a character: a genre that admits no characters is satisfied with an envoy seated.
 - **Turns.** An envoy that **replies in turn** is a candidate like any active character: when nobody else is due, it answers; with a mixed cast, the turn strategy may pick it. An envoy that speaks **on action** only ever posts through its action and is never picked for a turn — nor can it be asked to take one. If a session's genre admits no characters and no in-turn envoy is seated, sending a message tells you so: *This session has no one to answer — seat an envoy in Session settings.*
-- **Messages.** An envoy's reply shows its name and image from the genre's declaration. It has no character page to open, and Regenerate, Continue and Swipe work on it as on any reply; the inspector's *Portrayed by* line shows it as, for example, **Guide · AI**. An envoy's line is the **session owner's** to edit, regenerate or delete — as narration is — never a guest's. Your own line written with no persona is **yours**: the person who wrote it, and nobody else, may change it.
+- **Messages.** An envoy's reply shows its name and image from the genre's declaration. It has no character page to open, and Regenerate, Continue and Swipe work on it as on any reply; the inspector's *Portrayed by* line shows it as, for example, **Guide · AI**. An envoy's line is the **session owner's** to edit, regenerate or delete — as narration is — never a guest's. Your own line written with no persona is **yours**: the person who wrote it, and nobody else, may change it. A message nothing names any more — a reply whose character was later deleted from the library, or a line whose author's account is gone (it shows as **Unknown**) — is the session owner's to edit, hide or delete, as narration is.
 - **Its words are configuration.** An envoy's instructions are the genre's defaults, tuned in the Pipelines panel as a deviation — the step named **Envoy · <name>** on the pipeline that reads them — and reset by clearing the field. There is no separate schema, no prompt row and no "envoy editor": what the genre and the installed actions ship is what a session gets, and nobody authors an envoy for another genre.
 
 ## Narrator Response

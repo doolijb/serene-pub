@@ -29,7 +29,7 @@ import {
 	listSpeakerStrategies,
 	genreFieldsFor,
 	sessionGenreAvailable,
-	resolveFunctionSpec,
+	resolveSubjectSpec,
 	shapeViolations,
 	upgradeSessionGenre
 } from "$lib/server/pipelines/entities/sessionGenres"
@@ -167,37 +167,35 @@ describe("existing sessions", () => {
 	})
 })
 
-describe("function routing (19 §3, U-C3)", () => {
-	it("respond is the bucket: the entry node pins the mode's type", async () => {
+describe("subject routing (19 §3, U-C3; plans/31 V2)", () => {
+	it("the primary turn is the bucket: the inlet lock pins (genre, event)", async () => {
 		expect(
-			await resolveFunctionSpec(db, STANDARD_GENRE_ID, "respond")
+			await resolveSubjectSpec(db, STANDARD_GENRE_ID, sessionEvents.messageRespond)
 		).toBe(RESPOND_SPEC_ID)
 	})
 
-	it("narrate resolves through contributed data, not a hardcoded branch", async () => {
+	it("the narrator action resolves to its declarer through contributed data, not a hardcoded branch", async () => {
 		// This is the U-C3 proof: the narrate button reaching the narrate spec
-		// is now a fact in a `contributes.triggers` row, and deleting that
+		// is now a fact in a `contributes.actions` row, and deleting that
 		// declaration from the spec would break this test — not a string
 		// comparison in generateResponse.
 		expect(
-			await resolveFunctionSpec(db, STANDARD_GENRE_ID, "narrate")
+			await resolveSubjectSpec(db, STANDARD_GENRE_ID, `${NARRATE_SPEC_ID}#narrate`)
 		).toBe(NARRATE_SPEC_ID)
 	})
 
-	it("a function nothing serves resolves to null — the caller keeps its floor", async () => {
+	it("a subject nothing serves resolves to null — the caller keeps its floor; so does a bare key", async () => {
 		expect(
-			await resolveFunctionSpec(
-				db,
-				STANDARD_GENRE_ID,
-				"summon-dragon"
-			)
+			await resolveSubjectSpec(db, STANDARD_GENRE_ID, "core:spec/summon#summon-dragon")
 		).toBe(null)
+		// Neither an identity nor an event id names anything.
+		expect(await resolveSubjectSpec(db, STANDARD_GENRE_ID, "narrate")).toBe(null)
 		// An unknown mode has no bucket and no contributors either.
 		expect(
-			await resolveFunctionSpec(
+			await resolveSubjectSpec(
 				db,
 				"chariot.dungeon:inlet/crawl@1",
-				"respond"
+				sessionEvents.messageRespond
 			)
 		).toBe(null)
 	})
@@ -317,6 +315,40 @@ describe("the swap list (19 §5, U-C4)", () => {
 	})
 })
 
+describe("the Turn order control is offered only where there is a speaker node to swap", () => {
+	it("a Chat session has one; an Adventure or Lair session — narrator-driven, no `speaker` task — has none, so the list handler offers no strategies", async () => {
+		const { sessionHasSpeakerNode } = await import("./bindings")
+		const [user] = await db
+			.insert(schema.users)
+			.values({ username: "speaker-node", isAdmin: false })
+			.returning()
+		const make = async (genreId: string) => {
+			const [session] = await db
+				.insert(schema.sessions)
+				.values({ userId: user.id, isGroup: true, genreId } as any)
+				.returning()
+			return session.id
+		}
+		expect(await sessionHasSpeakerNode(db, await make("core:genre/chat"))).toBe(true)
+		expect(await sessionHasSpeakerNode(db, await make("core:genre/adventure"))).toBe(false)
+		const lair = await make("core:genre/lair")
+		expect(await sessionHasSpeakerNode(db, lair)).toBe(false)
+
+		// Through the handler: an empty list, so the card never renders and
+		// Apply can never be pressed to hear "has no next-speaker node".
+		const { sessionsSpeakerStrategiesHandler } = await import(
+			"$lib/server/sockets/sessions"
+		)
+		const res = await sessionsSpeakerStrategiesHandler.handler(
+			{ user: { id: user.id }, io: { to: () => ({ emit() {} }) } } as any,
+			{ sessionId: lair },
+			() => {}
+		)
+		expect(res.strategies).toEqual([])
+		expect(res.selected).toBeNull()
+	})
+})
+
 describe("the trigger set (19 §4, U-C5)", () => {
 	it("the narrate button is a row: contributed by the narrate spec, for the standard mode", async () => {
 		const triggers = await listGenreTriggers(db, STANDARD_GENRE_ID)
@@ -326,11 +358,12 @@ describe("the trigger set (19 §4, U-C5)", () => {
 		// failure in a test that has nothing to say about it.
 		// The action model's shape (R-15, U5c): a key, a venue LIST, the
 		// audience defaults, `quick`, and the slash name derived from the key.
-		expect(triggers.find((t) => t.function === "narrate")).toEqual({
+		expect(triggers.find((t) => t.key === "narrate")).toEqual({
 			key: "narrate",
-			function: "narrate",
 			venues: [{ kind: "composer" }],
 			audience: { see: ["participant"], act: ["owner"] },
+			// The effects line (U5d): a message-writing action stays in the fiction.
+			effects: "fiction",
 			quick: true,
 			slash: "narrate",
 			icon: "book-open-text",
@@ -354,11 +387,12 @@ describe("the trigger set (19 §4, U-C5)", () => {
 		// This is also the image feature's entry point — if this row is missing
 		// there is no way for a person to reach any of it.
 		const triggers = await listGenreTriggers(db, STANDARD_GENRE_ID)
-		expect(triggers.find((t) => t.function === "generate-image")).toEqual({
+		expect(triggers.find((t) => t.key === "generate-image")).toEqual({
 			key: "generate-image",
-			function: "generate-image",
 			venues: [{ kind: "composer" }],
 			audience: { see: ["participant"], act: ["owner"] },
+			// The effects line (U5d): a message-writing action stays in the fiction.
+			effects: "fiction",
 			quick: true,
 			slash: "generate-image",
 			icon: "image",
@@ -381,13 +415,13 @@ describe("the trigger set (19 §4, U-C5)", () => {
 			.where(eq(schema.pipelineSpecs.id, spec.id))
 		try {
 			const gone = await listGenreTriggers(db, STANDARD_GENRE_ID)
-			expect(gone.find((t) => t.function === "narrate")).toBeUndefined()
+			expect(gone.find((t) => t.key === "narrate")).toBeUndefined()
 			// And routing agrees in the same breath: the same rows feed both.
 			expect(
-				await resolveFunctionSpec(
+				await resolveSubjectSpec(
 					db,
 					STANDARD_GENRE_ID,
-					"narrate"
+					`${NARRATE_SPEC_ID}#narrate`
 				)
 			).toBe(null)
 		} finally {
@@ -672,7 +706,7 @@ describe("session actions resolve through session, preset, then default", () => 
 				STANDARD_GENRE_ID,
 				userId
 			)
-		).find((f) => f.function === "narrate")!
+		).find((f) => f.key === "narrate")!
 
 	it("offers the mode's contributed actions, and not respond", async () => {
 		const all = await listSessionFunctions(
@@ -681,10 +715,10 @@ describe("session actions resolve through session, preset, then default", () => 
 			STANDARD_GENRE_ID,
 			userId
 		)
-		expect(all.map((f) => f.function)).toContain("narrate")
-		// `respond` is intrinsic (§3), not a contribution — a session that could
-		// not reply would not be a session, so it is never in this list.
-		expect(all.map((f) => f.function)).not.toContain("respond")
+		expect(all.map((f) => f.key)).toContain("narrate")
+		// The primary turn is an event (§3), not a contribution — a session
+		// that could not reply would not be a session, so it is never in this list.
+		expect(all.map((f) => f.key)).not.toContain("respond")
 	})
 
 	it("starts a companion on, with the default answering", async () => {
@@ -720,7 +754,7 @@ describe("session actions resolve through session, preset, then default", () => 
 			STANDARD_GENRE_ID,
 			userId
 		)
-		expect(live.map((f) => f.function)).not.toContain("narrate")
+		expect(live.map((f) => f.key)).not.toContain("narrate")
 	})
 
 	it("returning it to the default deletes the row rather than storing it", async () => {
@@ -829,7 +863,7 @@ describe("a preset decides what a session includes", () => {
 				STANDARD_GENRE_ID,
 				userId
 			)
-		).find((f) => f.function === "narrate")!
+		).find((f) => f.key === "narrate")!
 		expect(n.included).toBe(false)
 		expect(n.enabled).toBe(false)
 		expect(n.source).toBe("preset")
@@ -866,7 +900,7 @@ describe("a preset decides what a session includes", () => {
 				STANDARD_GENRE_ID,
 				userId
 			)
-		).find((f) => f.function === "narrate")!
+		).find((f) => f.key === "narrate")!
 		expect(n.enabled).toBe(true)
 		expect(n.source).toBe("session")
 
@@ -1100,7 +1134,7 @@ describe("a session runs on a preset", () => {
 				STANDARD_GENRE_ID,
 				userId
 			)
-		).find((f) => f.function === "narrate")!
+		).find((f) => f.key === "narrate")!
 		expect(n.included).toBe(false)
 		expect(n.source).toBe("preset")
 	})
@@ -1179,23 +1213,23 @@ describe("a session's own binding beats its preset (R-6)", () => {
 		scopeId: number,
 		specId: number
 	) =>
-		db.insert(schema.pipelineFunctionBindings).values({
+		db.insert(schema.pipelineBindings).values({
 			scopeKind,
 			scopeId,
 			genreId: STANDARD_GENRE_ID,
-			functionKey: "respond",
+			subject: sessionEvents.messageRespond,
 			specId
 		})
 	const unbind = async () =>
 		db
-			.delete(schema.pipelineFunctionBindings)
-			.where(eq(schema.pipelineFunctionBindings.genreId, STANDARD_GENRE_ID))
+			.delete(schema.pipelineBindings)
+			.where(eq(schema.pipelineBindings.genreId, STANDARD_GENRE_ID))
 
 	const verdict = async () => {
-		const { resolveFunctionVerdict } = await import(
+		const { resolveSubjectVerdict } = await import(
 			"$lib/server/pipelines/entities/sessionGenres"
 		)
-		return resolveFunctionVerdict(db, STANDARD_GENRE_ID, "respond", {
+		return resolveSubjectVerdict(db, STANDARD_GENRE_ID, sessionEvents.messageRespond, {
 			sessionId
 		})
 	}
@@ -1282,11 +1316,11 @@ describe("a session's own binding beats its preset (R-6)", () => {
 			// The preset's session: the preset wins over the instance row.
 			expect((await verdict()).spec).toBe(RESPOND_SPEC_ID)
 			// A session on no preset: the instance row is the top layer left.
-			const { resolveFunctionVerdict } = await import(
+			const { resolveSubjectVerdict } = await import(
 				"$lib/server/pipelines/entities/sessionGenres"
 			)
 			expect(
-				(await resolveFunctionVerdict(db, STANDARD_GENRE_ID, "respond"))
+				(await resolveSubjectVerdict(db, STANDARD_GENRE_ID, sessionEvents.messageRespond))
 					.spec
 			).toBe(OTHER)
 		} finally {
@@ -1308,10 +1342,10 @@ describe("a session's own binding beats its preset (R-6)", () => {
 
 describe("the respond bucket is read *and* write", () => {
 	it("resolves the standard mode to the reply pipeline", async () => {
-		const slug = await resolveFunctionSpec(
+		const slug = await resolveSubjectSpec(
 			db,
 			STANDARD_GENRE_ID,
-			"respond"
+			sessionEvents.messageRespond
 		)
 		expect(slug).toBe(RESPOND_SPEC_ID)
 	})
@@ -1351,24 +1385,24 @@ describe("the respond bucket is read *and* write", () => {
 		// Written this way deliberately. Asserting only on the winner passed
 		// with the check removed — respond sorts first either way — so the
 		// test proved nothing about the rule it was named for.
-		await db.insert(schema.pipelineFunctionBindings).values({
+		await db.insert(schema.pipelineBindings).values({
 			scopeKind: "instance",
 			scopeId: 0,
 			genreId: STANDARD_GENRE_ID,
-			functionKey: "respond",
+			subject: sessionEvents.messageRespond,
 			specId: graph.id
 		})
 		try {
-			const slug = await resolveFunctionSpec(
+			const slug = await resolveSubjectSpec(
 				db,
 				STANDARD_GENRE_ID,
-				"respond"
+				sessionEvents.messageRespond
 			)
 			expect(slug).toBe(RESPOND_SPEC_ID)
 		} finally {
 			await db
-				.delete(schema.pipelineFunctionBindings)
-				.where(eq(schema.pipelineFunctionBindings.specId, graph.id))
+				.delete(schema.pipelineBindings)
+				.where(eq(schema.pipelineBindings.specId, graph.id))
 		}
 	})
 

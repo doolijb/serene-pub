@@ -15,6 +15,8 @@
 	import Panel from "./Panel.svelte"
 	import type { SurfaceManager } from "$lib/client/surfaces/panelManager.svelte"
 	import type { PanelInstance } from "$lib/client/surfaces/types"
+	import type { ActionsV1 } from "$lib/shared/widgets/context"
+	import type { ActionDispatch } from "$lib/shared/widgets/invokeAction"
 
 	interface Props {
 		manager: SurfaceManager
@@ -22,15 +24,31 @@
 		session?: unknown
 		/** The primary conversation body (the page owns its wiring). */
 		primaryChildren?: Snippet
+		/**
+		 * The session's action venues (`sessions:actions`), handed to every
+		 * panel this grid places — the `actions.v1` section its widget reads.
+		 */
+		actions?: ActionsV1
+		/** The host's routing for a press — core's verbs and its own fire (W4). */
+		actionDispatch?: ActionDispatch
 		onFrameAction?: (
 			fn: string,
 			messageId?: number,
-			payload?: Record<string, unknown>
+			payload?: Record<string, unknown>,
+			action?: string,
+			blockId?: string
 		) => void
 	}
 
-	let { manager, sessionId, session, primaryChildren, onFrameAction }: Props =
-		$props()
+	let {
+		manager,
+		sessionId,
+		session,
+		primaryChildren,
+		actions,
+		actionDispatch,
+		onFrameAction
+	}: Props = $props()
 
 	let wrapEl: HTMLDivElement | null = $state(null)
 	let layoutMenuOpen = $state(false)
@@ -247,6 +265,8 @@
 					primaryChildren={inst.role === "primary"
 						? primaryChildren
 						: undefined}
+					{actions}
+					{actionDispatch}
 					{onFrameAction}
 				/>
 			</div>

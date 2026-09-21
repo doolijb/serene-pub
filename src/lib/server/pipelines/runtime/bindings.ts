@@ -34,6 +34,9 @@ import {
 	envoySlugOfRef,
 	fieldLabel,
 	formAnswerSchema,
+	// D-4a: the pick hash, shared with plugin authors so that two readers of
+	// one session can never reach different suspects. Never re-implemented here.
+	rendezvousPick,
 	type BandIntent,
 	type FormBlock,
 	type MessageBlock,
@@ -70,6 +73,7 @@ const STATUS = {
 	buildingGraph: { i18n: { en: "building the graph: {step}" } }
 } satisfies Record<string, StatusText>
 import { i18nTextIn } from "$lib/shared/i18n/i18nText"
+import { participantRowId } from "$lib/server/pipelines/runtime/portrayals"
 /**
  * The node declarations themselves, as types.
  *
@@ -147,6 +151,7 @@ import {
 } from "$lib/server/pipelines/prompt/renderers"
 import { resolveContextInput } from "$lib/server/pipelines/prompt/promptFields"
 import { processMessages } from "$lib/server/pipelines/prompt/messages"
+import type { ChannelVoice } from "$lib/server/messages/channels"
 import { resolvePostHistoryContext } from "$lib/server/pipelines/prompt/postHistory"
 import type { PostHistoryDiag } from "$lib/server/pipelines/prompt/promptTypes"
 import { buildTemplateContext } from "$lib/server/pipelines/prompt/templateContext"
@@ -493,6 +498,8 @@ interface SessionCastRead {
 		} | null
 		/** Attached by the host from `lorebook_bindings`, not a cast column. */
 		absorbedAliases?: unknown
+		/** A departed seat, when the read carries the seat's row. */
+		removedAt?: Date | string | null
 	} | null> | null
 	/** The characters this session's users voice — character rows. */
 	sessionPersonas?: Array<{
@@ -503,6 +510,8 @@ interface SessionCastRead {
 			aliases?: unknown
 		} | null
 		absorbedAliases?: unknown
+		/** A departed presence, when the read carries the seat's row. */
+		removedAt?: Date | string | null
 	} | null> | null
 	/** The book's whole roster — see `castEntityRefs`. */
 	lorebookBindings?: Array<{
@@ -643,6 +652,34 @@ function withFingerprints(skipped: any[], entries: any[] | null | undefined) {
 }
 
 /**
+ * `core:query/lorebook-entries@1`'s `limit`, made safe to hand to SQL.
+ *
+ * ⚠ The three numbers are the declaration's — `default: 500`, `min: 1`,
+ * `max: 2000` — written out a second time here, which is the shape
+ * `session-history@1`'s `?? 100` above already has and for its reason: a
+ * declared bound is what the panel offers and what a spec author is told, and
+ * neither is what a stored config or a hand-written document is obliged to
+ * contain. The read is the one place the bound is load-bearing, so it is
+ * enforced at the read. **Move one and move the other**, in the same change.
+ *
+ * Anything that is not a finite **number** — absent, null, a string somebody
+ * typed into a JSON document — is the default, so nothing can turn into a
+ * `LIMIT NaN`. A number outside the range is pulled into it: this node has no
+ * "0 is off" convention, so 0 asks for one row rather than silently for an
+ * empty book.
+ *
+ * ⚠ `typeof`, deliberately, and **not** `Number.isFinite(Number(asked))`: that
+ * spelling is finite for `null`, `""`, `[]` and `false` — every one of them 0 —
+ * so a stored null would have asked for the single row 0 clamps to instead of
+ * the 500 the declaration promises. The field declares `type: 'integer'`; a
+ * value that is not one is not a number this node was given.
+ */
+const clampListingLimit = (asked: unknown): number =>
+	typeof asked === "number" && Number.isFinite(asked)
+		? Math.min(Math.max(Math.trunc(asked), 1), 2000)
+		: 500
+
+/**
  * One lorebook scan, filtered to a single source.
  *
  * Shared by the world-lore and character-lore queries. Both read the same rows
@@ -716,6 +753,21 @@ const LANE_READS = {
 >
 
 /**
+ * The character-lore lane's own declaration — `LANE_READS` plus the one port
+ * its two siblings do not have: `speaker` (W1, 2026-09-17).
+ *
+ * Its own rather than a fourth name in `LANE_READS`, because that constant is
+ * typed against the intersection of the three lanes and a port only one of
+ * them declares is not in it. Which is the check working: world lore and
+ * history are not gated by a binding, so a speaker port on them would be a
+ * control that reads nothing.
+ */
+const CHARACTER_LANE_READS = {
+	ports: [...LANE_READS.ports, "speaker"],
+	params: LANE_READS.params
+} as const satisfies TypedReads<typeof C.characterLore>
+
+/**
  * The three lore bands `lorebook-triggers` produces through one port, and
  * the namespaced intent each declares (`worldLoreShare` … — see
  * `bandIntentFieldsOf` in the contracts; U3b review W1). One table, read by
@@ -742,7 +794,9 @@ const TRIGGER_BANDS = {
 } as const
 
 const TRIGGER_READS = {
-	ports: LORE_READS.ports,
+	// `speaker` (W1) for the reason `CHARACTER_LANE_READS` gives: this node
+	// produces the character-lore band too, through the same gated read.
+	ports: [...LORE_READS.ports, "speaker"],
 	params: [
 		...LORE_READS.params,
 		...Object.values(TRIGGER_BANDS).flatMap(
@@ -765,14 +819,27 @@ async function loreFor(
 	input: SharedInput<
 		[typeof C.worldLore, typeof C.characterLore, typeof C.historyEntries]
 	>,
-	ctx: CoreQueryCtx
+	ctx: CoreQueryCtx,
+	/**
+	 * Whose private lore this read is for, as a participant reference (W1,
+	 * 2026-09-17) — `core:query/character-lore@1`'s `speaker` in-port, passed
+	 * only by that lane's arrow because it is the only one of the three whose
+	 * band is gated by a binding. `undefined` is the port unwired, and the host
+	 * then keys the gate on the run's scope exactly as it always did; the host
+	 * owns what any other value means (`loreVisibilitySubject`), because
+	 * resolving a reference to a row is a question only it can answer.
+	 */
+	speaker?: unknown
 ) {
 	ctx.status?.(STATUS.thinking)
 	const params = withDefaults(retrievalParamsFrom(input?.params))
 	const [entries, messages, embedding, cast] = await Promise.all([
 		ctx.read("lorebook_entries", {
 			sessionId: input?.scope?.sessionId,
-			currentCharacterId: input?.scope?.currentCharacterId ?? null
+			currentCharacterId: input?.scope?.currentCharacterId ?? null,
+			// Omitted rather than passed as `undefined`, so a lane that wires no
+			// speaker hands the host the same query object it always did.
+			...(speaker === undefined ? {} : { speaker })
 		}),
 		ctx.read("session_messages", {
 			sessionId: input?.scope?.sessionId,
@@ -1063,12 +1130,23 @@ function envoySpeakerCard(
 }
 
 /**
- * Who a model's `addressee` names, as a participant reference (U5d): a
- * reference already, or a cast member by name — a character's name or
- * nickname, an envoy's name or slug — case-insensitively. Null when nobody
- * in the cast bears it: the block goes out unaddressed rather than to the
- * wrong person. Never a persona: a form the narrator puts to the player is
- * a question the player answers by typing, not a block.
+ * Who a model's `addressee` names, as a participant reference (U5d): a cast
+ * member or a member's **presence** by name — a character's name or
+ * nickname, an envoy's name or slug — case-insensitively, or a reference
+ * that names a **seated** cast member, a live presence or an envoy of this
+ * session (U5d review, W8: a model that writes `character:7` is believed
+ * only when 7 is here — a reference to a character of another session, or
+ * to nobody, would otherwise address a form to someone the resolver says
+ * nobody here portrays). Null when nobody here bears the name: the block
+ * goes out unaddressed rather than to the wrong person.
+ *
+ * A presence — a live `session_personas` row — resolves to `character:<id>`
+ * exactly as a cast member does: a persona IS a character row (0132), and
+ * the resolver already answers `character:<id>` for both. A narrator that
+ * puts a question to the player's persona by name addresses the player
+ * (2026-09-17: "Rook" resolved to nobody, the block went out unaddressed,
+ * and the player's press landed as nobody's line). The cast is searched
+ * first, so a name both a cast member and a presence bear goes to the cast.
  */
 function resolveAddresseeName(
 	named: unknown,
@@ -1076,21 +1154,52 @@ function resolveAddresseeName(
 ): ParticipantRef | null {
 	if (typeof named !== "string" || !named.trim()) return null
 	const text = named.trim()
-	if (isParticipantRef(text)) return text
-	const wanted = text.toLowerCase()
-	for (const cc of cast?.sessionCharacters ?? []) {
-		const c = cc?.character
-		if (!c?.id) continue
-		const names = [c.name, c.nickname].filter(
-			(n): n is string => typeof n === "string" && !!n.trim()
-		)
-		if (names.some((n) => n.trim().toLowerCase() === wanted))
-			return `character:${c.id}`
-	}
-	for (const e of ((cast as { envoys?: unknown } | null)?.envoys ?? []) as Array<{
+	// Live seats only, on both sides: a departed participant — a cast
+	// member or a presence with `removedAt` — is nobody's, and a block put
+	// to one would be owner-only (the resolver says nobody portrays them)
+	// where one put to nobody in particular is open to the action's
+	// audience. The same `removedAt` test the turn strategies apply.
+	const seated = (cast?.sessionCharacters ?? []).filter(
+		(cc) => cc?.character?.id && cc.removedAt == null
+	)
+	const presences = (cast?.sessionPersonas ?? []).filter(
+		(cp) => cp?.persona?.id && cp.removedAt == null
+	)
+	const seatedCharacters = new Set<number>()
+	for (const cc of seated) seatedCharacters.add(cc!.character!.id!)
+	for (const cp of presences) seatedCharacters.add(cp!.persona!.id!)
+	const envoys = ((cast as { envoys?: unknown } | null)?.envoys ?? []) as Array<{
 		slug?: string
 		name?: unknown
-	}>) {
+	}>
+	if (isParticipantRef(text)) {
+		const ref = parseParticipantRef(text)
+		if (ref.kind === "character") {
+			const id = participantRowId(ref.id)
+			return id !== null && seatedCharacters.has(id) ? text : null
+		}
+		if (ref.kind === "envoy")
+			return envoys.some((e) => e?.slug === ref.slug) ? text : null
+		// A role or a user: not a cast member, so not a form's addressee by
+		// the model's say-so.
+		return null
+	}
+	const wanted = text.toLowerCase()
+	const bearsName = (c: { name?: string | null; nickname?: string | null }) =>
+		[c.name, c.nickname]
+			.filter((n): n is string => typeof n === "string" && !!n.trim())
+			.some((n) => n.trim().toLowerCase() === wanted)
+	// The cast first: a name both a cast member and a presence bear goes
+	// to the cast.
+	for (const cc of seated) {
+		const c = cc!.character!
+		if (bearsName(c)) return `character:${c.id}`
+	}
+	for (const cp of presences) {
+		const c = cp!.persona!
+		if (bearsName(c)) return `character:${c.id}`
+	}
+	for (const e of envoys) {
 		if (!e?.slug) continue
 		const name = i18nTextIn(e.name)
 		if (
@@ -1829,6 +1938,77 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		),
 
 		/**
+		 * The **listing** door — the whole book, or the one entry named.
+		 *
+		 * Beside `session-history` rather than among the four lore definitions
+		 * below, because it is the same kind of node as this one and not the
+		 * same kind as those: it fetches rows a spec asked for, where they run
+		 * a mechanism and publish candidates. Nothing here scores, ranks, or
+		 * produces a band intent, and `main` carries a bare list rather than
+		 * `core:shape/context-candidates@1` — see the definition.
+		 *
+		 * It exists because a create run has no conversation to scan, so the
+		 * scan window is empty and only `constant` entries are admitted: a
+		 * genre picking a secret, checking whether a room exists, or listing
+		 * its suspects had no door (plans/genres §10 G13/G14, §11 L4).
+		 *
+		 * The two postures the read is asked for, and why they are not the
+		 * scan's:
+		 *
+		 * · `enabled: true` / `archived: false` — a listing answers *does this
+		 *   exist* and *pick one of these*, so a row the author switched off or
+		 *   shelved must not be offered. The scan asks for neither and still
+		 *   sees disabled rows, on purpose, so it can report them on `skipped`
+		 *   with a reason.
+		 * · `currentCharacterId` passed through, exactly as the lore lanes pass
+		 *   it. This is not a way around the binding-visibility policy: while a
+		 *   character is speaking, another character's private lore stays out
+		 *   of the list. In the case this node exists for it is null, the
+		 *   policy is omniscient, and the whole book comes back.
+		 */
+		"core:query/lorebook-entries@1": reads<typeof C.lorebookEntries>(
+			async (
+				input: NodeInput<typeof C.lorebookEntries>,
+				ctx: CoreQueryCtx
+			) => {
+				const entries = await ctx.read("lorebook_entries", {
+					sessionId: input?.scope?.sessionId,
+					currentCharacterId:
+						input?.scope?.currentCharacterId ?? null,
+					entryTypes: input?.params?.entryTypes ?? [],
+					name: input?.params?.name ?? "",
+					/**
+					 * The declared default and the declared ceiling, applied
+					 * here as well as declared there.
+					 *
+					 * A parameter is a control, not a promise: `max: 2000`
+					 * tells the panel what to offer and tells a spec author
+					 * what is sensible, and neither of them is what a stored
+					 * config or a hand-written document has to contain. The
+					 * one place a bound on rows read is load-bearing is the
+					 * read, so the clamp is at the read.
+					 *
+					 * A value that is not a number at all — absent, null, a
+					 * string somebody typed into a JSON document — is the
+					 * declared default, never `NaN` turned into a `LIMIT`. A
+					 * number outside the declared range is pulled into it:
+					 * this node has no "0 is off" convention, so 0 is 1 row
+					 * rather than a silently empty book.
+					 */
+					limit: clampListingLimit(input?.params?.limit),
+					enabled: true,
+					archived: false
+				})
+				// `main` and `entries` carry the same value, on
+				// `session-history`'s terms: `main` is what an unrefined
+				// `$.entries` resolves to, and having it be the list rather
+				// than a wrapper is what makes the scope sugar read well.
+				return ok({ main: entries, entries })
+			},
+			{ ports: ["scope"], params: ["entryTypes", "name", "limit"] }
+		),
+
+		/**
 		 * The keyword mechanism. Reads rows, matches strings, reaches no network
 		 * (16 §1) — vector similarity is the other mechanism's job.
 		 *
@@ -1847,12 +2027,17 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				await loreFor("worldLore", input, ctx),
 			LANE_READS
 		),
+		/**
+		 * The one gated lane, and the one that takes a `speaker` (W1): wired
+		 * inside a repeating clause it names the voice THIS iteration writes as,
+		 * so two voices in one turn read two pools from one gather.
+		 */
 		"core:query/character-lore@1": reads<typeof C.characterLore>(
 			async (
 				input: NodeInput<typeof C.characterLore>,
 				ctx: CoreQueryCtx
-			) => await loreFor("characterLore", input, ctx),
-			LANE_READS
+			) => await loreFor("characterLore", input, ctx, input?.speaker),
+			CHARACTER_LANE_READS
 		),
 		// ⚠ The third lane, absent between spec 1.8.0 and 1.10.0. The two lore
 		// queries each filter the shared scan to their own source, and nothing
@@ -1877,7 +2062,13 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					ctx.read("lorebook_entries", {
 						sessionId: input?.scope?.sessionId,
 						currentCharacterId:
-							input?.scope?.currentCharacterId ?? null
+							input?.scope?.currentCharacterId ?? null,
+						// The per-speaker subject (W1), on `loreFor`'s terms: this
+						// node produces the character-lore band through the same
+						// gated read, so it takes the same port.
+						...(input?.speaker === undefined
+							? {}
+							: { speaker: input.speaker })
 					}),
 					ctx.read("session_messages", {
 						sessionId: input?.scope?.sessionId,
@@ -3685,6 +3876,15 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					relationshipsPerspectives: input?.relationshipsPerspectives,
 					relationshipsKnown: input?.relationshipsKnown,
 					session: cast,
+					// The turn's channel voice, on the cast read (R-C). Named
+					// rather than left to the spread above so the one thing
+					// this node takes off the cast that is a fact about the
+					// TURN is visible at the call — see `HostScope.channel`.
+					// Undefined for every genre that shapes no channel, which
+					// is what keeps `seedName` byte-identical for them.
+					turnChannelVoice: (
+						cast as { turnChannelVoice?: ChannelVoice }
+					).turnChannelVoice,
 					pickExample: (n: number) => Math.floor(random() * n)
 				})
 
@@ -3756,6 +3956,16 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					charName: ctxValue.char ?? "",
 					personaName: ctxValue.user ?? "",
 					seedName: input?.seedName ?? ctxValue.seedName,
+					// The other half of the seed decision, off the same cast
+					// read the context builder resolved the name from (R-C) —
+					// so "is there a seed row" and "whose name is on it" are
+					// answered from one fact rather than two readings of the
+					// history.
+					turnChannelVoice: (
+						input?.cast as
+							| { turnChannelVoice?: ChannelVoice }
+							| undefined
+					)?.turnChannelVoice,
 					continuationPrefill: input?.continuationPrefill
 				})
 				return ok({
@@ -4622,6 +4832,224 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			{ ports: ["items"], params: ["path", "separator"] }
 		),
 
+		// ── D-4a: the pure pick, and the room as options ───────────────────
+		//
+		// Two Tasks that compute rather than fetch. Neither touches `ctx` at
+		// all — no read, no commit, no model — which is what lets a genre
+		// DERIVE a hidden fact (which suspect did it) instead of authoring it
+		// or asking a model that can change its mind.
+
+		/**
+		 * The item this session picks, by a hash of its identity.
+		 *
+		 * ## Why rendezvous and not `items[hash % items.length]`
+		 *
+		 * Each candidate is scored on its own — `hash(key + '#' + itemKey)` —
+		 * and the highest wins, so a candidate arriving mid-session displaces
+		 * the pick with probability 1/n instead of moving every session's
+		 * answer at once. The function is the SDK's (`pick.ts`), not a copy:
+		 * the same numbers run in the app, in a plugin's sandbox and in the
+		 * test, because this pick IS the record — nothing writes the answer
+		 * down, so a drifted second implementation would not fail, it would
+		 * quietly disagree with last week's receipt.
+		 *
+		 * ## Halting is the only honest empty
+		 *
+		 * The definition declares no `optional`, so an empty list stops the
+		 * run. `optional: true` would publish an `ok` whose ports all read
+		 * absent — indistinguishable downstream from a pick that chose
+		 * nothing — and "nobody did it" is not a case a mystery can carry on
+		 * from.
+		 */
+		"core:task/pick-by-hash@1": reads<typeof C.pickByHash>(
+			async (input: NodeInput<typeof C.pickByHash>) => {
+				const items = Array.isArray(input?.items) ? input.items : []
+				// The key in the two spellings a spec can actually supply: the
+				// session's scope (`$.input.sessionScope`), which is the whole
+				// point — the same session reaches the same item on every turn
+				// — or a literal string for a pick that is not per-session.
+				// Deliberately no third reading: a bare row id could mean a
+				// session, a character or an entry, and guessing would key two
+				// genres' picks on one number.
+				const scoped = input?.scopeKey as { sessionId?: unknown } | null
+				const key =
+					typeof input?.scopeKey === "string"
+						? input.scopeKey.trim()
+						: typeof scoped?.sessionId === "number" &&
+							Number.isFinite(scoped.sessionId)
+							? `session:${scoped.sessionId}`
+							: ""
+				if (!key)
+					return halt(
+						"there is nothing to pick under — wire the session's scope " +
+							"(`$.input.sessionScope`), or a literal string, into `scopeKey`; " +
+							"a pick with no key would answer differently every run"
+					)
+				const by =
+					typeof input?.params?.by === "string"
+						? input.params.by.trim()
+						: ""
+				// The identity, in the two shapes a core list actually arrives
+				// in: `cast-choices` publishes `{ key, label }`, a lore listing
+				// publishes rows with an `id`, and a plain string is its own
+				// name. Anything else is skipped rather than scored under a
+				// shared empty key, which would make every unnameable entry one
+				// candidate.
+				const identityOf = (item: unknown): string | null => {
+					const raw =
+						by && item && typeof item === "object"
+							? (item as Record<string, unknown>)[by]
+							: typeof item === "string"
+								? item
+								: item && typeof item === "object"
+									? (item as Record<string, unknown>).id
+									: undefined
+					if (typeof raw === "string") return raw.trim() || null
+					if (typeof raw === "number" && Number.isFinite(raw))
+						return String(raw)
+					return null
+				}
+				const picked = rendezvousPick(items, key, identityOf)
+				if (!picked)
+					return halt(
+						by
+							? `there was nothing to pick from — no entry carried a \`${by}\` to be identified by`
+							: "there was nothing to pick from — the list was empty, or no entry could be identified"
+					)
+				return ok({
+					main: picked.item,
+					pickIndex: picked.index,
+					chosenKey: picked.key
+				})
+			},
+			{ ports: ["items", "scopeKey"], params: ["by"] }
+		),
+
+		/**
+		 * The room, as options a question can be put with.
+		 *
+		 * `make-choices` needs `{ key, label }` and nothing turned a cast into
+		 * that list, so a picker spent a whole model call reading the cast
+		 * back out as JSON — a request, a schema and a wait for a fact the run
+		 * already held, with a model free to misspell a suspect or invent one.
+		 *
+		 * The key is a **participant reference** (R-18 (3)), which is what
+		 * makes the round trip work: it lands on the pressed option, comes
+		 * back on `read-answer`'s `choice`, and a junction can compare that
+		 * against a `pick-by-hash` `chosenKey` derived over these same
+		 * options. A name would not — two cast members can bear one, and an
+		 * author can edit it between two turns.
+		 *
+		 * Live seats only, and never an envoy: `exclude` offers no way to turn
+		 * one off, so a narrator among the suspects could not be removed.
+		 *
+		 * It publishes the whole `{ question, options }` document beside the
+		 * bare list (ruled (b), 2026-09-17). `make-choices` reads the question
+		 * and the options off ONE `json` port, so a spec handed only the
+		 * options had nowhere to put the question — and the obvious repair, a
+		 * second in-port there, would move the hash of a node already wired
+		 * into shipped specs.
+		 */
+		"core:task/cast-choices@1": reads<typeof C.castChoices>(
+			async (input: NodeInput<typeof C.castChoices>) => {
+				const cast = (input?.cast ?? null) as SessionCastRead | null
+				const exclude = input?.params?.exclude ?? "none"
+				const question =
+					typeof input?.question === "string" ? input.question : ""
+				const options: Array<{ key: string; label: string }> = []
+				const seen = new Set<string>()
+				const add = (
+					id: number | null | undefined,
+					name: unknown,
+					nickname?: unknown
+				) => {
+					if (id == null || !Number.isFinite(id)) return
+					const key = `character:${id}`
+					if (seen.has(key)) return
+					const label = [name, nickname]
+						.map((n) => (typeof n === "string" ? n.trim() : ""))
+						.find((n) => !!n)
+					if (!label) return
+					seen.add(key)
+					options.push({ key, label })
+				}
+				// The cast first, then the presences — the order every other
+				// reader of this document uses, so an option list and an
+				// addressee resolution cannot disagree about who comes first.
+				if (exclude !== "characters")
+					for (const cc of cast?.sessionCharacters ?? []) {
+						// The turn strategies' own eligibility: a soft-removed
+						// seat is nobody, and an inactive one is not taking
+						// part. `isActive` is not on `SessionCastRead` — the
+						// host selects it and `pickSpeaker` reads it the same
+						// way.
+						const seat = cc as (typeof cc & { isActive?: boolean }) | null
+						if (!seat?.character || seat.removedAt != null) continue
+						if (seat.isActive === false) continue
+						add(seat.character.id, seat.character.name, seat.character.nickname)
+					}
+				if (exclude !== "personas")
+					for (const cp of cast?.sessionPersonas ?? []) {
+						if (!cp?.persona || cp.removedAt != null) continue
+						// A persona's own name only, as `castEntityRefs` has
+						// it: nothing else in the prompt answers to a
+						// persona's nickname.
+						add(cp.persona.id, cp.persona.name)
+					}
+				// `json` is the document `make-choices` reads off its own `json`
+				// port, in exactly that shape. No `addressee`: the document's is
+				// a NAME that node resolves against the cast, and this one has no
+				// more idea who the question is for than the cast document does —
+				// a spec that knows wires that node's own `addressee` port, which
+				// wins over the document's anyway.
+				return ok({ main: options, options, json: { question, options } })
+			},
+			{ ports: ["cast", "question"], params: ["exclude"] }
+		),
+
+		// ── Contracts batch 2: the two-document pair ───────────────────
+		//
+		// A junction branches on ONE port and `equalsPath` compares two paths
+		// of ONE document, so *is the accused the culprit?* is unaskable until
+		// something has put both in the same document. This is that something,
+		// and it is the dullest handler in the file on purpose.
+
+		/**
+		 * Two values, side by side under names the spec chose.
+		 *
+		 * ⚠ **An absent side is OMITTED, never written as null**, and that is
+		 * the whole of this handler worth reading. `predicateHolds` answers
+		 * `false` when either side of an `equalsPath` is `undefined` — two
+		 * absences are not a match — so a turn on which nothing was decided
+		 * falls through to the default branch. A `null` would destroy it:
+		 * `null` is a value, `readPath` returns it, and `null === null`, so a
+		 * document with both sides nulled compares EQUAL and a verdict fires
+		 * on a turn where nobody accused anybody.
+		 *
+		 * Two keys that are the same string halt rather than collapse: one key
+		 * holding whichever side was written last is a document that compares
+		 * equal to itself, which is the one answer this node must never
+		 * produce by accident.
+		 */
+		"core:task/pair@1": reads<typeof C.pair>(
+			async (input: NodeInput<typeof C.pair>) => {
+				const keyOf = (raw: unknown, fallback: string) =>
+					(typeof raw === "string" ? raw.trim() : "") || fallback
+				const firstKey = keyOf(input?.params?.firstKey, "first")
+				const secondKey = keyOf(input?.params?.secondKey, "second")
+				if (firstKey === secondKey)
+					return halt(
+						`both sides of the pair would be called “${firstKey}”, so the document would ` +
+							`compare equal to itself — give the two values different names`
+					)
+				const main: Record<string, unknown> = {}
+				if (input?.first !== undefined) main[firstKey] = input.first
+				if (input?.second !== undefined) main[secondKey] = input.second
+				return ok({ main })
+			},
+			{ ports: ["first", "second"], params: ["firstKey", "secondKey"] }
+		),
+
 		// ── Forms (plans/29 R-15 *Forms*; U5d, 2026-09-17) ─────────────────
 		//
 		// Three pure tasks around the block vocabulary: the form as a prompt
@@ -4670,9 +5098,10 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 
 		/**
 		 * An oracle's `{ addressee, question, options }` as a `choices` block.
-		 * The addressee is resolved against the cast by name (or taken as a
-		 * reference when it already is one); the `addressee` port wins when
-		 * wired. The host stamps identity and id at the write.
+		 * The addressee is resolved against the cast and the members'
+		 * presences by name (or taken as a reference when it already is
+		 * one); the `addressee` port wins when wired. The host stamps
+		 * identity and id at the write.
 		 */
 		"core:task/make-choices@1": reads<typeof C.makeChoices>(
 			async (input: NodeInput<typeof C.makeChoices>) => {
@@ -4699,9 +5128,16 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				// One key per option — a repeated key is the model's slip and
 				// the validator would refuse the block; the first wins.
 				const seen = new Set<string>()
+				const action =
+					typeof input?.action === "string" && input.action ? input.action : undefined
 				const actions = options
 					.filter((o) => (seen.has(o.key) ? false : (seen.add(o.key), true)))
-					.map((o) => ({ fn, label: o.label, choice: o.key }))
+					.map((o) => ({
+						fn,
+						...(action ? { action } : {}),
+						label: o.label,
+						choice: o.key
+					}))
 				const block: MessageBlock = {
 					kind: "choices",
 					question,
@@ -4710,14 +5146,15 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				}
 				return ok({ main: [block], blocks: [block], text: question, addressee })
 			},
-			{ ports: ["json", "fn", "addressee", "cast"] }
+			{ ports: ["json", "fn", "action", "addressee", "cast"] }
 		),
 
 		/**
 		 * A form's answer, port by port, for the action it fired: the option's
 		 * key and label, who answered and their row, the question, the values.
-		 * Halts when the press carried no form — the action was reached from
-		 * a menu with nothing to answer (⏳ until enabled-when, U5e, hides it).
+		 * Halts when the press carried no form — a fire naming no block, which
+		 * no listing offers since the `form` venue (U5d review, S1) but a
+		 * hand-made `sessions:triggerFunction` can still send.
 		 */
 		"core:task/read-answer@1": reads<typeof C.readAnswer>(
 			async (input: NodeInput<typeof C.readAnswer>) => {
@@ -5320,25 +5757,61 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			{ ports: ["target", "text", "thinking", "blocks"] }
 		),
 		/**
+		 * Bound 2026-09-17 (plans/29 R-2): the host's commit for both — bytes
+		 * into the session's asset store, a typed part onto the row — existed,
+		 * and no binding reached it. The commit reads the row off `target`
+		 * (the port `update-message` takes), or off the media reference's own
+		 * `messageId` where a caller outside the graph set one.
+		 */
+		"core:outlet/attach-image@1": reads<typeof C.attachImage>(
+			async (
+				input: NodeInput<typeof C.attachImage>,
+				ctx: OutletCtx
+			) => ok(await ctx.commit(input)),
+			{ ports: ["target", "image"] }
+		),
+		"core:outlet/attach-audio@1": reads<typeof C.attachAudio>(
+			async (
+				input: NodeInput<typeof C.attachAudio>,
+				ctx: OutletCtx
+			) => ok(await ctx.commit(input)),
+			{ ports: ["target", "audio"] }
+		),
+		/**
 		 * The form's answer, committed as a click (U5d). The commit fires the
 		 * block's action and reports what it fired; `answer` is lifted beside
 		 * the write result the way a built-in's extra port is.
+		 */
+		/**
+		 * The form's answer, committed as a click's fire (R-15; U5d review
+		 * W1/W2). The commit checks the answer, asks the caps and collects
+		 * the fire for the host to dispatch after this run's receipt; what it
+		 * publishes names the action fired and the child run's id. A commit
+		 * that could not make the fire — the oracle missed the form, the form
+		 * is gone, a cap refused — says so as a **halt**: a legible end of
+		 * this run, never an exception.
 		 */
 		"core:outlet/answer-form@1": reads<typeof C.answerForm>(
 			async (
 				input: NodeInput<typeof C.answerForm>,
 				ctx: OutletCtx
 			) => {
-				const { answer, fired, ...ids } = (await ctx.commit(input)) as {
-					id: unknown
-					sessionId?: unknown
-					answer?: unknown
-					fired?: unknown
-				}
+				const { answer, firedAction, firedRunId, halt: halted, ...ids } =
+					(await ctx.commit(input)) as {
+						id: unknown
+						sessionId?: unknown
+						answer?: unknown
+						firedAction?: unknown
+						firedRunId?: unknown
+						halt?: unknown
+					}
+				if (typeof halted === "string") return halt(halted)
 				return ok({
 					status: "committed",
-					ids: { ...ids, fired },
-					answer: answer ?? null
+					ids,
+					answer: answer ?? null,
+					firedAction: firedAction ?? null,
+					firedRunId: firedRunId ?? null
 				})
 			},
 			{ ports: ["form", "answer", "messageId", "blockId", "addressee"] }
@@ -5425,12 +5898,44 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			) => ok(await ctx.commit(input)),
 			{ ports: ["fromMessage", "title"] }
 		),
+		/**
+		 * The finished entry, and — since L2/L3 (2026-09-17) — its kind and
+		 * its links.
+		 *
+		 * `entryType` is a param because the kind of thing a pipeline writes is
+		 * a fact about the pipeline, not about the turn; `links` is a port
+		 * because a room's exits are this run's. Both are the commit's to
+		 * judge: an unknown type id and a link naming no entry are refused
+		 * there, inside the transaction, so a room whose exits do not resolve
+		 * fails WITH the room rather than leaving half of one behind.
+		 *
+		 * ⚠ The links are here rather than only on
+		 * `core:outlet/link-lore-entries@1` because of F7: a pipeline has ONE
+		 * write-class outlet, so a spec cannot create an entry and then link it
+		 * in the same run.
+		 */
 		"core:outlet/create-lore-entry@1": reads<typeof C.createLoreEntry>(
 			async (
 				input: NodeInput<typeof C.createLoreEntry>,
 				ctx: OutletCtx
 			) => ok(await ctx.commit(input)),
-			{ ports: ["name", "content"] }
+			{ ports: ["name", "content", "links"], params: ["entryType"] }
+		),
+		/**
+		 * One link between two entries of this session's lorebook.
+		 *
+		 * `to` takes a **name** as well as an id, and that is the half that
+		 * makes the write law survivable: a second run can link what a first
+		 * one created without holding an id across the two. A name nothing
+		 * answers to, and a name TWO entries answer to, are both refused at
+		 * the commit — picking one would link the wrong room silently.
+		 */
+		"core:outlet/link-lore-entries@1": reads<typeof C.linkLoreEntries>(
+			async (
+				input: NodeInput<typeof C.linkLoreEntries>,
+				ctx: OutletCtx
+			) => ok(await ctx.commit(input)),
+			{ ports: ["from", "to", "label"], params: ["linkType"] }
 		),
 		// Gate-eligible, and that is the mechanism behind "a graph build stops at
 		// the review screen": what comes back is a proposal, not rows.
@@ -5777,16 +6282,42 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		async (
 			input: NodeInput<typeof C.buildSideCharacterContext>,
 			ctx: TaskCtx
-		) =>
-			mergeContext(
-				asSideCharacter(input),
+		) => {
+			const prepared = asSideCharacter(input)
+			const built = await mergeContext(
+				prepared,
 				adventureVariables({
 					state: input?.state,
 					plan: input?.plan,
 					cast: input?.cast
 				}),
 				ctx
-			),
+			)
+			if (built.kind !== "ok") return built
+			/**
+			 * ⚠ **The `speaker` out-port is the id this node ALREADY derived**
+			 * (W1, 2026-09-17), spelled as a participant reference — not a
+			 * second resolution.
+			 *
+			 * `asSideCharacter` matches the planner's name against the cast to
+			 * decide whose card is compiled and what `{{char}}` renders. Until
+			 * this port existed that answer stopped here, so a lore lane in the
+			 * same clause had no way to be told whose secrets this voice may
+			 * read — and every voice read every character's. Publishing it is
+			 * what lets `core:query/character-lore@1` be wired
+			 * `speaker: $.voices.item.context.speaker` beside it.
+			 *
+			 * `null` for a name the cast does not hold — a genuine side
+			 * character is nobody, and the host reads that as nobody's private
+			 * lore rather than as the narrator's omniscience.
+			 */
+			const speaking = (prepared as { currentCharacterId?: number | null })
+				.currentCharacterId
+			return ok({
+				...(built.value as Record<string, unknown>),
+				speaker: speaking != null ? `character:${speaking}` : null
+			})
+		},
 		{
 			ports: ["cast", "sideCharacter", "state", "plan", "prompts", "variables"]
 		}

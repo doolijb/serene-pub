@@ -89,7 +89,26 @@ async function publishActionSpec(
 			.build()
 	)
 	const { saveDocument } = await import("$lib/server/pipelines/boot/store")
-	await saveDocument(db as any, doc, { publish: true })
+	const saved = await saveDocument(db as any, doc, { publish: true })
+	// 0137 was written against the documents of its day, which carried
+	// `function` on every action; the SDK stopped writing it with plans/31 V2
+	// (the key is the identity). The stored version is put back into that
+	// shape here, so the migration is exercised against what it was made for.
+	const schema = await import("$lib/server/db/schema")
+	await db
+		.update(schema.pipelineSpecVersions)
+		.set({
+			contributes: {
+				actions: actions.map((a) => ({
+					key: a.key,
+					function: a.function,
+					genre: genreId,
+					venue: [{ kind: "composer" }],
+					label: { en: a.key }
+				}))
+			}
+		} as any)
+		.where(eq(schema.pipelineSpecVersions.id, saved.specVersionId))
 }
 
 beforeAll(async () => {
@@ -105,6 +124,29 @@ beforeAll(async () => {
 		"$lib/server/pipelines/boot/bootstrap"
 	)
 	await bootstrapPipelines(db as any)
+	// …in the shape of their day: every stored action carried `function`
+	// until plans/31 V2, and 0137 reads that field. The seeded narrate spec
+	// is put back into it, as `publishActionSpec` does for the fixtures.
+	{
+		const [narrateSpec] = await db
+			.select({ activeVersionId: schema.pipelineSpecs.activeVersionId })
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, "core:spec/narrate"))
+		const [version] = await db
+			.select({ contributes: schema.pipelineSpecVersions.contributes })
+			.from(schema.pipelineSpecVersions)
+			.where(eq(schema.pipelineSpecVersions.id, narrateSpec!.activeVersionId!))
+		const contributes = version!.contributes as { actions: Array<Record<string, unknown>> }
+		await db
+			.update(schema.pipelineSpecVersions)
+			.set({
+				contributes: {
+					...contributes,
+					actions: contributes.actions.map((a) => ({ ...a, function: a.key }))
+				}
+			} as any)
+			.where(eq(schema.pipelineSpecVersions.id, narrateSpec!.activeVersionId!))
+	}
 
 	// `sum`: one declarer, an attachment — promoted (W2).
 	await publishActionSpec("acme:spec/sum", CHAT, [{ key: "sum", function: "sum" }])
@@ -279,7 +321,7 @@ describe("0137 — a preset's included set is rewritten to identities", () => {
 		const offered = await listGenreActions(db as any, CHAT)
 		const narrate = offered.find((t) => t.specSlug === "core:spec/narrate")!
 		const sum = offered.find((t) => t.specSlug === "acme:spec/sum")!
-		const rolls = offered.filter((t) => t.function === "roll")
+		const rolls = offered.filter((t) => t.key === "roll")
 		expect(rolls).toHaveLength(2)
 		const included = (await presetIncluded()) as string[]
 		expect(presetIncludes(included, narrate, offered)).toBe(true)

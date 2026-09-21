@@ -138,6 +138,138 @@ export function updateWidget(
 	}
 }
 
+/* ── zone membership (the middle's, which no zone template holds) ────────
+ *
+ * The side zones' membership lives in the zone template (`./schema`'s
+ * `withWidget` / `withoutWidget`); the MIDDLE's lives here, because the middle
+ * is this grid and the template never names it. The editor needs both halves
+ * or a widget dropped on the middle is arranged into cells nothing declares it
+ * in, and comes back offered in the tray on the next open.
+ *
+ * Named for the model they edit rather than merged with the template's pair:
+ * two vocabularies at a boundary are reconciled, never merged.
+ */
+
+/**
+ * The grid with `id` placed in `zone`, appended after what is already there
+ * (the order `withWidget` appends a side panel in). A widget already in the
+ * grid MOVES rather than doubling.
+ *
+ * The declaration is the one a layout's own strip uses — full width, content
+ * height, anchored to the top and both sides (see `ADVENTURE_LAYOUT`'s
+ * world-state above its messages). `required` is never claimed: that is the
+ * default layout's guarantee, not a newcomer's.
+ */
+export function withGridWidget(
+	layout: GridLayout,
+	id: string,
+	zone: Zone
+): GridLayout {
+	const others = layout.widgets.filter((w) => w.id !== id)
+	const order =
+		others
+			.filter((w) => w.zone === zone)
+			.reduce((n, w) => Math.max(n, w.order), -1) + 1
+	return {
+		...layout,
+		widgets: [
+			...others,
+			{
+				id,
+				zone,
+				order,
+				size: { w: "grow", h: "fixed" },
+				anchor: { top: true, left: true, right: true }
+			}
+		]
+	}
+}
+
+/**
+ * The grid without `id`. A REQUIRED widget is kept: the conversation is
+ * repositionable and never removable (§2), and `loadChatLayout` would put it
+ * back on the next read anyway — refusing here says so where the removal is
+ * asked for instead of silently undoing it one repaint later.
+ */
+export function withoutGridWidget(layout: GridLayout, id: string): GridLayout {
+	const widgets = layout.widgets.filter((w) => w.id !== id || w.required)
+	return widgets.length === layout.widgets.length
+		? layout
+		: { ...layout, widgets }
+}
+
+/**
+ * One zone's membership, reconciled against the arrangement that zone reported.
+ *
+ * The editor's gridstack zones are the only thing that knows a card was dragged
+ * from one zone into another, and for the SIDES the commit reads that answer
+ * straight into the zone template: a reported frame replaces that zone's widget
+ * list wholesale. The middle has no such list — it is this grid — so the same
+ * reading has to happen one model over, or a card dragged OUT of the middle
+ * stays in the grid and renders in two zones, and one dragged IN is arranged
+ * into cells nothing declares it in and is gone by the next open.
+ *
+ * `ids` is that zone's frame, as ids. **Absent (null/undefined) means NO
+ * OPINION**, never "the zone is empty": a zone that is still a faithful restore
+ * reports nothing at all, and taking that silence as authoritative would strip
+ * the conversation out of the grid on Done. A present frame IS authoritative —
+ * for membership only; the cells are the arrangement's and the order here is
+ * left as the grid has it, newcomers appended.
+ *
+ * Deduplication is the caller's, done first: by the time a frame reaches here
+ * an id is in at most one of them, so the tie-break that decided which zone a
+ * card that reported itself in two belongs to has already been applied and this
+ * reads the answer rather than re-deciding it.
+ *
+ * `required` survives whatever a frame says — `withoutGridWidget`'s guarantee,
+ * relied on rather than restated. Returns the layout BY REFERENCE when the
+ * membership it describes is the one already there.
+ */
+export function withGridMembership(
+	layout: GridLayout,
+	zone: Zone,
+	ids: readonly string[] | null | undefined
+): GridLayout {
+	if (!ids) return layout
+	const wanted = new Set(ids)
+	let next = layout
+	// Out: what this zone holds and the frame does not name.
+	for (const w of widgetsInZone(layout, zone))
+		if (!wanted.has(w.id)) next = withoutGridWidget(next, w.id)
+	// In: what the frame names and this zone does not hold — a card dragged in
+	// from another zone, or from nowhere this model can see.
+	const held = new Set(widgetsInZone(next, zone).map((w) => w.id))
+	for (const id of ids)
+		if (!held.has(id)) next = withGridWidget(next, id, zone)
+	return next
+}
+
+/**
+ * Split a ZONE TEMPLATE's widget list on the ids this grid holds as `required`.
+ *
+ * A required widget belongs to the zone the grid puts it in and to no other —
+ * the conversation moves around the middle and never leaves it. The editor now
+ * refuses the drag that would take it out (`GridStackZone`'s `acceptsRequired`),
+ * but an arrangement blob written before that refusal existed can still name it
+ * in a side zone's frame, and the commit reads a frame as authoritative. So the
+ * rule is kept a second time, here, where the side lists are assembled.
+ *
+ * Pure: it returns the list and what it refused, and says nothing. The caller
+ * logs — the same division `dedupeArranged` makes.
+ */
+export function withoutGridRequired(
+	grid: GridLayout,
+	ids: readonly string[]
+): { ids: string[]; refused: string[] } {
+	const required = new Set(
+		grid.widgets.filter((w) => w.required).map((w) => w.id)
+	)
+	const kept: string[] = []
+	const refused: string[] = []
+	for (const id of ids) (required.has(id) ? refused : kept).push(id)
+	return { ids: kept, refused }
+}
+
 function isPlainObject(x: unknown): x is Record<string, unknown> {
 	return !!x && typeof x === "object" && !Array.isArray(x)
 }
@@ -243,6 +375,15 @@ export interface PlacementOpts {
 	/** The widget box's measured inline size, for its tier. 0 = not yet measured. */
 	widthPx: number
 	/**
+	 * The widget box's measured block size, when the zone measures one.
+	 *
+	 * Omitted where a zone measures width alone, and that absence travels: the
+	 * contract's `box.px` reports BOTH or neither, because a widget fitting
+	 * itself to a box cannot use half of one — and a 0 standing in for "not
+	 * measured" is the failure mode `tier` already has to work around.
+	 */
+	heightPx?: number
+	/**
 	 * The cell height to REPORT, when it differs from the rows the box occupies.
 	 * `null` is the contract's "grows / is unbounded" (a `1fr` or `auto` track);
 	 * omitted means `box.h`, which is right wherever a zone's rows are uniform
@@ -295,7 +436,14 @@ export function placementOf(o: PlacementOpts): PlacementInput {
 				left: x <= 0,
 				right: x + w >= cols,
 				bottom: y + h >= rows
-			}
+			},
+			// Reported only when the zone measured BOTH axes — see `heightPx`.
+			// A zero is "not measured yet", never a measurement: the contract
+			// spells that absence, so the rule lives here rather than in each
+			// renderer that binds a box.
+			...(o.widthPx > 0 && o.heightPx && o.heightPx > 0
+				? { px: { width: o.widthPx, height: o.heightPx } }
+				: {})
 		},
 		tier: widgetTier(o.widthPx),
 		pinned: o.pinned ?? false,

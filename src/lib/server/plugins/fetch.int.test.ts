@@ -83,8 +83,10 @@ const HOOK = `module.exports = { hooks: {
 	}
 } }`
 
+// An oracle's ctx: the one kind granted `fetch` (hookCtx.ts, R-3).
 const opts = (input: Record<string, unknown>) => ({
 	input,
+	kind: "oracle" as const,
 	timeoutMs: 4000,
 	seedLabel: "s",
 	nowMs: 1

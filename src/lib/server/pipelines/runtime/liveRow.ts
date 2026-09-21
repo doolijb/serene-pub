@@ -51,6 +51,7 @@ import { joinContinuation } from "$lib/server/messages/continuation"
 import type { AuthenticatedSocket } from "$lib/server/sockets/auth"
 import { setLiveRow } from "$lib/server/pipelines/runtime/runRegistry"
 import { recordSessionChange } from "$lib/server/messages/sessionChanges"
+import { broadcastSessionRow } from "$lib/server/sessions/rowPush"
 
 // db is the global Db — see db/types.d.ts
 
@@ -207,6 +208,11 @@ export function createLiveRow(opts: LiveRowOptions): LiveRow {
 				sessionMessage: row
 			}).catch(() => {})
 		)
+		// The session's LIST row moved too — the same write, seen from the
+		// sidebar. Off the chain and debounced (`sessions/rowPush.ts`): a
+		// burst of chunks is one push at the end of it, and the card quotes
+		// the row once it is worth quoting rather than mid-token.
+		broadcastSessionRow(io, sessionId)
 		return announcing
 	}
 

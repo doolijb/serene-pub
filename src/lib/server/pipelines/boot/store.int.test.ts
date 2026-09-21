@@ -242,12 +242,20 @@ describe("an async block offers its mode", () => {
 					"each",
 					{ over: ($: any) => $.history.messages, max: 4 },
 					(m) =>
-						m.oracle("draft", ($: any) =>
-							C.generateText.v1({
-								context: $.input.text,
-								connection: slot.connection()
-							})
-						)
+						m
+							// A context the oracle's port accepts: the save
+							// validates since the U5d review (W9), and text
+							// wired into a context port is the mistake 01 §3
+							// exists to catch.
+							.task("prompt", ($: any) =>
+								C.assemble.v2({ messages: $.history.messages })
+							)
+							.oracle("draft", ($: any) =>
+								C.generateText.v1({
+									context: $.each.item.prompt.context,
+									connection: slot.connection()
+								})
+							)
 				)
 				.build()
 		)
@@ -356,9 +364,26 @@ describe("envoys are checked where a document lands (U5g review, W4, S5)", () =>
 		await expect(
 			saveDocument(db, actionDoc("acme:spec/dice", [action("roll", "master", { speaks: "in-turn" })]))
 		).rejects.toThrow(/speaks 'on-action' only/)
+		// A bare string is `en` (R-20, ruled 2026-09-17); a map without one is refused.
 		await expect(
-			saveDocument(db, actionDoc("acme:spec/dice", [action("roll", "master", { name: "Master" })]))
+			saveDocument(db, actionDoc("acme:spec/dice", [action("roll", "master", { name: { fr: "Maître" } })]))
 		).rejects.toThrow(/required 'en'/)
+		expect(
+			(await saveDocument(db, actionDoc("acme:spec/dice-bare", [action("roll", "bare", { name: "Master" })])))
+				.written
+		).toBe(true)
+	})
+
+	it("a blank envoy name or genre name is refused under R-20 with the sentence, in the genre and on an action (U5i)", async () => {
+		await expect(
+			saveDocument(db, createDoc([{ key: "keeper", name: "   " }]))
+		).rejects.toThrow(/\[R-20\].*genre\.envoys\[keeper\]\.name is empty/)
+		await expect(
+			saveDocument(db, docOf("acme:spec/create-blank", {
+				genre: { name: { fr: "Loge" }, family: "chat" },
+				input: { genre: GENRE, event: sessionEvents.sessionCreated }
+			}))
+		).rejects.toThrow(/\[R-20\].*genre\.name: a locale map with a required 'en'/)
 	})
 
 	it("a reference to an envoy the published genre does not declare is refused; a declared one, or an unknown genre, or a batch-mate's, is not", async () => {
@@ -441,5 +466,103 @@ describe("envoys are checked where a document lands (U5g review, W4, S5)", () =>
 		await expect(saveDocument(db, doc)).rejects.toThrow(
 			/reads the prompts of envoy 'keeper', which 'acme:genre\/lodge' does not declare — it declares no envoys/
 		)
+	})
+})
+
+/**
+ * The Fixed Ledger's static laws run at the publish (U5d review, W9).
+ *
+ * `validate()` had run for an author — the builder, the conformance suite —
+ * and never for the document an instance stores: thirteen shipped specs
+ * carried a 01 §3 finding for a release because `session-history@1` declared
+ * candidates and published rows, and no door said so. Now every save asks,
+ * an `error` refuses, and the catalog itself is clean.
+ */
+describe("saveDocument runs validate() (U5d review, W9)", () => {
+	it("every shipped spec validates with zero errors, and the seed publishes them all", async () => {
+		const { validate } = await import("@serene-pub/sdk")
+		const { CORE_SPECS } = await import("$lib/server/pipelines/specs")
+		const errors: string[] = []
+		for (const s of CORE_SPECS) {
+			const doc = s.build()
+			for (const f of validate(doc).filter((x) => x.severity === "error"))
+				errors.push(`${doc.id} · [${f.law}] ${f.nodeKey ?? ""}: ${f.message}`)
+		}
+		expect(errors).toEqual([])
+		// A world-in-message forgery is what the line refuses; a shape
+		// forgery is what the laws refuse — both at the same door.
+		const { bootstrapPipelines } = await import("$lib/server/pipelines/boot/bootstrap")
+		await expect(bootstrapPipelines(db as any)).resolves.toBeDefined()
+	}, 120_000)
+
+	it("a forged document — a world action in a message venue — is refused at saveDocument by validate()", async () => {
+		const { chatGenre } = await import("@serene-pub/core-catalog")
+		const doc = compile(
+			spec("core:spec/test-forged-world", {
+				version: "1.0.0",
+				taxonomy: { role: "action", genre: chatGenre.id },
+				contributes: {
+					actions: [
+						{
+							key: "grant",
+							function: "grant",
+							genre: chatGenre.id,
+							venue: { kind: "composer" },
+							label: { en: "Grant" }
+						}
+					]
+				}
+			})
+				.inlet("input", C.userMessage.v1(), {
+					genre: chatGenre,
+					event: sessionEvents.sessionAction
+				})
+				.outlet("save", ($) => C.createMessage.v1({ text: $.input.text }))
+				.build()
+		)
+		// Patched after the builder saw it — an import, a hand-written JSON.
+		const [action] = (doc.contributes as any).actions
+		const forged: SpecDocument = {
+			...doc,
+			contributes: {
+				actions: [{ ...action, effects: "world", venue: [{ kind: "message" }] }]
+			}
+		}
+		// Labelled with the line's own law, F41 (U7 review, W3) — the sentence
+		// still cites R-15, where the line is ruled.
+		await expect(saveDocument(db, forged, { publish: true })).rejects.toThrow(
+			/does not validate — \[F41\].*'world' action may not appear in the 'message' venue/
+		)
+	})
+
+	it("a document whose preset label is blank is refused at saveDocument under R-20, with the fix (U5i)", async () => {
+		const doc = sessionTurn()
+		const forged: SpecDocument = {
+			...doc,
+			id: "core:spec/test-blank-preset-label",
+			presets: [{ ...doc.presets[0]!, label: "" }]
+		}
+		await expect(saveDocument(db, forged, { publish: true })).rejects.toThrow(
+			/does not validate — \[R-20\] presets\[balanced\]\.label is empty — give it text a person reads, 'Title' or \{ en: 'Title' \} \(R-20\) \(write display text/
+		)
+	})
+
+	it("a shape forgery — text wired into a port that takes an assembled context — is refused at saveDocument; a warning is not", async () => {
+		const doc = compile(
+			spec("core:spec/test-forged-shape", { version: "1.0.0" })
+				.inlet("input", C.userMessage.v1())
+				.oracle("generate", ($: any) =>
+					C.generateText.v1({ context: $.input.text, connection: slot.connection() })
+				)
+				.outlet("save", ($) => C.createMessage.v1({ text: $.generate.text }))
+				.build()
+		)
+		await expect(saveDocument(db, doc)).rejects.toThrow(
+			/does not validate — \[01 §3\] generate: 'input\.text' produces core:shape\/text@1; 'generate\.context' needs core:shape\/assembled-context@1/
+		)
+		// The same document with the mistake fixed saves — and `sessionTurn`
+		// above, whose transcript feeds a candidates port, still does: a
+		// transcript may be offered as candidates (messages@1 → candidates).
+		expect((await saveDocument(db, sessionTurn())).specVersionId).toBeGreaterThan(0)
 	})
 })

@@ -81,7 +81,12 @@ export async function branchSession(
 				// up as a chat (2026-09-16).
 				genreId: original.genreId,
 				presetId: original.presetId,
-				genreFields: original.genreFields
+				genreFields: original.genreFields,
+				// The state version comes along (U5f): the copied value and
+				// possession rows keep the versions they landed at, and a
+				// branch that restarted at zero would read every one of them
+				// as "moved since" the first proposal made on it.
+				stateVersion: original.stateVersion
 			} satisfies InsertSession)
 			.returning()
 
@@ -144,8 +149,8 @@ export async function branchSession(
 				}))
 			)
 
-		if (messagesToCopy.length > 0)
-			await insertLegacyMany(
+		const copied = messagesToCopy.length
+			? await insertLegacyMany(
 				tx,
 				messagesToCopy.map(
 					(message) =>
@@ -170,7 +175,125 @@ export async function branchSession(
 						}) satisfies InsertSessionMessage
 				)
 			)
+			: []
+
+		// The anchors, remapped (R10). `insertLegacyMany` returns the rows of
+		// one INSERT in the order they were given, so zipping is the map — and
+		// the map is the whole of why state can be copied at all: every
+		// attribute row is anchored to a message id, and an id from the source
+		// session means nothing in the branch.
+		//
+		// ⚠ The branch copied NONE of these before today, so a forked adventure
+		// arrived with every bar back at its declaration default and no ledger.
+		const remap = new Map<number, number>()
+		messagesToCopy.forEach((message, i) => {
+			const row = copied[i]
+			if (row) remap.set(message.id, row.id)
+		})
+		await copyStateRows(tx, {
+			sessionId,
+			created: created.id,
+			forkMessageId: fromMessageId,
+			remap
+		})
 
 		return created
 	})
+}
+
+/**
+ * Copy a session's state rows into its branch, anchors remapped.
+ *
+ * Values, configurations and possessions — the three session-layer tables —
+ * and the sheets its owners have, which is what the branch *tracks* rather than
+ * what it holds. Rows anchored after the fork are left behind: a branch is the
+ * conversation up to a point, and carrying a change made three replies later
+ * would be carrying a fact from a future the branch never had.
+ *
+ * A null anchor is "from the beginning" and always comes across.
+ *
+ * ⚠ **Proposals are deliberately not copied.** A pending decision belongs to
+ * the person who was asked, in the session they were asked in; two sessions
+ * each holding the same undecided line is two chances to answer one question,
+ * and no way to say which answer was meant.
+ */
+async function copyStateRows(
+	tx: Db,
+	input: {
+		sessionId: number
+		created: number
+		forkMessageId: number
+		remap: Map<number, number>
+	}
+): Promise<void> {
+	const { sessionId, created, forkMessageId, remap } = input
+	/** The anchor a copied row gets, or `undefined` when the row stays behind. */
+	const anchor = (source: number | null): number | null | undefined => {
+		if (source === null) return null
+		if (source > forkMessageId) return undefined
+		return remap.get(source) ?? undefined
+	}
+
+	const values = await tx
+		.select()
+		.from(schema.attributeValues)
+		.where(eq(schema.attributeValues.sessionId, sessionId))
+	for (const row of values) {
+		const at = anchor(row.validFromMessageId)
+		if (at === undefined) continue
+		const { id: _id, createdAt: _createdAt, ...rest } = row
+		await tx.insert(schema.attributeValues).values({
+			...rest,
+			sessionId: created,
+			validFromMessageId: at
+		})
+	}
+
+	const configs = await tx
+		.select()
+		.from(schema.attributeConfigs)
+		.where(eq(schema.attributeConfigs.sessionId, sessionId))
+	for (const row of configs) {
+		const at = anchor(row.validFromMessageId)
+		if (at === undefined) continue
+		const { id: _id, createdAt: _createdAt, ...rest } = row
+		await tx.insert(schema.attributeConfigs).values({
+			...rest,
+			sessionId: created,
+			validFromMessageId: at
+		})
+	}
+
+	const possessions = await tx
+		.select()
+		.from(schema.sessionPossessions)
+		.where(eq(schema.sessionPossessions.sessionId, sessionId))
+	for (const row of possessions) {
+		const at = anchor(row.validFromMessageId)
+		if (at === undefined) continue
+		const { id: _id, createdAt: _createdAt, ...rest } = row
+		await tx.insert(schema.sessionPossessions).values({
+			...rest,
+			sessionId: created,
+			validFromMessageId: at
+		})
+	}
+
+	// What the branch TRACKS, as opposed to what it holds: the session's own
+	// sheets and its cast's. Both are keyed by `session_id`, so both are found
+	// by one predicate and both are remapped the same way — the `session_cast`
+	// owner id is a `characters.id` and does not change across a branch, which
+	// is why only the `session` owner's id moves.
+	const sheets = await tx
+		.select()
+		.from(schema.ownerSheets)
+		.where(eq(schema.ownerSheets.sessionId, sessionId))
+	for (const row of sheets)
+		await tx.insert(schema.ownerSheets).values({
+			ownerKind: row.ownerKind,
+			ownerId: row.ownerKind === "session" ? created : row.ownerId,
+			sessionId: created,
+			sheetId: row.sheetId,
+			position: row.position
+		})
 }

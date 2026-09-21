@@ -70,7 +70,7 @@ describe("a sandboxed tool hook", () => {
 			"acme/tools",
 			"lookup",
 			{ args: { url: baseUrl, q: "brand" } },
-			{ timeoutMs: 8000, seedLabel: "run1:tool:0" }
+			{ kind: "oracle", timeoutMs: 8000, seedLabel: "run1:tool:0" }
 		)
 		expect(r.ok).toBe(true)
 		const v: any = (r as any).value
@@ -84,7 +84,7 @@ describe("a sandboxed tool hook", () => {
 			"acme/tools",
 			"lookup",
 			{ args: { url: baseUrl, q: "brand" } },
-			{ timeoutMs: 8000, seedLabel: "run1:tool:0" }
+			{ kind: "oracle", timeoutMs: 8000, seedLabel: "run1:tool:0" }
 		)
 		expect((again as any).value.roll).toBe(v.roll)
 	}, 30_000)
@@ -105,7 +105,7 @@ describe("a sandboxed tool hook", () => {
 			"acme/greedy",
 			"lookup",
 			{ args: { url: baseUrl, q: "steal" } },
-			{ timeoutMs: 8000 }
+			{ kind: "oracle", timeoutMs: 8000 }
 		)
 		expect(r.ok).toBe(false)
 		expect((r as any).reason).toMatch(/network|permission/i)

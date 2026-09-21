@@ -1,9 +1,10 @@
 /**
  * Serve a plugin's frame documents (20 §12).
  *
- * The URL is `/plugin-ui/<namespace>/<name>/<file...>` — the first two
- * segments are the plugin id (which contains a slash by grammar), the rest
- * is the stored file path.
+ * The URL is `/plugin-ui/<pluginId>/<file...>` — the FIRST segment is the
+ * plugin id and everything after it is the stored file path. One segment,
+ * because a plugin slug is dotted and never slashed (SDK `defineExtension`);
+ * an id outside that grammar is a 404 rather than a guess.
  *
  * No session auth, deliberately: an opaque-origin sandbox sends no
  * credentials, so a cookie check here would refuse every legitimate frame
@@ -21,13 +22,16 @@ import type { RequestHandler } from "@sveltejs/kit"
 import { eq } from "drizzle-orm"
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { readPluginFile, frameCsp } from "$lib/server/plugins/frameHost"
+import {
+	readPluginFile,
+	frameCsp,
+	parseFrameSrc
+} from "$lib/server/plugins/frameHost"
 
 export const GET: RequestHandler = async (event) => {
-	const segments = (event.params.rest ?? "").split("/").filter(Boolean)
-	if (segments.length < 3) return new Response("Not found", { status: 404 })
-	const pluginId = `${segments[0]}/${segments[1]}`
-	const path = segments.slice(2).join("/")
+	const parsed = parseFrameSrc(event.params.rest)
+	if (!parsed) return new Response("Not found", { status: 404 })
+	const { pluginId, path } = parsed
 
 	const [plugin] = await db
 		.select({

@@ -14,6 +14,8 @@
 	 * back into a payload belong to the host surface.
 	 */
 
+	import { i18nTextIn } from "$lib/shared/i18n/i18nText"
+
 	interface FieldDecl {
 		type:
 			| "string"
@@ -42,7 +44,7 @@
 	let { schema, values = $bindable() }: Props = $props()
 
 	const text = (v: FieldDecl["label"], fallback: string): string =>
-		typeof v === "string" ? v : (v?.en ?? fallback)
+		i18nTextIn(v) ?? fallback
 
 	/** Declaration order within a group; group order is first appearance. */
 	const groups = $derived.by(() => {

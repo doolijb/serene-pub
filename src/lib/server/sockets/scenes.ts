@@ -29,6 +29,7 @@ import {
 	TEXT_CAPABILITY
 } from "$lib/server/connections/capabilityTarget"
 import { activityError, activityStore } from "$lib/server/utils/activityStore"
+import { sceneWriteRefusal } from "$lib/server/messages/writes"
 import { withSessionTriggerLock } from "$lib/server/utils/sessionTriggerLock"
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
 import { resolveOrCreateBinding } from "$lib/server/utils/characterBindingSync"
@@ -211,6 +212,15 @@ export const sceneCreateHandler: Handler<
 			if (!session) {
 				throw new Error("Session not found or access denied.")
 			}
+			/**
+			 * Declared writes (R-B): a scene opened *from a session* is a
+			 * session write, and a genre that opens none refuses it here.
+			 * Gated on `data.sessionId` and nothing else — a scene created
+			 * from the lorebook screens carries no session and is a person at
+			 * a book, which this lever deliberately says nothing about.
+			 */
+			const noScenes = await sceneWriteRefusal(db, data.sessionId)
+			if (noScenes) throw new Error(noScenes)
 		}
 
 		// Without this, a scene could be created with an attacker's own
@@ -271,6 +281,30 @@ export const sceneCreateHandler: Handler<
 				participantCharacters,
 				mentionedCharacters
 			})
+		}
+
+		// A capture is one of the three moments a session's numbers are written
+		// onto the world's timeline (R8): the scene names the history entry, so
+		// this is the moment the state has a place on the story clock to be
+		// filed at. Best-effort — a capture that succeeded must not be reported
+		// as failed because the timeline write did — and silent for a session
+		// with no world, which has no timeline by design.
+		if (newScene.sessionId) {
+			try {
+				const { recordToTimeline } = await import(
+					"$lib/server/state/durable"
+				)
+				await recordToTimeline(db, newScene.sessionId, {
+					reason: "scene",
+					sceneId: newScene.id,
+					historyEntryId: newScene.historyEntryId
+				})
+			} catch (e) {
+				console.warn(
+					"[scenes:create] state was not recorded to the timeline:",
+					e
+				)
+			}
 		}
 
 		// Refresh scene list and scened message IDs for the session.

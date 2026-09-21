@@ -16,9 +16,15 @@
  * card's answer — and it is supplied per owner and slot, so one character's
  * starting health is never read as another's.
  */
+import type { SlotValue } from "@serene-pub/sdk"
 import { formatSlotValue } from "./barMath"
 
-export type LedgerValue = number | string | boolean | null
+/**
+ * What a value row carries, which is the SDK's `SlotValue` and not a copy of
+ * it: a `list` slot's row is an array, and a ledger that could not hold one
+ * would be a line the transcript quietly dropped.
+ */
+export type LedgerValue = SlotValue
 
 /** One anchored row. The wire shape (`Sockets.State.LedgerRow`), structurally. */
 export interface LedgerRow {

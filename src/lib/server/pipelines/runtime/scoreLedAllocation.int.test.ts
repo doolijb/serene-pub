@@ -278,10 +278,9 @@ describe("the declared switch and the shipped behaviour are one answer", () => {
 
 	it("is not declared on the sibling ranker", async () => {
 		// Spread onto `rank-hybrid` alone, like the signal matrix and for the
-		// same reason (S3): `rank-by-recency` does not run this selection, and
-		// widening a sibling's declared surface is a hash change on a type
-		// nobody meant to touch — which would want a re-projection 0196 does
-		// not write.
+		// same reason (S3): the `rank-recall` example does not run this
+		// selection, and widening a sibling's declared surface is a hash
+		// change on a type nobody meant to touch.
 		const [row] = await db
 			.select()
 			.from(schema.pipelineDefinitionRegistry)
@@ -289,12 +288,13 @@ describe("the declared switch and the shipped behaviour are one answer", () => {
 				and(
 					eq(
 						schema.pipelineDefinitionRegistry.definitionId,
-						"core:task/rank-by-recency"
+						"chariot.recall:rank-recall"
 					),
 					eq(schema.pipelineDefinitionRegistry.version, 1)
 				)
 			)
 			.limit(1)
+		expect(row, "the sibling ranker is published").toBeTruthy()
 		expect(
 			(row?.slots as any)?.params?.schema?.scoreLedAllocation
 		).toBeUndefined()

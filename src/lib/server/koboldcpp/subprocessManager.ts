@@ -36,30 +36,76 @@ interface SubprocessState {
 	isExternal: boolean
 }
 
-const state: SubprocessState = {
-	process: null,
-	status: "stopped",
-	pid: null,
-	startedAt: null,
-	lastError: null,
-	restartCount: 0,
-	isExternal: false
+/**
+ * Every piece of mutable state this module owns, kept on `globalThis` rather
+ * than in module scope — the same rule, for the same reason, as
+ * `sockets/loadSockets.server.ts`.
+ *
+ * Vite's SSR HMR re-evaluates this module whenever it or anything it imports
+ * changes (`$lib/server/db`, so any schema edit; `./kcppHttp`;
+ * `./pollUntilReady`). Module-scope state then splits in two: the OLD
+ * evaluation still holds the child-process handle, its `exit` handlers, its
+ * health-check interval and the emitters that reach the browser, while the NEW
+ * evaluation — the one every fresh request, preflight and socket handler now
+ * calls — starts from `status: "stopped"` with no handle at all. The live
+ * process is then invisible to the code that asks about it: the status card
+ * shows _Stopped_ or a _Starting_ that never resolves, the next generation
+ * re-adopts the process as if it were a stranger (resetting `startedAt`), and
+ * the old evaluation's health check keeps firing against a suspended-flag it
+ * no longer shares, free to declare a crash mid-load. Seen live on
+ * 2026-09-18: uptime 4m59s on a process 8 minutes old.
+ *
+ * One shared bag means every evaluation reads and writes the same process,
+ * the same timers and the same emitters. Production evaluates once and never
+ * notices.
+ */
+interface ManagerState {
+	state: SubprocessState
+	// Map<userId, {emit, connections}>, not a single nullable slot or a
+	// Set<EmitFn> — see binaryManager.ts's registerEmitter for the full
+	// rationale (same anti-pattern: a Set overcorrects the old single-slot bug
+	// into an N² broadcast when the same admin has multiple tabs open, since
+	// registration happens once per connection but emitToUser already
+	// broadcasts to every one of that user's connections).
+	statusEmitters: Map<
+		number,
+		{ emit: (s: SubprocessStatusEvent) => void; connections: number }
+	>
+	healthInterval: ReturnType<typeof setInterval> | null
+	idleTimer: ReturnType<typeof setTimeout> | null
+	subprocessTimeoutSecs: number
+	lastBinaryDir: string | null
+	healthCheckFailures: number
+	healthCheckSuspended: boolean
+	startingPromise: Promise<void> | null
 }
 
-// Map<userId, {emit, connections}>, not a single nullable slot or a
-// Set<EmitFn> — see binaryManager.ts's registerEmitter for the full
-// rationale (same anti-pattern: a Set overcorrects the old single-slot bug
-// into an N² broadcast when the same admin has multiple tabs open, since
-// registration happens once per connection but emitToUser already
-// broadcasts to every one of that user's connections).
-const statusEmitters = new Map<
-	number,
-	{ emit: (s: SubprocessStatusEvent) => void; connections: number }
->()
-let healthInterval: ReturnType<typeof setInterval> | null = null
-let idleTimer: ReturnType<typeof setTimeout> | null = null
-let subprocessTimeoutSecs = 1800
-let lastBinaryDir: string | null = null
+const globalScope = globalThis as unknown as {
+	__SERENE_PUB_KCPP_SUBPROCESS__?: ManagerState
+}
+
+const shared: ManagerState = (globalScope.__SERENE_PUB_KCPP_SUBPROCESS__ ??= {
+	state: {
+		process: null,
+		status: "stopped",
+		pid: null,
+		startedAt: null,
+		lastError: null,
+		restartCount: 0,
+		isExternal: false
+	},
+	statusEmitters: new Map(),
+	healthInterval: null,
+	idleTimer: null,
+	subprocessTimeoutSecs: 1800,
+	lastBinaryDir: null,
+	healthCheckFailures: 0,
+	healthCheckSuspended: false,
+	startingPromise: null
+})
+
+const state = shared.state
+const statusEmitters = shared.statusEmitters
 
 // Best-effort: if this Node process dies (normal exit, uncaught exception,
 // or a caught signal that leads to exit), take the managed koboldcpp
@@ -221,6 +267,18 @@ async function adoptIfAlreadyRunning(
 	port: number
 ): Promise<boolean> {
 	if (await pingKoboldCPP(`http://localhost:${port}`, 2000)) {
+		// Already ours and already tracked: nothing to adopt. Re-adopting a
+		// process this evaluation is supervising re-stamps `startedAt` (the
+		// card's uptime jumps back to zero on a process minutes old), restarts
+		// the health check and re-derives ownership from the pid file — all
+		// for no change. The boot-time check below reaches here on every dev
+		// re-evaluation of the startup module, which is how a live process
+		// kept reporting an uptime younger than itself.
+		if (
+			(state.status === "running" || state.status === "starting") &&
+			(state.process || state.pid)
+		)
+			return true
 		const ownedPid = await findVerifiedOwnedPid(binaryDir, binaryPath)
 		console.log(
 			ownedPid
@@ -328,27 +386,27 @@ export function isRunning(): boolean {
 }
 
 function clearIdleTimer() {
-	if (idleTimer) {
-		clearTimeout(idleTimer)
-		idleTimer = null
+	if (shared.idleTimer) {
+		clearTimeout(shared.idleTimer)
+		shared.idleTimer = null
 	}
 }
 
 export function pingActivity() {
 	clearIdleTimer()
-	if (state.status !== "running" || subprocessTimeoutSecs <= 0) return
-	idleTimer = setTimeout(() => {
+	if (state.status !== "running" || shared.subprocessTimeoutSecs <= 0) return
+	shared.idleTimer = setTimeout(() => {
 		console.log(
 			"[KoboldCPP] Subprocess idle timeout reached, shutting down…"
 		)
 		stop().catch((err) =>
 			console.error("[KoboldCPP] Auto-stop failed:", err)
 		)
-	}, subprocessTimeoutSecs * 1000)
+	}, shared.subprocessTimeoutSecs * 1000)
 }
 
 export function setSubprocessTimeout(secs: number) {
-	subprocessTimeoutSecs = secs
+	shared.subprocessTimeoutSecs = secs
 	if (state.status === "running") pingActivity()
 }
 
@@ -385,8 +443,6 @@ async function waitForReady(port: number, proc: ChildProcess): Promise<void> {
 // is in flight (KoboldCppManagedAdapter.preflight) should also bracket it
 // with suspendHealthCheck()/resumeHealthCheck() below — belt and suspenders.
 const HEALTH_CHECK_FAILURE_THRESHOLD = 3
-let healthCheckFailures = 0
-let healthCheckSuspended = false
 
 /** Pause health checking entirely for the duration of a known-slow operation
  * (a model load). Unlike the failure-threshold tolerance above, this has no
@@ -394,26 +450,26 @@ let healthCheckSuspended = false
  * still won't get its process torn out from under it. Always pair with
  * resumeHealthCheck() in a finally block. */
 export function suspendHealthCheck() {
-	healthCheckSuspended = true
+	shared.healthCheckSuspended = true
 }
 
 export function resumeHealthCheck() {
-	healthCheckSuspended = false
-	healthCheckFailures = 0
+	shared.healthCheckSuspended = false
+	shared.healthCheckFailures = 0
 }
 
 function startHealthCheck(port: number) {
 	stopHealthCheck()
-	healthInterval = setInterval(async () => {
-		if (state.status !== "running" || healthCheckSuspended) return
+	shared.healthInterval = setInterval(async () => {
+		if (state.status !== "running" || shared.healthCheckSuspended) return
 		const ok = await pingKoboldCPP(`http://localhost:${port}`, 5000)
 		if (ok) {
-			healthCheckFailures = 0
+			shared.healthCheckFailures = 0
 			return
 		}
-		healthCheckFailures++
+		shared.healthCheckFailures++
 		if (
-			healthCheckFailures >= HEALTH_CHECK_FAILURE_THRESHOLD &&
+			shared.healthCheckFailures >= HEALTH_CHECK_FAILURE_THRESHOLD &&
 			state.status === "running"
 		) {
 			clearIdleTimer()
@@ -427,10 +483,10 @@ function startHealthCheck(port: number) {
 }
 
 function stopHealthCheck() {
-	healthCheckFailures = 0
-	if (healthInterval) {
-		clearInterval(healthInterval)
-		healthInterval = null
+	shared.healthCheckFailures = 0
+	if (shared.healthInterval) {
+		clearInterval(shared.healthInterval)
+		shared.healthInterval = null
 	}
 }
 
@@ -458,15 +514,14 @@ function failStart(message: string): never {
 // leaving two koboldcpp processes racing for the same port. Concurrent
 // callers now await the same in-flight attempt instead, same pattern as
 // modelManager.ts's loadingPromise for concurrent model loads.
-let startingPromise: Promise<void> | null = null
 
 export async function start(): Promise<void> {
-	if (startingPromise) return startingPromise
-	startingPromise = doStart()
+	if (shared.startingPromise) return shared.startingPromise
+	shared.startingPromise = doStart()
 	try {
-		await startingPromise
+		await shared.startingPromise
 	} finally {
-		startingPromise = null
+		shared.startingPromise = null
 	}
 }
 
@@ -515,7 +570,7 @@ async function doStart(): Promise<void> {
 	} = settings
 	if (!binaryDir || !binaryVariant) failStart("Binary not configured")
 
-	lastBinaryDir = binaryDir
+	shared.lastBinaryDir = binaryDir
 	const binaryPath = path.join(binaryDir, binaryVariant)
 
 	try {
@@ -540,7 +595,7 @@ async function doStart(): Promise<void> {
 			.set({ koboldCppManagedAdminPassword: password })
 			.where(eq(schema.koboldCppSettings.id, 1))
 	}
-	subprocessTimeoutSecs =
+	shared.subprocessTimeoutSecs =
 		settings.koboldCppManagedSubprocessTimeoutSecs ?? 1800
 
 	// If KoboldCPP is already reachable (e.g. left over from a previous server
@@ -769,5 +824,5 @@ export async function stop(): Promise<void> {
 	state.isExternal = false
 	emitStatus()
 
-	if (lastBinaryDir) await clearPidFile(lastBinaryDir)
+	if (shared.lastBinaryDir) await clearPidFile(shared.lastBinaryDir)
 }

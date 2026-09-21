@@ -19,6 +19,7 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import * as schema from "$lib/server/db/schema"
+import { eq } from "drizzle-orm"
 import {
 	defineAttributeSlot,
 	derivations,
@@ -366,5 +367,347 @@ describe("stateFor", () => {
 		expect(state.cast[key]?.hp).toBe(14)
 		// Both keys, always — the bare one and the fully qualified one.
 		expect(state.cast[key]?.core_hp).toBe(14)
+	})
+})
+
+// ── Two indexes, one set of entries (R17) ───────────────────────────────────
+
+describe("the cast, twice over", () => {
+	test("byId and the slug are the SAME object", async () => {
+		declareSlots()
+		const w = await world()
+		const { stateFor, castKey } = await import("$lib/server/state/resolve")
+		await putValue("session_cast", w.character.id, HP, 14, {
+			sessionId: w.session.id,
+			validFromMessageId: w.message.id
+		})
+		const state = await stateFor(db, w.session.id)
+		const byId = state.cast.byId[String(w.character.id)]
+		const bySlug = state.cast[castKey(w.character.name)]
+		// Not "deeply equal" — the same object. A template editing one and a
+		// script editing the other must be editing one thing.
+		expect(bySlug).toBe(byId)
+		expect(byId.id).toBe(w.character.id)
+		expect(byId.name).toBe(w.character.name)
+		expect(byId.key).toBe(castKey(w.character.name))
+		expect(byId.hp).toBe(14)
+	})
+
+	test("byId is always there, empty or not", async () => {
+		declareSlots()
+		const { createTestUser } = await import("$lib/server/utils/testDb")
+		const user = await createTestUser(db, `empty-cast-${++n}`)
+		const [session] = await db
+			.insert(schema.sessions)
+			.values({
+				userId: user.id,
+				isGroup: false,
+				name: "Empty",
+				genreId: GENRE
+			})
+			.returning()
+		const { stateFor } = await import("$lib/server/state/resolve")
+		const state = await stateFor(db, session.id)
+		expect(state.cast.byId).toEqual({})
+	})
+})
+
+// ── who (R16) ───────────────────────────────────────────────────────────────
+
+describe("who", () => {
+	/** A session with two characters, a persona, and some turns. */
+	async function peopled() {
+		const suffix = `${++n}`
+		const { createTestUser } = await import("$lib/server/utils/testDb")
+		const user = await createTestUser(db, `who-${suffix}`)
+		const mk = async (name: string, isPersona = false) =>
+			(
+				await db
+					.insert(schema.characters)
+					.values({
+						userId: user.id,
+						name: `${name} ${suffix}`,
+						description: "…",
+						isPersona
+					})
+					.returning()
+			)[0]
+		const verity = await mk("Verity")
+		const marrow = await mk("Marrow")
+		const player = await mk("Rook", true)
+		const [session] = await db
+			.insert(schema.sessions)
+			.values({
+				userId: user.id,
+				isGroup: true,
+				name: `Run ${suffix}`,
+				genreId: GENRE
+			})
+			.returning()
+		for (const [i, c] of [verity, marrow].entries())
+			await db.insert(schema.sessionCharacters).values({
+				sessionId: session.id,
+				characterId: c.id,
+				position: i
+			})
+		await db
+			.insert(schema.sessionPersonas)
+			.values({ sessionId: session.id, personaId: player.id, position: 0 })
+		const say = async (speakerId: number | null) => {
+			const [row] = await db
+				.insert(schema.messages)
+				.values({
+					sessionId: session.id,
+					role: "assistant",
+					characterId: speakerId
+				})
+				.returning()
+			return row
+		}
+		return { user, verity, marrow, player, session, say }
+	}
+
+	test("an absent role is an absent KEY, never a null", async () => {
+		declareSlots()
+		const w = await peopled()
+		const { stateFor } = await import("$lib/server/state/resolve")
+		const state = await stateFor(db, w.session.id)
+		// Nobody has spoken and nobody asked, so four of the seven are simply
+		// not there — "nobody has spoken yet" is a different sentence from
+		// "the speaker is nothing".
+		expect("speaker" in state.who).toBe(false)
+		expect("last" in state.who).toBe(false)
+		expect("previous" in state.who).toBe(false)
+		expect("user" in state.who).toBe(false)
+		// Two that are: the owner's persona, and the seated active cast.
+		expect(state.who.owner?.id).toBe(w.player.id)
+		expect(state.who.active.map((e) => e.id)).toEqual([
+			w.verity.id,
+			w.marrow.id
+		])
+		// No `narrator` and no `addressed`, ever.
+		expect("narrator" in state.who).toBe(false)
+		expect("addressed" in state.who).toBe(false)
+	})
+
+	test("last and previous are the two most recent DIFFERENT speakers", async () => {
+		declareSlots()
+		const w = await peopled()
+		await w.say(w.marrow.id)
+		await w.say(w.verity.id)
+		// Answering herself does not make her her own predecessor.
+		await w.say(w.verity.id)
+		const { stateFor } = await import("$lib/server/state/resolve")
+		const state = await stateFor(db, w.session.id)
+		expect(state.who.last?.id).toBe(w.verity.id)
+		expect(state.who.previous?.id).toBe(w.marrow.id)
+	})
+
+	test("every role points at the SAME entry the cast holds", async () => {
+		declareSlots()
+		const w = await peopled()
+		await w.say(w.verity.id)
+		const { stateFor } = await import("$lib/server/state/resolve")
+		const state = await stateFor(db, w.session.id, {
+			speakerId: w.verity.id,
+			userId: w.user.id
+		})
+		const entry = state.cast.byId[String(w.verity.id)]
+		expect(state.who.speaker).toBe(entry)
+		expect(state.who.last).toBe(entry)
+		expect(state.who.active[0]).toBe(entry)
+		// The asking user's own persona — a character, seated as their voice.
+		expect(state.who.user?.id).toBe(w.player.id)
+		expect(state.who.user).toBe(state.cast.byId[String(w.player.id)])
+	})
+
+	test("a speaker nobody is in this cast leaves the key absent", async () => {
+		declareSlots()
+		const w = await peopled()
+		const { stateFor } = await import("$lib/server/state/resolve")
+		const state = await stateFor(db, w.session.id, { speakerId: 9_999_999 })
+		// Half an entry — an identity with no values — would be worse than no
+		// answer at all.
+		expect("speaker" in state.who).toBe(false)
+	})
+})
+
+// ── Derivations written as expressions (R11) ────────────────────────────────
+
+describe("a derivation is an expression over the resolved state", () => {
+	const STAMINA = "core:slot/stamina@1"
+	const SPENT = "core:slot/spent@1"
+	const CONDITION = "core:slot/condition@1"
+	const DERIVE_GENRE = "test:genre/derive"
+
+	function declareDerived() {
+		_clearAttributeSlots()
+		const stamina = defineAttributeSlot(STAMINA, {
+			type: "integer",
+			descriptor: "How much they have left in them.",
+			appliesTo: ["cast"],
+			config: { min: 0, max: 10 },
+			default: 10
+		})
+		// Reads the stored slot…
+		const spent = defineAttributeSlot(SPENT, {
+			type: "derived",
+			descriptor: "How much they have burned through.",
+			appliesTo: ["cast"],
+			derive: "10 | minus: owner.stamina"
+		})
+		// …and this one reads THAT, so the order is not the declaration order.
+		const condition = defineAttributeSlot(CONDITION, {
+			type: "derived",
+			descriptor: "Whether they are visibly spent.",
+			appliesTo: ["cast"],
+			derive: "owner.spent > 5"
+		})
+		genre(DERIVE_GENRE, {
+			name: { en: "Derive" },
+			family: "test",
+			// ⚠ `condition` is listed BEFORE the `spent` it reads, so a naive
+			// pass in declaration order would compute it against nothing. The
+			// order is the graph's.
+			slots: [stamina, condition, spent],
+			events: {}
+		})
+	}
+
+	async function derivedWorld() {
+		const suffix = `${++n}`
+		const { createTestUser } = await import("$lib/server/utils/testDb")
+		const user = await createTestUser(db, `derive-${suffix}`)
+		const [character] = await db
+			.insert(schema.characters)
+			.values({ userId: user.id, name: `Wren ${suffix}`, description: "…" })
+			.returning()
+		const [session] = await db
+			.insert(schema.sessions)
+			.values({
+				userId: user.id,
+				isGroup: false,
+				name: `Run ${suffix}`,
+				genreId: DERIVE_GENRE
+			})
+			.returning()
+		await db
+			.insert(schema.sessionCharacters)
+			.values({ sessionId: session.id, characterId: character.id })
+		const [message] = await db
+			.insert(schema.messages)
+			.values({
+				sessionId: session.id,
+				role: "assistant",
+				characterId: character.id
+			})
+			.returning()
+		return { user, character, session, message }
+	}
+
+	test("a derived slot is computed, in dependency order", async () => {
+		declareDerived()
+		const w = await derivedWorld()
+		await putValue("session_cast", w.character.id, STAMINA, 2, {
+			sessionId: w.session.id,
+			validFromMessageId: w.message.id
+		})
+		const { castKey, stateFor } = await import("$lib/server/state/resolve")
+		const state = await stateFor(db, w.session.id)
+		const entry: any = state.cast[castKey(w.character.name)]
+		expect(entry.stamina).toBe(2)
+		expect(entry.spent).toBe(8)
+		// Reads `spent`, which is itself derived: the order is the graph's, not
+		// the declaration list's. Declared last and computed last is a
+		// coincidence here; reversing the declarations would not change it.
+		expect(entry.condition).toBe(true)
+	})
+
+	test("a derived slot is never written, and is absent rather than zero", async () => {
+		declareDerived()
+		const w = await derivedWorld()
+		const { setValue, StateRefusal } = await import(
+			"$lib/server/state/write"
+		)
+		await expect(
+			setValue(db, { sessionId: w.session.id, updatedBy: "user" }, {
+				owner: { kind: "session_cast", id: w.character.id },
+				slotId: SPENT,
+				value: 4
+			})
+		).rejects.toBeInstanceOf(StateRefusal)
+	})
+
+	test("a circle is refused at save, where the person who wrote it is", async () => {
+		declareDerived()
+		const { checkDerivationGraph } = await import(
+			"$lib/server/state/resolve"
+		)
+		const ring = [
+			{
+				id: "x:slot/a@1",
+				type: "derived",
+				descriptor: "A.",
+				appliesTo: ["cast"],
+				origin: "stored",
+				derive: "owner.b | plus: 1"
+			},
+			{
+				id: "x:slot/b@1",
+				type: "derived",
+				descriptor: "B.",
+				appliesTo: ["cast"],
+				origin: "stored",
+				derive: "owner.a | plus: 1"
+			}
+		] as any
+		expect(checkDerivationGraph(ring)).toMatch(/circle/)
+		expect(checkDerivationGraph([ring[0]])).toBeNull()
+	})
+})
+
+// ── Retirement (R3) ─────────────────────────────────────────────────────────
+
+describe("a retired slot", () => {
+	test("still resolves, still shows, and is flagged", async () => {
+		declareSlots()
+		const w = await world()
+		const { retireAttributeSlot, defineStoredAttributeSlot } = await import(
+			"@serene-pub/sdk"
+		)
+		const mine = "somebody:slot/dread@1"
+		const decl = defineStoredAttributeSlot(
+			mine,
+			{
+				type: "integer",
+				descriptor: "How frightened they are.",
+				appliesTo: ["cast"],
+				config: { min: 0, max: 10 },
+				default: 0
+			},
+			{ userId: w.user.id }
+		)
+		genre("test:genre/retired", {
+			name: { en: "Retired" },
+			family: "test",
+			slots: [decl],
+			events: {}
+		})
+		await db
+			.update(schema.sessions)
+			.set({ genreId: "test:genre/retired" })
+			.where(eq(schema.sessions.id, w.session.id))
+		await putValue("session_cast", w.character.id, mine, 7, {
+			sessionId: w.session.id,
+			validFromMessageId: w.message.id
+		})
+		retireAttributeSlot(mine)
+
+		const { castKey, stateFor } = await import("$lib/server/state/resolve")
+		const state = await stateFor(db, w.session.id)
+		// Everything already written stays and still resolves — the values are
+		// somebody's play, not a definition.
+		expect((state.cast[castKey(w.character.name)] as any).dread).toBe(7)
+		expect(state.slots.find((s) => s.id === mine)?.retired).toBe(true)
 	})
 })

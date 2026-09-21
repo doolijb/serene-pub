@@ -1,6 +1,9 @@
 <script lang="ts">
 	import { avatarSrc, withRevisedAvatar } from "$lib/client/utils/media"
 	import { embeddingsStarred } from "$lib/shared/constants/embeddings"
+	// The channel every session has, from the one place the host and a plugin
+	// frame both read it (`messages/channels.ts` re-exports the same symbol).
+	import { DEFAULT_CHANNEL } from "@serene-pub/sdk"
 	import {
 		messageEnvoySlug,
 		messageSpeaker
@@ -37,9 +40,11 @@
 	} from "$lib/client/components/sessionMessages/messageOrder"
 	import ProcessSceneModal from "$lib/client/components/modals/ProcessSceneModal.svelte"
 	import SessionComposer from "$lib/client/components/sessionMessages/SessionComposer.svelte"
-	import GeneratingAnimation from "$lib/client/components/sessionMessages/GeneratingAnimation.svelte"
 	import { renderMarkdownWithQuotedText } from "$lib/client/utils/markdownToHTML"
+	import { canAnswerForm as formAnswerVerdict } from "$lib/client/utils/formAnswer"
 	import { getContext, onDestroy, onMount } from "svelte"
+	import { statusText } from "$lib/client/i18n/state.svelte"
+	import { itemValuesOf } from "$lib/shared/actions/itemValues"
 	import Avatar from "$lib/client/components/Avatar.svelte"
 	import PersonaSelectModal from "$lib/client/components/modals/PersonaSelectModal.svelte"
 	import BranchSessionModal from "$lib/client/components/modals/BranchSessionModal.svelte"
@@ -76,9 +81,12 @@
 	import {
 		actionIdentity,
 		isCoreActionIdentity,
+		NARRATE_ACTION,
+		NARRATE_CHARACTER_ACTION,
 		parseActionIdentity
 	} from "$lib/shared/actions/identity"
 	import { paletteRowState } from "$lib/client/components/sessionMessages/slashPalette"
+	import { VERB_REASONS } from "$lib/client/components/sessionMessages/messageVerbState"
 	import { SurfaceManager } from "$lib/client/surfaces/panelManager.svelte"
 	import type { LayoutBlob } from "$lib/client/surfaces/types"
 
@@ -106,10 +114,14 @@
 	)
 
 	// Lets globally-rendered sidebars (e.g. LorebooksSidebar) know which session
-	// is open and whether it already has a lorebook, without a fetch of their own.
+	// is open and whether it already has a lorebook, without a fetch of their own,
+	// and carries the session's identity — name, cast, genre — to the header,
+	// which renders beside this page rather than inside it.
 	$effect(() => {
 		openSessionCtx.sessionId = session?.id ?? null
 		openSessionCtx.sessionName = session?.name ?? null
+		openSessionCtx.cast = headerCast
+		openSessionCtx.genreName = genreName
 		openSessionCtx.lorebookId = session?.lorebookId ?? null
 		openSessionCtx.isOwner =
 			!!session && session.userId === userCtx.user?.id
@@ -256,6 +268,8 @@
 	let sessionActions = $derived(venueOf("composer").primary)
 	/** …and its overflow: every enabled action the chips leave out (F38). */
 	let composerOverflow = $derived(venueOf("composer").overflow)
+	/** The More menu's list — primary then overflow, every enabled action, quick or not (NOMENCLATURE overflow). */
+	let composerMenuActions = $derived([...sessionActions, ...composerOverflow])
 	/** The message venue, handed to every row. */
 	let messageActions = $derived(venueOf("message"))
 	/** The extra tab's — Continue and Regenerate, when the genre offers them. */
@@ -263,8 +277,6 @@
 		...venueOf("extra").primary,
 		...venueOf("extra").overflow
 	])
-	const offersExtra = (key: string) =>
-		extraActions.some((a) => a.specSlug === "core" && a.key === key)
 	/**
 	 * What `/` offers (R-15 slash names): the composer's own venues — the
 	 * chips row and the extra tab — one entry per action, whether it sits in
@@ -273,16 +285,100 @@
 	let paletteActions = $derived(
 		[...sessionActions, ...composerOverflow, ...extraActions].map((a) => ({
 			key: a.key,
-			function: a.function,
 			specSlug: a.specSlug,
 			name: a.name,
 			slash: a.slash,
 			icon: a.icon,
+			audience: a.audience,
 			canAct: a.canAct,
 			isNew: a.isNew,
-			venue: a.venue
+			venue: a.venue,
+			// The enabled-when verdict (U5e), its reason resolved here once
+			// for the chips, the More menu and the palette alike; the
+			// `item.*` half rides for the palette to judge against the
+			// newest row (`newestItem`).
+			enabled: a.enabled,
+			...(a.reason ? { reason: statusText(a.reason) || a.reason.i18n.en } : {}),
+			...(a.itemPredicates?.length ? { itemPredicates: a.itemPredicates } : {})
 		}))
 	)
+	/**
+	 * What a composer press of a message action acts on — the newest row's
+	 * `item` document, the same shape the message row and the server's door
+	 * build — or `null` for a session with no row, which fails every `item.*`
+	 * predicate: nothing to regenerate, continue or swipe.
+	 */
+	let newestItem = $derived.by(() => {
+		// `lastMessage` and `canControlMessage` are declared further down;
+		// a derived body runs after the script has, so the closure is fine.
+		const newest = lastMessage
+		if (!newest) return null
+		return itemValuesOf(newest, {
+			isNewest: true,
+			mine: canControlMessage(newest)
+		})
+	})
+
+	/**
+	 * The verdict a chip reads off its listed action: the audience and the
+	 * enabled-when (U5e), the reason resolved to a sentence — the same
+	 * `paletteRowState` the palette and the More menu read.
+	 */
+	const chipVerdict = (a: Sockets.Sessions.Actions.Action) => ({
+		name: a.name,
+		audience: a.audience,
+		canAct: a.canAct,
+		enabled: a.enabled,
+		venue: a.venue,
+		...(a.reason ? { reason: statusText(a.reason) || a.reason.i18n.en } : {}),
+		...(a.itemPredicates?.length ? { itemPredicates: a.itemPredicates } : {})
+	})
+	/**
+	 * The turn controls' chips — Regenerate, Continue — are core's `retry`
+	 * and `continue` at the **extra** venue, and they act on the newest
+	 * row: their state is the listed verdict plus the `item.*` predicates
+	 * judged against `newestItem`, exactly as the `/` palette judges the
+	 * same rows (review pass 3). The bespoke handlers stay the click
+	 * targets; only the grey decision is the list's.
+	 */
+	const extraAction = (key: string) =>
+		extraActions.find((a) => a.specSlug === "core" && a.key === key)
+	const extraChip = (
+		t: Sockets.Sessions.Actions.Action,
+		busy: [holds: boolean, reason: string][] = []
+	) => {
+		for (const [holds, reason] of busy) if (holds) return { disabled: true, reason }
+		return paletteRowState(chipVerdict(t), {
+			generating: !session || !!lastMessage?.isGenerating,
+			newest: newestItem
+		})
+	}
+	/** A persona-less session cannot take a turn — the one client-side condition the turn controls keep. */
+	const NO_PERSONA = "add a persona first"
+	const needsPersona = $derived.by(
+		() => !session || (personasInMode && !session.sessionPersonas?.[0]?.personaId)
+	)
+
+	/**
+	 * The enabled-when verdict is a snapshot of the session's published
+	 * values (U5e). The SERVER re-sends the list when a run ends — every road
+	 * pushes `sessions:actions` after `runRegistry.finish` (review C1) — so
+	 * nothing here relists off progress frames or the generating flag. The
+	 * one client-side ask is a state write landing (`state:changed`, scoped
+	 * to this session): a person setting a slot by hand starts no run, and
+	 * *Set a location first* should lift the moment they set it.
+	 */
+	function relistActions() {
+		if (!Number.isFinite(sessionId)) return
+		socket.emit("sessions:actions", { sessionId })
+	}
+	$effect(() => {
+		if (!Number.isFinite(sessionId)) return
+		return declareInterest<"state:changed">(
+			interestKey("state:changed", sessionId),
+			relistActions
+		)
+	})
 
 	// The session's frame surfaces (20 §12): a mode-declared session-view
 	// replaces core's log wholesale (the total-conversion lane); panels are
@@ -323,6 +419,39 @@
 			return listed.some((a) => a.specSlug === "core" && a.key === verb)
 		return messageVerbs?.[verb] !== false
 	}
+	/**
+	 * What this session may write beyond messages (R-B) — off `sessions:view`,
+	 * resolved from the same declaration the write sites refuse with.
+	 *
+	 * An affordance, like `messageVerbs`: an absent answer (an older server, or
+	 * the view not back yet) reads as on, and the summarize handler, the scene
+	 * create handler and the lore-entry outlet each refuse independently. So a
+	 * stale value costs a refusal message, never a write the genre forbade.
+	 */
+	const writes = $derived(sessionFrames?.writes)
+	const offersWrite = (write: "lore" | "scenes") => writes?.[write] !== false
+
+	/**
+	 * The session's channels (20 §7; R-C) — off `sessions:view`, `main` first,
+	 * and `[main]` for every session whose genre declares none.
+	 */
+	const sessionChannels = $derived(sessionFrames?.channels ?? [DEFAULT_CHANNEL])
+	/**
+	 * Which of them the composer is writing on, and the log is showing.
+	 *
+	 * Held here rather than in the composer because BOTH halves answer to it:
+	 * the send carries it to the server, where the row is stored on it and the
+	 * reply is asked for on it, and the log hides what is not on it. One
+	 * answer, in the one place that can hand it to both.
+	 */
+	let composerChannel = $state(DEFAULT_CHANNEL)
+	$effect(() => {
+		// A session whose genre no longer has the chosen channel — a preset
+		// changed under an open page, or the view arrived after a guess —
+		// falls back to `main`, which every session has.
+		if (!sessionChannels.includes(composerChannel))
+			composerChannel = DEFAULT_CHANNEL
+	})
 
 	// ── Surface grid (plan 21) ──────────────────────────────────────
 	// The modular session layout: the conversation is the primary panel, and
@@ -424,6 +553,12 @@
 	 * announces the settings (`CORE_WIDGETS`), and a panel entry has to carry
 	 * them for the settings card to draw a control. Read rather than retyped,
 	 * so a field added to the announcement reaches the panel with it.
+	 *
+	 * CORE's only, and only for the defaults below. A genre's widgets and a
+	 * plugin's arrive on `sessions:view.modePanels` with their schema already
+	 * on them; `SurfaceManager.toInstance` copies it onto the instance and
+	 * `widgetDeclOf` prefers the instance over `CORE_WIDGETS`, so a declaration
+	 * core has never heard of resolves its values on the same path.
 	 */
 	const declaredSettings = (id: string) =>
 		CORE_WIDGETS.find((w) => w.id === id)?.settings as
@@ -708,35 +843,53 @@
 	/**
 	 * Frame and widget actions ride the same audited path as every
 	 * contributed button — with the pressed declaration's identity when the
-	 * caller named one (`invoke`; W1). One of core's verbs named that way is
-	 * routed to its real handler here too (W4): the hosts between this page
-	 * and a frame (`SessionLayout`, `WidgetHost`) are the layouts lane's and
-	 * do not yet carry `coreVerbs` down, so a frame's `invoke('continue')`
-	 * reaches this page as `action: "core#continue"` and must not be sent to
+	 * caller named one (`invoke`; W1), and the block a form's press answers
+	 * when it answers one (U5d).
+	 *
+	 * One of core's verbs named that way is routed to its real handler here
+	 * too (W4). The hosts between this page and a mount now carry the whole
+	 * `actionDispatch` down, so a widget's `invoke('continue')` is resolved at
+	 * the mount and never reaches this function; a frame or widget that still
+	 * arrives here naming `core#continue` (a bare `{ t: "action" }`, or a host
+	 * wired without the dispatch) must not be sent to
 	 * `sessions:triggerFunction`, which refuses it by name.
+	 *
+	 * Everything else goes to `fireTrigger` — the offered-action wrapper — or,
+	 * when the press answers a form, straight to `emitTrigger` beneath it. A
+	 * press arriving from a frame or a widget is the same press as the chip or
+	 * the form button beside it, so it is named as a run on the same terms; an
+	 * emit of its own here would be a second, lesser fire for whoever pressed
+	 * from the wrong place.
 	 */
 	function handleFrameAction(
 		fn: string,
 		messageId?: number,
 		payload?: Record<string, unknown>,
-		action?: string
+		action?: string,
+		blockId?: string
 	) {
 		const parsed = action ? parseActionIdentity(action) : null
 		if (action && parsed && isCoreActionIdentity(action)) {
 			dispatchAction(
-				{ specSlug: parsed.specSlug, key: parsed.key, function: fn },
+				{ specSlug: parsed.specSlug, key: parsed.key },
 				actionDispatch,
-				{ messageId, payload }
+				{ messageId, payload, ...(blockId ? { blockId } : {}) }
 			)
 			return
 		}
-		socket.emit("sessions:triggerFunction", {
-			sessionId,
-			function: fn,
-			...(action ? { action } : {}),
-			...(messageId != null ? { messageId } : {}),
-			...(payload && Object.keys(payload).length ? { payload } : {})
-		})
+		// A press naming a block answers a form already on the row, so it goes
+		// straight to the emit — the same route `fireBlockAction` takes for the
+		// row's own buttons, and for the same reason: no divert, and the
+		// block's stamped identity carried verbatim rather than read as a
+		// declaration this session offers.
+		if (blockId) {
+			emitTrigger({ fn, identity: action, messageId, payload, blockId })
+			return
+		}
+		// A press that named no well-formed identity (a bare `{ t: "action" }`)
+		// carries its bare key onward, and the server resolves it to the one
+		// declaration of that key or refuses it (plans/31 V2).
+		fireTrigger(parsed ?? { key: fn }, { messageId, payload })
 	}
 
 	// The mode's shape (19 §1–§2): what capabilities exist for this session at
@@ -888,10 +1041,6 @@
 		"sessions:sideCharacterOptions",
 		handleSessionsSideCharacterOptions
 	)
-	useInterest<"sessions:actions">(
-		"sessions:actions",
-		handleSessionsActions
-	)
 	useInterest<"sessions:view">("sessions:view", handleSessionsView)
 	useInterest<"sessions:panelLayout:get">(
 		"sessions:panelLayout:get",
@@ -1014,6 +1163,14 @@
 			declareInterest<"sessions:userTyping">(
 				interestKey("sessions:userTyping", sessionId),
 				handleSessionsUserTyping
+			),
+			// The action list, SCOPED (U5e review W-A4): the reply to this
+			// page's own request and the push every finished run makes both
+			// carry `sessionId`, so a tab on another session hears nothing
+			// and the server builds no list for it.
+			declareInterest<"sessions:actions">(
+				interestKey("sessions:actions", sessionId),
+				handleSessionsActions
 			)
 		]
 		return () => {
@@ -1034,7 +1191,7 @@
 		const releases = [
 			declareInterest<"pipelines:runStarted">(
 				interestKey("pipelines:runStarted", sessionId),
-				handleRunProgress
+				handleRunStarted
 			),
 			declareInterest<"pipelines:progress">(
 				interestKey("pipelines:progress", sessionId),
@@ -1276,6 +1433,44 @@
 		return foundCharacter
 	})
 
+	/**
+	 * The session header's cast stack: the session's characters, then the
+	 * personas people speak as. Names come from `resolveCharacterName`, the same
+	 * helper the message log labels a speaker with, so a face and its lines
+	 * carry one name. The header renders under `<main>` as a sibling of this
+	 * page, so `openSessionCtx` is what carries the faces up to it.
+	 */
+	let headerCast: OpenSessionCastMember[] = $derived.by(() => {
+		const nextId = shouldShowNextCharacterBlock
+			? (nextCharacter?.id ?? null)
+			: null
+		const characters = (session?.sessionCharacters ?? [])
+			.filter((cc) => !!cc.character)
+			.map((cc) => ({
+				key: `character:${cc.character.id}`,
+				name: resolveCharacterName(cc.character, cc.character.name),
+				avatarSrc: avatarSrc(cc.character) ?? null,
+				isPersona: false,
+				isNext: cc.character.id === nextId
+			}))
+		const personas = (session?.sessionPersonas ?? [])
+			.filter((cp) => !!cp.persona)
+			.map((cp) => ({
+				key: `persona:${cp.persona.id}`,
+				name: resolveCharacterName(cp.persona, cp.persona.name),
+				avatarSrc: avatarSrc(cp.persona) ?? null,
+				isPersona: true,
+				isNext: false
+			}))
+		return [...characters, ...personas]
+	})
+
+	/** What the header calls this session's genre; null while the list loads. */
+	let genreName: string | null = $derived(
+		modesList.find((m) => m.genreId === ((session as any)?.genreId ?? ""))
+			?.name ?? null
+	)
+
 	// Check if current user is a guest (not the session owner)
 	let isGuest: boolean = $derived.by(() => {
 		if (!session || !userCtx.user?.id) return false
@@ -1349,6 +1544,21 @@
 			.filter((char) => char !== undefined) as SelectCharacter[]
 	})
 
+	// May this person answer a form put to `addressee` (U5d review, W7)? The
+	// resolver's rules over the session the client holds
+	// (`utils/formAnswer.ts`); an affordance only — the server refuses
+	// regardless. Handed down to every message's block view.
+	let canAnswerForm = (addressee: string | undefined): boolean =>
+		formAnswerVerdict(
+			addressee,
+			{
+				userId: userCtx.user?.id ?? null,
+				isOwner: !!session && !isGuest,
+				isAdmin: !!userCtx.user?.isAdmin
+			},
+			session
+		)
+
 	// Check if current user can edit/control a specific message — mirrors
 	// `canActOnMessage` (`server/messages/permissions.ts`) branch for branch:
 	// - Persona messages: only that persona's own owner, never the session
@@ -1357,6 +1567,8 @@
 	//   (so a guest who brought their own character in can control it).
 	// - An envoy's line and narration: the session owner's.
 	// - A user line with no persona: its author's, by `userId`.
+	// - An orphaned row (its character/persona deleted globally, its author
+	//   gone — the rows that render as "Unknown"): the session owner's.
 	// An affordance only — the server refuses regardless.
 	let canControlMessage = (msg: SelectSessionMessage): boolean => {
 		if (!userCtx.user?.id) return false
@@ -1397,7 +1609,8 @@
 		if (msg.role === "user" && msg.userId != null)
 			return msg.userId === userCtx.user?.id
 
-		return false
+		// Nothing on the row names anyone: the session owner's, as narration.
+		return !isGuest
 	}
 
 	function handleSend() {
@@ -1420,7 +1633,10 @@
 		const msg: Sockets.SessionMessages.SendPersonaMessage.Params = {
 			sessionId,
 			personaId: personaId ?? null,
-			content: newMessage
+			content: newMessage,
+			// Where this line goes, and — through the trigger the handler
+			// makes — which channel the reply is asked for on (R-C).
+			channel: composerChannel
 		}
 		socket.emit("sessionMessages:sendPersonaMessage", msg)
 		newMessage = ""
@@ -2169,12 +2385,19 @@
 				(m: SelectSessionMessage) => m.id === sessionMessage.id
 			)
 			if (existingIndex !== -1) {
+				// Held before the array is rewritten: the row it REPLACES is
+				// the only thing that says whether this push is a streamed
+				// chunk, an edit or a run ending (`witnessMessage`).
+				const previous = currentSession.sessionMessages[existingIndex]
 				const updatedMessages = [...currentSession.sessionMessages]
 				updatedMessages[existingIndex] = sessionMessage
 				session = {
 					...currentSession,
 					sessionMessages: updatedMessages
 				}
+				// Announced AFTER the state is written, so a widget woken by
+				// the event reads the row the event describes.
+				surfaceManager.witnessMessage(sessionMessage, previous)
 			} else {
 				// Add new message and maintain chronological order
 				const updatedMessages = [
@@ -2190,6 +2413,10 @@
 				surfaceManager.activateForChannel(
 					(sessionMessage as any).channel
 				)
+				// No previous row: the arrival itself is `message:created`,
+				// which every widget's own feed announces. What this adds is
+				// `generation:start` for a reply that arrives already filling.
+				surfaceManager.witnessMessage(sessionMessage)
 			}
 			// Refresh response order when messages change
 			socket.emit("sessions:getResponseOrder", { sessionId })
@@ -2312,6 +2539,13 @@
 			// Check if we're deleting the last message
 			const wasLastMessage = lastSeenMessageId === msg.id
 
+			// The row itself, while the page still holds it: the announcement
+			// below names the channel it was on so a widget that declared
+			// another is not told about it (`witnessMessageDeleted`).
+			const deleted = session.sessionMessages.find(
+				(m: SelectSessionMessage) => m.id === msg.id
+			)
+
 			// Remove the deleted message from the session messages array
 			const filteredMessages = session.sessionMessages.filter(
 				(m: SelectSessionMessage) => m.id !== msg.id
@@ -2333,6 +2567,8 @@
 				lastSeenMessageId = null
 				lastSeenMessageContent = ""
 			}
+
+			surfaceManager.witnessMessageDeleted(deleted ?? { id: msg.id })
 
 			// Refresh response order after deletion
 			socket.emit("sessions:getResponseOrder", { sessionId })
@@ -2494,7 +2730,15 @@
 				handleDeleteMessage(new Event("invoke"), m)
 			)
 	}
-	/** ONE routing rule (`dispatchAction`): core's verbs above, the rest the audited fire. */
+	/**
+	 * ONE routing rule (`dispatchAction`): core's verbs above, the rest the
+	 * audited fire.
+	 *
+	 * Threaded down to every widget and frame mount (`actionDispatch`), so a
+	 * press inside one resolves here and not in a lesser copy: `fire` is this
+	 * page's own `fireTrigger`, which names the run and opens the narrator's
+	 * modal, and the chip, the menu row and the widget are then one lane.
+	 */
 	const actionDispatch: ActionDispatch = {
 		core: coreVerbs,
 		fire: (a, args) => fireTrigger(a, args)
@@ -2505,19 +2749,7 @@
 	 * go to their handlers; everything else is the generic fire, identity in
 	 * hand, which routes the narrator's to its modal.
 	 */
-	function invokeAction(a: {
-		specSlug: string
-		key: string
-		function: string
-		shared?: boolean
-	}) {
-		// A shared palette row is a name, not a declaration: it cannot be one
-		// of core's verbs (those hold their names first), so it goes straight
-		// to the fire, legacy-shaped (W-D).
-		if (a.shared) {
-			fireTrigger(a)
-			return
-		}
+	function invokeAction(a: { specSlug: string; key: string }) {
 		dispatchAction(a, actionDispatch)
 	}
 
@@ -2528,14 +2760,21 @@
 	/**
 	 * A long run reporting itself.
 	 *
-	 * Both events land here: `runStarted` is the same shape as a progress tick,
-	 * and treating it as one means the card appears the instant the run does
-	 * rather than after the backend's first report — which for an image render
-	 * can be several seconds of a button that looks like it did nothing.
+	 * Both events land in the store: `runStarted` is the same shape as a
+	 * progress tick, and recording it as one means the card appears the
+	 * instant the run does rather than after the backend's first report —
+	 * which for an image render can be several seconds of a button that looks
+	 * like it did nothing. A start goes through `started`, so what last ended
+	 * in the session yields to the new run whether or not a progress card is
+	 * mounted to say so.
 	 */
 	function handleRunProgress(msg: RunProgress) {
 		if (msg.sessionId != null && msg.sessionId !== sessionId) return
 		runProgress.apply(msg)
+	}
+	function handleRunStarted(msg: RunProgress) {
+		if (msg.sessionId != null && msg.sessionId !== sessionId) return
+		runProgress.started(msg)
 	}
 
 	function handleSessionsTriggerFunction(
@@ -2552,13 +2791,13 @@
 			// notice about the one it displaced would be noise blaming them
 			// for a cancel they did not make.
 			if (msg.cancelledBy !== "system:superseded")
-				toaster.info({ title: msg.function, description: "Cancelled." })
+				toaster.info({ title: msg.action, description: "Cancelled." })
 			// Still re-read: a run stops BETWEEN nodes, so a consumer earlier
 			// in the spec may already have written. "Cancelled" is all this
 			// knows; "nothing happened" is a claim it cannot make.
 			socket.emit("sessions:get", { id: sessionId })
 		} else if (msg.error) {
-			toaster.error({ title: msg.function, description: msg.error })
+			toaster.error({ title: msg.action, description: msg.error })
 		} else if (msg.success) {
 			// The spec's consumers wrote whatever they wrote — re-read the session
 			// so it shows.
@@ -2567,40 +2806,99 @@
 	}
 
 	/**
-	 * The generic fire (19 §4), named by the declaration that was pressed
-	 * (W1): the server checks THAT action's audience and enablement and runs
-	 * THAT spec. A subject message and entered values ride when there are
-	 * any.
+	 * THE `sessions:triggerFunction` emit. There is no other on this page, and
+	 * a second one would be a second, lesser fire for whoever pressed from the
+	 * wrong place: every press — a chip, the `/` palette, a message's ⋮ menu,
+	 * a widget's `invoke(key)`, a frame's `{ t: "invoke" }`, a bare frame
+	 * action, a form answered on the row — is named as a run here, so Cancel
+	 * reaches it during the window between the press and the first progress
+	 * event, which is exactly when somebody realises they meant something
+	 * else.
+	 *
+	 * Deliberately below the bespoke client flows rather than around them:
+	 * `fireTrigger` diverts the narrator's functions before calling this, and
+	 * a press answering a form calls it straight, because a form's button must
+	 * answer the form whatever its function happens to be named.
+	 */
+	function emitTrigger(p: {
+		/** The action's bare key — what the server resolves when no identity rides (⏳, plans/31 V2). */
+		fn: string
+		/**
+		 * `<spec slug>#<key>`, when the press named a declaration (W1): the
+		 * server checks THAT action's audience and enablement and runs THAT
+		 * spec. Absent, the server resolves `fn` to its sole declarer.
+		 */
+		identity?: string | null
+		messageId?: number
+		payload?: Record<string, unknown>
+		/**
+		 * The form this press answers (U5d): the server reads the block off
+		 * the row and holds the press to its addressee.
+		 */
+		blockId?: string
+	}) {
+		socket.emit("sessions:triggerFunction", {
+			sessionId,
+			...(p.identity ? { action: p.identity } : { key: p.fn }),
+			...(p.messageId != null ? { messageId: p.messageId } : {}),
+			...(p.blockId ? { blockId: p.blockId } : {}),
+			...(p.payload && Object.keys(p.payload).length
+				? { payload: p.payload }
+				: {}),
+			runId: crypto.randomUUID()
+		})
+	}
+
+	/**
+	 * The generic fire (19 §4) for an OFFERED action, named by the declaration
+	 * that was pressed (W1). A subject message, entered values and the block a
+	 * press answers ride when there are any.
+	 *
+	 * The wrapper every offered press takes, and the reason
+	 * `actionDispatch.fire` is it: the chips, the `/` palette, a message's ⋮
+	 * menu, a widget's `invoke(key)`, a frame's `{ t: "invoke" }` and a bare
+	 * frame action all arrive here, so the divert below is had by all of them
+	 * or by none.
+	 *
+	 * The spec is optional because a caller may have no declaration to give
+	 * — a frame's bare `{ t: "action", fn }` — and then the key alone rides.
 	 */
 	function fireTrigger(
-		a: { specSlug: string; key: string; function: string; shared?: boolean },
+		a: {
+			specSlug?: string
+			key: string
+		},
 		args?: InvokeArgs
 	) {
 		// The functions with a bespoke client flow: both halves of the narrator
 		// split open the same modal — whose first step *is* the choice between
 		// them — and fire the dedicated event. Everything else is the generic
 		// fire (19 §4).
-		if (a.function === "narrate" || a.function === "narrate-character") {
+		//
+		// Never for a press that carries a `blockId`, whatever it is named: a
+		// form answer answers its form. `fireBlockAction` goes straight to
+		// `emitTrigger` for exactly that reason, but it is not the only way a
+		// block's press arrives — a widget's `invoke(key, { blockId })` and a
+		// frame's `{ t: "invoke", blockId }` come through this wrapper — so the
+		// rule belongs here too, or a form whose action is one of the
+		// narrator's two opens the modal and leaves its question unanswered and
+		// still answerable.
+		const identity = a.specSlug ? actionIdentity({ specSlug: a.specSlug, key: a.key }) : null
+		if (
+			!args?.blockId &&
+			(identity === NARRATE_ACTION ||
+				identity === NARRATE_CHARACTER_ACTION ||
+				(!identity && (a.key === "narrate" || a.key === "narrate-character")))
+		) {
 			openNarrateModal()
 			return
 		}
-		// The run is named HERE, so Cancel works during the window between the
-		// press and the first progress event — which is exactly when somebody
-		// realises they meant something else.
-		//
-		// A palette row standing for a slash name several declarations share
-		// (`shared`, W-D) names none of them: the legacy fire, so the server's
-		// binding layer selects the spec rather than this page picking the
-		// first declaration it listed.
-		socket.emit("sessions:triggerFunction", {
-			sessionId,
-			function: a.function,
-			...(a.shared ? {} : { action: actionIdentity(a) }),
-			...(args?.messageId != null ? { messageId: args.messageId } : {}),
-			...(args?.payload && Object.keys(args.payload).length
-				? { payload: args.payload }
-				: {}),
-			runId: crypto.randomUUID()
+		emitTrigger({
+			fn: a.key,
+			identity,
+			messageId: args?.messageId,
+			payload: args?.payload,
+			blockId: args?.blockId
 		})
 	}
 
@@ -2631,15 +2929,17 @@
 		action?: string,
 		blockId?: string
 	) {
-		socket.emit("sessions:triggerFunction", {
-			sessionId,
-			function: fn,
-			...(action ? { action } : {}),
+		// Straight to the emit, past `fireTrigger`: a form's button is not an
+		// offered action, so it takes none of the offered ones' bespoke client
+		// flows — a block whose function happens to be one of the narrator's
+		// must answer the form, not open the modal. The run is named all the
+		// same, so Cancel reaches a press made here like any other.
+		emitTrigger({
+			fn,
+			identity: action,
 			messageId: msg.id,
-			// A form's press names its block (U5d): the server reads the
-			// block off the row and holds the press to its addressee.
-			...(blockId ? { blockId } : {}),
-			...(payload && Object.keys(payload).length ? { payload } : {})
+			payload,
+			blockId
 		})
 	}
 
@@ -2784,6 +3084,8 @@
 		sceneImages.set({ left: null, right: null })
 		openSessionCtx.sessionId = null
 		openSessionCtx.sessionName = null
+		openSessionCtx.cast = []
+		openSessionCtx.genreName = null
 		openSessionCtx.lorebookId = null
 		openSessionCtx.isOwner = false
 	})
@@ -2853,7 +3155,7 @@
 						: undefined}
 					messages={session?.sessionMessages ?? []}
 					actions={actionVenues}
-					{coreVerbs}
+					{actionDispatch}
 					onAction={handleFrameAction}
 				/>
 			</div>
@@ -2876,6 +3178,8 @@
 				presetUsage={layoutPresetUsage}
 				{layoutSettings}
 				onLayoutSettings={persistLayoutSettings}
+				actions={actionVenues}
+				{actionDispatch}
 				onFrameAction={handleFrameAction}
 			>
 				<!-- The one `messages` widget: the log, the field you write into,
@@ -2924,6 +3228,7 @@
 			{editSessionMessage}
 			{hasGeneratingMessage}
 			{isGuest}
+			channel={composerChannel}
 			{sceneList}
 			onHistoryEntryClick={({ historyEntryId, lorebookId }) => {
 				panelsCtx.digest.lore = {
@@ -2971,25 +3276,16 @@
 					{continueRefusal}
 					{isSummarizationMode}
 					isSelected={selectedMessageIds.has(props.msg.id)}
-					onStartSummarization={!isSummarizationMode
+					onStartSummarization={!isSummarizationMode &&
+					offersWrite("lore")
 						? enterSummarizationMode
 						: undefined}
 					{messageActions}
 					onActionsSeen={markActionsSeen}
 					onFireTrigger={fireMenuTrigger}
 					onBlockAction={fireBlockAction}
+					{canAnswerForm}
 				>
-					{#snippet GeneratingAnimationComponent()}
-						{@const character = props.getMessageCharacter(
-							props.msg
-						)}
-						{@const speakerName = props.msg.isNarratorResponse
-							? props.msg.metadata?.narratorName || "Narrator"
-							: resolveCharacterName(character, "User")}
-						<GeneratingAnimation
-							text={`${speakerName} is typing`}
-						/>
-					{/snippet}
 					{#snippet messageControls(msg)}
 						{#if isSummarizationMode}
 							{@const isScened = scenedMessageIds.has(msg.id)}
@@ -3075,7 +3371,6 @@
 							<MessageControls
 								{msg}
 								isLastMessage={props.isLastMessage}
-								canRegenerateLastMessage={props.canRegenerateLastMessage}
 								editSessionMessage={props.editSessionMessage}
 								hasGeneratingMessage={props.hasGeneratingMessage}
 								onEditMessage={props.onEditMessage}
@@ -3086,16 +3381,14 @@
 								{continueRefusal}
 								{messageActions}
 								canControl={props.canControlMessage(msg)}
-								canSwipe={props.canSwipeRight(
-									msg,
-									!!msg.metadata?.isGreeting
-								)}
 								onSwipeMessage={(_e, m) => props.onSwipeRight(m)}
 								onActionsSeen={markActionsSeen}
 								onFireTrigger={fireMenuTrigger}
 								onAbortMessage={props.onAbortMessage}
 								onBranchMessage={props.onBranchMessage}
-								onStartSummarization={enterSummarizationMode}
+								onStartSummarization={offersWrite("lore")
+									? enterSummarizationMode
+									: undefined}
 								debugMeta={systemSettingsCtx.settings
 									?.contextDebuggingEnabled
 									? (msg.debugMeta ?? null)
@@ -3187,16 +3480,22 @@
 				</button>
 			</div>
 		{/if}
-		{#each [...typingPersonas.values()] as typingPersona (typingPersona.name)}
-			<div class="flex items-center gap-2 px-2 pb-1">
-				<p class="text-surface-600-400 animate-pulse text-sm">
-					{typingPersona.name} is typing...
-				</p>
-				<div
-					class="bg-primary-500 h-2 w-2 animate-bounce rounded-full"
-				></div>
-			</div>
-		{/each}
+		<!-- Who else is writing, directly above the field they are writing into.
+		     It belongs to the composer, so it shows where the composer does: a
+		     selection toolbar, a read-only session and a genre with no field are
+		     three states in which nobody is typing into anything. -->
+		{#if !isSummarizationMode && !modeMissing && !composerHidden}
+			{#each [...typingPersonas.values()] as typingPersona (typingPersona.name)}
+				<div class="flex items-center gap-2 px-2 pb-1">
+					<p class="text-surface-600-400 animate-pulse text-sm">
+						{typingPersona.name} is typing...
+					</p>
+					<div
+						class="bg-primary-500 h-2 w-2 animate-bounce rounded-full"
+					></div>
+				</div>
+			{/each}
+		{/if}
 	{/snippet}
 
 	{#snippet conversationNudge()}
@@ -3251,15 +3550,20 @@
 						<Icons.X size={16} />
 						<span class="hidden sm:inline">Cancel</span>
 					</button>
-					<button
-						class="btn btn-sm preset-filled-secondary-500"
-						title="Scene"
-						disabled={selectedMessageIds.size === 0}
-						onclick={() => openSummarizeModal("scene")}
-					>
-						<Icons.Film size={16} />
-						<span class="hidden sm:inline">Scene</span>
-					</button>
+					<!-- A scene summary opens a scene, which is its own
+					     declared write (R-B): a genre that opens none does
+					     not offer it, and `scenes:create` refuses it. -->
+					{#if offersWrite("scenes")}
+						<button
+							class="btn btn-sm preset-filled-secondary-500"
+							title="Scene"
+							disabled={selectedMessageIds.size === 0}
+							onclick={() => openSummarizeModal("scene")}
+						>
+							<Icons.Film size={16} />
+							<span class="hidden sm:inline">Scene</span>
+						</button>
+					{/if}
 					<button
 						class="btn btn-sm preset-filled-primary-500"
 						title="World lore"
@@ -3317,12 +3621,15 @@
 					showAddPersonaModal = true
 				}}
 				onAbortLastMessage={handleAbortLastMessage}
+				channels={sessionChannels}
+				bind:channel={composerChannel}
 				composerSkin={view.composerSkin}
 				showActions={view.showActions}
 				sendTonal={shouldShowNextCharacterBlock}
 				actions={sessionActions.length ? sessionActionsRow : undefined}
-				overflowActions={composerOverflow}
+				overflowActions={composerMenuActions}
 				{paletteActions}
+				{newestItem}
 				onInvokeAction={invokeAction}
 				onActionsSeen={markActionsSeen}
 				extraTabs={isGuest
@@ -4088,7 +4395,9 @@
 				lorebookId={session.lorebookId}
 				{sceneList}
 				onOpenEntry={handleOpenEntry}
-				onEnterSummarizationMode={enterSummarizationModeEmpty}
+				onEnterSummarizationMode={offersWrite("lore")
+					? enterSummarizationModeEmpty
+					: undefined}
 			/>
 
 			<!--
@@ -4154,46 +4463,84 @@
 			<!-- Continue and Regenerate are core's `retry`/`continue` at the
 			     extra venue (R-15, U5c): present when the genre offers the
 			     verb, off the one action list. -->
-			{#if charactersInMode && offersExtra("continue")}
+			<!-- Greyed, not disabled (S6): `aria-disabled` keeps the chip in
+			     the tab order and the reason — the listed verdict's, or the
+			     newest row's — reaches a screen reader through
+			     `aria-describedby`; the click is guarded instead. -->
+			{#if charactersInMode && extraAction("continue")}
+				{@const t = extraAction("continue")!}
+				{@const chip = extraChip(t, [[needsPersona, NO_PERSONA]])}
 				<button
 					class="btn btn-sm preset-tonal-primary"
-					title="Continue the conversation"
-					onclick={handleTriggerContinueConversation}
-					disabled={!session ||
-						(personasInMode &&
-							!session.sessionPersonas?.[0]?.personaId) ||
-						lastMessage?.isGenerating}
+					class:opacity-60={chip.disabled}
+					class:cursor-not-allowed={chip.disabled}
+					title={chip.reason
+						? `Continue — ${chip.reason}`
+						: "Continue the conversation"}
+					aria-disabled={chip.disabled}
+					aria-describedby={chip.reason ? "extra-note-continue" : undefined}
+					onclick={(e) =>
+						chip.disabled
+							? e.preventDefault()
+							: handleTriggerContinueConversation(e)}
 				>
 					<Icons.MessageSquareMore size={14} />
 					Continue
 				</button>
+				{#if chip.reason}
+					<span id="extra-note-continue" class="sr-only">{chip.reason}</span>
+				{/if}
 			{/if}
 			{#if charactersInMode}
+				{@const pick = needsPersona
+					? { disabled: true, reason: NO_PERSONA }
+					: !session || lastMessage?.isGenerating
+						? { disabled: true, reason: VERB_REASONS.generating }
+						: { disabled: false, reason: undefined }}
 				<button
 					class="btn btn-sm preset-tonal-secondary"
-					title="Pick who speaks"
-					onclick={handleTriggerCharacterMessage}
-					disabled={!session ||
-						(personasInMode &&
-							!session.sessionPersonas?.[0]?.personaId) ||
-						lastMessage?.isGenerating}
+					class:opacity-60={pick.disabled}
+					class:cursor-not-allowed={pick.disabled}
+					title={pick.reason
+						? `Pick who speaks — ${pick.reason}`
+						: "Pick who speaks"}
+					aria-disabled={pick.disabled}
+					aria-describedby={pick.reason ? "extra-note-pick" : undefined}
+					onclick={(e) =>
+						pick.disabled
+							? e.preventDefault()
+							: handleTriggerCharacterMessage(e)}
 				>
 					<Icons.MessageSquarePlus size={14} />
 					Pick who speaks
 				</button>
+				{#if pick.reason}
+					<span id="extra-note-pick" class="sr-only">{pick.reason}</span>
+				{/if}
 			{/if}
 			<!-- Absent, not disabled, when the genre does not offer retry
 			     (R-15): a dice-are-final genre has no reply to redo. -->
-			{#if offersExtra("retry")}
+			{#if extraAction("retry")}
+				{@const t = extraAction("retry")!}
+				{@const chip = extraChip(t)}
 				<button
 					class="btn btn-sm preset-tonal-warning"
-					title="Regenerate the last reply"
-					onclick={handleRegenerateLastMessage}
-					disabled={!canRegenerateLastMessage}
+					class:opacity-60={chip.disabled}
+					class:cursor-not-allowed={chip.disabled}
+					title={chip.reason
+						? `Regenerate — ${chip.reason}`
+						: "Regenerate the last reply"}
+					aria-disabled={chip.disabled}
+					aria-describedby={chip.reason ? "extra-note-retry" : undefined}
+					onclick={(e) =>
+						chip.disabled ? e.preventDefault() : handleRegenerateLastMessage(e)}
 				>
 					<Icons.RefreshCw size={14} />
 					Regenerate
 				</button>
+				{#if chip.reason}
+					<span id="extra-note-retry" class="sr-only">{chip.reason}</span>
+				{/if}
 			{/if}
 		</div>
 	{/snippet}
@@ -4208,8 +4555,9 @@
 		<!-- Keyed by the action's identity (W3): two actions on one function
 		     — core's and a plugin's `summarize` — are two chips. -->
 		{#each sessionActions as t (actionIdentity(t))}
-			{@const chip = paletteRowState(t, {
-				generating: !session || !!lastMessage?.isGenerating
+			{@const chip = paletteRowState(chipVerdict(t), {
+				generating: !session || !!lastMessage?.isGenerating,
+				newest: newestItem
 			})}
 			{@const chipNoteId = `chip-note-${actionIdentity(t).replace(/[^a-z0-9-]/g, "-")}`}
 			<!-- Greyed, not disabled (S6): `aria-disabled` keeps the chip in
@@ -4221,14 +4569,14 @@
 			     step is the choice between the two. A second bespoke button
 			     here would be a second place to keep in step with the
 			     narrator's resolved name. -->
-			{#if t.function === "narrate"}
+			{#if actionIdentity(t) === NARRATE_ACTION}
 				<button
 					class="btn btn-sm preset-tonal-success"
 					class:opacity-60={chip.disabled}
 					class:cursor-not-allowed={chip.disabled}
 					title={chip.reason
 						? `${narratorName} — ${chip.reason}`
-						: "Trigger Narrator Response"}
+						: "Ask the narrator"}
 					aria-disabled={chip.disabled}
 					aria-describedby={chip.reason ? chipNoteId : undefined}
 					onclick={(e) =>

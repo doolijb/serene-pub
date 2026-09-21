@@ -112,6 +112,9 @@ export function makePluginHookDispatch(
 				hookName,
 				{ value: req.value, extras: req.extras },
 				{
+					// A chain link is a script: neither storage nor fetch, the
+					// ctx an in-app script gets (R-3).
+					kind: "chain-link",
 					timeoutMs: req.timeoutMs ?? 250,
 					seedLabel: req.seedLabel,
 					nowMs: req.nowMs,

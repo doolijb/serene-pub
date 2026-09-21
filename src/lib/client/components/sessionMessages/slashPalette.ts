@@ -14,32 +14,40 @@
  * the popover, this owns what they show.
  */
 
+import { enablementVerdict, i18nText, type EnabledWhen } from "@serene-pub/sdk"
 import { CORE_ACTION_SPEC } from "$lib/shared/actions/identity"
-import { VERB_REASONS } from "./messageVerbState"
+import type { ItemValues } from "$lib/shared/actions/itemValues"
+import { statusText } from "$lib/client/i18n/state.svelte"
+import { notYoursToUse, VERB_REASONS } from "./messageVerbState"
 
 export interface PaletteAction {
+	/** With `specSlug`, the action's identity — the one key (plans/31 V2). */
 	key: string
-	function: string
 	specSlug: string
 	name: string
 	slash: string
 	icon?: string
+	/** Who may act, off the list — what the audience's sentence names when `canAct` is false. */
+	audience: { act: string[] }
 	canAct: boolean
 	isNew: boolean
 	venue: string
 	/**
-	 * This slash name is offered by more than one declaration — two specs
-	 * contributing one function under one name — and the row stands for
-	 * the **name**, not for the first declaration that happened to carry
-	 * it (U5c review, W-D). Such a row is fired as the legacy shape, naming
-	 * no `action`, so the server's binding layer (`resolveFunctionVerdict`:
-	 * the session's binding, then the preset's, then the instance's, then
-	 * the companion rule) selects the spec — the one place that choice is
-	 * ruled to be made. Naming the first row's identity would have run
-	 * that spec and skipped every binding. Set by `dedupePaletteActions`;
-	 * absent on a row that is the only one of its name.
+	 * The enabled-when verdict off the list (U5e): every predicate the
+	 * server evaluated over the session's published values holds. Absent
+	 * (an older server) reads as enabled.
 	 */
-	shared?: boolean
+	enabled?: boolean
+	/** Why it is grey when `enabled` is false — already resolved to a sentence. */
+	reason?: string
+	/**
+	 * The `item.*` predicates the server could not judge without a message
+	 * (U5e). An **extra**-venue row acts on the newest row — `/retry`,
+	 * `/continue` — so they are judged here against it, and a session with
+	 * no row at all fails them: nothing to regenerate. A composer row's
+	 * press names no row, and is judged against none.
+	 */
+	itemPredicates?: EnabledWhen[]
 }
 
 /** The draft as a slash query: `/nar` → `nar`; anything else → null. */
@@ -49,41 +57,25 @@ export function slashQueryOf(draft: string): string | null {
 }
 
 /**
- * One row per slash name. Two specs offering one function under one name
- * are alternatives the **binding** selects among, so the palette shows the
- * name once and marks the row `shared` — the fire then names no
- * declaration and the server selects (W-D). The first occurrence keeps
- * its place in the order; only the mark is added. A name carried by one
- * declaration is that declaration's row, unmarked.
+ * One row per slash name. One declaration listed under several venues —
+ * the chips row and the extra tab — is one action and one row; the first
+ * occurrence keeps its place in the order. Two declarations under one name
+ * cannot reach a session: one slash name means one action (R-15; plans/31
+ * V2), refused at publish. Were a stale listing to carry two, core's verb
+ * holds the name (S1) and otherwise the first declaration does.
  */
 export function dedupePaletteActions(
 	actions: ReadonlyArray<PaletteAction>
 ): PaletteAction[] {
 	const rows = new Map<string, PaletteAction>()
-	const identities = new Map<string, Set<string>>()
 	for (const a of actions) {
-		const identity = `${a.specSlug}#${a.key}`
-		const seen = identities.get(a.slash)
-		if (!seen) {
-			rows.set(a.slash, a)
-			identities.set(a.slash, new Set([identity]))
-			continue
-		}
-		// One declaration listed under several venues is one action, not
-		// an alternative.
-		if (seen.has(identity)) continue
-		seen.add(identity)
-		// Core's verbs hold their names (S1): a verb's row is the name's,
-		// never shared, whichever side of it a contributed alternative was
-		// listed — a verb goes to its handler, and the fire refuses it by
-		// name anyway.
-		const held = rows.get(a.slash)!
-		if (held.specSlug === CORE_ACTION_SPEC) continue
-		if (a.specSlug === CORE_ACTION_SPEC) {
+		const held = rows.get(a.slash)
+		if (!held) {
 			rows.set(a.slash, a)
 			continue
 		}
-		rows.set(a.slash, { ...held, shared: true })
+		if (held.specSlug !== CORE_ACTION_SPEC && a.specSlug === CORE_ACTION_SPEC)
+			rows.set(a.slash, a)
 	}
 	return [...rows.values()]
 }
@@ -110,10 +102,7 @@ export function filterPaletteActions(
 	return [...byName, ...byLabel]
 }
 
-/**
- * The one row a whole slash name names, if the draft is exactly it — the
- * deduped row, so a shared name fires legacy here too (W-D).
- */
+/** The one row a whole slash name names, if the draft is exactly it — the deduped row. */
 export function exactPaletteMatch(
 	actions: ReadonlyArray<PaletteAction>,
 	draft: string
@@ -127,16 +116,49 @@ export function exactPaletteMatch(
 
 /**
  * Whether one palette row may be run now, and why not: the audience first
- * (`canAct`, off the list), then the session's state — nothing runs while a
- * reply streams, as the chips and the **More** menu already refuse (U5c
- * review, S5). One reading for the row's `aria-disabled`, its note and the
- * Enter/click guard, so the palette cannot say one thing and do another.
+ * (`canAct`, off the list), then the declared **enabled-when** verdict the
+ * list carries (`enabled` / `reason`, U5e — *Set a location first*), then
+ * the session's state — nothing runs while a reply streams, as the chips
+ * and the **More** menu already refuse (U5c review, S5). One reading for
+ * the row's `aria-disabled`, its note and the Enter/click guard, so the
+ * palette cannot say one thing and do another; the chips and the More
+ * menu read it too.
  */
 export function paletteRowState(
-	a: Pick<PaletteAction, "canAct">,
-	opts: { generating: boolean }
+	a: Pick<PaletteAction, "name" | "audience" | "canAct" | "enabled" | "reason" | "itemPredicates"> & {
+		venue?: string
+	},
+	opts: {
+		generating: boolean
+		/**
+		 * The newest row's `item` document, or `null` for a session with no
+		 * row — what an **extra**-venue press (Regenerate, Continue, and
+		 * their palette rows) acts on. A composer-venue press names no row
+		 * and is judged against none, as the door judges it (W4). Absent
+		 * means the caller has no row to offer and the item predicates are
+		 * left unjudged (a surface that lists no such action).
+		 */
+		newest?: ItemValues | null
+	}
 ): { disabled: boolean; reason?: string } {
-	if (!a.canAct) return { disabled: true, reason: VERB_REASONS.notYoursToUse }
+	if (!a.canAct)
+		return { disabled: true, reason: notYoursToUse({ name: a.name, act: a.audience.act }) }
+	if (a.enabled === false)
+		return { disabled: true, ...(a.reason ? { reason: a.reason } : {}) }
+	if (a.itemPredicates?.length && opts.newest !== undefined) {
+		// No row reads as every `item.*` value absent, so the first item
+		// predicate — the newest-row rule, for core's verbs — names why.
+		const actsOn = a.venue === "extra" ? opts.newest : null
+		const heard = enablementVerdict.judge({
+			preds: a.itemPredicates,
+			doc: actsOn ? { item: actsOn } : {}
+		})
+		if (!heard.ok)
+			return {
+				disabled: true,
+				reason: statusText({ i18n: heard.sentence }) || (i18nText(heard.sentence) ?? "")
+			}
+	}
 	if (opts.generating)
 		return { disabled: true, reason: VERB_REASONS.generating }
 	return { disabled: false }

@@ -9,7 +9,11 @@ import {
 	compile,
 	run,
 	pin,
-	describeTaskDefinition
+	describeTaskDefinition,
+	ok,
+	err,
+	halt,
+	cancelled
 } from "@serene-pub/sdk"
 import * as C from "@serene-pub/contracts"
 
@@ -35,10 +39,13 @@ const lookup = pin(
 	}) as any
 )
 
+// `(input, ctx)`, where input is the node's own ports — the SDK's handler
+// signature, and what `pluginNodeBindings` hands over (D-6b). It used to
+// arrive wrapped as `{ input }`, which no authored handler reads.
 const BUNDLE = `module.exports = { hooks: {
 	lookup: function (i, ctx) {
 		return { main: {
-			answer: "the answer to " + i.input.q,
+			answer: "the answer to " + i.q,
 			roll: Math.floor(ctx.random() * 6) + 1
 		} };
 	}
@@ -178,5 +185,97 @@ describe("a process-transport node runs through the executor", () => {
 		)
 		expect(r.kind).toBe("err")
 		expect(r.reason).toMatch(/declares no hook/)
+	})
+})
+
+/**
+ * Binding law B1 (`BINDING_PROBES` in the SDK's `testing.ts`): a hook returns a
+ * discriminated `Result`, never a bare value — and both showcase plugins do.
+ * The sandbox passes that value through verbatim, so unwrapping it is this
+ * seam's job. Read as ports instead, `ok({ main, blocks })` arrived as the
+ * ports object `{ kind: 'ok', value: … }`, whose `main` is missing — and the
+ * "ensure main" step then set `ports.main = ports`, handing `ok()` a
+ * self-referential object for the receipt's redaction and hashing to walk.
+ *
+ * The manager is faked here rather than bundled into the sandbox because the
+ * thing under test is the translation, and a fake is the only way to post a
+ * `halt` or a `cancelled` at it deliberately.
+ */
+describe("a hook's Result is unwrapped, never read as ports", () => {
+	const call = async (value: unknown) => {
+		const fake = {
+			callHook: async () => ({
+				ok: true,
+				value,
+				logs: [],
+				durationMs: 0,
+				backend: "quickjs"
+			})
+		}
+		const bindings = await pluginNodeBindings(db, fake as any, {
+			seed: "seed:unwrap",
+			nowMs: 1_000_000
+		})
+		const binding = bindings["acme.tools:task/lookup@1"] as any
+		expect(binding).toBeTruthy()
+		return (await binding({ q: "x" }, {})) as any
+	}
+
+	it("ok(ports) lands as exactly the ports a core binding publishes", async () => {
+		expect(await call(ok({ main: 1 }))).toEqual(ok({ main: 1 }))
+	})
+
+	it("ok(ports) with no main gets one, and it is never the object itself", async () => {
+		const r = await call(ok({ blocks: [] }))
+		expect(r.kind).toBe("ok")
+		expect(r.value.blocks).toEqual([])
+		// The whole ports object is the main port — said with a copy, so the
+		// receipt can carry it.
+		expect(r.value.main).toEqual({ blocks: [] })
+		expect(r.value.main).not.toBe(r.value)
+		expect(() => JSON.stringify(r)).not.toThrow()
+	})
+
+	it("err, halt and cancelled reach the executor in the hook's own voice", async () => {
+		expect(await call(err("nope"))).toEqual(err("nope"))
+		expect(await call(halt("not applicable"))).toEqual(
+			halt("not applicable")
+		)
+		// `cancelled()` crosses the transport as a lone `{ kind }`: JSON drops
+		// an undefined reason, so the sentence is ours to supply.
+		const c = await call({ kind: "cancelled" })
+		expect(c.kind).toBe("cancelled")
+		expect(c.reason).toMatch(/cancelled/)
+		expect(await call(cancelled("the user stopped it"))).toEqual(
+			cancelled("the user stopped it")
+		)
+	})
+
+	it("a bare ports object still reads as ports (pre-B1 packaging)", async () => {
+		expect(await call({ main: 1 })).toEqual(ok({ main: 1 }))
+		// Including one that carries a `kind` port of its own: `ok()` never
+		// produces a third key, so this is ports, not a result.
+		expect(await call({ kind: "ok", main: 1 })).toEqual(
+			ok({ kind: "ok", main: 1 })
+		)
+		// And a bare value is still tolerated as `main`.
+		expect(await call(7)).toEqual(ok({ main: 7 }))
+	})
+
+	it("no returned shape produces a value the receipt cannot serialize", async () => {
+		for (const v of [
+			ok({ main: 1 }),
+			ok({ blocks: [] }),
+			ok(7),
+			err("nope"),
+			halt("not applicable"),
+			{ kind: "cancelled" },
+			{ main: 1 },
+			{ blocks: [] },
+			7
+		]) {
+			const r = await call(v)
+			expect(() => JSON.stringify(r)).not.toThrow()
+		}
 	})
 })

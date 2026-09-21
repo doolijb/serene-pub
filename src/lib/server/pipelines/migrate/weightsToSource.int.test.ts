@@ -682,6 +682,5 @@ describe("the defaults reproduce today's effective values", () => {
 		const schema = C.rankHybrid.descriptor.slots?.params?.schema ?? {}
 		for (const gone of ["share", "maxEntries", "minEntries"])
 			expect(gone in schema, `${gone} still on rank-hybrid`).toBe(false)
-		expect(C.rankByRecency.descriptor.slots?.params).toBeUndefined()
 	})
 })

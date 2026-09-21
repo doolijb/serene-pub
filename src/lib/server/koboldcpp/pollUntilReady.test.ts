@@ -107,6 +107,48 @@ describe("pollUntilReady", () => {
 			await expect(promise).rejects.toThrow(/appears to have crashed/)
 		})
 
+		test("refusedGraceMs tolerates refusals well past the strike threshold, then gives up by time", async () => {
+			// A model load takes koboldcpp's listener down for far longer than
+			// three ticks; a caller that knows that asks for a wall-clock grace
+			// instead, and the strike count is then never consulted.
+			const check = vi.fn<() => Promise<PollResult>>(
+				async () => "refused"
+			)
+			const promise = pollUntilReady(check, {
+				intervalMs: 10,
+				refusedStrikeThreshold: 3,
+				refusedGraceMs: 100
+			})
+			promise.catch(() => {})
+			for (let i = 0; i < 8; i++) await vi.advanceTimersByTimeAsync(10)
+			expect(check.mock.calls.length).toBeGreaterThan(3)
+			await vi.advanceTimersByTimeAsync(30)
+			await expect(promise).rejects.toThrow(
+				/refused connections for 0s and appears to have crashed/
+			)
+		})
+
+		test("a not-ready result resets the refusedGraceMs clock", async () => {
+			const sequence: PollResult[] = [
+				"refused",
+				"refused",
+				"not-ready",
+				"refused",
+				"refused",
+				"ready"
+			]
+			let i = 0
+			const check = vi.fn<() => Promise<PollResult>>(
+				async () => sequence[i++] ?? "ready"
+			)
+			const promise = pollUntilReady(check, {
+				intervalMs: 10,
+				refusedGraceMs: 25
+			})
+			for (let k = 0; k < 6; k++) await vi.advanceTimersByTimeAsync(10)
+			await expect(promise).resolves.toBeUndefined()
+		})
+
 		test("a not-ready result resets the refusal streak", async () => {
 			// refused, refused, not-ready, refused, refused, ready — never hits 3
 			// consecutive refusals because the not-ready in the middle resets it.

@@ -3,6 +3,7 @@ import * as schema from "$lib/server/db/schema"
 import { updateLegacyWhere } from "$lib/server/messages/store"
 import { and, eq } from "drizzle-orm"
 import { broadcastToSessionUsers } from "../sockets/utils/broadcastHelpers"
+import { broadcastSessionRow } from "$lib/server/sessions/rowPush"
 import {
 	ComposedError,
 	type ConnectionIdentity
@@ -82,6 +83,10 @@ export async function persistGenerationStatus(
 		await broadcastToSessionUsers(socketIo, sessionId, "sessionMessage", {
 			sessionMessage: updated
 		})
+		// The placeholder this status sits on counts towards the list row's
+		// `messageCount`, so the cards are told even though a generating row
+		// is never the line they quote.
+		broadcastSessionRow(socketIo, sessionId)
 	}
 }
 
@@ -174,8 +179,13 @@ export async function persistGenerationErrorRow(
 	// between what an administrator and a guest receive is made by the walk
 	// inside `broadcastToSessionUsers`, per recipient — which is the same rule,
 	// in the same place, as every other emit on the server.
-	if (updated && socketIo)
+	if (updated && socketIo) {
 		await broadcastToSessionUsers(socketIo, sessionId, "sessionMessage", {
 			sessionMessage: updated
 		})
+		// The row leaves the generating state here, so whatever text arrived
+		// before the failure is visible from this moment and may be the line
+		// the session's cards quote.
+		broadcastSessionRow(socketIo, sessionId)
+	}
 }

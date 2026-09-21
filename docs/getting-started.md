@@ -53,7 +53,7 @@ Once detected, a dropdown lists the models currently loaded in KoboldCPP so you 
 
 ### Setting up with Ollama
 
-If the Ollama manager is enabled, the wizard tells you to open the **Ollama Manager** (footer button) to download and activate a model; the wizard advances automatically once a model connects.
+If an Ollama connection is already managed by this pub, the wizard tells you to open it in the Connections sidebar and use **Get models** to pull one; the wizard advances automatically once a model connects.
 
 With the manager off, you get manual instructions instead:
 

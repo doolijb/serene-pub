@@ -114,6 +114,50 @@ export function participantFloors(
 	}
 }
 
+/**
+ * Does the held lorebook answer the genre's shape? A genre that requires one
+ * cannot start without it — the server refuses the create in a sentence
+ * (`shapeViolations`), and a Start that is offered only to be refused is the
+ * defect this guards. An optional or absent capability is satisfied by
+ * anything, including nothing; `reconcileToShape` has already detached the
+ * lorebook where the capability is absent.
+ */
+export function lorebookSatisfied(
+	shape: GenreShape | null | undefined,
+	lorebookId: number | null | undefined
+): boolean {
+	return shape?.lorebook !== "required" || lorebookId != null
+}
+
+/**
+ * What a one-click start — the wizard's character card, a character's own
+ * Start — can do on its own: the genre and preset the instance is set up to
+ * start (`defaultGenreId`), and whether `sessions:create` can be sent with
+ * only what such a caller knows (a character, the first persona).
+ *
+ * `direct` is false when the genre asks something the caller cannot answer,
+ * and today that is one thing: a required lorebook. The caller then hands
+ * the start screen what it knows (`prefill.characterId`, the genre and
+ * preset) and the screen asks the rest — instead of creating straight away
+ * and being refused with the lorebook sentence (2026-09-17: an
+ * administrator-starred Adventure preset made every character card's Start
+ * a refusal).
+ */
+export function oneClickStart(
+	genres: GenreRow[],
+	presets: PresetRow[]
+): { genreId: string; presetId: number | null; direct: boolean } {
+	const genreId = defaultGenreId(genres, presets) ?? STANDARD_GENRE_ID
+	const enabled = enabledPresetsFor(presets, genreId)
+	const preset = enabled.find((p) => p.isDefault) ?? enabled[0] ?? null
+	const shape = genres.find((g) => g.genreId === genreId)?.shape ?? null
+	return {
+		genreId,
+		presetId: preset?.id ?? null,
+		direct: lorebookSatisfied(shape, null)
+	}
+}
+
 /** One line of shape facts for a genre card — presentation over the same
  * shape the server validates against. */
 export function genreFacts(shape: GenreShape | null | undefined): string {
@@ -311,12 +355,14 @@ export class StartSessionFlow {
 	)
 	floors = $derived(participantFloors(this.shape, this.genreId))
 
-	/** True once both answers are settled and the cast meets the floors. */
+	/** True once both answers are settled, the cast meets the floors, and a
+	 *  genre that requires a lorebook has one. */
 	canStart = $derived(
 		!!this.genreId &&
 			!this.noPresetsForGenre &&
 			this.characterIds.length >= this.floors.characters &&
-			this.personaIds.length >= this.floors.personas
+			this.personaIds.length >= this.floors.personas &&
+			lorebookSatisfied(this.shape, this.fields.lorebookId)
 	)
 
 	chooseGenre(id: string) {

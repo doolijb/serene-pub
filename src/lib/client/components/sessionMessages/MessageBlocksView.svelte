@@ -22,11 +22,27 @@
 	 * payload. The question is shown above the options unless the message
 	 * body already says it (`bodyText`), which is how the narrator's Ask
 	 * reads: the question once, then the buttons.
+	 *
+	 * **Answered once** (U5d review, W7): a form the host has stamped
+	 * `answered` shows the answer in place of its buttons, greyed; a form
+	 * put to somebody the viewer does not portray shows no buttons at all —
+	 * `canAnswer` is the viewer's verdict, handed down from the page, which
+	 * mirrors the server's resolver (`utils/formAnswer.ts`). An affordance
+	 * only: the server refuses regardless.
+	 *
+	 * **Superseded** (plans/29 R-15 *Staleness and order*; U5f): a form the
+	 * channel has moved past — unanswered, and a newer message on its row's
+	 * channel than the `head` it was issued at — collapses to one quiet line,
+	 * no question and no buttons (the row's body already showed the question).
+	 * `isStale` is the verdict, handed down from the message
+	 * (`utils/formAnswer.ts` `staleOf`, the server's rule over the list the
+	 * client holds). Answered beats stale.
 	 */
 	import * as Icons from "@lucide/svelte"
 	import MessageBlocksView from "./MessageBlocksView.svelte"
 	import { renderMarkdownWithQuotedText } from "$lib/client/utils/markdownToHTML"
 	import { t } from "$lib/client/i18n/state.svelte"
+	import { answeredChoiceLabel, answeredOf } from "$lib/client/utils/formAnswer"
 
 	interface Props {
 		blocks: any[]
@@ -39,9 +55,31 @@
 		depth?: number
 		/** The message body, so a form's question is not shown twice. */
 		bodyText?: string
+		/**
+		 * May the viewer answer a form put to this addressee? Absent, every
+		 * addressed form shows its buttons and the server judges the press.
+		 */
+		canAnswer?: (addressee: string | undefined) => boolean
+		/**
+		 * Has the channel moved past this form (U5f)? Absent, no form is
+		 * drawn superseded and the server refuses a stale press.
+		 */
+		isStale?: (block: { head?: unknown; answered?: unknown }) => boolean
 	}
 
-	let { blocks, onAction, depth = 1, bodyText }: Props = $props()
+	let { blocks, onAction, depth = 1, bodyText, canAnswer, isStale }: Props = $props()
+
+	/** Whether the form is superseded — never when answered. */
+	const superseded = (b: { head?: unknown; answered?: unknown }): boolean =>
+		!answeredOf(b) && !!isStale && isStale(b)
+
+	/** The addressee, when the block has one. */
+	const addresseeOf = (b: { addressee?: unknown }): string | undefined =>
+		typeof b?.addressee === "string" && b.addressee ? b.addressee : undefined
+
+	/** Whether this viewer's buttons show on the form. */
+	const mayAnswer = (b: { addressee?: unknown }): boolean =>
+		!canAnswer || canAnswer(addresseeOf(b))
 
 	/** A form's question, when the body does not already carry it. */
 	const caption = (b: { question?: unknown }): string | null => {
@@ -146,38 +184,90 @@
 				src="/session-assets/{block.assetId}"
 				alt={block.alt ?? "attachment"}
 			/>
+		{:else if block?.kind === "choices" && superseded(block)}
+			<!-- Superseded (U5f): the conversation moved on; one quiet line, no buttons. -->
+			<p
+				class="flex flex-wrap items-center gap-1 text-sm opacity-60"
+				data-superseded="true"
+			>
+				<Icons.History size={14} aria-hidden="true" />
+				<span>{t("Superseded — the conversation moved on")}</span>
+			</p>
 		{:else if block?.kind === "choices"}
+			{@const answered = answeredOf(block)}
 			<div
 				class="flex flex-col gap-1"
+				class:opacity-60={!!answered}
 				role="group"
 				aria-label={typeof block.question === "string" && block.question
 					? block.question
 					: t("Choices")}
+				data-answered={answered ? "true" : undefined}
 			>
 				{#if caption(block)}
 					<p class="text-sm italic opacity-80">{caption(block)}</p>
 				{/if}
-				<div class="flex flex-wrap gap-2">
-					{#each block.actions ?? [] as action}
-						<button
-							type="button"
-							class="btn btn-sm preset-tonal-primary"
-							disabled={!onAction}
-							onclick={() =>
-								onAction?.(
-									action.fn,
-									typeof action.choice === "string"
-										? { choice: action.choice }
-										: {},
-									identityOf(action),
-									blockIdOf(block)
-								)}
-						>
-							<Icons.Play size={14} aria-hidden="true" />
-							{action.label}
-						</button>
-					{/each}
-				</div>
+				{#if answered}
+					<!-- Answered once: the answer stands in for the buttons. -->
+					<p class="flex items-center gap-1 text-sm">
+						<Icons.Check size={14} aria-hidden="true" />
+						<span class="font-medium">{t("Answered")}</span>
+						{#if answeredChoiceLabel(block, answered)}
+							<span>· {answeredChoiceLabel(block, answered)}</span>
+						{/if}
+					</p>
+				{:else if !mayAnswer(block)}
+					<!-- Somebody else's to answer: no buttons for this viewer. -->
+					<p class="text-sm opacity-70">{t("Awaiting an answer")}</p>
+				{:else}
+					<div class="flex flex-wrap gap-2">
+						{#each block.actions ?? [] as action}
+							<button
+								type="button"
+								class="btn btn-sm preset-tonal-primary"
+								disabled={!onAction}
+								onclick={() =>
+									onAction?.(
+										action.fn,
+										typeof action.choice === "string"
+											? { choice: action.choice }
+											: {},
+										identityOf(action),
+										blockIdOf(block)
+									)}
+							>
+								<Icons.Play size={14} aria-hidden="true" />
+								{action.label}
+							</button>
+						{/each}
+					</div>
+				{/if}
+			</div>
+		{:else if block?.kind === "form" && superseded(block)}
+			<!-- Superseded (U5f): the conversation moved on; one quiet line, no buttons. -->
+			<p
+				class="flex flex-wrap items-center gap-1 text-sm opacity-60"
+				data-superseded="true"
+			>
+				<Icons.History size={14} aria-hidden="true" />
+				<span>{t("Superseded — the conversation moved on")}</span>
+			</p>
+		{:else if block?.kind === "form" && answeredOf(block)}
+			<div class="flex w-full max-w-sm flex-col gap-2 text-sm opacity-60" data-answered="true">
+				{#if caption(block)}
+					<p class="italic opacity-80">{caption(block)}</p>
+				{/if}
+				<p class="flex items-center gap-1">
+					<Icons.Check size={14} aria-hidden="true" />
+					<span class="font-medium">{t("Answered")}</span>
+				</p>
+			</div>
+		{:else if block?.kind === "form" && !mayAnswer(block)}
+			<div class="flex w-full max-w-sm flex-col gap-2 text-sm">
+				{#if caption(block)}
+					<p class="italic opacity-80">{caption(block)}</p>
+				{/if}
+				<p class="opacity-70">{t("Awaiting an answer")}</p>
 			</div>
 		{:else if block?.kind === "form"}
 			<div class="flex w-full max-w-sm flex-col gap-2 text-sm">
@@ -251,7 +341,14 @@
 				class:flex-wrap={block.layout === "row"}
 				class:flex-col={block.layout !== "row"}
 			>
-				<MessageBlocksView blocks={block.blocks} {onAction} depth={depth + 1} />
+				<MessageBlocksView
+					blocks={block.blocks}
+					{onAction}
+					{bodyText}
+					{canAnswer}
+					{isStale}
+					depth={depth + 1}
+				/>
 			</div>
 		{/if}
 	{/each}

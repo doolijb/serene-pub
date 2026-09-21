@@ -36,8 +36,11 @@ import {
 	allDefinitions,
 	allScriptKinds,
 	snapshotRegistry,
-	declarationHash,
-	DESCRIPTOR_DISPLAY_KEYS
+	definitionContractHash,
+	DESCRIPTOR_DISPLAY_KEYS,
+	DESCRIPTOR_POLICY_KEYS,
+	getDefinition,
+	type Descriptor
 } from "@serene-pub/sdk"
 import { definitionContentHash } from "$lib/server/pipelines/boot/registrySync"
 // Importing the contracts is what registers them — the same fact-about-the-code
@@ -116,13 +119,72 @@ import "@serene-pub/core-catalog"
  * rows and recorded the old slug in `renamed_from`. `core:input/message-created@1`
  * is gone: culled (R-4), no spec used it and nothing emitted it.
  */
+/**
+ * ## U6 (plans/29 R-2, 2026-09-17) — ten culled, two bound, three flagged
+ *
+ * Fifteen published definitions had no handler. Ten are gone from this table
+ * — `lorebook-probabilistic`, `message-text`, `persona-card`, `chunk-text`,
+ * `first-json`, `rank-by-recency`, `render-entries`, `to-candidates`,
+ * `emit-socket`, `save-plugin-data` — no shipped spec placed one, and the
+ * registry rows an install holds are marked `removed` by the boot's
+ * reverse-diff, never deleted. Two moved by gaining the `target` in-port the
+ * host's commit reads (answer 3) and are bound: `attach-image`, `attach-audio`.
+ * Three were flagged `provisional: true`: `speak` (plans/14), `mcp-tool` and
+ * `mcp-resource` (plans/28) — a policy flag since V6 below, so binding one
+ * moves nothing here.
+ */
+/**
+ * ## V6 (plans/31, 2026-09-17) — the contract hash; every pin moved once
+ *
+ * A definition's content hash covers its **contract** — what a pinned spec
+ * runs against: `id · version · kind · ports · slots · effects · review.fields
+ * · shape · optional · declaresRandomness · scriptPoints · sessionShape ·
+ * earlyExit · causesEvent · liveRow · media · entryShape` — and nothing else.
+ * `provisional`, `reviewDefault`, `timeoutMs`, `timeoutKind`, `toggleable`,
+ * `public`, `usage` and every piece of display text are **policy**: stored on
+ * the registry row, never hashed, refreshed in place. The material is the
+ * SDK's `definitionContract`, which this file's `definitionContentHash` now
+ * is; the last test below holds the two to one string per definition.
+ *
+ * Every line in this table moved on the same day, for the same reason: the
+ * slug's own `id` and `version` are contract and were never in the material
+ * before, and `review.fields`, `shape`, `earlyExit`, `liveRow`,
+ * `declaresRandomness` and `media` are contract and were hashed by the SDK
+ * only. Answer 3, one hundred and twelve times — the pointer carries each; no
+ * spec's document moves, because no declaration changed. Two consequences
+ * worth reading off the table: two definitions never share a hash any more
+ * (the four turn strategies, `merge-` and `concat-candidates`, the two
+ * candidates script kinds and the three `test:` twins each read one value
+ * where they read one shared value), and the three provisional definitions
+ * will NOT move again the day they are bound.
+ */
 const PUBLISHED_HASHES: Record<string, string> = {
-	"chariot.comfy:render-image@1": "92b7d5f3c1248",
-	"chariot.dice-tray:roll@1": "b7457cf04e36d",
-	"chariot.recall:rank-recall@1": "17b9069e6e0b65",
-	"core:outlet/attach-audio@1": "c499561b77704",
-	"core:outlet/attach-image@1": "1427daa9dd3b33",
-	"core:outlet/create-lore-entry@1": "c745cab165e22",
+	"chariot.comfy:render-image@1": "1c1c3bef639b8",
+	"chariot.dice-tray:roll@1": "7d840117afff3",
+	"chariot.recall:rank-recall@1": "88b3c0a62e6ae",
+	// Moved (U6, R-2, 2026-09-17): a `target` in-port — the row the part lands
+	// on, the port `update-message` takes — and bound. The host's commit read
+	// `p.target?.id` already; the declaration now says so. (was "c499561b77704")
+	"core:outlet/attach-audio@1": "1f92305dec26b9",
+	// Same day, same port, same reason. (was "1427daa9dd3b33")
+	"core:outlet/attach-image@1": "1a83777d127f38",
+	// Moved (L2/L3, contracts batch 2, 2026-09-17) — answer 3, and nothing
+	// pinning it moves: an `entryType` **param** (which kind of entry this
+	// pipeline writes, refused at the commit when it names no declared type,
+	// world lore when absent, which is what the code did unconditionally
+	// before) and a `links` **in-port** (the links written in the SAME
+	// transaction as the row). `links` is here rather than only on the link
+	// outlet because of F7: a pipeline has one write-class outlet, so a spec
+	// cannot create an entry and then link it in one run. No shipped spec
+	// wires either, so no document moves. (was "c745cab165e22")
+	"core:outlet/create-lore-entry@1": "15401f006df68c",
+	// NEW (L2, 2026-09-17): one link between two entries of the session's
+	// lorebook — an entry-ended `narrative_relationships` row, the same edge
+	// the lorebook's own graph draws, which no pipeline could write. `to`
+	// takes a NAME as well as an id so a second run can link what a first
+	// created; `effects: 'write'`, review on the link itself (`linkType`,
+	// `label`) and never on its ends, `causesEvent: lore-link-created`.
+	"core:outlet/link-lore-entries@1": "685d35ac8c432",
 	// Re-projected by 0174: a `media` in-port, so an image can be posted AS a new
 	// message. `attach-image` could not do it — a message created inside a run is
 	// not a valid target for a later node — which left no path at all from a
@@ -146,12 +208,10 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// MessageBlock list posted with the row, validated, stamped with the
 	// writing spec's action identity and a block id, stored as a
 	// `core:blocks` part; a form among them addressed to the AI is recorded
-	// as `form-addressed`. `review.fields: ['text']` declared too, outside
-	// the hash. (was "198a9cc1f85286")
-	"core:outlet/create-message@1": "7fc3e8b44f28",
-	"core:outlet/emit-socket@1": "a085c19a92e28",
-	"core:outlet/graph-proposal@1": "b0e989f10de1c",
-	"core:outlet/save-plugin-data@1": "1a5ed3c57c13cf",
+	// as `form-addressed`. `review.fields: ['text']` declared too — contract
+	// since V6. (was "198a9cc1f85286")
+	"core:outlet/create-message@1": "10759d42019944",
+	"core:outlet/graph-proposal@1": "68c1f10a8eb0c",
 	// Moved (09-B B4, 2026-09-15): a `thinking` in-port, so the reply's
 	// reasoning trace lands on the row it fills; the `target` port now takes
 	// the placeholder's write result (`write-result@1` is assignable to
@@ -159,8 +219,8 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// (was "f912a25836fda")
 	// Moved (U5d, 2026-09-17): a `blocks` in-port, appended after the text
 	// lands — see `create-message`. (was "1df0cd729ce38f")
-	"core:outlet/update-message@1": "17018030a55f5d",
-	"core:inlet/summarize-request@1": "156561d0dff248",
+	"core:outlet/update-message@1": "1f7eec771e6f80",
+	"core:inlet/summarize-request@1": "e359d02006672",
 	// Gained the `greeting` field on its sessionShape (20, migration 0151) —
 	// the default greeting-on-creation behaviour stated, not changed.
 	//
@@ -192,7 +252,24 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// an action's fire sent (the host always supplied it, undeclared), and
 	// `form`, the block facts a press on a form carries, read off the row.
 	// (was "2099748049ba8")
-	"core:inlet/user-message@1": "1bc7a6568eb294",
+	// Moved (R-C, 2026-09-17): a `channel` out-port — which channel the
+	// message that triggered this turn is on, so a genre can branch on it at
+	// a junction and so the seed line can be the one that channel's declared
+	// `voice` calls for. Additive on the same terms as `messageId` and
+	// `speaker` above: no shipped spec wires it, so no document moves, and
+	// the port it does not have is the reason `voice: 'narrator'` shipped
+	// unwired. (was "1bc7a6568eb294")
+	// Moved (G9, contracts batch 2, 2026-09-17): a `presser` out-port — the
+	// reference of whoever sent the message or fired the action this run
+	// answers. `user:<id>`, or `character:<id>` where they hold a persona in
+	// the session, or the participant an answer pipeline pressed for. NOT
+	// `speaker`, which is whose turn it is: on nearly every turn a person
+	// types and a character answers, and the host's path for writing a line AS
+	// the presser (`create-message@1`'s `speaker: 'user:<id>'`) existed with
+	// no port carrying the reference to put in it. Additive on the same terms
+	// as `channel` above: no shipped spec wires it, so no document moves.
+	// (was "1a907ed16d5413")
+	"core:inlet/user-message@1": "ad0fd05d15cc",
 	/**
 	 * Forms (U5d, R-15 *Forms*, 2026-09-17). NEW types — a line each: the
 	 * inlet `core:event/form-addressed@1` lands on; the task that turns the
@@ -203,24 +280,33 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	 * 'write'`, `reviewDefault: 'off'`, `review.fields: ['answer']`,
 	 * `causesEvent: form-answered`).
 	 */
-	"core:inlet/form-addressed@1": "b0258a5d76514",
-	"core:task/form-context@1": "b972bd4ddb74d",
-	"core:task/make-choices@1": "be5d083f614f8",
-	"core:task/read-answer@1": "148221a6207dc4",
-	"core:outlet/answer-form@1": "118beb40f685e4",
+	"core:inlet/form-addressed@1": "bd719823a91c7",
+	"core:task/form-context@1": "1d7e674904cdd6",
+	"core:task/make-choices@1": "3e585eb0287f8",
+	"core:task/read-answer@1": "16006e4fcd8b3",
+	// NEW (contracts batch 2, 2026-09-17): two values side by side in one
+	// document, under names the spec chose, so a junction's `equalsPath` has
+	// two paths to compare — a junction branches on ONE port, and until this
+	// nothing in core merged two. ⚠ An absent side is OMITTED and never
+	// written as null: `predicateHolds` answers false when either side is
+	// `undefined`, but `null === null`, so nulls would fire a verdict on a
+	// turn where nobody decided anything.
+	"core:task/pair@1": "1a78c74711949b",
+	// (was "118beb40f685e4") — a write's timeout (5 s, was 600 s) and two out-ports, `firedAction` · `firedRunId` — the commit collects the fire, the host dispatches it (U5d review, W2).
+	"core:outlet/answer-form@1": "19c67e930a44d2",
 	/**
 	 * The built-in writes (U5b, R-15, 2026-09-16). NEW types — a line each:
 	 * the request inlet every `core:spec/builtin-*` starts with, and the
 	 * five write outlets, each `effects: 'write'` with `reviewDefault: 'off'`
 	 * and a `causesEvent` naming its `core:event/message-*` / `session-branched`.
 	 */
-	"core:inlet/built-in-request@1": "31c1702ff0275",
-	"core:outlet/delete-message@1": "bee519f606bda",
-	"core:outlet/hide-message@1": "1d3c6e30114b3b",
-	"core:outlet/edit-message@1": "5eb425cbf386a",
-	"core:outlet/swipe-message@1": "1e1efecb2e5476",
-	"core:outlet/branch-session@1": "187975ebe6f833",
-	"core:inlet/session-created@1": "42fd6a589d374",
+	"core:inlet/built-in-request@1": "789f6700578d8",
+	"core:outlet/delete-message@1": "1df20df447956b",
+	"core:outlet/hide-message@1": "75981562f5865",
+	"core:outlet/edit-message@1": "1f8b8b73d43d57",
+	"core:outlet/swipe-message@1": "9f6bbbdd40316",
+	"core:outlet/branch-session@1": "aedd725871d9d",
+	"core:inlet/session-created@1": "179d2302a903a7",
 	// The side-character turn (ruling 2026-09-07). A NEW type — no migration,
 	// just a line: it inserts a row and conflicts with nothing.
 	//
@@ -248,9 +334,9 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// terms as `user-message@1`'s. (was "1f362f9aad444")
 	// Moved (U5b review S4, 2026-09-16): `changes` → `sessionChanges`, on the
 	// same terms as `user-message@1`'s. (was "4078fdc5d681e")
-	"core:inlet/side-character-turn@1": "1f499d06ada149",
-	"core:query/session-greetings@1": "5c57ecc64e730",
-	"core:outlet/seed-greetings@1": "13de9feb88a07f",
+	"core:inlet/side-character-turn@1": "72f02c87f57bc",
+	"core:query/session-greetings@1": "b9be953c1501",
+	"core:outlet/seed-greetings@1": "1afd90048e87d2",
 	// Re-projected by **0201** (policy answer 3): the node is `optional`, which
 	// in the executor turns an error into an empty `ok` with `recoveredAsEmpty`
 	// on the receipt. It is wired into a shipped spec for the first time in
@@ -265,7 +351,7 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// so the loser embed node's `slot.params({ node })` still resolves it at
 	// the owner under the field-level rule. Same value, same default.
 	// (was "335574a52f09f")
-	"core:oracle/embed-text@1": "171e22960612c5",
+	"core:oracle/embed-text@1": "145a24d51e143c",
 	// Gained its two script hooks in 0.6-preview (migration 0146): `scripts`
 	// before over `content`, `castScripts` after over `cast` — the paste-rung
 	// half of replaceable cast extraction (ruling of 2026-08-26). Replacing
@@ -274,7 +360,7 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// the transcript into it and the handler never read it; the extractor
 	// works from `content`. No shipped spec runs this node (the extraction is
 	// on ice), so no document moves with it. (was "972921f6b6931")
-	"core:oracle/extract-cast@1": "58606505551e4",
+	"core:oracle/extract-cast@1": "7831ea64c5b34",
 	// Gained `currentCharacterId` in 0.6-preview (migration 0134): the §27l
 	// stop-string exclusion follows the next-speaker node's output through
 	// the host's payload-wins seam (19 §5).
@@ -296,16 +382,19 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// a second copy. Behaviour-preserving: nothing consumed the value on any
 	// run. The same slot leaves `generate-with-tools@1` and `generate-json@1`.
 	// (was "1a083045eaf4b")
-	"core:oracle/generate-text@1": "51c2035e57795",
-	"core:oracle/graph-node-description@1": "1e0af65455ad8b",
-	"core:oracle/graph-node-resolution@1": "59f8009f61382",
-	"core:oracle/graph-perspective@1": "33a10939bd4b4",
-	"core:oracle/graph-pre-filter@1": "f8d2c9d143dd",
-	"core:oracle/graph-state-detection@1": "ea704ada5f952",
+	"core:oracle/generate-text@1": "1b38509034c053",
+	"core:oracle/graph-node-description@1": "338643a12d7a",
+	"core:oracle/graph-node-resolution@1": "144ed35a261c23",
+	"core:oracle/graph-perspective@1": "1507fd50fbe616",
+	"core:oracle/graph-pre-filter@1": "1850789a82c4f9",
+	"core:oracle/graph-state-detection@1": "bf3ae8fbd53f5",
 	// Re-pinned when 14 was built out (the draft stub's hash never reached an
 	// install — 0141's core wipe re-projects every row at boot).
-	"core:oracle/mcp-tool@1": "1e7c0f4288ac2b",
-	"core:oracle/mcp-resource@1": "6abee9a7077a",
+	// `provisional: true` (U6, R-2, 2026-09-17): declared, not bound, plans/28
+	// owns the handler. Policy since V6 — binding it moves nothing here.
+	"core:oracle/mcp-tool@1": "1e44b38506a00b",
+	// Same flag, same plan.
+	"core:oracle/mcp-resource@1": "ef231626303e9",
 	// Re-projected by **0113** (policy answer 3), with the two summarize steps
 	// below: a `loreType` in-port (D-I). `summarizeSpec` writes it as a literal
 	// into the node's config, in the same map as `content` and `batch`, and
@@ -314,8 +403,10 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// port is what it is. Declared rather than made a parameter, which would
 	// have put "which kind of entry this pipeline writes" in the panel as
 	// something a user could tune their scene summarizer into a world one with.
-	"core:oracle/name-entry@1": "17d9cd3e31b5b4",
-	"core:oracle/speak@1": "16373de5b23bda",
+	"core:oracle/name-entry@1": "721f6c62e54a1",
+	// `provisional: true` (U6, R-2, 2026-09-17): declared, not bound, plans/14
+	// owns the handler. Policy since V6 — binding it moves nothing here.
+	"core:oracle/speak@1": "15b834f7e24c86",
 	// Re-projected by **0113** — `loreType`, on the same terms as `name-entry`
 	// above.
 	// Moved (R-11, 2026-09-16 — U4): its `each-draft` interior point declares
@@ -333,9 +424,9 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// none of their pins moved — `definitionContentMaterial` hashes
 	// `authoredSlots()` only. See `registrySync.ts` for why.
 	// (was "1f87aae843e9b8")
-	"core:oracle/summarize-batch@1": "14d037b2f733fd",
-	"core:oracle/summarize-synth@1": "16b03175f600a9",
-	"core:query/session-cast@1": "142e94006413af",
+	"core:oracle/summarize-batch@1": "104ff874953d6b",
+	"core:oracle/summarize-synth@1": "3f410f2816392",
+	"core:query/session-cast@1": "732ef4e007bf7",
 	// Re-projected by 0186 (policy answer 3), together with `history-entries`
 	// below — one hash, because the three lore gather branches share a slot declaration
 	// and the content hash strips display text. `scanDepth`'s declared default
@@ -404,8 +495,17 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// The three hashes differ now because the intent's defaults and labels
 	// do. Behaviour-preserving by construction; migration 0135 moves stored
 	// values. (was "b2dd2f1b3f043" ×3)
-	"core:query/world-lore@1": "1467c76938099b",
-	"core:query/character-lore@1": "c469fd1ae6088",
+	"core:query/world-lore@1": "c2bd803678ccb",
+	// Moved (W1, 2026-09-17): gained the `speaker` in-port — a participant
+	// reference naming whose private lore this read is for, wired inside a
+	// repeating clause so two voices of one turn read two pools from one
+	// gather. Additive and unwired on every shipped spec that had this node
+	// before it, and the host keys on the run's scope exactly as it did when
+	// the port is absent — so the pointer carries it (answer 3). Its two
+	// sibling lanes do NOT gain it: world lore and history are not gated by a
+	// lorebook binding, so a speaker would be a control that reads nothing.
+	// (was "c469fd1ae6088")
+	"core:query/character-lore@1": "a80274d1059ef",
 	// Gained the `channel` param in 0.6-preview (migration 0149, 20 §7);
 	// default 'main' reproduces the legacy read byte-for-byte.
 	//
@@ -426,8 +526,13 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Moved (R-7 P5, 2026-09-16 — U3b): the conversation's band intent —
 	// `share` 0.5, `maxEntries` 50, `minEntries` 6, `priority` read at last —
 	// and a `band` out-port carrying it to the ranker. (was "c9d269db28ae0")
-	"core:query/session-history@1": "16a2cac2f8f36b",
-	"core:query/session-state@1": "138a9731c106d9",
+	// (was "16a2cac2f8f36b") — `main` · `messages` say `messages@1` — rows, which is what the binding always published (U5d review, W9); `band` still `context-candidates@1`.
+	"core:query/session-history@1": "31215db9aacee",
+	// Moved (U5f, R-15 *Staleness and order*, 2026-09-17): a `version`
+	// out-port — the session's state version, on its own port so a spec can
+	// hand it back as `base`. Additive: the Adventure keeper graphs wire it.
+	// (was "138a9731c106d9")
+	"core:query/session-state@1": "10900258df1b46",
 	// ⚠ `core:query/graph-context@1` was here, and is gone rather than frozen.
 	// It split into the two below, because one node emitting both directions of
 	// the graph gave them one heading, one layout and one switch. Removing a
@@ -469,9 +574,9 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// gained "leave it empty for no ceiling", and display text is stripped
 	// before hashing, so the whole of the movement is the missing `default`.
 	// (was "133fb1aab4e288")
-	"core:query/relationships-perspectives@1": "1cb5dd5736dd89",
+	"core:query/relationships-perspectives@1": "1a2d5179a4bc15",
 	// (was "1a709dd0599745")
-	"core:query/relationships-known@1": "feb131426e5",
+	"core:query/relationships-known@1": "fd3cbb1afbf80",
 	// The graph as a ranked retrieval mechanism (ruling 2026-09-10, Q1) — the
 	// same three layers the two nodes above publish as keyed sections, read
 	// instead as candidates in the `relationships` budget band and ordered
@@ -482,8 +587,8 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Moved (R-7 P5, 2026-09-16 — U3b): `share` (0, the band's switch) and
 	// `priority` beside the ceiling; the ceiling is the band's, absent =
 	// uncapped. (was "1a07eb0bde9fac")
-	"core:query/relationship-search@1": "acd77e5ab001e",
-	"core:query/graph-scenes@1": "93cf67e05eb1",
+	"core:query/relationship-search@1": "15b1b8194c0986",
+	"core:query/graph-scenes@1": "3d0bc6433032e",
 	// The third gather branch, added in 0.6 after its absence was found: the
 	// split into world and character lore left `history` with no node, so those
 	// candidates were read, scored and dropped for two spec versions. A *new*
@@ -495,8 +600,7 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Moved with its two siblings above (R-12): `text` culled. (was "e252379dcbac9")
 	// Moved with its two siblings (R-7 P5, U3b): its own intent at 0.1666 / 10.
 	// (was "b2dd2f1b3f043")
-	"core:query/history-entries@1": "1074e88838b900",
-	"core:query/lorebook-probabilistic@1": "6ac9faa6efbb8",
+	"core:query/history-entries@1": "1c5ee4567fc8b2",
 	// Re-projected by 0186: the same `scanDepth` correction, on this type's own
 	// duplicate declaration of the field. Deliberately still a separate schema
 	// rather than folded into the shared `loreSlots` — the two overlap in that
@@ -553,17 +657,44 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// lore member on those specs' rankers here. The three spec hashes do NOT
 	// move — their documents wire `params: slot.params()` already; only the
 	// declaration behind the slot grew. (was "13604832d9dbd")
-	"core:query/lorebook-triggers@1": "73ddcc1d71670",
+	// Moved (W1, 2026-09-17): gained the `speaker` in-port, on
+	// `character-lore@1`'s terms above — this node produces the character-lore
+	// band through the same gated read, so it takes the same port.
+	// (was "73ddcc1d71670")
+	"core:query/lorebook-triggers@1": "1b5e7f463cde1e",
+	// A **new** type (2026-09-17), so no migration and no bump — the same
+	// sentence `entry-keys@1` below stands on. It is the **listing** door the
+	// five definitions above are not: no mechanism runs, nothing is scored, and
+	// `main`/`entries` publish `core:shape/json@1` rather than candidates, so
+	// no reader of theirs could be looking at this. It shares no declaration
+	// with them — its own `scope` in-port and its own three parameters, nothing
+	// spread from `loreSlots` — which is why nothing else in this table moved
+	// when it landed, and that immobility is the check that the addition really
+	// is additive. See `runtime/bindings.ts` for what it binds to and
+	// `host.ts`'s `lorebook_entries` case for the read.
+	//
+	// Moved the same day (answer 3), before it had ever shipped: the first
+	// parameter is `entryTypes`, not `types` — a parameter may not take the
+	// bare noun (R3), and *type* alone already names a node type, a session
+	// type and a part type. Nothing else in this table moves: the declaration
+	// is this node's own and is spread into nothing. (was "1fabf250d1b6c5")
+	//
+	// ⚠ **Red until the contracts package is rebuilt.** This file reads the
+	// contracts through their `dist`, which still carries `types`, so the drift
+	// check above reports this line until `npm run sdk:build` catches up — the
+	// Lair block in `specHashes.test.ts` describes the same lag, which skips
+	// there only because those keys are absent from `current()` and this one is
+	// not. The recorded value is the source's, computed with this file's own
+	// `definitionContentHash` over the snapshot with the key renamed.
+	"core:query/lorebook-entries@1": "13572f1bddbdd1",
 	// A **new** type, so no migration and no bump — policy's own sentence,
 	// "adding a new type is safe and needs no migration". Nothing else in this
 	// table moved when it landed, which is the check that says the declaration
 	// really is additive: it declares its own ports and its own two parameters
 	// and spreads nothing from a sibling, so no existing content hash could
 	// follow it. See `ranking/keyProposal.ts` for what it binds to.
-	"core:query/entry-keys@1": "7b6c180485049",
-	"core:query/message-text@1": "13028fee53a4e1",
-	"core:query/persona-card@1": "a0b05bce48983",
-	"core:query/summarize-source@1": "172011b74d3c72",
+	"core:query/entry-keys@1": "112e2978d9c9a8",
+	"core:query/summarize-source@1": "1b53afc623e3fc",
 	// Re-projected by **0201** (policy answer 3), retrieval plan phase 2: this
 	// mechanism is wired into the shipped reply spec at last, and it gains the switch
 	// that lets it be. `maxEntries` defaults to **0 — off** — on the
@@ -590,16 +721,17 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// mechanism can reach it either, which is the one thing the governing rule
 	// forbids. The replacement shapes the contribution (`cos ** falloff`) and
 	// ships at 1 — the raw cosine, which is what ran while the floor sat unread.
-	"core:query/vector-search@1": "132b49d9fcceb4",
+	// (was "132b49d9fcceb4") — `vectors` says `json@1` — a list of query vectors, which is what `embed-text@1` publishes (U5d review, W9).
+	"core:query/vector-search@1": "66b22cb34f028",
 	// The third retrieval mechanism (design §13.5), added 2026-09-06 — retrieval by
 	// the names a scene is using, over annotations written in the background. A
 	// **new** type id, so the registry inserts it and nothing conflicts: no
 	// re-projection migration, on the same terms as the tool-calling pair below.
-	"core:query/entity-search@1": "b8050d92df823",
+	"core:query/entity-search@1": "a62c1e036691f",
 	// Documentation search (U5g, R-18, 2026-09-16) — the guide genre's one
 	// retrieval mechanism: the compiled docs' sections, scored against the
 	// newest messages, published in the `worldLore` band. A **new** type id.
-	"core:query/docs-search@1": "3fe0abab9fec7",
+	"core:query/docs-search@1": "53584fd75910e",
 	// The fifth mechanism (retrieval plan phase 4), added 2026-09-06 —
 	// retrieval by *description*: a second named vector space holding one
 	// vector per name, queried with the descriptive references the scene used
@@ -613,8 +745,8 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// in-port and returns it enriched, which is what makes "a link is a score
 	// contribution, never an admission" a property of the ports rather than a
 	// promise in a binding.
-	"core:query/mention-spans@1": "773d78c837203",
-	"core:query/entity-link@1": "103770dd960003",
+	"core:query/mention-spans@1": "1001472b134a3c",
+	"core:query/entity-link@1": "14722f3bd64182",
 	// Gained a `variables` slot for its post-budget lore and history in
 	// 0.6-preview. Re-projected by migration 0108, on the same terms as 0107.
 	// Migration 0095 — answer 3.
@@ -669,11 +801,11 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// what fits is the ranker's `select`, per band, so a second drop rule here
 	// had no place to act. Behaviour-preserving: no run ever consulted it.
 	// (was "1d97d036a0a3e4")
-	"core:task/assemble@2": "7711867ef8c2",
+	"core:task/assemble@2": "5f517d8de2d47",
 	// Tool calling's pure halves (20 §9), added 2026-08-26. New types — a
 	// row inserts and conflicts with nothing.
-	"core:task/advertise-tools@1": "b3b15a945f7e2",
-	"core:task/parse-tool-call@1": "213e18d434bbb",
+	"core:task/advertise-tools@1": "1fde41dd02ebce",
+	"core:task/parse-tool-call@1": "319ee4b56a7bf",
 	// The three the tool loop needed beside them (20 §9, 01 §4a), added
 	// 2026-09-10. All new types — a row inserts and conflicts with nothing, so
 	// no migration. `run-tool` is the impure middle the two pure halves sit
@@ -681,9 +813,54 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// from, a Query because which extensions are enabled is not a property of
 	// a spec; `join-text` is the reduce a repeated block has always needed —
 	// `map` and `loop` publish a list and every write takes a scalar.
-	"core:query/available-tools@1": "426517ae42329",
-	"core:oracle/run-tool@1": "cb03acea6cca6",
-	"core:task/join-text@1": "1d3d05a12133fa",
+	"core:query/available-tools@1": "1275d437461a7e",
+	"core:oracle/run-tool@1": "e3dfadabceed9",
+	"core:task/join-text@1": "89b6a865c3edd",
+	// The two pure Tasks of D-4a (2026-09-17), and **new** types — a row
+	// inserts and conflicts with nothing, so no migration and no bump.
+	//
+	// `pick-by-hash` is the node that lets a genre DERIVE a hidden fact
+	// instead of authoring it: rendezvous hashing over a stable key, so the
+	// create run and every later turn reach the same item with nothing written
+	// down (the alternative was the attribute-slot ledger, which the player's
+	// own state panel renders). `turn-random@1` could not stand in — it draws
+	// `ctx.random`, seeded per RUN. `cast-choices` is the other half of the
+	// same gap: `make-choices@1` needs `{ key, label }` options and nothing
+	// turned a cast into that list, so both Whodunit pickers spend a model
+	// call enumerating the room.
+	//
+	// Both moved the same night, before either had shipped — the window in
+	// which a name is free, and the reason to spend it.
+	//
+	// `pick-by-hash`: its in-port is **`scopeKey`** and its out-port
+	// **`pickIndex`** (R3 — qualify, never the bare noun). *key* alone was
+	// already an option's key, the identity a candidate is scored under and a
+	// settings field's name; *index* was a database index and a message's
+	// position. Nothing else in this table moves: the declaration is this
+	// node's own and is spread into nothing.
+	//
+	// `cast-choices`: a **`question`** in-port and a **`json`** out-port
+	// carrying `{ question, options }` — the document
+	// `core:task/make-choices@1` reads off its own `json` port (ruled (b),
+	// 2026-09-17). The alternative was a `question` in-port on
+	// `make-choices`, which would have moved the hash of a node already wired
+	// into three shipped specs; shaping the document on this side moves only
+	// this line, and `make-choices@1` above is byte-identical across the
+	// change. `options` stays beside `json` for a spec that wants the bare
+	// list — a pick over the same options is exactly that spec.
+	//
+	// Both values were computed from the **source** declaration, because this
+	// file reads the contracts through their `dist` and that package lagged
+	// the edit — the same lag the `lorebook-entries` line above describes.
+	// The route is this file's own `definitionContentHash` over
+	// `snapshotRegistry`'s entry for the declaration as `contracts/src`
+	// declares it, verified by reproducing two pins already recorded here:
+	// `join-text@1` and `lorebook-entries@1` both come back byte-identical by
+	// it. So if either line below is red, `npm run sdk:build` has not caught
+	// up with the source — not that the pin moved again.
+	// (were "ba3cb88fbbe59" and "16714786944485")
+	"core:task/pick-by-hash@1": "1d94930bb514a9",
+	"core:task/cast-choices@1": "610624f6ff394",
 	// The native door (20 §9). `core:oracle/generate-text@1` is published and
 	// frozen, so a `tools` in-port and a `toolCall` out-port are a NEW pin
 	// rather than two more lines on that one — which would move its hash and
@@ -692,7 +869,7 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Gained `params.streaming` with the other three providers.
 	// Moved (R-12, 2026-09-16): `prompts` slot culled — see `generate-text@1`.
 	// (was "b8e60704bfb8e")
-	"core:oracle/generate-with-tools@1": "168d0d14958026",
+	"core:oracle/generate-with-tools@1": "1d291657ad5c20",
 	// The structured door, on the same terms as the tools one above and for the
 	// same reason: `generate-text@1` is published and frozen, and this node does
 	// not make the same request anyway. It asks a question rather than taking a
@@ -701,7 +878,7 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Gained `params.streaming` with the other three providers.
 	// Moved (R-12, 2026-09-16): `prompts` slot culled — see `generate-text@1`.
 	// (was "7bac9bd9068a5")
-	"core:oracle/generate-json@1": "a9d0633b49a7d",
+	"core:oracle/generate-json@1": "170f772cd314a4",
 	// Re-projected by **0102** (policy answer 3): a `sampling` slot, so the cut
 	// can be clamped to the window the batch is actually sent against — the
 	// binding read no sampling config at all, and there is no truncation on
@@ -710,13 +887,13 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// `core:task/context-budget@1`. `batchTokens` also moves from 2048 to 2560
 	// — a default is content, and the old number meant 548 tokens of chat once
 	// the binding subtracted its reserve from it.
-	"core:task/batch-messages@1": "3936f5e8dc834",
+	"core:task/batch-messages@1": "3a1bef51d6d9a",
 	// The narrator's half of the split (migration 0114). It shares this one's
 	// implementation and ports; what makes it a separate type is that it
 	// declares a different configurable surface — `narratorName`, and no
 	// example-dialogue or relationship layouts. Adding a type needs no
 	// re-projection: it inserts a row and conflicts with nothing.
-	"core:task/build-narrator-context@1": "131936fee7832b",
+	"core:task/build-narrator-context@1": "f832d75d396be",
 	// The third context surface (ruling 2026-09-07), and a NEW type for the
 	// same reason the narrator's was one: it declares a different configurable
 	// surface. What separates it from the narrator's is a `speaker` IN-PORT —
@@ -740,7 +917,13 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Moved (U5a, 2026-09-16): the fact's in-port is `sideCharacter` (was
 	// `speaker`) — see `side-character-turn@1`. Same handler, same reads.
 	// (was "4db3df67c3a47")
-	"core:task/build-side-character-context@1": "2314a96fa5a1c",
+	// Moved (W1, 2026-09-17): gained the `speaker` OUT-port — the participant
+	// reference this node already derived from the `sideCharacter` fact,
+	// published so a lore lane in the same clause can be handed the same
+	// answer instead of matching the name a second time. Still no
+	// `currentCharacterId` in-port: the id is published, never set.
+	// (was "2314a96fa5a1c")
+	"core:task/build-side-character-context@1": "152663c795c601",
 	// Gained the `variables` slot in 0.6-preview (migration 0107), a
 	// `speakerRelationships` layout when the graph query was wired in
 	// (migration 0111), and lost `narratorName` from its `prompts` slot when
@@ -771,7 +954,7 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// declaration the cast read carries) compiles where a cast member's
 	// would, through the `speakerName`/`speakerCharacter` seam. A
 	// `character:` reference changes nothing. (was "6b960498d9527")
-	"core:task/build-template-context@1": "1536fb0197a841",
+	"core:task/build-template-context@1": "1a11717a9bff7a",
 	/**
 	 * The Adventure genre's three agent surfaces onto that same builder.
 	 *
@@ -782,17 +965,22 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	 * context@1` is the one with a `plan` port and `build-keeper-context@1` the
 	 * one with `reply` and the `afterWrite` ordering edge.
 	 */
-	"core:task/build-planner-context@1": "8c4e2af04a8e5",
-	"core:task/build-scene-context@1": "126ff7b99d32ac",
-	"core:task/build-keeper-context@1": "46cff3ca4db9a",
-	"core:task/chunk-text@1": "5cef916d3eef",
+	"core:task/build-planner-context@1": "cb8d07e357492",
+	"core:task/build-scene-context@1": "1f1aa57b4caed2",
+	"core:task/build-keeper-context@1": "17dab50617992b",
 	/**
 	 * A model's JSON answer, read back as data — the other half of asking for
 	 * structure. `optional`, so a reply nobody can read subtracts the structure
 	 * and not the turn.
 	 */
-	"core:task/parse-json@1": "626dd0656d27b",
-	"core:task/set-state@1": "9628110ba5c34",
+	"core:task/parse-json@1": "641e92e749ec8",
+	// Moved (U5f, R-15 *Staleness and order*, 2026-09-17): a `base` in-port
+	// (the state version the changes are deltas against) and a `refused`
+	// out-port (the sentences `main.refused` always carried — a slot that
+	// moved since the base lands there in `apply` mode). Additive: every
+	// pin keeps `changes` · `scope` · `applied` · `proposed`.
+	// (was "9628110ba5c34")
+	"core:task/set-state@1": "1566850749f34",
 	/**
 	 * The names a model used, resolved against this session's cast. A Query
 	 * because resolving a name is a read; the same `ownerFor`/`slotFor` the
@@ -801,30 +989,32 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// ⚠ MOVED: one declared in-port, `plan`, carrying the planner's world hints
 	// — a required part of the plan's schema that no node read, so a turn that
 	// planned a location left the world strip empty.
-	"core:query/resolve-state-changes@1": "16e758af287e3d",
+	// Moved (U5f, R-15 *Staleness and order*, 2026-09-17): a `base` in-port,
+	// passed through onto every resolved change so `set-state` can rebase
+	// each one. Additive. (was "16e758af287e3d")
+	"core:query/resolve-state-changes@1": "1d3741c19b7463",
 	// Moved (R-8, 2026-09-15): a `connection` slot, shared with the generating
 	// step in every shipped spec, so the ONE window computation reads the
 	// model's own window (0114) off the same pair the request goes out on.
 	// (was "efdd9a915c681")
-	"core:task/context-budget@1": "1755b6318f4090",
-	"core:task/first-json@1": "13093e6bda129",
+	"core:task/context-budget@1": "1949a34d1d682",
 	// Re-projected by 0191 (policy answer 3). Two changes, one hash move: the
 	// dead `strategy` and `dedup` parameters are gone — the binding read
 	// neither, `strategy` was 0.5's engine choice that wiring replaced, and
 	// `dedup` described what rank fusion does unconditionally — and the node
 	// gained a `diagnostics` out-port, which is where it now says so when its
 	// input orderings turn out to be disjoint.
-	"core:task/merge-candidates@1": "1e44f4e71225d6",
+	"core:task/merge-candidates@1": "2dc1eda4715b3",
 	// The node the three lore gather branches wanted all along: concatenation, stamping
 	// no score, so `rank-hybrid` still has signals to score and share bands to
 	// budget between. A **new** type — a row inserts and conflicts with
 	// nothing, so it needs no re-projection of its own.
 	//
-	// Identical hash to the merge above, and legitimately: the content hash
-	// strips display text, and what is left (ports, timeout, no slots) is the
-	// same declaration. The same coincidence the three lore gather branches and the four
-	// turn strategies already have.
-	"core:task/concat-candidates@1": "1e44f4e71225d6",
+	// One implementation beside the merge above, declared under its own id —
+	// and since V6 the id is contract, so the two read two hashes where they
+	// read one (ports alone, no slots, was all the material had to tell them
+	// apart by).
+	"core:task/concat-candidates@1": "16fda337949636",
 	// Re-projected by **0106** (policy answer 3). It gained a
 	// `continuationPrefill` IN-port — and the seam it feeds is older than the
 	// port: `prompt/messages.ts` has put `input.continuationPrefill` on the seed
@@ -833,14 +1023,14 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// supply a value because the declaration had no port for one. So a continue
 	// sent an empty seed, got a fresh reply, and the socket glued the partial on
 	// afterwards. The declaration is what was missing (ruling 2026-09-08, D-2).
-	"core:task/process-messages@1": "1078354c939461",
+	"core:task/process-messages@1": "11460213d98113",
 	// The same conversation for a step that READS it: no seed line, and no JSON
 	// blocks left by an earlier turn for the next model to imitate. Both are
 	// properties of the transcript rather than of the request, which is why they
 	// are a node and not a flag on a provider: by the time a completion prompt is
 	// rendered the seed is an open block inside one string.
-	"core:task/prose-transcript@1": "1fce15d9ff8c59",
-	"core:task/query-windows@1": "184fdf6f3a0762",
+	"core:task/prose-transcript@1": "1faa916f51a8e2",
+	"core:task/query-windows@1": "74c7f9fc461f",
 	// Re-projected by **0201**, and it is the one type in that migration nobody
 	// set out to touch. Ruling R6 removes per-source floors — *"lore competes on
 	// score alone"* — which narrows `minEntries` from the five bands to
@@ -849,11 +1039,6 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// alternative is a second copy of the whole rank slot declaration, and 0195
 	// records why `lorebook-triggers` keeping its own duplicate is tolerable
 	// only because the two overlap in a single field name.
-	// Moved (R-7 P5, 2026-09-16 — U3b): its `params` slot is gone. It wore the
-	// per-source maps only because `rankSlots` was spread onto every ranker;
-	// with those on the sources it has nothing cross-source to declare.
-	// (was "aae1563fa43a3")
-	"core:task/rank-by-recency@1": "1121f90c32b126",
 	// Both re-projected by migration 0146. rank-hybrid gained the nine
 	// signal-weight fields — the tuning matrix `weights.ts` always held but
 	// nothing declared; rank-semantic gained `sourceBudget` and
@@ -938,55 +1123,52 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// ranker and declared on the five sources; `shareNormalisation` (relative,
 	// the shipped arithmetic) joins the cross-source set. Migration 0135 moves
 	// the stored maps. (was "a4ba08bbc5618")
-	"core:task/rank-hybrid@1": "15ebe8358b7fa0",
+	"core:task/rank-hybrid@1": "7f48680db781",
 	// Moved (R-12, 2026-09-16): `params.currentWindow` / `recentWindow` are culled from
 	// the ranker — they size the two windows `query-windows@1` cuts and
 	// declares as its own; here they were rendered twice and read once.
 	// `withDefaults` still fills both for the `SemanticParams` shape, so the
 	// ranker's arithmetic is byte-identical. (was "d3849f48f8442")
-	"core:task/rank-semantic@1": "188d7e834f2b04",
-	"core:task/render-entries@1": "7541eb6256ba5",
+	"core:task/rank-semantic@1": "cf206e2efccf8",
 	// The four next-speaker strategies (19 §5, U-C4) — one implementation,
-	// four ids, and one hash: the content hash strips display text, and what
-	// remains (ports, timeout) is identical across the family, exactly like
-	// the three lore gather branches above.
+	// four ids, four hashes: the id is contract (V6), and the family shares
+	// everything but that.
 	// Moved, all four (U5a, R-18 (3), 2026-09-16): a `speaker` in-port — the
 	// explicit pick as a participant reference, which is the only way an
 	// envoy can be picked — and a `speaker` out-port beside `characterId`,
 	// so the receipt and the wiring carry the reference; the bare id stays
 	// for the context and generation readers. (was "cadef103232f2")
-	"core:task/turn-round-robin@1": "1e667e415a1009",
-	"core:task/turn-random@1": "1e667e415a1009",
-	"core:task/turn-manual@1": "1e667e415a1009",
-	"core:task/turn-none@1": "1e667e415a1009",
-	"core:task/to-candidates@1": "174b5c86bb414b",
+	"core:task/turn-round-robin@1": "c744f942f9ab0",
+	"core:task/turn-random@1": "1b93fc66d0df45",
+	"core:task/turn-manual@1": "4e3558050952b",
+	"core:task/turn-none@1": "874db8f3997c4",
 	// The `test:` fixtures are published by the same module as everything else,
 	// so a running instance has rows for them and they freeze on exactly the same
 	// terms. Editing one to suit an SDK test would stop pipelines on every
 	// upgraded install — which is worth knowing before it happens, not after.
-	"test:query/network@1": "c1601e776f664",
-	"test:task/bad-toggleable@1": "594a2f094b17a",
-	"test:task/gate@1": "cf73634860fe1",
+	"test:query/network@1": "89bfd7d0b9c91",
+	"test:task/bad-toggleable@1": "1b049c5454ccd9",
+	"test:task/gate@1": "287eb5a95fdb9",
 	// ── Scripts (18) ────────────────────────────────────────────────────
 	//
 	// Published into the same registry under the same freeze rule. The seven
 	// core contracts of 18 §3, one content scope per group.
-	"core:script:text/transform@1": "14b3b24125511d",
-	"core:script:text/stop@1": "1657b41ed5a2be",
-	"core:script:messages/inject@1": "10feba4829eab3",
-	"core:script:messages/transform@1": "48e7776bf623f",
-	"core:script:candidates/filter@1": "5921c6940b28f",
-	"core:script:candidates/rescore@1": "5921c6940b28f",
-	"core:script:context/transform@1": "1a74f953c2e773",
+	"core:script:text/transform@1": "168985a29d3b67",
+	"core:script:text/stop@1": "11bbc3440d6195",
+	"core:script:messages/inject@1": "6bdac9278679f",
+	"core:script:messages/transform@1": "fb7dd6e01540b",
+	"core:script:candidates/filter@1": "160e74129e402f",
+	"core:script:candidates/rescore@1": "17bf99d12e564e",
+	"core:script:context/transform@1": "e188343d13ee7",
 	// The cast scope (2026-08-26): scripts over what extract-cast publishes.
 	// A new type — inserts a row, conflicts with nothing, needs no migration.
-	"core:script:cast/transform@1": "16b4355ec1eb01",
+	"core:script:cast/transform@1": "9abc9e28e8c41",
 	// Local image generation: the modality twin of generate-text, same node kind,
 	// its shape naming which one. A new type — inserts a row, needs no migration.
 	// Gained a `params` slot, holding `streaming` alone — the node had none, so
 	// the slot moves with the parameter. `off` means one request with no
 	// progress polling and no previews.
-	"core:oracle/generate-image@1": "607862735ca56",
+	"core:oracle/generate-image@1": "1ec57f509dd81f",
 	// ── Entry types (Part 1) ────────────────────────────────────────────
 	//
 	// A lorebook row's kind, declared and versioned instead of being the table
@@ -995,12 +1177,20 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// moves these hashes: roles, render, source kind, export key, the anchor
 	// policy and the declared `fields` schema are all contract, so changing any
 	// of them is `@2` and not an edit here.
-	"core:entry/world-lore@1": "1a6bd578150efc",
-	"core:entry/character-lore@1": "7592f16899263",
-	"core:entry/history@1": "4ea53ec3a9700",
-	"test:task/passthrough@1": "cf73634860fe1",
-	"test:task/sloppy-stream@1": "13093e6bda129",
-	"test:task/slow@1": "cf73634860fe1"
+	"core:entry/world-lore@1": "100f8933de881b",
+	"core:entry/character-lore@1": "50f9370f3ab1",
+	"core:entry/history@1": "64444542921c6",
+	// NEW (L3, 2026-09-17): a place the story can be in, and can be walked out
+	// of. World lore's roles and fields, the `worldLore` band, rendered by the
+	// world-lore variable — what earns it a type is that a place is a thing
+	// other places are next to. ⚠ No `exits` field and no `exportKey`: exits
+	// are link rows (the settings language has no reference type, so a field
+	// could only hold names with no foreign key and no cascade), and the wire
+	// vocabulary has no word for a location, so it exports as world lore.
+	"core:entry/location@1": "1d81270e5347d7",
+	"test:task/passthrough@1": "14f0c9d8aaf7b0",
+	"test:task/sloppy-stream@1": "1224877b3fece4",
+	"test:task/slow@1": "b227d955f2539"
 }
 
 /**
@@ -1139,25 +1329,25 @@ describe("published type content hashes", () => {
 	 * The same promise, two levels down, and against the SDK's answer.
 	 *
 	 * ⚠ The test above injects display text at the TOP of the entry, which is
-	 * the only level `stripI18n` was ever exercised at — and that is how core
+	 * the only level the earlier guard exercised the strip at — and that is how core
 	 * and the SDK came to disagree without anything failing. A parameter's
 	 * display text is **not** spelled `i18n`: settings.ts calls `label` the
 	 * canonical key for a field or a member band and `i18n` its deprecated
 	 * alias, and those sit inside `slots[].schema`. The SDK's descriptor
-	 * registry has stripped `label` since `refuseUnlessIdentical` was written
-	 * (`DESCRIPTOR_DISPLAY_KEYS`); core hashed it. So re-declaring a descriptor
-	 * with a renamed parameter was a no-op in the SDK and, here, a
-	 * `TypeRegistryConflictError` that `bootstrapPipelines` caught by returning
-	 * early — silently stopping every pipeline on the install. The stop is gone
-	 * (the slug's pointer moves instead), and the strips must still agree: two
-	 * answers to *is this the same declaration?* would now silently move a
-	 * pointer for a translated label.
+	 * registry stripped `label` (`DESCRIPTOR_DISPLAY_KEYS`); core hashed it.
+	 * So re-declaring a descriptor with a renamed parameter was a no-op in the
+	 * SDK and, here, a `TypeRegistryConflictError` that `bootstrapPipelines`
+	 * caught by returning early — silently stopping every pipeline on the
+	 * install. The stop is gone (the slug's pointer moves instead), and since
+	 * V6 the two sides are one function, `definitionContract` — this test
+	 * holds core's hash to the SDK's for the injected label AND for every
+	 * shipped definition, so two answers to *is this the same declaration?*
+	 * cannot come apart without a red line here.
 	 *
 	 * ⚠ **No shipped type carries a `label` today**, which is why the
-	 * disagreement was latent and why closing it moved no recorded hash above.
-	 * That is also why this test injects one: without it, nothing in the suite
-	 * can tell the corrected strip from the old one, and a green suite would be
-	 * evidence of nothing.
+	 * disagreement was latent. That is also why this test injects one:
+	 * without it, nothing in the suite can tell the corrected strip from the
+	 * old one, and a green suite would be evidence of nothing.
 	 *
 	 * The control is the half that makes it a test rather than a tautology.
 	 * `max` is a range, and a range decides which stored values are still legal
@@ -1187,8 +1377,7 @@ describe("published type content hashes", () => {
 			definitionContentHash(
 				snapshotRegistry([d as any], { release: "test" })[0]!
 			)
-		const sdkHash = (d: unknown) =>
-			declarationHash(d, DESCRIPTOR_DISPLAY_KEYS)
+		const sdkHash = (d: unknown) => definitionContractHash(d as Descriptor)
 
 		const base = withKey("__unused", undefined)
 		for (const word of [
@@ -1213,5 +1402,60 @@ describe("published type content hashes", () => {
 		const widened = withKey("max", 999_999)
 		expect(coreHash(widened)).not.toBe(coreHash(base))
 		expect(sdkHash(widened)).not.toBe(sdkHash(base))
+
+		// And the whole registry: core's hash of a row IS the SDK's hash of
+		// the descriptor it was projected from, definition by definition.
+		for (const d of allDefinitions())
+			expect(coreHash(d), d.id).toBe(sdkHash(d))
+	})
+
+	/**
+	 * Contract moves a pin; policy does not (plans/31 V6, 2026-09-17).
+	 *
+	 * The one rule this table is read under: *what runs is contract; what is
+	 * offered is policy.* Each half is asserted on a shipped definition rather
+	 * than a fixture, so the check is against the declarations that are
+	 * actually published — and against the SDK's list of policy keys, so a
+	 * key classified there is exercised here without a second list.
+	 */
+	it("moves for a port, for review.fields — and not for provisional, timeoutMs or any policy key", () => {
+		const generate = getDefinition("core:oracle/generate-text@1")!
+		const hashOf = (d: Descriptor) =>
+			definitionContentHash(snapshotRegistry([d], { release: "test" })[0]!)
+		const before = hashOf(generate)
+
+		// Policy: the flag that U6 hashed on purpose, and the timeout.
+		expect(hashOf({ ...generate, provisional: true })).toBe(before)
+		expect(hashOf({ ...generate, timeoutMs: (generate.timeoutMs ?? 0) + 1 })).toBe(before)
+		// Every policy key, moved to a value it does not hold.
+		const moved: Record<(typeof DESCRIPTOR_POLICY_KEYS)[number], unknown> = {
+			i18n: { name: { en: "Renamed" } },
+			reviewDefault: generate.reviewDefault === "on" ? "off" : "on",
+			toggleable: !generate.toggleable,
+			provisional: true,
+			public: !generate.public,
+			timeoutMs: 1,
+			timeoutKind: generate.timeoutKind === "idle" ? "wall" : "idle",
+			usage: "somewhere.else"
+		}
+		for (const key of DESCRIPTOR_POLICY_KEYS)
+			expect(hashOf({ ...generate, [key]: moved[key] }), key).toBe(before)
+
+		// Contract: a port, and the review fields.
+		expect(
+			hashOf({
+				...generate,
+				ports: { ...generate.ports, in: { ...generate.ports.in, extra: "core:shape/text@1" } }
+			})
+		).not.toBe(before)
+		expect(hashOf({ ...generate, review: { fields: ["context"] } })).not.toBe(before)
+
+		// And the three flagged definitions, bound: no pin above moves.
+		for (const id of ["core:oracle/speak@1", "core:oracle/mcp-tool@1", "core:oracle/mcp-resource@1"]) {
+			const d = getDefinition(id)!
+			expect(d.provisional, id).toBe(true)
+			const { provisional: _p, ...bound } = d
+			expect(hashOf(bound as Descriptor), id).toBe(PUBLISHED_HASHES[id])
+		}
 	})
 })

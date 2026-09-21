@@ -133,6 +133,44 @@ describe("eventListenersOf", () => {
 			eventListenersOf({ eventHooks: [1, null, ["x"], { event: EVENT }] })
 		).toEqual([{ event: EVENT }])
 	})
+
+	/**
+	 * The packager's spelling (D-6). `serene-pub build` writes the same
+	 * declarations at `hooks.eventListeners`, and this module is their one
+	 * reader, so the two are reconciled here rather than left to disagree — a
+	 * subscription that vanished between two vocabularies is a hook that never
+	 * fires and never says why.
+	 */
+	it("reads the packager's hooks.eventListeners too, and prefers the app key", () => {
+		expect(
+			eventListenersOf({ hooks: { eventListeners: [{ event: EVENT }] } })
+		).toEqual([{ event: EVENT }])
+		// Both present: the app key wins, because it is the richer shape.
+		expect(
+			eventListenersOf({
+				eventHooks: [{ event: EVENT, hook: "h" }],
+				hooks: { eventListeners: [{ event: OTHER }] }
+			})
+		).toEqual([{ event: EVENT, hook: "h" }])
+		// And `hooks` carrying anything else is not half-read.
+		expect(eventListenersOf({ hooks: { handlers: [] } })).toEqual([])
+	})
+
+	it("says what the packager's entry is missing, naming its own field", () => {
+		const { subscriptions, problems } = subsOf({
+			pluginId: "acme/packaged",
+			manifest: {
+				permissions: [`event:${EVENT}`],
+				hooks: { eventListeners: [{ event: EVENT }] }
+			}
+		})
+		expect(subscriptions).toEqual([])
+		expect(problems).toHaveLength(1)
+		expect(problems[0]).toContain("hooks.eventListeners[0]")
+		expect(problems[0]).toContain("no 'hook'")
+		// …and points at the shape that works today.
+		expect(problems[0]).toContain("eventHooks")
+	})
 })
 
 describe("subscriptionsOf", () => {

@@ -227,7 +227,7 @@ describe("rows through the manager, end to end", () => {
 			"acme/bump",
 			"bump",
 			{},
-			{ timeoutMs: 5000 }
+			{ kind: "outlet", timeoutMs: 5000 }
 		)
 		expect(first.ok && first.value).toBe("first")
 		expect(await loadPluginRows(db, "acme/bump")).toEqual([
@@ -247,7 +247,7 @@ describe("rows through the manager, end to end", () => {
 			"acme/bump",
 			"bump",
 			{},
-			{ timeoutMs: 5000 }
+			{ kind: "outlet", timeoutMs: 5000 }
 		)
 		expect(second.ok && second.value).toBe(1)
 		expect((await loadPluginRows(db, "acme/bump"))[0]!.value).toBe(2)
@@ -279,7 +279,7 @@ describe("rows through the manager, end to end", () => {
 			"acme/doom",
 			"doom",
 			{},
-			{ timeoutMs: 30_000, runId: "run-1" }
+			{ kind: "outlet", timeoutMs: 30_000, runId: "run-1" }
 		)
 		await sleep(200)
 		const [call] = mgr.activeInvocations()
@@ -319,7 +319,7 @@ describe("rows through the manager, end to end", () => {
 			"acme/unregistered",
 			"bump",
 			{},
-			{ timeoutMs: 5000 }
+			{ kind: "outlet", timeoutMs: 5000 }
 		)
 		expect(r.ok).toBe(false)
 		if (!r.ok) expect(r.reason).toMatch(/rows could not be committed/)

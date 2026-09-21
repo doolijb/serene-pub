@@ -8,6 +8,10 @@
  * exists to avoid. So the view intercepts the links it can answer itself, and
  * this is the rule it intercepts by.
  *
+ * `helpAnchorId` below is the other half of the same seam: the view renames the
+ * ids inside its own article so they cannot collide with `/docs`, and every
+ * anchor it is handed has to be read against the renamed ones.
+ *
  * Pure, and in its own module, because it is the whole of that decision and the
  * only part of the view a test can reach: the suite runs in `node` with no DOM
  * and no `@testing-library/svelte` (vitest.config.ts), so the delegated click
@@ -59,4 +63,46 @@ export function resolveInViewLink(
 	// hand-written link may have and no manifest key does.
 	const slug = pathname.slice(DOCS_BASE.length).replace(/^\/+|\/+$/g, "")
 	return { slug: slug || null, anchor }
+}
+
+/**
+ * The prefix this view puts in front of every id inside its article.
+ *
+ * `/docs/[...slug]` renders the same compiled page from the same docs-dist,
+ * and the sidebar can be open beside it — so without a prefix the document
+ * carries two `#the-rail` elements. That is an a11y defect on its own, and it
+ * also hands the wrong element to `:target` and to the route's own
+ * `getElementById` (`routes/docs/[...slug]/+page.svelte`), which resolve to the
+ * FIRST match: the sidebar, which comes before `<main>` in the shell's markup.
+ * `/docs` keeps the bare ids — it is the page that owns them, and its URL
+ * fragments have to keep working.
+ *
+ * A colon and not `help-`, because a compiled id can already begin with the
+ * word: `help-and-about` is a real heading in the getting-started guide today.
+ * With `help-` there would be no way to tell an id this view has already
+ * scoped from one that merely starts with "help", and the two answers differ
+ * (`help-and-about` must become `help:help-and-about`). The compiler's slugger
+ * strips colons, so no doc id can contain one and the test is exact. It also
+ * reads as the app's own identifier grammar (NOMENCLATURE §2): a namespace,
+ * then the name.
+ */
+export const HELP_ANCHOR_PREFIX = "help:"
+
+/**
+ * The id the Help view gives one doc anchor — the single place that knows the
+ * prefix, so the rewrite that spends it and the lookups that follow it can
+ * never disagree.
+ *
+ * Idempotent, because anchors reach it both ways: bare from a Jump hit
+ * (`digest.help`), from the outline's `#id` rows and from a cross-page link's
+ * fragment, and already scoped from a link inside the article, whose href the
+ * same rewrite has rebased onto the new ids.
+ *
+ * An empty anchor stays empty: it means the top of the page, not an element.
+ */
+export function helpAnchorId(anchor: string): string {
+	if (!anchor) return ""
+	return anchor.startsWith(HELP_ANCHOR_PREFIX)
+		? anchor
+		: `${HELP_ANCHOR_PREFIX}${anchor}`
 }

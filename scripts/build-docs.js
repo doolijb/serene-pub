@@ -51,6 +51,21 @@ const SDK_REPO_DIR = path.resolve(appRoot, "../serene-pub-sdk")
 const SDK_API_DIR = path.join(SDK_REPO_DIR, "docs/generated/api")
 
 /**
+ * The hand-written SDK guides, in the SDK repo at `guides/<slug>.md`.
+ *
+ * Prose a person wrote, not pages rendered from a declaration — which is why
+ * they live beside the packages they teach rather than under `docs/` here: the
+ * SDK repo is public, its guides are read on GitHub as well as in the app, and
+ * a guide's runnable fences are run by the SDK's own suite
+ * (`sdk-tests/guides.test.ts`) against the same playground runner the page
+ * gives a reader. Compiled as a `dir` source, exactly like the app's guides.
+ *
+ * Absent — an older SDK checkout, or one fetched before the directory existed —
+ * is a warning and a skipped source, never a failed docs build.
+ */
+export const SDK_GUIDES_DIR = path.join(SDK_REPO_DIR, "guides")
+
+/**
  * The executed examples, written by the SDK's build too (`docs:examples`):
  * each page is an example's source, run against the fixture host, with its
  * output checked against a golden. The app never runs an example itself —
@@ -177,6 +192,16 @@ export const GUIDE_ORDER = [
 ]
 
 /**
+ * Reading order for the hand-written SDK guides, which the app repo owns for
+ * the same reason it owns GUIDE_ORDER: the nav is an editorial decision, and
+ * the SDK repo does not know where in this reading order its guides belong.
+ *
+ * A guide missing from this list is appended alphabetically and reported as a
+ * warning — the compiler's rule, not a special case for this source.
+ */
+const SDK_GUIDE_ORDER = ["your-first-plugin", "channels", "frames", "storage", "forms-and-effects"]
+
+/**
  * Reading order for the catalog-and-laws source, derived from its own pages.
  *
  * The pages are rendered from a package's announcement, so most of the list
@@ -230,6 +255,13 @@ const SDK_BANNER =
 	"Plugin modding is only available in 0.7 previews. This reference " +
 	"describes the SDK the app runs; authoring and installing plugins " +
 	"arrives in 0.7."
+
+/**
+ * The guides are written for plugin authors, so the second sentence of the
+ * reference banner ("describes the SDK the app runs") would mislead here.
+ */
+const SDK_GUIDES_BANNER =
+	"Plugin modding is only available in 0.7 previews. Everything on this page builds and runs today; installing a plugin is what the 0.7 previews add."
 
 /** Assets are served from static/, which ships whole — 6 MB is the ceiling. */
 const ASSET_BUDGET_BYTES = 6 * 1024 * 1024
@@ -395,6 +427,18 @@ export async function buildDocs({ watch = false, profile = "app" } = {}) {
 		...renderLawsDocs()
 	]
 
+	// The hand-written guides are checked for rather than loaded: a `dir`
+	// source reads its own directory, and the compiler's readdir on a missing
+	// one is an ENOENT, not a skipped source. Both profiles carry them — a
+	// guide is prose, which is exactly what a phone has room for.
+	const hasSdkGuides = fs.existsSync(SDK_GUIDES_DIR)
+	if (!hasSdkGuides) {
+		console.warn(
+			`[docs] no SDK guides at ${SDK_GUIDES_DIR} — the SDK checkout beside ` +
+				`this repo has none; compiling without them.`
+		)
+	}
+
 	// The API reference is written by the SDK's own build (`npm run sdk:build`),
 	// so a checkout nobody has built yet simply has none. The guides and the
 	// catalog are worth compiling without it — say what is missing and go on.
@@ -430,6 +474,24 @@ export async function buildDocs({ watch = false, profile = "app" } = {}) {
 			dir: GUIDES_DIR,
 			order: GUIDE_ORDER
 		},
+		// Between using the app and the reference, because that is the order a
+		// reader arrives in: what the app does, then how to write a plugin for
+		// it, then the declarations that plugin is written against. The nav
+		// follows this array — `compileDocs` pushes one nav group per source,
+		// in order (docs/src/compile.ts, the loop over `bySource`).
+		...(hasSdkGuides
+			? [
+					{
+						id: "sdk-guides",
+						group: "SDK guides",
+						prefix: "sdk/guides",
+						dir: SDK_GUIDES_DIR,
+						order: SDK_GUIDE_ORDER,
+						banner: SDK_GUIDES_BANNER,
+						repo: sdkRepo
+					}
+				]
+			: []),
 		{
 			id: "sdk",
 			group: "SDK reference",

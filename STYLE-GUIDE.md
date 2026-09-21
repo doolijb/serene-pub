@@ -191,7 +191,7 @@ The interface uses a fixed set of sizes. Pick from this table; do not invent a s
 | ----- | ----------- | ------- | ------- | ---------------------------------------------------------- |
 | 32px  | 1.15        | 600     | Display | The home greeting                                          |
 | 24px  | 1.2         | 600     | Display | A page title inside the main area (the admin header)       |
-| 20px  | 1.2         | 600     | Display | A session's name in its header (target; the session page is not yet built to this) |
+| 20px  | 1.2         | 600     | Display | A session's name in its header, beside the cast stack and the genre name |
 | 18px  | 1.3         | 600     | Display | A detail hero's name, a continue card's title              |
 | 16px  | 1.4         | 600     | Display | A sidebar view's title                                     |
 | 15px  | 1.4         | 500     | Sans    | A list row's name                                          |
@@ -321,14 +321,18 @@ app already is, and a new one must be too.
 | -------- | -------------------------------------------------------- |
 | 10       | The shell: rail, sidebar, main                           |
 | 40       | The mobile More sheet                                    |
+| 44       | The Jump pill                                            |
 | 45       | A view open as a mobile sheet                            |
-| 46       | The Jump pill                                            |
 | 50       | Modal backdrops and dialogs, including the Jump overlay  |
 | 100      | The update notice bar                                    |
 | 1000     | Popovers and menus                                       |
 
-The pill sits above every sheet and below every modal on purpose; a modal opened from a sheet must
-cover the sheet. Do not add a layer between 46 and 50.
+The pill sits **under** every sidebar view and above the rest of the page (ruled 2026-09-17). It
+is not rendered at all while a view is full page on desktop, nor while a view is open as a sheet
+below `lg`: the shell is its own stacking context, so nothing outside it can slide beneath a view
+that fills the window, and the z-index alone would leave the pill drawn over the sheet. Ctrl K
+opens the overlay in every state. A modal opened from a sheet must cover the sheet.
+Do not add a layer between 45 and 50.
 
 ---
 
@@ -373,6 +377,11 @@ is a `<button aria-expanded>` that collapses the group; the rows inside are inde
 width and nothing else. Ungrouped rows come first with no header. A filter that empties a group
 hides its header rather than showing an empty one.
 
+A row that stands for a **connection** always shows its title and its service together: the
+title (the user's words) at 15px, then one 11px chip naming the service. Teal-tonal for a managed
+runtime (KoboldCPP, Ollama), outlined for a host (a preset's name such as OpenRouter, Anthropic,
+ONNX). Never one without the other: the title says which, the chip says what (ruled 2026-09-17).
+
 A card is `rounded-[12px] border border-surface-800` with `p-4`, on the ground one step lighter
 than what it sits on. That recipe is the `.panel-card` utility in `app.css`, paired for light mode;
 use it rather than spelling the four classes out again. Section cards carry a 12px quiet label or a
@@ -414,6 +423,15 @@ the open view or the route; Backspace on an empty box or the chip's × drops to 
 a scoped search always ends with an Everywhere tail. Views feed Jump through registration, never by
 adding their own search UI.
 
+The pill is 34px tall in a 56px band, so it sits _in_ a header row rather than over one — but only
+where that row leaves it the room. It publishes its measured width as `--jump-pill-width`
+(the label names the scope, so it is 190px over Admin and 247px over Documentation), and any
+surface whose own controls reach the top-right corner reserves that width plus the pill's 1rem
+inset and one `gap-1.5`. Today that is one surface: the session header, whose **Layout** button
+ends before the pill. A sidebar view in **full page** reserves nothing, because the pill is not
+rendered while one is open (§5.4). While the session layout editor is open its toolbar owns the
+band and the pill is not rendered either. In both cases the Ctrl K overlay still opens.
+
 ---
 
 ### 6.9 Documentation pages
@@ -445,6 +463,9 @@ same markup unstyled.
   block the compiler emitted without a source gets no toolbar at all. `/docs` and Help only:
   Document View keeps the static block (§2.5).
 - **Outline** ("On this page"): depth 2–3 headings, shown only when the docs container is ≥ 48rem.
+  From 40rem the article drops `prose-sm` and prose's 65ch cap (`prose-base max-w-none`), a step
+  before the outline: the column bounds the line, and a capped column beside a list pane reads as a
+  slot, not a page.
 - **Search** is Jump (§6.8): a heading is a `doc` hit, the chip reads *Documentation* while Help or
   `/docs` is open, and `doc:` narrows. Neither Help nor `/docs` has a search box of its own.
 ## 7. Iconography
@@ -461,8 +482,41 @@ dingbat, never two icons for one idea.
 Motion answers an action and shows what changed. The rail width transitions over 150ms. A popover
 appears in place. A view being hidden is `hidden`, instantly, because it is a tab, not a page.
 There are no entrance animations on load, no hover transitions on every card, and no motion that
-repeats on its own except the ember pulse that means the model is working. Respect
-`prefers-reduced-motion` on anything longer than 150ms.
+repeats on its own except the ember pulse that means the model is working and an atmosphere
+(§8.1). Respect `prefers-reduced-motion` on anything longer than 150ms.
+
+### 8.1 Atmospheres
+
+An **atmosphere** is an animated background layer: rain, snow, mist, drifting glyphs, a candle's
+glow. It is the one sanctioned self-repeating motion besides the ember pulse, and it is allowed
+because it is never part of the interface. It sits under a screen's content, takes no pointer
+events, is `aria-hidden`, and nothing is ever placed inside it or aligned to it. Today it appears
+on one screen, the login page, where one of the fourteen shipped atmospheres is chosen at random
+on each load (`src/lib/client/atmospheres/`, registry `ATMOSPHERES` in `definitions.ts`, mounted
+by `AtmosphereLayer.svelte`). Anything that wants one elsewhere follows the same rules:
+
+- **It paints with the theme, never with a colour of its own.** The host resolves `primary`,
+  `secondary`, `tertiary` and the `surface` ladder from the live theme (`palette.ts`) and hands
+  them to the effect; a definition carries no hex. `warning`, `success` and `error` are signals
+  (§2.3) and are never used as a tint, so an ember-coloured atmosphere is not allowed even though
+  the house theme's motes are gold.
+- **One knob.** Intensity, 0.12–1.4, drives count, opacity and density. Speed, direction and
+  colour are the atmosphere's own business, so a picker stays a picker.
+- **One loop.** Every canvas atmosphere runs on the single `requestAnimationFrame` loop in
+  `host.ts`: `dt` clamped to 50ms, skipped while the document is hidden, device pixel ratio
+  capped at 1.5. CSS-kind atmospheres cost no JavaScript after mount.
+- **Reduced motion is a still, not an absence.** A canvas atmosphere warms a few frames and
+  freezes; a CSS one is frozen by the global rule in `app.css`. The mood survives, the movement
+  does not.
+- **The card over it stays legible on its own.** Whatever sits on an atmosphere carries its own
+  ground, the theme's `950` at 75% with a backdrop blur on the login card, so contrast never
+  depends on what the atmosphere happens to be drawing.
+- **Off is always one step away.** An atmosphere is opt-in per surface; a surface that ships one
+  on by default must make it switchable when it grows a setting. The login page has no setting
+  yet and honours only the reduced-motion preference.
+
+A computed still scene, if one is ever built, is a **backdrop** and not an atmosphere; a
+user-supplied image stays a **background**. The words are kept apart in NOMENCLATURE §26.
 
 ---
 

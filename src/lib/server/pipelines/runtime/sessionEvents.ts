@@ -11,7 +11,7 @@
  * that wants them binds by declaring, not by core growing a call site.
  */
 import { v4 as uuidv4 } from "uuid"
-import { runSpec } from "$lib/server/pipelines/runtime/runTurn"
+import { runSpec, type SpecRunRequest } from "$lib/server/pipelines/runtime/runTurn"
 import {
 	lockedEventSpec,
 	presetEventSpec,
@@ -25,12 +25,74 @@ import * as runRegistry from "$lib/server/pipelines/runtime/runRegistry"
 import { saveReceipt } from "$lib/server/pipelines/runtime/receipts"
 import type { SessionIo } from "$lib/server/pipelines/runtime/liveRow"
 import type { Receipt } from "@serene-pub/sdk"
+import { and, eq } from "drizzle-orm"
+import * as schema from "$lib/server/db/schema"
+
+/**
+ * The session's own binding for an event (plans/31 V2): the spec its
+ * `pipeline_bindings` row at session scope names for `event`, when that spec
+ * still answers (genre, event) on its inlet lock — else null, and the layers
+ * below decide. Eligibility is re-checked at read for the reason every
+ * binding's is: a row whose spec left the bucket falls through rather than
+ * routing to something that cannot serve.
+ */
+export async function sessionBoundEventSpec(
+	db: Db,
+	sessionId: number,
+	genreId: string,
+	event: string
+): Promise<string | null> {
+	const [row] = await db
+		.select({ specId: schema.pipelineBindings.specId })
+		.from(schema.pipelineBindings)
+		.where(
+			and(
+				eq(schema.pipelineBindings.scopeKind, "session"),
+				eq(schema.pipelineBindings.scopeId, sessionId),
+				eq(schema.pipelineBindings.genreId, genreId),
+				eq(schema.pipelineBindings.subject, event)
+			)
+		)
+		.limit(1)
+	if (!row) return null
+	const [spec] = await db
+		.select({
+			slug: schema.pipelineSpecs.slug,
+			activeVersionId: schema.pipelineSpecs.activeVersionId
+		})
+		.from(schema.pipelineSpecs)
+		.where(eq(schema.pipelineSpecs.id, row.specId))
+		.limit(1)
+	if (!spec?.activeVersionId) return null
+	const [version] = await db
+		.select({
+			status: schema.pipelineSpecVersions.status,
+			inputGenre: schema.pipelineSpecVersions.inputGenre,
+			inputEvent: schema.pipelineSpecVersions.inputEvent
+		})
+		.from(schema.pipelineSpecVersions)
+		.where(eq(schema.pipelineSpecVersions.id, spec.activeVersionId))
+		.limit(1)
+	if (
+		!version ||
+		version.status !== "published" ||
+		version.inputGenre !== genreId ||
+		version.inputEvent !== event
+	)
+		return null
+	return spec.slug
+}
 
 /**
  * Which spec answers (genre, event) for this session, and how it was reached.
  *
- * Two layers, in this order:
+ * Three layers, in this order:
  *
+ * 0. **The session's own binding** on the event id (plans/31 V2; closes the
+ *    R-6 gap): a `pipeline_bindings` row at session scope whose `subject` is
+ *    this event, when its spec still answers (genre, event) — the same
+ *    eligibility `resolveSubjectVerdict` re-checks. A session is a work, not
+ *    a preference (12 §2): its own choice beats its preset's.
  * 1. **The session's preset**, when a `sessionId` is given and its preset
  *    binds this event (24 §1). A preset that names a pipeline is an
  *    administrator answering the question directly, so it outranks the lock's
@@ -64,14 +126,15 @@ export async function resolveSessionEventVerdict(
 	scope?: { sessionId?: number | null }
 ): Promise<SessionEventResolution> {
 	try {
-		// ⚠ R-6 (ruled 2026-09-15): a session's own choice resolves BEFORE its
-		// preset — built for the reply and the actions in
-		// `resolveFunctionVerdict` (`pipeline_function_bindings` at session
-		// scope), which consults this reader second. A lifecycle event has no
-		// per-session binding yet — nothing writes one and no screen offers it
-		// — so for an event the preset is the top layer. When a session gains
-		// a per-event override, it goes above this call, on the same terms and
-		// with the same eligibility check.
+		// R-6 (ruled 2026-09-15; the event half built with plans/31 V2): a
+		// session's own choice resolves BEFORE its preset, on the same row
+		// and the same eligibility the reply's `resolveSubjectVerdict` reads
+		// for an event subject, so a reply and a dispatched event cannot
+		// route differently.
+		if (scope?.sessionId != null) {
+			const own = await sessionBoundEventSpec(db, scope.sessionId, genreId, event)
+			if (own) return { spec: own }
+		}
 		const verdict = await presetEventSpec(db, {
 			sessionId: scope?.sessionId,
 			genreId,
@@ -140,6 +203,15 @@ export async function dispatchSessionEvent(
 		/** Where a child's rows are announced — the parent's socket server, when it had one. */
 		io?: SessionIo
 		runId?: string
+		/**
+		 * The parent's progress sink and status relay, handed down (U5d
+		 * review, S4): a child's frames ride the parent's card, so the person
+		 * who pressed sees the answer being made — its stage, its statuses.
+		 */
+		sink?: SpecRunRequest["sink"]
+		onStatus?: SpecRunRequest["onStatus"]
+		/** The parent's park relay, handed down — see `SpecRunRequest.onParked`. */
+		onParked?: SpecRunRequest["onParked"]
 	}
 ): Promise<SessionEventDispatch | null> {
 	const resolved = await resolveSessionEventVerdict(
@@ -203,6 +275,9 @@ export async function dispatchSessionEvent(
 			signal: handle ? handle.controller.signal : opts.signal,
 			...(handle ? { cancelSignal: () => runRegistry.cancellation(handle) } : {}),
 			lineage: opts.lineage,
+			...(opts.sink ? { sink: opts.sink } : {}),
+			...(opts.onStatus ? { onStatus: opts.onStatus } : {}),
+			...(opts.onParked ? { onParked: opts.onParked } : {}),
 			// A run reached through a substitution says so on its own receipt.
 			// The explain surface reads it from there, which is where every other
 			// "why did the turn do that" answer already lives.
@@ -224,12 +299,22 @@ export async function dispatchSessionEvent(
 }
 
 /**
- * The receipt a cap's refusal leaves (01 §8; U5d): a run that never started,
+ * The receipt a refusal leaves (01 §8; U5d): a run that never started,
  * written as one row so the inspector shows the tree ending on a sentence
  * rather than on nothing. No nodes, no seed to replay — there was no run —
- * and `triggerSource: 'event'`, since an event asked for it.
+ * and `triggerSource: 'event'`, since an event asked for it. Written at both
+ * doors a dispatched run has (U5d review, W1): a `form-addressed` child the
+ * caps refused here, and the fire an `answer-form` commit could not make —
+ * a cap, receipted by `dispatchFires` after the answer's own row (S-b), or
+ * `fireAction`'s own refusal at the dispatch.
+ *
+ * The same row for a fire that was **stopped** before it ran or that
+ * **threw** on its way (U5d review, W-a): the answer's receipt names
+ * `firedRunId`, so a fire that leaves no row is a run the inspector cannot
+ * find. `cancelled` carries the stop's actor and reason the way the
+ * executor stamps them; a throw is a `halt` on the error's sentence.
  */
-async function refusalReceipt(
+export async function refusalReceipt(
 	db: Db,
 	opts: {
 		runId: string
@@ -238,6 +323,10 @@ async function refusalReceipt(
 		userId: number
 		lineage: RunLineage
 		reason: string
+		/** `halt` unless a stop is being recorded. */
+		outcome?: "halt" | "cancelled"
+		/** Who stopped it — set with `outcome: 'cancelled'`. */
+		cancelledBy?: string
 	}
 ): Promise<Receipt> {
 	const { loadPublished } = await import("$lib/server/pipelines/boot/bootstrap")
@@ -255,8 +344,11 @@ async function refusalReceipt(
 		depth: opts.lineage.depth,
 		startedAt: now,
 		endedAt: now,
-		outcome: "halt",
+		outcome: opts.outcome ?? "halt",
 		haltReason: opts.reason,
+		...(opts.outcome === "cancelled" && opts.cancelledBy
+			? { cancelledBy: opts.cancelledBy }
+			: {}),
 		nodes: [],
 		emitted: [],
 		consumption: { tokens: 0, nodeExecutions: 0 }

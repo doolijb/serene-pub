@@ -163,6 +163,24 @@ describe("plugin presets", () => {
 		expect(row.enabled).toBe(true)
 	})
 
+	it("resolves a locale-map label and description to en, as the catalogue's seed does (R-20, U5i)", async () => {
+		await install({
+			enabled: true,
+			manifest: manifest({
+				label: { en: "Quick", fr: "Rapide" },
+				description: { en: "Fast turns.", fr: "Tours rapides." }
+			})
+		})
+		await syncPluginPresets(db)
+		const row = await presetRow()
+		expect(row.name).toBe("Quick")
+		expect(row.description).toBe("Fast turns.")
+		// And back to the bare spelling, which is the same value.
+		await install({ enabled: true, manifest: manifest() })
+		await syncPluginPresets(db)
+		expect((await presetRow()).name).toBe("Dice Board")
+	})
+
 	it("honours a declaration that asks to be offered immediately", async () => {
 		await db
 			.delete(schema.sessionPresets)
@@ -259,7 +277,9 @@ describe("plugin presets", () => {
 		const C = await import("@serene-pub/contracts")
 		const { saveDocument } = await import("$lib/server/pipelines/boot/store")
 		const GENRE = "acme.dice:genre/board"
-		const publish = async (id: string, fn: string) =>
+		// A second declarer of one key takes its own slash name (V2: one
+		// name means one action); the bare key it shares is still two-declared.
+		const publish = async (id: string, fn: string, slash?: string) =>
 			saveDocument(
 				db as any,
 				compile(
@@ -270,10 +290,10 @@ describe("plugin presets", () => {
 							actions: [
 								{
 									key: fn,
-									function: fn,
 									genre: GENRE,
 									venue: { kind: "composer" },
-									label: { en: fn }
+									label: { en: fn },
+									...(slash ? { slash } : {})
 								}
 							]
 						}
@@ -290,7 +310,7 @@ describe("plugin presets", () => {
 		// `reroll`: one declarer. `cheat`: two. `teleport`: none.
 		await publish("acme.dice:spec/reroll", "reroll")
 		await publish("acme.dice:spec/cheat", "cheat")
-		await publish("acme.dice:spec/cheat-too", "cheat")
+		await publish("acme.dice:spec/cheat-too", "cheat", "acme.dice.cheat-too")
 
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
 		try {

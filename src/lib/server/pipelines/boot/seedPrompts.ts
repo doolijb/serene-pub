@@ -38,6 +38,7 @@ import {
 	poolKeyFor,
 	promptPoolKeyFor
 } from "$lib/server/pipelines/entities/promptPool"
+import { coreTemplateIdFor } from "$lib/server/pipelines/entities/templateIds"
 
 export interface PromptSeedResult {
 	/** `<node definition>#<slot>` — the pool, for a log line and for the tests. */
@@ -106,8 +107,15 @@ export async function seedPipelinePrompts(db: Db): Promise<PromptSeedResult[]> {
 				// fields the catalog is the authority for; `createdForSpecId`
 				// is included because it is derived from the catalog too and
 				// resolves to null on the boot before its spec is published.
+				// The template id is derived from the seed key, so it is
+				// part of the drift check for the same reason the prose is:
+				// migration 0143 backfills every install that had rows
+				// already, and this is what gives one to a row seeded before
+				// that and to a row seeded after it, identically.
+				const templateId = coreTemplateIdFor(prompt.seedKey)
 				const drifted =
 					existing.name !== prompt.name ||
+					existing.templateId !== templateId ||
 					!sameFields(
 						(existing.fields ?? {}) as Record<string, string>,
 						prompt.fields
@@ -125,6 +133,7 @@ export async function seedPipelinePrompts(db: Db): Promise<PromptSeedResult[]> {
 					.update(schema.pipelinePrompts)
 					.set({
 						name: prompt.name,
+						templateId,
 						fields: prompt.fields,
 						defaultForSpecs: prompt.defaultForSpecs,
 						createdForSpecId,
@@ -139,6 +148,7 @@ export async function seedPipelinePrompts(db: Db): Promise<PromptSeedResult[]> {
 				nodeDefinitionId: poolKeyFor(prompt.nodeType),
 				slot: prompt.slot,
 				seedKey: prompt.seedKey,
+				templateId: coreTemplateIdFor(prompt.seedKey),
 				name: prompt.name,
 				isImmutable: true,
 				fields: prompt.fields,
@@ -216,6 +226,12 @@ export async function defaultPromptFor(
 	)
 	if (owned) return owned.id
 
-	const shipped = rows.find((r) => r.isImmutable)
+	// Never a WITHDRAWN row (R19). Step 3 is the one step that picks a row
+	// nobody named, so it is the one place a disabled package's prompt could
+	// silently become a pipeline's shipped default. The row is still there and
+	// anything already pointing at it still renders; what it stops being is a
+	// new answer. `withdrawn_at` is NULL on every row that is not a plugin's,
+	// so this filter is a no-op for core.
+	const shipped = rows.find((r) => r.isImmutable && !r.withdrawnAt)
 	return shipped?.id ?? null
 }

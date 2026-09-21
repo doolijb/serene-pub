@@ -114,6 +114,24 @@ async function applyOne(client: PGlite, tag: string): Promise<void> {
 		await client.exec(stmt)
 }
 
+/**
+ * Every migration after `tag`, in journal order — what a real upgrade runs
+ * once the rename has landed. The two under test are applied by name above;
+ * the rest have to follow because the app's queries select the columns they
+ * add (U5d's `pipeline_runs.parent_run_id`, say), and a database stopped at
+ * 0135 would fail those reads for a reason that has nothing to do with the
+ * rename.
+ */
+async function applyAfter(client: PGlite, tag: string): Promise<void> {
+	const journal = JSON.parse(
+		fs.readFileSync(path.join(MIGRATIONS, "meta/_journal.json"), "utf8")
+	) as Journal
+	const from = journal.entries.find((e) => e.tag === tag)
+	if (!from) throw new Error(`no migration ${tag} in the journal`)
+	for (const e of journal.entries)
+		if (e.idx > from.idx) await applyOne(client, e.tag)
+}
+
 /** Load the fixture's rows table by table, in the order the dump wrote them. */
 async function loadFixture(
 	client: PGlite,
@@ -271,6 +289,7 @@ describe("0134 — the one-shot rename, against the pre-rename seeds", () => {
 
 		await applyOne(client, RENAME_TAG)
 		await applyOne(client, WEIGHTS_TAG)
+		await applyAfter(client, WEIGHTS_TAG)
 		db = drizzle(client, { schema }) as unknown as TestDb
 		routed.db = db
 	}, 120_000)
@@ -351,17 +370,21 @@ describe("0134 — the one-shot rename, against the pre-rename seeds", () => {
 		 * rewrite; the boot after it publishes them fresh (the last case
 		 * below sees them arrive). U5b (R-15): the five built-in writes.
 		 * U5g (R-18): the guide genre's two — its create pipeline and its
-		 * reply.
+		 * reply. U5d (R-15 *Forms*): the three answer pipelines and the
+		 * Adventure genre's Ask and Answer.
 		 */
 		const PUBLISHED_SINCE_RENAME = new Set(
 			CORE_SPECS.map((c) => c.slug).filter(
 				(slug) =>
 					slug.startsWith("core:spec/builtin-") ||
 					slug === "core:spec/create-guide" ||
-					slug === "core:spec/guide-respond"
+					slug === "core:spec/guide-respond" ||
+					slug.startsWith("core:spec/answer-form-") ||
+					slug === "core:spec/adventure-ask" ||
+					slug === "core:spec/adventure-answer"
 			)
 		)
-		expect(PUBLISHED_SINCE_RENAME.size).toBe(7)
+		expect(PUBLISHED_SINCE_RENAME.size).toBe(12)
 		const atRename = CORE_SPECS.length - PUBLISHED_SINCE_RENAME.size
 		expect(specs.length).toBe(atRename)
 		/**
@@ -387,8 +410,18 @@ describe("0134 — the one-shot rename, against the pre-rename seeds", () => {
 		 * cast carries `metadata.speaker = character:<id>` like a migrated
 		 * row (0138) — another edit already covered by its entry here, so
 		 * its pin does not move either.
+		 * U5d (R-15 *Forms*): the genre surface on the two create specs that
+		 * were here at the rename declares `form-addressed` — they join the
+		 * map at the hash they were rewritten TO.
+		 * U5d review (W9): `session-history@1` now declares the rows it
+		 * publishes (`messages@1`), and an edge's compiled shape is part of
+		 * the document — every spec reading history moved; `tool-loop`, the
+		 * one such spec not yet here, joins the map at the hash it was
+		 * rewritten TO (the pin W9 replaced).
 		 */
 		const EDITED_SINCE_RENAME: Record<string, string> = {
+			"core:spec/create-chat": "9bfdda8a4f589",
+			"core:spec/adventure-create": "1c67b7acb698cf",
 			"core:spec/respond": "19cac7b1208d4e",
 			"core:spec/adventure-respond": "1cce782246906a",
 			"core:spec/adventure-look": "11669b8b5b66fd",
@@ -397,7 +430,8 @@ describe("0134 — the one-shot rename, against the pre-rename seeds", () => {
 			"core:spec/adventure-rest": "4e32a33712802",
 			"core:spec/adventure-advance-time": "17168783bd30d0",
 			"core:spec/echo": "19cc4810162b94",
-			"core:spec/generate-image": "19338b1db2497c"
+			"core:spec/generate-image": "19338b1db2497c",
+			"core:spec/tool-loop": "1d560d3f202dd5"
 		}
 		let checked = 0
 		for (const s of specs) {
@@ -672,11 +706,15 @@ describe("0134 — the one-shot rename, against the pre-rename seeds", () => {
 				`SELECT (SELECT count(*) FROM pipeline_prompts)::text AS prompts, (SELECT count(*) FROM pipeline_context_templates)::text AS templates`
 			).then(([r]) => ({ prompts: Number(r!.prompts), templates: Number(r!.templates) }))
 		const poolsBefore = await poolCounts()
+		// Read BEFORE the boot: the keys the fixture holds, so the rows the
+		// catalog gained since the rename can be counted as they arrive.
+		const fixtureKeys = new Set(
+			(await rows<{ seed_key: string }>(client, `SELECT seed_key FROM pipeline_prompts`)).map((r) => r.seed_key)
+		)
 
 		// An install whose archive never saw the pre-rename declaration (it
 		// last booted before 0119) adopts it from the registry row at this
-		// boot. The row's `kind` now says `inlet` while its hash was taken over
-		// `input`, so the adopted material must be the one the hash names.
+		// boot, under the hash the row carries — never one recomputed here.
 		const [pre] = await rows(client, `SELECT content_hash FROM pipeline_definition_registry WHERE definition_id = 'core:inlet/user-message'`)
 		await client.query(`DELETE FROM pipeline_definition_declarations WHERE definition_id = 'core:inlet/user-message'`)
 
@@ -693,14 +731,17 @@ describe("0134 — the one-shot rename, against the pre-rename seeds", () => {
 			const hit = await rows(client, `SELECT id FROM pipeline_spec_versions WHERE canonical_hash = $1`, [r.spec_hash])
 			expect(hit.length).toBe(1)
 		}
-		// The adopted declaration sits under the pre-rename hash with the
-		// material that hash was taken over, and the new declaration beside it.
+		// The adopted declaration sits under the pre-rename hash, and the new
+		// declaration beside it. The fixture's hash was taken over the material
+		// of its own build; this build's contract material (plans/31 V6) is
+		// a different object, so the row as this build reads it is what the
+		// archive holds beside that hash — the kind the current vocabulary
+		// spells, not the one the fixture hashed.
 		const adopted = await rows(client, `SELECT source, material, entry FROM pipeline_definition_declarations WHERE definition_id = 'core:inlet/user-message' AND content_hash = $1`, [pre!.content_hash])
 		expect(adopted.length).toBe(1)
 		expect(adopted[0]!.source).toBe("adopted")
-		expect(adopted[0]!.material.kind).toBe("input")
+		expect(adopted[0]!.material.kind).toBe("inlet")
 		const { definitionContentHash } = await import("$lib/server/pipelines/boot/registrySync")
-		expect(definitionContentHash(adopted[0]!.entry as any)).toBe(pre!.content_hash)
 		const { snapshotRegistry, getDefinition } = await import("@serene-pub/sdk")
 		const [current] = await rows(client, `SELECT content_hash FROM pipeline_definition_registry WHERE definition_id = 'core:inlet/user-message'`)
 		expect(current!.content_hash).not.toBe(pre!.content_hash)
@@ -709,14 +750,21 @@ describe("0134 — the one-shot rename, against the pre-rename seeds", () => {
 
 		// The prompt and template pools: the `seed_key` rewrite (§2) exists so
 		// the boot finds every shipped prompt under its new key rather than
-		// inserting a twin into a pool that already holds the name.
-		expect(await poolCounts()).toEqual(poolsBefore)
+		// inserting a twin into a pool that already holds the name. Rows the
+		// catalog gained since the rename (U5d: the answer pipeline's and
+		// Ask's) arrive once, under keys the fixture never held.
+		const { CORE_PROMPTS } = await import("@serene-pub/core-catalog")
+		const poolsAfter = {
+			...poolsBefore,
+			prompts: poolsBefore.prompts + CORE_PROMPTS.filter((p) => !fixtureKeys.has(p.seedKey)).length
+		}
+		expect(await poolCounts()).toEqual(poolsAfter)
 
 		const second = await bootstrapPipelines(db)
 		expect(second.specs.every((s) => s.action === "present")).toBe(true)
 		expect(second.types.republished).toEqual([])
 		expect(second.types.inserted).toBe(0)
-		expect(await poolCounts()).toEqual(poolsBefore)
+		expect(await poolCounts()).toEqual(poolsAfter)
 	}, 120_000)
 
 	it("a folded session override resolves for the session through world.ts — at the owner, for every lane (W3)", async () => {

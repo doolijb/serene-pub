@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest"
 import {
 	defaultZoneLayout,
 	normalizeZoneLayout,
+	pinsOnFirstDrop,
 	resolveZone,
 	withWidget,
 	withoutWidget,
@@ -118,5 +119,39 @@ describe("normalization and edits", () => {
 		expect(layout.zones.right?.widgets).toEqual(["a", "b"])
 		layout = withoutWidget(layout, "b")
 		expect(layout.zones.right?.widgets).toEqual(["a"])
+	})
+})
+
+
+/**
+ * Ruled 2026-09-17. `defaultZoneLayout` ships Left unpinned because a fresh
+ * session has nothing on the left; somebody who has just arranged widgets into
+ * that column meant a column. The only thing that separates "shipped unpinned"
+ * from "the user unpinned this" is whether the zone held any widgets when the
+ * editor opened — you unpin a rail you can see.
+ */
+describe("pinsOnFirstDrop — the first drop takes the shipped default with it", () => {
+	it("pins a zone that was empty and unpinned (the shipped Left)", () => {
+		expect(
+			pinsOnFirstDrop({ pinned: false, hadWidgets: false })
+		).toBe(true)
+		expect(defaultZoneLayout().zones.left?.pinned).toBe(false)
+	})
+
+	it("leaves a zone the user unpinned alone — it had widgets to unpin", () => {
+		expect(pinsOnFirstDrop({ pinned: false, hadWidgets: true })).toBe(false)
+	})
+
+	it("is a no-op for a zone that is already pinned, either way", () => {
+		expect(pinsOnFirstDrop({ pinned: true, hadWidgets: false })).toBe(false)
+		expect(pinsOnFirstDrop({ hadWidgets: false })).toBe(false)
+	})
+
+	it("pinning is what turns the shipped Left from icons into a rail", () => {
+		const def = defaultZoneLayout().zones.left!
+		expect(resolveZone("left", def, 1440).mode).toBe("icons")
+		expect(resolveZone("left", { ...def, pinned: true }, 1440).mode).toBe(
+			"rail"
+		)
 	})
 })

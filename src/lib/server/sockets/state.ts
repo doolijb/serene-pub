@@ -67,6 +67,7 @@ import {
 	pendingProposals,
 	setValue,
 	StateRefusal,
+	supersededProposals,
 	transferPossession
 } from "$lib/server/state/write"
 
@@ -124,10 +125,22 @@ async function guarded<T>(
 	}
 }
 
+/**
+ * The rows the widget draws: the pending lines, and the **superseded** ones
+ * (U5f) — an accept that found the slot moved, kept under its message with
+ * no buttons so the ledger says why the model's ask never landed. Accepted
+ * and rejected rows are not listed: an accepted one became a ledger line,
+ * a rejected one changed nothing.
+ */
 const proposalRows = async (
 	sessionId: number
 ): Promise<Sockets.State.ProposalRow[]> =>
-	(await pendingProposals(db, sessionId)).map(toProposalRow)
+	[
+		...(await pendingProposals(db, sessionId)),
+		...(await supersededProposals(db, sessionId))
+	]
+		.sort((a, b) => a.id - b.id)
+		.map(toProposalRow)
 
 const toProposalRow = (row: any): Sockets.State.ProposalRow => ({
 	id: row.id,
@@ -137,6 +150,7 @@ const toProposalRow = (row: any): Sockets.State.ProposalRow => ({
 	payload: row.payload ?? {},
 	status: row.status,
 	proposedBy: row.proposedBy ?? "",
+	baseVersion: row.baseVersion ?? null,
 	createdAt: new Date(row.createdAt).toISOString()
 })
 
@@ -732,10 +746,14 @@ export const stateDecide: Handler<
 		const outcome = await guarded(emitToUser, "state:decide", () =>
 			decideProposal(db, Number(params.proposalId), !!params.accept)
 		)
-		const res = {
+		// `superseded` (U5f) is an accept that applied nothing: the slot
+		// moved since the proposal's base. `movedSlots` names it, and the
+		// row comes back in `proposals` collapsed for the list to draw.
+		const res: Sockets.State.Decide.Response = {
 			sessionId,
 			proposalId: Number(params.proposalId),
 			status: outcome.status,
+			...(outcome.movedSlots ? { movedSlots: outcome.movedSlots } : {}),
 			proposals: await proposalRows(sessionId),
 			state: await stateFor(db, sessionId)
 		}

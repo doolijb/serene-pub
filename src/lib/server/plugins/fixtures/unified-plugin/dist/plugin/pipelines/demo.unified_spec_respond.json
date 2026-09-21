@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "id": "demo.unified:spec/respond",
+  "version": "1.0.0",
+  "input": {
+    "genre": "demo.unified:genre/tally",
+    "event": "core:event/message-respond@1"
+  },
+  "includes": [],
+  "presets": [],
+  "nodes": [
+    {
+      "key": "input",
+      "kind": "inlet",
+      "definitionId": "core:inlet/user-message",
+      "definitionVersion": 1,
+      "config": {},
+      "position": 0
+    },
+    {
+      "key": "tally",
+      "kind": "task",
+      "definitionId": "demo.unified:task/tally",
+      "definitionVersion": 1,
+      "config": {
+        "text": {
+          "__ref": "data",
+          "node": "input",
+          "port": "text"
+        }
+      },
+      "position": 1
+    }
+  ],
+  "edges": [
+    {
+      "from": "input",
+      "fromPort": "text",
+      "to": "tally",
+      "toPort": "text",
+      "shape": "core:shape/text@1",
+      "streaming": false
+    }
+  ],
+  "clauses": []
+}

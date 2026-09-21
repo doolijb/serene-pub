@@ -123,6 +123,35 @@ export async function readWidgetSettings(
 }
 
 /**
+ * The widget ids this user ALREADY has a row for in one session.
+ *
+ * The exemption the seating gate is held to (ruled 2026-09-17): a disable
+ * deletes nothing, so a key that is already stored is written back whatever the
+ * session can seat today. A plugin turned off stops being offered; the
+ * arrangement a person made under it waits for the re-enable, exactly as
+ * `announcedWidgetIds` leaves a style already made alone.
+ *
+ * Slugs rather than values, because the gate asks only whether a row exists —
+ * `readWidgetSettings` next door is for the reader that wants what is in them,
+ * and it drops an empty row this one would still report.
+ */
+export async function storedWidgetSlugs(
+	sessionId: number,
+	userId: number
+): Promise<Set<string>> {
+	const rows = await db
+		.select({ widgetSlug: schema.widgetSettings.widgetSlug })
+		.from(schema.widgetSettings)
+		.where(
+			and(
+				eq(schema.widgetSettings.sessionId, sessionId),
+				eq(schema.widgetSettings.userId, userId)
+			)
+		)
+	return new Set(rows.map((r) => r.widgetSlug))
+}
+
+/**
  * Replace this user's settings for one session with `next`.
  *
  * A widget whose deviations are empty gets no row: the caller has already

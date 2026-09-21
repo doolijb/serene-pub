@@ -156,7 +156,7 @@ describe("the option payload", () => {
 		// boundary in a hyphenated name splits it: `generate-image` contains
 		// `generate`, which the respond spec happens to use as a node key. Same
 		// exemption class as `mode`: legitimately public, not derived from a node.
-		const PUBLIC_IDS = new Set(["mode", "function", "specSlug"])
+		const PUBLIC_IDS = new Set(["mode", "key", "specSlug"])
 		// `prompt` is the prompts-ref option's designed payload field (the
 		// selected prompt row riding along for inline editing) — a property
 		// the panel always shipped in production, tripped here only because

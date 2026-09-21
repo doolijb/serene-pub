@@ -113,6 +113,11 @@
 	const when = (iso: string) => new Date(iso).toLocaleString()
 
 	const culled = $derived(notices.filter((n) => n.kind === "culled"))
+	const unbound = $derived(notices.filter((n) => n.kind === "unbound"))
+
+	/** The badge word per kind — what happened, in one word. */
+	const badge = (kind: Sockets.Pipelines.ConfigNotice["kind"]) =>
+		kind === "culled" ? "removed" : kind === "unbound" ? "cannot run" : "added"
 </script>
 
 {#if notices.length}
@@ -143,6 +148,10 @@
 				{culled.length === 1 ? "its value was" : "their values were"}
 				removed. What {culled.length === 1 ? "it" : "they"} held is kept
 				below.
+			{:else if unbound.length}
+				This pipeline places {unbound.length === 1 ? "a node" : "nodes"}
+				this build does not run. A run stops there until the node is
+				bound or taken out of the pipeline.
 			{:else}
 				New settings arrived at the values the pipeline ships.
 			{/if}
@@ -153,11 +162,11 @@
 					class="preset-tonal-surface flex flex-wrap items-center gap-2 rounded p-2 text-sm"
 				>
 					<span
-						class="{n.kind === 'culled'
+						class="{n.kind === 'culled' || n.kind === 'unbound'
 							? 'preset-tonal-warning'
 							: 'preset-tonal-surface'} rounded-full px-2 py-0.5 text-[0.68rem]"
 					>
-						{n.kind === "culled" ? "removed" : "added"}
+						{badge(n.kind)}
 					</span>
 					<span class="font-medium">{n.label}</span>
 					{#if n.kind === "culled"}

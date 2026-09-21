@@ -40,7 +40,7 @@ import {
 	declareInterest,
 	requestWithInterest
 } from "$lib/client/sockets/interest.svelte"
-import { renderStatusText, type StatusText } from "@serene-pub/sdk"
+import { localeMapOf, renderStatusText, type StatusText } from "@serene-pub/sdk"
 
 const CACHE_PREFIX = "sp-i18n-"
 
@@ -137,7 +137,8 @@ export function t(source: string): string {
 /**
  * A run's status (R-19) as the person reads it, in their language.
  *
- * The text is a locale map with `{vars}` — *{speaker} is typing* with
+ * The text is display text with `{vars}` — a string or a locale map (R-20;
+ * a bare string is `en`) — *{speaker} is typing* with
  * `speaker: "Jasmine"` — and the client is where the locale is resolved. Two
  * roads, in order: a locale the author shipped for this language is used as
  * written; otherwise the `en` TEMPLATE goes through `t()` — placeholders
@@ -147,9 +148,10 @@ export function t(source: string): string {
  */
 export function statusText(status: StatusText | null | undefined): string {
 	if (!status) return ""
-	if (status.i18n[language] !== undefined)
-		return renderStatusText(status, language)
-	return renderStatusText({ ...status, i18n: { en: t(status.i18n.en) } })
+	// A bare string is `en` (R-20): read both spellings as the map.
+	const i18n = localeMapOf(status.i18n)
+	if (i18n[language] !== undefined) return renderStatusText(status, language)
+	return renderStatusText({ ...status, i18n: { en: t(i18n.en) } })
 }
 
 /**

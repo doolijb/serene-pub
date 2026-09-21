@@ -748,7 +748,9 @@ async function noticesFor(
 			n.label ??
 			(n.kind === "culled"
 				? "A setting this version removed"
-				: "A setting this version added"),
+				: n.kind === "unbound"
+					? "A node this build does not run"
+					: "A setting this version added"),
 		// The address is not sent. `nodeKey` is topology (05 §0a) and the label
 		// is the part a person needs; the id is what a dismissal names.
 		...(n.previousValue != null ? { previousValue: n.previousValue } : {}),

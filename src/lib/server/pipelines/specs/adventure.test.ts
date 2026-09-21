@@ -287,7 +287,7 @@ describe("the preset and the prompts", () => {
 	const preset = () =>
 		CORE_PRESETS.find((p) => p.slug === "adventure-default")!
 
-	it("binds both required events and includes the three actions", () => {
+	it("binds both required events and the form answer, and includes the five actions", () => {
 		const p = preset()
 		expect(p.genre).toBe(ADVENTURE_GENRE_ID)
 		expect(p.bindings[sessionEvents.sessionCreated]?.spec).toBe(
@@ -296,11 +296,19 @@ describe("the preset and the prompts", () => {
 		expect(p.bindings[sessionEvents.messageRespond]?.spec).toBe(
 			ADVENTURE_RESPOND_SPEC_ID
 		)
-		// By identity (W-A): the declaration, not the spec.
+		// The optional form event (R-15 *Forms*; U5d), bound so a question put
+		// to an AI-portrayed cast member is answered out of the box.
+		expect(p.bindings[sessionEvents.formAddressed]?.spec).toBe(
+			"core:spec/answer-form-adventure"
+		)
+		// By identity (W-A): the declaration, not the spec. Ask and Answer are
+		// the worked form (U5d).
 		expect(p.actions?.include).toEqual([
 			`${ADVENTURE_LOOK_SPEC_ID}#look`,
 			`${ADVENTURE_REST_SPEC_ID}#rest`,
-			`${ADVENTURE_ADVANCE_TIME_SPEC_ID}#advance-time`
+			`${ADVENTURE_ADVANCE_TIME_SPEC_ID}#advance-time`,
+			"core:spec/adventure-ask#ask",
+			"core:spec/adventure-answer#answer"
 		])
 	})
 
@@ -408,8 +416,10 @@ describe("the Adventure layout", () => {
 		// Unpinned: an icon strip that pops over the conversation, which is what
 		// "collapsed to the rail" means.
 		expect(l.zoneLayout.zones.left.pinned).toBe(false)
+		// The middle zone is world-state over the one conversation widget:
+		// the composer is a setting of `messages`, not a widget of its own.
 		const middle = l.widgetGrid.widgets.map((w: any) => w.id)
-		expect(middle).toEqual(["world-state", "messages", "composer"])
+		expect(middle).toEqual(["world-state", "messages"])
 		expect(l.widgetSettings["scene-portraits"].bars).toBe(true)
 	})
 })
@@ -427,9 +437,12 @@ describe("parity", () => {
 		// 2026-09-16 (R-7 P5, U3b: the lore pool concatenates the
 		// conversation's `band` port), and once more on 2026-09-16 (U5a,
 		// R-18 (3): the turn strategy takes the inlet's `speaker` reference
-		// beside the bare id) — none by this genre.
+		// beside the bare id), and once more on 2026-09-17 (U5d review W9:
+		// `session-history@1` declares the rows it publishes, `messages@1`,
+		// and an edge's compiled shape is part of the document — every spec
+		// reading history moved) — none by this genre.
 		// (was "18917086c3f34", then "3f0e84937c657", then "19cac7b1208d4e",
-		//  then "1ace29594a6283")
-		expect(canonicalHash(built(RESPOND_SPEC_ID))).toBe("1c503cc437da52")
+		//  then "1ace29594a6283", then "1c503cc437da52")
+		expect(canonicalHash(built(RESPOND_SPEC_ID))).toBe("c0b92cae6b39d")
 	})
 })

@@ -10,6 +10,7 @@
  */
 
 import { eq } from "drizzle-orm"
+import { i18nFindings } from "@serene-pub/sdk"
 import { plugins, pluginHookInvocations } from "$lib/server/db/schema"
 import { hookSettingsFor } from "./settingsHost"
 import type { InvocationRecord, PluginDescriptor } from "./SandboxManager"
@@ -86,6 +87,24 @@ export async function loadEnabledPlugins(db: Db): Promise<PluginDescriptor[]> {
 	return rows.map(rowToDescriptor)
 }
 
+/**
+ * Every installed plugin's id and stored manifest — what its declarations are
+ * read back from at boot (`pluginDefinitions.ts`).
+ *
+ * Installed rather than enabled: the registry rows a package published exist
+ * from the moment it was installed, and a declaration this process does not
+ * hold makes a spec that names it halt on `unknown type` rather than on the
+ * plugin being switched off, which is the one sentence that would send an
+ * administrator looking in the wrong place.
+ */
+export async function loadPluginManifests(
+	db: Db
+): Promise<Array<{ pluginId: string; manifest: unknown }>> {
+	return db
+		.select({ pluginId: plugins.pluginId, manifest: plugins.manifest })
+		.from(plugins)
+}
+
 /** Append one invocation to the log. Denormalized identity — no FK to plugins. */
 export async function writeInvocation(
 	db: Db,
@@ -133,7 +152,30 @@ export interface InstallInput {
  * `enabled=false` so the new code cannot run under the old consent. Callers
  * must therefore re-enable after an upgrade — that re-enable is the re-review.
  */
+/**
+ * The install's half of R-20 (U5i): a manifest's `name` and `description` are
+ * display text — a string or a locale map with `en`, never blank. The SDK's
+ * `defineExtension` and the packager refuse these where the author is; the
+ * install repeats the check over the manifest it is handed, because a bundle
+ * may have been packaged against an older SDK and the plugin list shows this
+ * name. Empty when the manifest carries neither or both are sound.
+ */
+export function manifestDisplayTextFindings(
+	manifest: Record<string, unknown> | null | undefined
+): string[] {
+	if (!manifest || typeof manifest !== "object") return []
+	return [
+		...i18nFindings(manifest.name, "manifest.name"),
+		...i18nFindings(manifest.description, "manifest.description")
+	]
+}
+
 export async function upsertPlugin(db: Db, input: InstallInput): Promise<void> {
+	const findings = manifestDisplayTextFindings(input.manifest)
+	if (findings.length)
+		throw new Error(
+			`plugin '${input.pluginId}' cannot be installed: ${findings.join("; ")}`
+		)
 	const backend = input.backend ?? input.backends[0] ?? "quickjs"
 	// Annotated: the `["quickjs"]` fallback widens to `string[]` on its own,
 	// and `backends` is an enum-typed array column.

@@ -2,8 +2,8 @@
  * The Move tab's SCREEN-SIZE SIMULATOR (P5, ruled 2026-08-30) — pure geometry.
  *
  * The layout editor draws its three zones as a ¼ | ½ | ¼ split of the width it
- * is given, deliberately identical in both width modes (see the `.edit-center`
- * / `.edit-margin` comments in SessionLayout: "This keeps the edit screen
+ * is given, deliberately identical in both width modes (see the `.edit-canvas`
+ * / `.edit-center` comments in SessionLayout: "This keeps the edit screen
  * identical in both modes"). This module is the ONE implementation of that
  * split — the editor calls it with the real viewport width, the simulator calls
  * it with a tier's width — so a previewed tier can never drift from what the
@@ -22,12 +22,11 @@
  * The live side zones resolve their width and their COLUMN COUNT from a rule
  * ladder (`DEFAULT_SIDE_RULES` in ./schema) — and from 2400px up that ladder
  * turns each rail into a 344px TWO-column grid. The editor's ¼ | ½ | ¼ does not
- * follow it, and deliberately: `.edit-margin` is the app shell's own reclaimed
- * margin ("Left/Right zones ride in the site's reclaimed margins … same
- * geometry as the live margin rails"), i.e. the box a rail rides IN, not the
- * rail. Widening it to the ladder's footprint would draw an edit margin wider
- * than the margin the shell actually reserves, and at a real ultrawide the
- * fixed `.edit-margin` would then sit on top of the chat.
+ * follow it, and deliberately: a SIDE TRACK of `.edit-canvas` is the app
+ * shell's own reclaimed margin — the box a rail rides IN, not the rail.
+ * Widening it to the ladder's footprint would draw an edit margin wider than
+ * the margin the shell actually reserves, so at a real ultrawide the editor
+ * would promise the middle a width the session never gives it.
  *
  * So: the SPLIT governs the frame, the LADDER governs the columns. That is why
  * `sideColumns` is reported here (read off the ladder through `resolveZone`,
@@ -47,13 +46,14 @@ import type { WidgetTier } from "$lib/shared/widgets/types"
 export const EDIT_SIDE_FRACTION = 0.25
 
 /**
- * Non-grid pixels inside one editor zone box, both edges summed: the
- * `.edit-margin` padding (0.4rem × 2), the `.zgrid` border (1.5px × 2) and the
- * `.zgrid-body` padding (0.4rem × 2). Only used to answer "can this margin hold
- * a single cell at all?" — the exact column count is still derived by
+ * Non-grid pixels inside one editor zone box, both edges summed: the `.zgrid`
+ * border (1.5px × 2 = 3) and the `.zgrid-body` padding (0.4rem × 2 = 12.8).
+ * That is the whole of it — `.edit-canvas`'s own 0.4rem gutter is OUTSIDE the
+ * side track, not inside the zone. Only used to answer "can this margin hold a
+ * single cell at all?" — the exact column count is still derived by
  * `GridStackZone` from its own measured box.
  */
-export const EDIT_ZONE_CHROME_PX = 29
+export const EDIT_ZONE_CHROME_PX = 16
 
 /**
  * The width previewed for each tier. Cozy/roomy/wide preview at the width where

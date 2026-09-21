@@ -1,8 +1,13 @@
 import { describe, expect, test } from "vitest"
 import {
-	filterIndex,
+	countConnections,
+	filterConnections,
+	foldManagedImage,
 	indexTotals,
+	isCustomOpenAiPreset,
+	needsAttention,
 	parseIndexFilter,
+	servesCapability,
 	type IndexConnection
 } from "./connectionIndexFilter"
 
@@ -73,88 +78,139 @@ const rows: IndexConnection[] = [
 const opts = {
 	query: "",
 	filter: "all" as const,
-	isDefault: (c: number, m: number) => c === 1 && m === 11,
-	serviceLabel: (t: string | null | undefined) =>
-		t === "ollama"
+	serviceLabel: (c: IndexConnection) =>
+		c.type === "ollama"
 			? "Ollama"
-			: t === "openai"
-				? "OpenAI Session"
+			: c.type === "openai"
+				? (c.preset ?? "OpenAI Session")
 				: "Llama.cpp"
 }
 
-describe("filterIndex — the one filter", () => {
-	test("all shows every endpoint with every model, empty endpoints included", () => {
-		const out = filterIndex(rows, opts)
-		expect(out.map((g) => [g.connection.id, g.models.length])).toEqual([
-			[1, 3],
-			[2, 1],
-			[3, 0]
-		])
+const ids = (out: readonly IndexConnection[]) => out.map((c) => c.id)
+
+describe("filterConnections — the unit is the connection", () => {
+	test("all keeps every connection, including one with no models", () => {
+		expect(ids(filterConnections(rows, opts))).toEqual([1, 2, 3])
 	})
 
-	test("defaults keeps only models a default points at, and drops endpoints left empty", () => {
-		const out = filterIndex(rows, { ...opts, filter: "defaults" })
+	test("attention keeps a failed listing and a connection with a missing model", () => {
 		expect(
-			out.map((g) => [g.connection.id, g.models.map((m) => m.id)])
-		).toEqual([[1, [11]]])
+			ids(filterConnections(rows, { ...opts, filter: "attention" }))
+		).toEqual([1, 2])
 	})
 
-	test("attention keeps missing models and endpoints whose listing failed", () => {
-		const out = filterIndex(rows, { ...opts, filter: "attention" })
-		expect(
-			out.map((g) => [g.connection.id, g.models.map((m) => m.id)])
-		).toEqual([
-			[1, [13]],
-			[2, [21]]
-		])
+	test("a local file that failed to download needs attention too", () => {
+		const onnx: IndexConnection = {
+			id: 9,
+			name: "Embeddings",
+			type: "local_onnx_embeddings",
+			baseUrl: null,
+			notes: null,
+			modelsSync: { at: null, error: null },
+			models: [
+				{
+					id: 91,
+					name: "bge-small",
+					model: "bge-small",
+					enabled: true,
+					missingSince: null,
+					local: { state: "error" }
+				}
+			]
+		}
+		expect(needsAttention(onnx)).toBe(true)
+		// A model somebody switched off is a choice, not a fault.
+		expect(needsAttention(rows[2])).toBe(false)
 	})
 
-	test("a capability keeps the models that may serve it", () => {
-		const out = filterIndex(rows, {
-			...opts,
-			filter: "cap:text->embedding"
-		})
+	test("a preset-less OpenAI-compatible row is the custom one", () => {
+		expect(isCustomOpenAiPreset(null)).toBe(true)
+		expect(isCustomOpenAiPreset(undefined)).toBe(true)
+		expect(isCustomOpenAiPreset("")).toBe(true)
+		expect(isCustomOpenAiPreset("openrouter")).toBe(false)
+	})
+
+	test("a capability keeps a connection with at least one model that serves it", () => {
 		expect(
-			out.map((g) => [g.connection.id, g.models.map((m) => m.id)])
-		).toEqual([[1, [12]]])
+			ids(
+				filterConnections(rows, {
+					...opts,
+					filter: "cap:text->embedding"
+				})
+			)
+		).toEqual([1])
+		expect(servesCapability(rows[0], "text->text")).toBe(true)
+		expect(servesCapability(rows[1], "text->text")).toBe(false)
+	})
+
+	test("defaults narrows nothing — it is a mode, not a predicate", () => {
+		expect(
+			ids(filterConnections(rows, { ...opts, filter: "defaults" }))
+		).toEqual([1, 2, 3])
 	})
 })
 
-describe("filterIndex — search", () => {
-	test("matches a model by name or identifier and keeps only that model", () => {
-		const out = filterIndex(rows, { ...opts, query: "nomic-embed-TEXT" })
+describe("filterConnections — search", () => {
+	test("a model's name or identifier keeps its whole connection", () => {
 		expect(
-			out.map((g) => [g.connection.id, g.models.map((m) => m.id)])
-		).toEqual([[1, [12]]])
+			ids(filterConnections(rows, { ...opts, query: "nomic-embed-TEXT" }))
+		).toEqual([1])
 	})
 
-	test("matches an endpoint by name, note, service or host and keeps all its models", () => {
-		for (const query of ["fast box", "ollama (local)", "11434"]) {
-			const out = filterIndex(rows, { ...opts, query })
-			expect(out.map((g) => [g.connection.id, g.models.length])).toEqual([
-				[1, 3]
+	test("matches a connection by name, note, service or host", () => {
+		for (const query of ["fast box", "ollama (local)", "11434"])
+			expect(ids(filterConnections(rows, { ...opts, query }))).toEqual([
+				1
 			])
-		}
-		// The service LABEL, not the type id.
-		const byService = filterIndex(rows, {
-			...opts,
-			query: "openai session"
-		})
-		expect(byService.map((g) => g.connection.id)).toEqual([2])
+		expect(
+			ids(filterConnections(rows, { ...opts, query: "openai session" }))
+		).toEqual([2])
+	})
+
+	test("a preset's name is what somebody types to find that connection", () => {
+		const presetRows = [{ ...rows[1], baseUrl: null, preset: "openrouter" }]
+		expect(
+			ids(filterConnections(presetRows, { ...opts, query: "openrouter" }))
+		).toEqual([2])
 	})
 
 	test("never widens what the filter narrowed", () => {
-		const out = filterIndex(rows, {
-			...opts,
-			filter: "cap:text->text",
-			query: "nomic"
-		})
-		expect(out).toEqual([])
+		expect(
+			filterConnections(rows, {
+				...opts,
+				filter: "cap:text->embedding",
+				query: "openrouter"
+			})
+		).toEqual([])
+	})
+})
+
+describe("countConnections", () => {
+	test("counts what each filter row would keep, ignoring the query", () => {
+		expect(countConnections(rows, "all")).toBe(3)
+		expect(countConnections(rows, "attention")).toBe(2)
+		expect(countConnections(rows, "cap:text->text")).toBe(1)
+		expect(countConnections(rows, "defaults")).toBe(0)
+	})
+})
+
+describe("foldManagedImage", () => {
+	const isText = (t: string | null | undefined) => t === "koboldcpp_managed"
+	const isImage = (t: string | null | undefined) =>
+		t === "koboldcpp_managed_image"
+	const managed: IndexConnection[] = [
+		{ ...rows[2], id: 4, type: "koboldcpp_managed" },
+		{ ...rows[2], id: 5, type: "koboldcpp_managed_image" }
+	]
+
+	test("drops the image row when the text row is there", () => {
+		expect(ids(foldManagedImage(managed, isText, isImage))).toEqual([4])
 	})
 
-	test("an empty endpoint matches by its own fields under all", () => {
-		const out = filterIndex(rows, { ...opts, query: "empty" })
-		expect(out.map((g) => g.connection.id)).toEqual([3])
+	test("keeps a lone image row — a connection nothing can reach is worse", () => {
+		expect(ids(foldManagedImage([managed[1]], isText, isImage))).toEqual([
+			5
+		])
 	})
 })
 

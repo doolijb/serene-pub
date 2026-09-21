@@ -12,6 +12,12 @@
 		/** Marks the tab with a dot: something inside its panel needs
 		 *  attention while another panel is the one on show. */
 		hasError?: boolean
+		/** Marks the tab with an ember dot: something inside its panel is
+		 *  happening — a download in flight — while another panel is on show.
+		 *  A state, not a fault, so it is `warning` and says "in progress"
+		 *  rather than "has an error". Ignored when `hasError` is set: one
+		 *  signal per tab, and a fault outranks a state. */
+		hasActivity?: boolean
 	}
 </script>
 
@@ -121,6 +127,12 @@
 						aria-hidden="true"
 					></span>
 					<span class="sr-only">(has an error)</span>
+				{:else if tab.hasActivity}
+					<span
+						class="bg-warning-500 absolute -top-0.5 -right-2 size-1.5 rounded-full"
+						aria-hidden="true"
+					></span>
+					<span class="sr-only">(in progress)</span>
 				{/if}
 			</span>
 		</button>

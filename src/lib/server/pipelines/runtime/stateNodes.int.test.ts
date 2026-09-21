@@ -114,13 +114,26 @@ async function world() {
 			content: "Green with age."
 		})
 		.returning()
+	// ⚠ The message is VERITY'S, and that is load-bearing under the turn lock
+	// (R9): a change to a cast member anchors to that character's own latest
+	// reply. A message with no speaker would leave her anchor null — which is
+	// the legitimate before-her-first-reply case, tested in `write.int.test.ts`
+	// — and nothing here would be filed against a message at all.
 	const [legacy] = await testDb
 		.insert(schema.sessionMessages)
-		.values({ sessionId: session.id, role: "assistant", content: "…" })
+		.values({
+			sessionId: session.id,
+			role: "assistant",
+			characterId: verity.id,
+			content: "…"
+		})
 		.returning()
-	await testDb
-		.insert(schema.messages)
-		.values({ id: legacy.id, sessionId: session.id, role: "assistant" })
+	await testDb.insert(schema.messages).values({
+		id: legacy.id,
+		sessionId: session.id,
+		characterId: verity.id,
+		role: "assistant"
+	})
 	return { user, verity, lorebook, session, key, message: legacy }
 }
 
@@ -443,4 +456,129 @@ describe("the three tools", () => {
 			"take_item"
 		])
 	})
+})
+
+/**
+ * R-15 *Staleness and order* at the nodes (plans/30 U5f): the state query
+ * publishes `version`; `resolve-state-changes` passes `base` through onto
+ * every change; `set-state` in `apply` mode refuses a delta whose slot moved
+ * past its base onto the `refused` port and applies the rest, and in
+ * `propose` mode stamps the base on the proposal.
+ */
+describe("R-15 · staleness and order at the nodes (U5f)", () => {
+	test("session-state publishes the version on its own port", async () => {
+		declareSlots()
+		const w = await world()
+		const { setValue } = await import("$lib/server/state/write")
+		const { stateFor } = await import("$lib/server/state/resolve")
+		await setValue(
+			testDb as unknown as Db,
+			{ sessionId: w.session.id, updatedBy: "user" },
+			{ owner: { kind: "session_cast", id: w.verity.id }, slotId: HP, value: 14 }
+		)
+		const query = await node("core:query/session-state@1")
+		const out: any = await query({ scope: { sessionId: w.session.id } }, {
+			read: async (_t: string, q: any) =>
+				await stateFor(testDb as unknown as Db, q.sessionId)
+		} as any)
+		expect(out.value.version).toBe(1)
+		expect(out.value.state.version).toBe(1)
+	}, 60_000)
+
+	test("resolve-state-changes carries base onto every change it resolves", async () => {
+		declareSlots()
+		const w = await world()
+		const resolve = await node("core:query/resolve-state-changes@1")
+		const out: any = await resolve(
+			{
+				scope: { sessionId: w.session.id },
+				base: 7,
+				changes: [
+					{ owner: w.verity.name, slot: "hp", value: "3" },
+					{ owner: w.verity.name, entryId: w.key.id, delta: 1 }
+				]
+			},
+			{
+				// The cast, as the host publishes it for `ownerFor`.
+				read: async () => [
+					{ character: { id: w.verity.id, name: w.verity.name } }
+				]
+			} as any
+		)
+		expect(out.value.refused).toEqual([])
+		expect(out.value.changes).toHaveLength(2)
+		expect(out.value.changes.every((c: any) => c.base === 7)).toBe(true)
+		expect(out.value.changes.some((c: any) => c.entryId === w.key.id)).toBe(true)
+		// No base wired: none is invented.
+		const bare: any = await resolve(
+			{
+				scope: { sessionId: w.session.id },
+				changes: [{ owner: w.verity.name, slot: "hp", value: "4" }]
+			},
+			{
+				read: async () => [
+					{ character: { id: w.verity.id, name: w.verity.name } }
+				]
+			} as any
+		)
+		expect(bare.value.changes[0].base).toBeUndefined()
+	}, 60_000)
+
+	test("apply with a base behind: a moved slot lands on refused with the versions, untouched slots apply; propose stamps the base", async () => {
+		declareSlots()
+		const w = await world()
+		const { applyChange } = await import("$lib/server/state/write")
+		const db = testDb as unknown as Db
+		const verity = { kind: "session_cast" as const, id: w.verity.id }
+		const user = { sessionId: w.session.id, updatedBy: "user" }
+		await applyChange(db, user, { owner: verity, slotId: HP, value: 19 }) // v1 — what the run read
+		await applyChange(db, user, { owner: verity, slotId: HP, value: 18 }) // v2 — hp moved since
+
+		const setState = await node("core:task/set-state@1", "run-9")
+		const out: any = await setState(
+			{
+				scope: { sessionId: w.session.id },
+				params: { mode: "apply" },
+				base: 1,
+				changes: [
+					{ owner: verity, slotId: HP, value: 5 },
+					{ owner: verity, entryId: w.key.id, delta: 1 }
+				]
+			},
+			{} as any
+		)
+		expect(out.value.applied).toHaveLength(1)
+		expect(out.value.refused).toEqual([
+			"hp changed since this run read it (v1 → v2); resolve-state-changes must rebase on the next turn"
+		])
+		expect(out.value.main.refused).toEqual(out.value.refused)
+		// A change carrying its own base keeps it over the node's.
+		const own: any = await setState(
+			{
+				scope: { sessionId: w.session.id },
+				params: { mode: "apply" },
+				base: 1,
+				changes: [{ owner: verity, slotId: HP, value: 5, base: 3 }]
+			},
+			{} as any
+		)
+		expect(own.value.applied).toHaveLength(1)
+		expect(own.value.refused).toEqual([])
+
+		// Propose: the base rides the row.
+		const proposed: any = await setState(
+			{
+				scope: { sessionId: w.session.id },
+				base: 2,
+				changes: [{ owner: verity, slotId: HP, value: 7 }]
+			},
+			{} as any
+		)
+		expect(proposed.value.proposed).toHaveLength(1)
+		const [row] = await testDb
+			.select({ baseVersion: schema.stateProposals.baseVersion })
+			.from(schema.stateProposals)
+			.where(eq(schema.stateProposals.id, proposed.value.proposed[0]))
+		expect(row!.baseVersion).toBe(2)
+	}, 60_000)
 })

@@ -28,24 +28,31 @@
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { isKoboldCppManagedType } from "$lib/shared/utils/connectionServiceItems"
 
-/** A manager companion panel, as `panelsCtx.openPanel` keys it. */
+/**
+ * A runtime this pub RUNS, whose own view owns this endpoint's models.
+ *
+ * `panel` keeps its name and its two values — they are the manager kinds
+ * `enableManager` takes — but it is no longer a `panelsCtx.openPanel` key:
+ * the managers folded into their connection with the 2026-09-17 ruling (R2),
+ * so the door it opens is that connection's view.
+ */
 export interface ModelManager {
 	panel: "ollama" | "koboldcpp"
 	label: string
 }
 
-/** The manager that owns this endpoint's models, or null. */
+/** The runtime that owns this endpoint's models, or null. */
 export function managerFor(
 	type: string | null | undefined
 ): ModelManager | null {
 	if (!type) return null
 	if (isKoboldCppManagedType(type))
-		return { panel: "koboldcpp", label: "KoboldCPP manager" }
+		return { panel: "koboldcpp", label: "KoboldCPP" }
 	if (
 		type === CONNECTION_TYPE.OLLAMA ||
 		type === CONNECTION_TYPE.OLLAMA_EMBEDDINGS
 	)
-		return { panel: "ollama", label: "Ollama manager" }
+		return { panel: "ollama", label: "Ollama" }
 	return null
 }
 
@@ -82,7 +89,7 @@ export function modelsSourceHint(
 ): string | null {
 	const manager = managerFor(type)
 	if (manager)
-		return `Models are pulled and removed in the ${manager.label}; this list follows it.`
+		return `Models are downloaded and removed in the ${manager.label} connection; this list follows it.`
 	if (isLocalOnnxType(type))
 		return "Models come from the recommended list and anything added by Hugging Face id. Download one to this machine, then make it active."
 	return null

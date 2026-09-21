@@ -42,12 +42,19 @@ export interface RunArtifact {
 	/**
 	 * Which table the id belongs to.
 	 *
-	 * Five, because five producers exist today — `session` arrived with the
-	 * branch built-in (2026-09-16). A sixth is added when a sixth producer
-	 * is — a vocabulary entry nothing writes is a control with no effect
-	 * wearing a contract.
+	 * Six, because six producers exist — `session` arrived with the branch
+	 * built-in (2026-09-16) and `lore_link` with the link outlet (L2,
+	 * 2026-09-17). A seventh is added when a seventh producer is — a
+	 * vocabulary entry nothing writes is a control with no effect wearing a
+	 * contract.
 	 */
-	kind: "message" | "file" | "variant" | "lore_entry" | "session"
+	kind:
+		| "message"
+		| "file"
+		| "variant"
+		| "lore_entry"
+		| "lore_link"
+		| "session"
 	/**
 	 * The row's id in that table.
 	 *

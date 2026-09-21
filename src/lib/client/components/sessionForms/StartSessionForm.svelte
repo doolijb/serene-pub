@@ -1,9 +1,10 @@
 <script lang="ts">
 	/**
-	 * Start a session: the first screen, four answers down one column.
+	 * Start a session: the first screen, a few answers down one column.
 	 *
 	 * Genre, then an admin-enabled preset of that genre, then who is in it,
-	 * then a name (ruled 2026-09-10). A step with one option answers itself and
+	 * then — for a genre whose shape has the capability — a lorebook, then a
+	 * name (ruled 2026-09-10). A step with one option answers itself and
 	 * shows as its summary line; an answered step collapses to the same line
 	 * with a Change action. Everything else a session has is edited afterwards
 	 * in the edit form.
@@ -66,6 +67,9 @@
 	let characters: Sockets.Characters.List.Response["characterList"] = $state(
 		[]
 	)
+	let lorebookList: Sockets.Lorebooks.List.Response["lorebookList"] = $state(
+		[]
+	)
 	let name = $state("")
 	let creating = $state(false)
 	/**
@@ -87,6 +91,9 @@
 	const handleCharactersList = (msg: Sockets.Characters.List.Response) => {
 		characters = msg.characterList || []
 	}
+	const handleLorebooksList = (msg: Sockets.Lorebooks.List.Response) => {
+		lorebookList = msg.lorebookList || []
+	}
 	const handleGenres = (msg: Sockets.Sessions.Genres.Response) => {
 		flow.rawGenres = msg.genres || []
 	}
@@ -96,18 +103,23 @@
 	}
 
 	/**
-	 * The three lists this screen reads, each asked for and listened for in
+	 * The four lists this screen reads, each asked for and listened for in
 	 * one. The cast and the "who you play as" rows come from the SAME list: a
 	 * persona is a character carrying `isPersona`, so there is no second
-	 * family to ask.
+	 * family to ask. The lorebook picker's list is the edit form's, on the
+	 * same terms.
 	 *
 	 * All BARE: none has an entry in `SCOPED_EVENTS`, and each is the whole of
 	 * a list rather than one session's rows. All standing while the form is
 	 * mounted, because each is a cascade target — a character created in its
-	 * own picker re-sends the list this screen renders.
+	 * own picker, or a lorebook created elsewhere, re-sends the list this
+	 * screen renders.
 	 */
 	$effect(() =>
 		requestWithInterest("characters:list", {}, handleCharactersList)
+	)
+	$effect(() =>
+		requestWithInterest("lorebooks:list", {}, handleLorebooksList)
 	)
 	$effect(() => requestWithInterest("sessions:genres", {}, handleGenres))
 	$effect(() => requestWithInterest("sessionPresets:list", {}, handlePresets))
@@ -268,6 +280,33 @@
 			})
 	)
 
+	/**
+	 * The lorebook step, asked only of a genre whose shape has the
+	 * capability. Required or optional is the shape's word (`lorebook:
+	 * "required" | "optional"`); a genre without it is never asked, and
+	 * `reconcileToShape` has already detached whatever was held.
+	 */
+	type LorebookOption = (typeof lorebookList)[number] & { id: number }
+	const lorebookOptions = $derived(
+		lorebookList.filter((l): l is LorebookOption => l.id != null)
+	)
+	const lorebookRequired = $derived(flow.shape?.lorebook === "required")
+	/** On screen once everything above it has an answer, like the Name card. */
+	const showLorebook = $derived(
+		genreAnswered &&
+			presetAnswered &&
+			castAnswered &&
+			!!flow.shape?.lorebook
+	)
+
+	/** One lorebook and the genre requires it: answered for the person, like
+	 *  any other step with one option. The list stays on screen. */
+	$effect(() => {
+		if (!lorebookRequired || flow.fields.lorebookId != null) return
+		if (lorebookOptions.length !== 1) return
+		flow.fields.lorebookId = lorebookOptions[0].id
+	})
+
 	const selectedCharacters = $derived(
 		flow.characterIds
 			.map((id) => characterOptions.find((c) => c.id === id))
@@ -358,6 +397,11 @@
 		touched = true
 		castTouched = true
 		flow.personaIds = [id]
+	}
+
+	function chooseLorebook(id: number | null) {
+		touched = true
+		flow.fields.lorebookId = id
 	}
 
 	const handleCreated = (res: Sockets.Sessions.Create.Response) => {
@@ -727,7 +771,110 @@
 			</section>
 		{/if}
 
-		<!-- ── 4. Name ──────────────────────────────────────────────────── -->
+		<!-- ── 4. Lorebook ──────────────────────────────────────────────── -->
+		{#if showLorebook}
+			<section
+				class={CARD_CLASS}
+				aria-labelledby="start-lorebook-heading"
+			>
+				<h3 id="start-lorebook-heading" class="text-sm font-medium">
+					Lorebook{lorebookRequired ? "*" : ""}
+				</h3>
+				<p class="text-surface-600 dark:text-surface-400 mt-1 text-xs">
+					The session will use world lore, character lore and history
+					entries from this lorebook.
+				</p>
+				{#if lorebookOptions.length === 0}
+					<p
+						class="mt-3 text-[13px] {lorebookRequired
+							? 'preset-tonal-warning rounded-[10px] p-3'
+							: 'text-surface-500'}"
+						role="status"
+					>
+						{#if lorebookRequired}
+							This genre needs a lorebook — create one in
+							Lorebooks first.
+						{:else}
+							You have no lorebooks yet — this genre can start
+							without one.
+						{/if}
+					</p>
+				{:else}
+					<ul
+						class="mt-3 flex flex-col gap-1"
+						role="radiogroup"
+						aria-labelledby="start-lorebook-heading"
+					>
+						{#if !lorebookRequired}
+							{@const selected = flow.fields.lorebookId == null}
+							<li>
+								<button
+									type="button"
+									role="radio"
+									aria-checked={selected}
+									class="hover:bg-surface-200-800 flex min-h-11 w-full items-center gap-2.5 rounded-[10px] px-2 py-1.5 text-left {selected
+										? 'sidebar-row-active'
+										: ''}"
+									onclick={() => chooseLorebook(null)}
+								>
+									<Icons.BookDashed
+										size={20}
+										class="text-surface-500 shrink-0"
+										aria-hidden="true"
+									/>
+									<span
+										class="min-w-0 flex-1 truncate text-[15px]"
+									>
+										None
+									</span>
+									{#if selected}
+										<Icons.Check
+											size={16}
+											class="text-primary-500 shrink-0"
+											aria-hidden="true"
+										/>
+									{/if}
+								</button>
+							</li>
+						{/if}
+						{#each lorebookOptions as l (l.id)}
+							{@const selected = flow.fields.lorebookId === l.id}
+							<li>
+								<button
+									type="button"
+									role="radio"
+									aria-checked={selected}
+									class="hover:bg-surface-200-800 flex min-h-11 w-full items-center gap-2.5 rounded-[10px] px-2 py-1.5 text-left {selected
+										? 'sidebar-row-active'
+										: ''}"
+									onclick={() => chooseLorebook(l.id)}
+								>
+									<Icons.BookMarked
+										size={20}
+										class="text-surface-500 shrink-0"
+										aria-hidden="true"
+									/>
+									<span
+										class="min-w-0 flex-1 truncate text-[15px] font-medium"
+									>
+										{l.name || "Untitled lorebook"}
+									</span>
+									{#if selected}
+										<Icons.Check
+											size={16}
+											class="text-primary-500 shrink-0"
+											aria-hidden="true"
+										/>
+									{/if}
+								</button>
+							</li>
+						{/each}
+					</ul>
+				{/if}
+			</section>
+		{/if}
+
+		<!-- ── 5. Name ──────────────────────────────────────────────────── -->
 		{#if showName}
 			<section class={CARD_CLASS} aria-labelledby="start-name-heading">
 				<h3 id="start-name-heading" class="text-sm font-medium">

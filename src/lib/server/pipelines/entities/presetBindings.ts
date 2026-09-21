@@ -16,7 +16,7 @@
  * ## Two questions, deliberately separate
  *
  * **Which spec answers this event** needs the event, so it is asked by the
- * dispatch seams (`resolveSessionEventSpec`, `resolveFunctionSpec`).
+ * dispatch seams (`resolveSessionEventSpec`, `resolveSubjectSpec`).
  *
  * **Which config that spec runs with** is asked by `resolveSelectedConfig`,
  * which is handed a spec and a session and no event at all — and must stay
@@ -157,7 +157,7 @@ const bindingsOf = (preset: PresetRow) =>
  * cheaper to read here than as a join condition. Genres and specs are both
  * small, closed sets.
  *
- * ⚠ **Ordered by spec id**, for the reason `resolveFunctionSpec` states about
+ * ⚠ **Ordered by spec id**, for the reason `resolveSubjectSpec` states about
  * its own tie-break: more than one published spec can declare (genre,
  * `message-respond`), and an unordered SELECT makes "the first one" whatever
  * order the heap returns. Two installs with identical data would then name

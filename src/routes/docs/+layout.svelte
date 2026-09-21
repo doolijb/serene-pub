@@ -18,7 +18,7 @@
 	class="preset-tonal mt-4 flex h-[calc(100%-2rem)] flex-col overflow-hidden rounded-lg shadow-md"
 >
 	<div
-		class="border-surface-300-700 flex items-center justify-end gap-3 border-b p-4"
+		class="border-surface-300-700 flex items-center justify-end gap-3 border-b p-4 lg:pr-[calc(var(--jump-pill-width,0px)+1.375rem)]"
 	>
 		<DocsHistoryControls />
 	</div>

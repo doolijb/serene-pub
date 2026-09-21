@@ -23,6 +23,11 @@
 	import { JUMP_CONTEXT, type JumpCtx } from "$lib/client/shell/jump.svelte"
 	import { lastActivityAt } from "$lib/client/utils/timeAgo"
 	import { SvelteMap } from "svelte/reactivity"
+	import {
+		applyRowChanged,
+		clearRowPatches,
+		patchedRow
+	} from "$lib/client/sessions/sessionRowPatches.svelte"
 	import type { StatusText } from "@serene-pub/sdk"
 
 	interface Props {
@@ -225,7 +230,13 @@
 		// A fresh list is the registry's current answer for every row; what
 		// this map heard before it is older than that.
 		runStatuses.clear()
+		// Same reasoning for the quoted line and the message count: the list
+		// carries the server's own projection of both.
+		clearRowPatches()
 		isLoading = false
+	}
+	function handleRowChanged(msg: Sockets.Sessions.RowChanged.Response) {
+		applyRowChanged(msg)
 	}
 	function handleRunStatus(msg: Sockets.Sessions.RunStatus.Response) {
 		runStatuses.set(msg.sessionId, msg.status)
@@ -260,6 +271,12 @@
 	interest.useInterest<"sessions:runStatus">(
 		"sessions:runStatus",
 		handleRunStatus
+	)
+	// BARE for the same reason: any session in this list may have a message
+	// land in it.
+	interest.useInterest<"sessions:rowChanged">(
+		"sessions:rowChanged",
+		handleRowChanged
 	)
 
 	async function handleOnClose() {
@@ -496,6 +513,14 @@
 	}
 
 	/**
+	 * The list with every `sessions:rowChanged` push since it applied.
+	 * Everything downstream — the filters, the buckets, the view panel — reads
+	 * this rather than `sessions`, so one derivation keeps the quoted line, the
+	 * message count and the activity sort current together.
+	 */
+	const patchedSessions: SessionRow[] = $derived(sessions.map(patchedRow))
+
+	/**
 	 * Every narrowing in force, stacked: the two deep-link filters, then the
 	 * popout's pick, then the text. They stack rather than replace each other,
 	 * so a tag chip plus a typed word means both, never either.
@@ -503,7 +528,7 @@
 	let filteredSessions: SessionRow[] = $derived.by(() => {
 		const lower = search.toLowerCase()
 
-		let filtered = [...sessions]
+		let filtered = [...patchedSessions]
 
 		// If searching by character ID, filter sessions that include that character
 		if (searchByCharacterId) {
@@ -756,7 +781,9 @@
 
 	/** The row whose detail panel is showing, as the list row the list has. */
 	const viewingSession = $derived(
-		viewingId == null ? undefined : sessions.find((s) => s.id === viewingId)
+		viewingId == null
+			? undefined
+			: patchedSessions.find((s) => s.id === viewingId)
 	)
 
 	onMount(() => {

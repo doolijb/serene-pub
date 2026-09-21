@@ -1,0 +1,387 @@
+/*
+ * The CSS-kind atmospheres.
+ *
+ * Imported by AtmosphereLayer.svelte rather than from app.css, so these rules
+ * only ship on a screen that actually mounts one. Every colour here comes from
+ * the custom properties the host writes on the layer root (see host.ts):
+ *   --sp-fx1/2/3  primary, secondary, tertiary
+ *   --sp-fxink    ink on a dark theme, muted on a light one
+ *   --sp-ground   the page stop     --sp-deep  the deepest stop
+ *   --sp-k        intensity, 0.12–1.4
+ *   --sp-blend    screen on dark, multiply on light
+ *   --sp-blend2   overlay on dark, multiply on light
+ * Nothing in this file names a colour of its own, which is what lets an
+ * atmosphere follow the theme.
+ *
+ * Motion: the global prefers-reduced-motion rule in app.css collapses every
+ * animation below to 0.01ms with one iteration, so these freeze on their end
+ * state. Canvas atmospheres freeze themselves — AtmosphereHost.setStill.
+ */
+
+/* The layer root. Fills whatever positioned parent it is mounted in and
+   never takes a pointer event — it is scenery, not a surface. */
+.sp-atmosphere {
+	/* The host overwrites this inline on mount. Declared anyway because every
+	   rule below reads it inside a calc(), and a calc() over a custom property
+	   with no value is invalid at computed-value time — an effect would come
+	   out at full opacity rather than at its intensity. */
+	--sp-k: 0.55;
+	position: absolute;
+	inset: 0;
+	overflow: hidden;
+	pointer-events: none;
+	/* The layer arrives, it does not appear: a slow fade from nothing so the
+	   first frame is the card alone and the weather settles in behind it.
+	   `both` holds opacity 0 through the short delay. Under
+	   prefers-reduced-motion the global rule in app.css collapses this to an
+	   instant, which is the right answer there. */
+	animation: sp-atmo-arrive 4s ease-out 250ms both;
+}
+
+@keyframes sp-atmo-arrive {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
+}
+
+.fx-canvas,
+.fx-dom {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+}
+
+/* Registered so the hue can be animated at all: a plain custom property is a
+   string to the animation engine and would step rather than sweep. */
+@property --sp-dh {
+	syntax: "<angle>";
+	inherits: true;
+	initial-value: 0deg;
+}
+
+/* ---------- Mist ---------- */
+
+.sp-atmo-mist > div {
+	position: absolute;
+	width: 70%;
+	height: 75%;
+	border-radius: 50%;
+	filter: blur(40px);
+	opacity: calc(0.6 * var(--sp-k) + 0.2);
+	background: radial-gradient(
+		closest-side,
+		color-mix(in oklch, var(--sp-fxink) 42%, transparent),
+		transparent
+	);
+	animation: sp-atmo-mist-drift 46s ease-in-out infinite alternate;
+}
+.sp-atmo-mist > div:nth-child(1) {
+	left: -10%;
+	top: -20%;
+}
+.sp-atmo-mist > div:nth-child(2) {
+	left: 40%;
+	top: 30%;
+	width: 80%;
+	animation-duration: 61s;
+	animation-delay: -20s;
+}
+.sp-atmo-mist > div:nth-child(3) {
+	left: -20%;
+	top: 50%;
+	animation-duration: 38s;
+	animation-delay: -9s;
+}
+@keyframes sp-atmo-mist-drift {
+	from {
+		transform: translate(0, 0) scale(1);
+	}
+	to {
+		transform: translate(22%, 10%) scale(1.15);
+	}
+}
+
+/* ---------- Aurora ---------- */
+
+.sp-atmo-aurora > div {
+	position: absolute;
+	inset: -30% -25%;
+	filter: blur(28px);
+	mix-blend-mode: var(--sp-blend);
+	opacity: calc(0.25 + 0.45 * var(--sp-k));
+	transform-origin: 50% 40%;
+	background: linear-gradient(
+		100deg,
+		transparent 30%,
+		color-mix(in oklch, var(--sp-fx2) 22%, transparent) 42%,
+		color-mix(in oklch, var(--sp-fx3) 26%, transparent) 52%,
+		transparent 66%
+	);
+	animation: sp-atmo-aurora-sway 19s ease-in-out infinite alternate;
+}
+.sp-atmo-aurora > div:nth-child(2) {
+	background: linear-gradient(
+		80deg,
+		transparent 38%,
+		color-mix(in oklch, var(--sp-fx1) 14%, transparent) 50%,
+		transparent 62%
+	);
+	animation-duration: 27s;
+	animation-delay: -11s;
+}
+.sp-atmo-aurora > div:nth-child(3) {
+	background: linear-gradient(
+		115deg,
+		transparent 40%,
+		color-mix(in oklch, var(--sp-fx3) 18%, transparent) 55%,
+		transparent 68%
+	);
+	animation-duration: 23s;
+	animation-delay: -5s;
+}
+@keyframes sp-atmo-aurora-sway {
+	from {
+		transform: translateX(-8%) skewX(-8deg) scaleY(1);
+	}
+	to {
+		transform: translateX(8%) skewX(10deg) scaleY(1.12);
+	}
+}
+
+/* ---------- Hue drift ---------- */
+
+.sp-atmo-drift > div {
+	position: absolute;
+	inset: 0;
+	animation: sp-atmo-hue-drift 70s linear infinite;
+	background: linear-gradient(
+		135deg,
+		oklch(
+			from var(--sp-ground) l calc(c + 0.02 + 0.09 * var(--sp-k))
+				calc(h + var(--sp-dh))
+		),
+		oklch(
+			from var(--sp-deep) calc(l - 0.02)
+				calc(c + 0.03 + 0.11 * var(--sp-k))
+				calc(h + var(--sp-dh) + 60deg)
+		)
+	);
+}
+@keyframes sp-atmo-hue-drift {
+	to {
+		--sp-dh: 360deg;
+	}
+}
+
+/* ---------- Scanlines ---------- */
+
+.sp-atmo-crt {
+	background: color-mix(in oklch, var(--sp-fx3) 6%, transparent);
+}
+.sp-atmo-crt .lines {
+	position: absolute;
+	inset: 0;
+	background: repeating-linear-gradient(
+		to bottom,
+		transparent 0 2px,
+		color-mix(in oklch, var(--sp-deep) 55%, transparent) 2px 3px
+	);
+	opacity: calc(0.35 + 0.6 * var(--sp-k));
+	animation: sp-atmo-crt-flick 5s steps(1, end) infinite;
+}
+.sp-atmo-crt .sweep {
+	position: absolute;
+	left: 0;
+	right: 0;
+	height: 16%;
+	background: linear-gradient(
+		to bottom,
+		transparent,
+		color-mix(in oklch, var(--sp-fx3) 16%, transparent),
+		transparent
+	);
+	animation: sp-atmo-crt-sweep 7.5s linear infinite;
+}
+.sp-atmo-crt .vig {
+	position: absolute;
+	inset: 0;
+	background: radial-gradient(
+		ellipse at center,
+		transparent 50%,
+		color-mix(in oklch, var(--sp-deep) 75%, transparent)
+	);
+}
+@keyframes sp-atmo-crt-sweep {
+	from {
+		top: -20%;
+	}
+	to {
+		top: 110%;
+	}
+}
+@keyframes sp-atmo-crt-flick {
+	0%,
+	100% {
+		opacity: calc(0.35 + 0.6 * var(--sp-k));
+	}
+	31% {
+		opacity: calc(0.3 + 0.55 * var(--sp-k));
+	}
+	32% {
+		opacity: calc(0.4 + 0.6 * var(--sp-k));
+	}
+	77% {
+		opacity: calc(0.33 + 0.58 * var(--sp-k));
+	}
+}
+
+/* ---------- Horizon ---------- */
+
+.sp-atmo-horizon .glow {
+	position: absolute;
+	left: 0;
+	right: 0;
+	top: 26%;
+	height: 26%;
+	background: radial-gradient(
+		ellipse at 50% 100%,
+		color-mix(in oklch, var(--sp-fx2) 32%, transparent),
+		transparent 70%
+	);
+	opacity: calc(0.5 + 0.5 * var(--sp-k));
+}
+.sp-atmo-horizon .line {
+	position: absolute;
+	left: 0;
+	right: 0;
+	top: 52%;
+	height: 1px;
+	background: color-mix(in oklch, var(--sp-fx1) 60%, transparent);
+}
+.sp-atmo-horizon .gridp {
+	position: absolute;
+	left: -40%;
+	right: -40%;
+	top: 52%;
+	bottom: -45%;
+	transform: perspective(520px) rotateX(62deg);
+	transform-origin: 50% 0;
+	opacity: calc(0.35 + 0.6 * var(--sp-k));
+	background-image:
+		linear-gradient(
+			color-mix(in oklch, var(--sp-fx1) 45%, transparent) 1px,
+			transparent 1px
+		),
+		linear-gradient(
+			90deg,
+			color-mix(in oklch, var(--sp-fx1) 45%, transparent) 1px,
+			transparent 1px
+		);
+	background-size: 64px 64px;
+	animation: sp-atmo-grid-scroll 2.6s linear infinite;
+	-webkit-mask-image: linear-gradient(to bottom, transparent, #000 30%, #000);
+	mask-image: linear-gradient(to bottom, transparent, #000 30%, #000);
+}
+@keyframes sp-atmo-grid-scroll {
+	to {
+		background-position:
+			0 64px,
+			0 0;
+	}
+}
+
+/* ---------- Paper ---------- */
+
+.sp-atmo-paper .grain {
+	position: absolute;
+	inset: -10%;
+	opacity: calc(0.08 + 0.16 * var(--sp-k));
+	mix-blend-mode: var(--sp-blend2);
+	animation: sp-atmo-paper-drift 60s linear infinite;
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+.sp-atmo-paper .warm {
+	position: absolute;
+	inset: 0;
+	background:
+		radial-gradient(
+			ellipse at 30% 20%,
+			color-mix(in oklch, var(--sp-fx1) 10%, transparent),
+			transparent 60%
+		),
+		radial-gradient(
+			ellipse at 80% 90%,
+			color-mix(in oklch, var(--sp-fx2) 8%, transparent),
+			transparent 60%
+		);
+}
+@keyframes sp-atmo-paper-drift {
+	to {
+		background-position: 240px 240px;
+	}
+}
+
+/* ---------- Candlelight ---------- */
+
+.sp-atmo-candle > div {
+	position: absolute;
+	border-radius: 50%;
+	pointer-events: none;
+}
+.sp-atmo-candle .flame {
+	width: 95%;
+	aspect-ratio: 1;
+	left: -28%;
+	bottom: -48%;
+	opacity: calc(0.45 + 0.55 * var(--sp-k));
+	background: radial-gradient(
+		closest-side,
+		color-mix(in oklch, var(--sp-fx1) 38%, transparent),
+		color-mix(in oklch, var(--sp-fx1) 10%, transparent) 55%,
+		transparent
+	);
+	animation: sp-atmo-flame 3.3s ease-in-out infinite;
+}
+.sp-atmo-candle .breath {
+	inset: 0;
+	border-radius: 0;
+	background: radial-gradient(
+		ellipse at 15% 100%,
+		color-mix(in oklch, var(--sp-fx1) 12%, transparent),
+		transparent 65%
+	);
+	animation: sp-atmo-breath 8s ease-in-out infinite alternate;
+}
+@keyframes sp-atmo-flame {
+	0%,
+	100% {
+		transform: scale(1);
+	}
+	18% {
+		transform: scale(1.05) translate(1%, -1%);
+	}
+	37% {
+		transform: scale(0.97);
+	}
+	52% {
+		transform: scale(1.06) translate(-1%, 0);
+	}
+	71% {
+		transform: scale(0.985) translate(0.5%, 1%);
+	}
+	88% {
+		transform: scale(1.03);
+	}
+}
+@keyframes sp-atmo-breath {
+	from {
+		opacity: 0.6;
+	}
+	to {
+		opacity: 1;
+	}
+}

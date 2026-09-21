@@ -261,6 +261,28 @@ describe("subprocessManager.checkForOrphanOnBoot", () => {
 		expect(pingKoboldCPPMock).not.toHaveBeenCalled()
 	})
 
+	// The startup module re-runs its tasks on every dev re-evaluation, and this
+	// check is one of them. Re-adopting a process that is already tracked
+	// re-stamped `startedAt` — the card's uptime jumped back to zero on a
+	// process minutes old — and restarted the health check for no change.
+	test("is a no-op for a process this evaluation already tracks", async () => {
+		const sm = await freshImport()
+		findFirstMock.mockResolvedValue({ ...REAL_SETTINGS_BASE })
+		pingKoboldCPPMock.mockResolvedValue(true)
+		vi.mocked(fsPromises.readFile).mockResolvedValue("9999")
+		readFileSyncMock.mockReturnValue("koboldcpp-linux --host 127.0.0.1")
+		vi.spyOn(process, "kill").mockImplementation(() => true as any)
+
+		await sm.start()
+		const before = sm.getStatus()
+		await new Promise((r) => setTimeout(r, 5))
+		await sm.checkForOrphanOnBoot()
+
+		expect(sm.getStatus().startedAt).toBe(before.startedAt)
+		expect(sm.getStatus().pid).toBe(9999)
+		expect(sm.isRunning()).toBe(true)
+	})
+
 	test("adopts an instance that's already responding, so status is accurate immediately at boot", async () => {
 		const sm = await freshImport()
 		findFirstMock.mockResolvedValue({ ...REAL_SETTINGS_BASE })

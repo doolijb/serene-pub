@@ -13,7 +13,7 @@
  * it is the reason these writes are read-modify-write rather than a dump of
  * whatever this process happens to have in memory.
  */
-import { afterAll, beforeEach, describe, expect, test, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -30,7 +30,13 @@ beforeEach(() => {
 	metaPath = path.join(scratch, "meta.json")
 })
 
-afterAll(() => {
+/**
+ * Per test, not per file: `beforeEach` mints a NEW scratch directory for every
+ * test, so an `afterAll` here only ever removed the last one and left the rest
+ * in the temp root for good. Multiply by every run on the machine and they were
+ * a measurable share of the leftovers that filled the root filesystem.
+ */
+afterEach(() => {
 	fs.rmSync(scratch, { recursive: true, force: true })
 })
 

@@ -6,26 +6,18 @@
 	 * has zero ambient anything — no cookies, no DOM reach, no socket — and
 	 * everything it knows arrives on the MessageChannel this component owns.
 	 *
-	 * ## Protocol v1 (host ⇄ frame, over the transferred port)
+	 * ## The protocol (host ⇄ frame, over the transferred port)
 	 *
-	 * host → frame:
-	 *   { t: "init",     protocol: 1, surface, payload }   // with the port
-	 *   { t: "session",  session }                          // metadata
-	 *   { t: "messages", messages }                         // parts-native list
-	 *   { t: "message",  message }                          // one update
-	 *   { t: "channel",  channel, messages }   // panel surfaces: one lane's msgs (21)
-	 *   { t: "props",    props }               // panel surfaces: declared props (21)
-	 *   { t: "settings", settings }         // panel surfaces: settings.v1 (25)
-	 *   { t: "style",    css, vars }           // panel surfaces: the widget skin (25)
-	 *   { t: "layout",   layout }              // panel surfaces: layout.v1 (25)
-	 *   { t: "event",    event }               // panel surfaces: one host event (25)
-	 *   { t: "actions",  actions }             // panel surfaces: actions.v1 — the venues (R-15, U5c)
-	 *   { t: "suspend" } / { t: "resume" }     // off-screen idle, never a reload (21)
+	 * Declared ONCE, in the SDK: `HostFrameMessage` and `FrameHostMessage` are
+	 * imported below and every post is checked against them, so what this host
+	 * sends is what a plugin compiled against `@serene-pub/sdk` was told to
+	 * expect. `init` carries `FRAME_PROTOCOL` — the SDK's number, never a
+	 * literal — which is what tells the frame which members it may use.
 	 *
-	 * frame → host:
-	 *   { t: "ready" }
-	 *   { t: "action", fn, messageId?, payload? }  // → the trigger machinery
-	 *   { t: "invoke", key, messageId?, payload? } // an action by identity (`<spec>#<key>`), or a key one action carries, off `actions.v1` (U5c)
+	 * Read the unions for the wire itself; what follows is only this host's
+	 * side of it. Surfaces differ: a page or session-view frame is not a
+	 * widget, so it receives no `settings`, `style`, `layout`, `event` or
+	 * `actions` at all.
 	 *
 	 * A panel that declares `channels` is a *view onto those lanes*: it receives
 	 * only their messages (per-channel `channel` posts), never the whole log —
@@ -48,11 +40,39 @@
 	 * ack, so an unstyled frame costs one dropped message and no error. See
 	 * `frameStyle.ts` for the sanitiser boundary this crosses.
 	 *
+	 * ## What this host answers (protocol 2)
+	 *
+	 * Beyond `ready` and the presses, a frame may `error`, `request` and
+	 * `save-state`. A v2 host may decline any of the three and still be a v2
+	 * host — a request is not a grant — but declining them *silently* is what
+	 * made them useless: an author could not tell a host that ignored them
+	 * from a frame that never sent them. So:
+	 *
+	 *   · **`error`** is logged against the plugin, and a `fatal` one puts a
+	 *     sentence in this frame's own chrome — a surface that has given up
+	 *     should say so rather than sit blank, and it must say it OUT HERE:
+	 *     a sandboxed document cannot raise the app's error surface.
+	 *   · **`request messages`** is answered with `page`, cut from the very
+	 *     rows this host already pushed and scoped by the same matcher, so a
+	 *     frame can page a long channel without the host guessing a slice —
+	 *     and cannot page its way to a lane it never declared.
+	 *   · **`save-state`** is held per (session, surface) and returned as
+	 *     `state` on the next mount, capped: see `framePort.ts`, which owns
+	 *     all three decisions and is the twin of the preview harness's file
+	 *     of the same name.
+	 *
 	 * The init post targets `"*"` by necessity — an opaque origin matches no
 	 * targetOrigin — which is safe *because* the channel port rides the
 	 * message: only the document inside this exact frame receives it.
 	 */
 	import { onDestroy } from "svelte"
+	import * as Icons from "@lucide/svelte"
+	import {
+		type FrameHostMessage,
+		type HostFrameMessage,
+		type MessageV1,
+		type SessionV1
+	} from "@serene-pub/sdk"
 	import {
 		eventInScope,
 		scopeMessages,
@@ -66,17 +86,26 @@
 		type WidgetEvent,
 		type WidgetEventSource
 	} from "$lib/shared/widgets/context"
-	import type { CoreVerbHandlers } from "$lib/shared/widgets/invokeAction"
+	import type { ActionDispatch } from "$lib/shared/widgets/invokeAction"
 	import { buildEventMessage, buildLayoutMessage } from "./framePlacement"
 	import { buildStyleMessage } from "./frameStyle"
 	import { frameInvokeVerdict } from "./frameActivation"
+	import {
+		buildPageMessage,
+		buildStateMessage,
+		frameStateKey,
+		initMessage,
+		pageOf,
+		savedFrameState,
+		type FrameRow
+	} from "./framePort"
 
 	interface Props {
 		src: string
 		title: string
 		surface: "session-view" | "panel" | "page"
 		/** Sent in init and re-sent on change. */
-		session?: unknown
+		session?: SessionV1
 		/** Parts-native messages; re-sent wholesale on change. */
 		messages?: unknown[]
 		/**
@@ -123,19 +152,30 @@
 		 * its ctx. A frame invokes one by identity (or a key only one action
 		 * carries) with `{ t: "invoke" }`, which the host resolves to the
 		 * declaration exactly as the native `invoke` verb does (`makeInvoke`):
-		 * one of core's verbs to `coreVerbs`, a contributed one through
-		 * `onAction` with its identity. Undefined on the surfaces that are
-		 * not widgets, and nothing is posted for those.
+		 * one of core's verbs to `actionDispatch.core`, a contributed one to
+		 * `actionDispatch.fire` — the host's own fire, not `onAction`, so a
+		 * frame's press is the one the chips make. Undefined on the surfaces
+		 * that are not widgets, and nothing is posted for those.
 		 */
 		actions?: ActionsV1
 		/**
-		 * The host's real handlers for core's verbs, by key (U5c review, W4)
-		 * — what `invoke('continue')` lands on. A frame on a host that wires
-		 * none is refused by name (a warning), never fired as a function.
+		 * The host's own routing for a press (U5c review, W4): its handlers
+		 * for core's verbs — what `invoke('continue')` lands on; a frame on a
+		 * host that wires none is refused by name (a warning), never fired as
+		 * a function — and its fire for a contributed one, which names the run
+		 * and takes the bespoke client flows. A host that threads no dispatch
+		 * falls back to `onAction`, the thinner fire.
 		 */
-		coreVerbs?: CoreVerbHandlers
+		actionDispatch?: ActionDispatch
 		/** Panel surfaces (21): idle the frame off-screen without unmounting. */
 		suspended?: boolean
+		/**
+		 * What this surface's saved view state is keyed on, beside the session
+		 * (`save-state` → `state`). A panel passes its instance id — the string
+		 * a saved layout row already names — and anything else falls back to the
+		 * document's own path, which is stable for a page or session-view frame.
+		 */
+		surfaceId?: string
 		/**
 		 * The audited fire. `action` is the pressed declaration's identity
 		 * when the frame named one (`invoke`); a bare `{ t: "action", fn }`
@@ -145,7 +185,8 @@
 			fn: string,
 			messageId?: number,
 			payload?: Record<string, unknown>,
-			action?: string
+			action?: string,
+			blockId?: string
 		) => void
 		class?: string
 	}
@@ -162,9 +203,10 @@
 		skin,
 		placement,
 		actions,
-		coreVerbs,
+		actionDispatch,
 		source,
 		suspended = false,
+		surfaceId,
 		onAction,
 		class: klass = ""
 	}: Props = $props()
@@ -172,6 +214,23 @@
 	let frame = $state<HTMLIFrameElement | null>(null)
 	let port: MessagePort | null = null
 	let ready = $state(false)
+
+	/**
+	 * What a `fatal` error said, once one has been reported — the flag the
+	 * chrome below reads. The frame's own words are NOT rendered (they go to
+	 * the console; a sandboxed document must not write copy into the app's
+	 * UI), they are kept because a host that has to explain itself later
+	 * should not have to ask the frame again. Cleared on every document load:
+	 * a reloaded frame is a fresh boot, and the last document's complaint must
+	 * not outlive it.
+	 */
+	let fatal = $state<string | null>(null)
+
+	/**
+	 * Where this surface's saved state is filed. Derived rather than captured,
+	 * so a panel moved between sessions files under the session it is now in.
+	 */
+	let stateKey = $derived(frameStateKey(session?.id, surfaceId ?? src))
 
 	/**
 	 * When focus last entered this frame, as the host can see it (S-C; W3) —
@@ -208,16 +267,87 @@
 
 	function handleLoad() {
 		// A fresh channel per document load — a reloaded frame must never
-		// receive a stale port.
+		// receive a stale port. A fresh boot, too: the previous document's
+		// fatal complaint is not this one's, and `ready` is re-announced.
+		ready = false
+		fatal = null
 		port?.close()
 		const channel = new MessageChannel()
 		port = channel.port1
 		port.onmessage = (e) => {
+			// `FrameHostMessage` names what a WELL-BEHAVED frame sends; what
+			// arrives is whatever the sandboxed document chose to post, so
+			// this stays untyped and every field is tested at runtime before
+			// it is used. The union is the contract, not a guarantee about
+			// this value.
 			const m = e.data
 			if (!m || typeof m !== "object") return
 			if (m.t === "ready") {
 				ready = true
+				// Saved state BEFORE the first push: a remount is exactly when
+				// a frame has forgotten, and it should be able to restore its
+				// open tab or scroll offset before it has any rows to put in
+				// it. Nothing is posted when there is none — `state` means
+				// "here is what you saved", never "you saved nothing".
+				const held = savedFrameState.get(stateKey)
+				if (held) post(buildStateMessage(held))
 				push()
+			} else if (m.t === "error") {
+				// A frame that failed to boot has to be able to say so, or a
+				// broken surface is indistinguishable from a slow one. Logged
+				// against the plugin, and a `fatal` one — the frame saying it
+				// has given up, not merely complained — also replaces the blank
+				// with a sentence in the chrome below. The sentence is the
+				// host's; what the frame says goes to the console, because a
+				// sandboxed document must not be able to write the app's own UI.
+				const message = String(m.message ?? "frame reported an error")
+				console.warn(
+					`PluginFrame "${title}" (${src}): ${m.fatal === true ? "FATAL — " : ""}${message}`,
+					m.detail
+				)
+				if (m.fatal === true) fatal = message
+			} else if (m.t === "request" && typeof m.requestId === "string") {
+				// A request is not a grant: the host answers out of what it
+				// already chose to push, or declines with a warning. Declined
+				// silently down the port — there is no "no" in the union — but
+				// never silently in the console, or an author cannot tell a
+				// refusal from a host that dropped the message.
+				if (m.what !== "messages") {
+					console.warn(
+						`PluginFrame "${title}": declined request — '${String(m.what)}' is not something this host answers`
+					)
+					return
+				}
+				const page = pageOf(
+					{
+						messages: (messages ?? []) as FrameRow[],
+						channels
+					},
+					{
+						channel:
+							typeof m.channel === "string" ? m.channel : undefined,
+						cursor:
+							typeof m.cursor === "string" ? m.cursor : undefined,
+						limit:
+							typeof m.limit === "number" ? m.limit : undefined
+					}
+				)
+				if (page.refused) {
+					console.warn(
+						`PluginFrame "${title}": declined request — ${page.refused}`
+					)
+					return
+				}
+				post(buildPageMessage(m.requestId, page))
+			} else if (m.t === "save-state") {
+				// Not storage. Held for this (session, surface) and returned on
+				// the next mount; over the cap it is dropped with a warning
+				// rather than quietly becoming a database a surface relies on.
+				const outcome = savedFrameState.set(stateKey, m.state)
+				if (!outcome.kept)
+					console.warn(
+						`PluginFrame "${title}": dropped save-state — ${outcome.reason}`
+					)
 			} else if (m.t === "action" && typeof m.fn === "string") {
 				onAction?.(
 					m.fn,
@@ -270,36 +400,48 @@
 					}
 					makeInvoke(
 						() => projectActions(actions),
-						(fn, messageId, payload, action) =>
-							onAction?.(fn, messageId, payload, action),
+						(fn, messageId, payload, action, blockId) =>
+							onAction?.(fn, messageId, payload, action, blockId),
 						title,
-						coreVerbs
+						actionDispatch
 					)(m.key, {
 						messageId:
 							typeof m.messageId === "number" ? m.messageId : undefined,
 						payload:
 							m.payload && typeof m.payload === "object"
 								? m.payload
-								: undefined
+								: undefined,
+						// The form this press answers (U5d), carried across the
+						// port exactly as the native lane carries it — so a
+						// frame drawing a message's form is held to the block's
+						// addressee rather than read as an unaddressed press.
+						blockId:
+							typeof m.blockId === "string" ? m.blockId : undefined
 					})
 				} catch (e) {
 					console.warn(`PluginFrame: ${(e as Error).message}`)
 				}
 			}
 		}
-		frame?.contentWindow?.postMessage(
-			{ t: "init", protocol: 1, surface },
-			"*",
-			[channel.port2]
-		)
+		// `initMessage`, which carries `FRAME_PROTOCOL` and never a literal: the
+		// number a frame reads to know which members of the union it may use
+		// has exactly one home, and it is the same package the frame's author
+		// compiled against.
+		frame?.contentWindow?.postMessage(initMessage(surface), "*", [
+			channel.port2
+		])
 	}
 
 	/**
 	 * Post one frame message, surviving uncloneable payloads: callers should
 	 * hand plain data, but a stray proxy/function must degrade to a warning,
 	 * never an unhandled DataCloneError that kills the rest of the push.
+	 *
+	 * Typed as the SDK's union, so a message this host invents — or a member
+	 * it spells wrong — fails to compile rather than reaching a frame that
+	 * cannot recognise it.
 	 */
-	function post(msg: Record<string, unknown>) {
+	function post(msg: HostFrameMessage) {
 		try {
 			port?.postMessage(msg)
 		} catch (e) {
@@ -313,18 +455,21 @@
 	function push() {
 		if (!port || !ready) return
 		if (session !== undefined) post({ t: "session", session })
+		// The rows as the page holds them. Narrowed at this one seam rather
+		// than at every call site: what a host has in hand is a wire row, and
+		// `MessageV1` is what the contract promises a frame once it crosses.
+		const held = (messages ?? []) as MessageV1[]
 		if (channels && channels.length) {
 			// Panel scoping: only this panel's lanes, one post each. The frame
 			// never sees the whole log.
-			const list = (messages ?? []) as Array<{ channel?: string }>
 			for (const ch of channels)
 				post({
 					t: "channel",
 					channel: ch,
-					messages: list.filter((m) => (m?.channel ?? "main") === ch)
+					messages: held.filter((m) => (m?.channel ?? "main") === ch)
 				})
 		} else if (messages !== undefined) {
-			post({ t: "messages", messages })
+			post({ t: "messages", messages: held })
 		}
 		if (props !== undefined) post({ t: "props", props })
 		if (settings !== undefined) post({ t: "settings", settings })
@@ -342,6 +487,10 @@
 		// does: a frame that reloads replays `ready`, and everything it needs to
 		// draw itself has to arrive again without the host being asked.
 		if (placement !== undefined) post(buildLayoutMessage(placement))
+		// The look the app is wearing, as data. A frame is its own document and
+		// can see nothing of the top one, so the two attributes the app steers
+		// its own stylesheet with are the whole of what it needs to match.
+		if (theme) post({ t: "theme", theme: theme.theme, mode: theme.mode })
 	}
 
 	// Re-feed on data change — the frame renders what the host chose to post,
@@ -355,7 +504,36 @@
 		void skin
 		void placement
 		void actions
+		void theme
 		push()
+	})
+
+	/* ── the host's theme ──────────────────────────────────────────────────
+	 * Read off `<html>` rather than out of the settings context, on the same
+	 * reasoning `WidgetHost` reads `data-mode` there: the attributes are what
+	 * is true of the DOM whatever wrote them, including the root layout taking
+	 * one away for Document View. The mirror is a single `$state`, so the push
+	 * above re-runs whenever either attribute moves.
+	 *
+	 * Values, never tokens: the frame's CSP grants it its OWN files, so a
+	 * stylesheet resolving `data-theme` is one the package ships. What crosses
+	 * is the id and light-or-dark, which is what a frame needs to pick a side. */
+	let theme = $state<{ theme: string; mode: "light" | "dark" } | null>(null)
+	$effect(() => {
+		const read = () => {
+			const el = document.documentElement
+			theme = {
+				theme: el.getAttribute("data-theme") ?? "",
+				mode: el.getAttribute("data-mode") === "dark" ? "dark" : "light"
+			}
+		}
+		read()
+		const mo = new MutationObserver(read)
+		mo.observe(document.documentElement, {
+			attributes: true,
+			attributeFilter: ["data-theme", "data-mode"]
+		})
+		return () => mo.disconnect()
 	})
 
 	/* ── events (PLAN 25) ──────────────────────────────────────────────────
@@ -417,7 +595,7 @@
 		if (!port || !ready) return
 		if (s !== lastSuspended) {
 			lastSuspended = s
-			port.postMessage({ t: s ? "suspend" : "resume" })
+			post({ t: s ? "suspend" : "resume" })
 		}
 	})
 
@@ -426,13 +604,36 @@
 
 <svelte:window onblur={handleWindowBlur} onfocus={handleWindowFocus} />
 
-<iframe
-	bind:this={frame}
-	{src}
-	{title}
-	sandbox="allow-scripts"
-	class="h-full w-full border-0 {klass}"
-	onload={handleLoad}
-	onfocus={touched}
-	onblur={left}
-></iframe>
+<!-- `relative` is the fatal notice's containing block, and the only reason this
+     wrapper exists: a frame that has given up must show a sentence WITHOUT being
+     unmounted — unmounting it would reload the document on the next render, and a
+     surface that crash-loops is worse than one that says so once. -->
+<div class="relative h-full w-full">
+	<iframe
+		bind:this={frame}
+		{src}
+		{title}
+		sandbox="allow-scripts"
+		class="h-full w-full border-0 {klass}"
+		onload={handleLoad}
+		onfocus={touched}
+		onblur={left}
+	></iframe>
+
+	<!-- The frame said `fatal`. The sentence is the host's; what the frame
+	     actually said went to the console, because a sandboxed document must
+	     not be able to write copy into the app's own UI. -->
+	{#if fatal}
+		<div
+			class="bg-surface-50-950 absolute inset-0 flex flex-col items-center justify-center gap-2 p-4 text-center"
+			role="alert"
+		>
+			<Icons.TriangleAlert size={20} class="text-error-500" />
+			<p class="text-surface-600-400 max-w-xs text-xs">
+				This surface stopped and can't show anything. Reload the page to
+				try it again — the extension's own message is in the browser
+				console.
+			</p>
+		</div>
+	{/if}
+</div>

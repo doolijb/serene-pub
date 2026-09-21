@@ -15,12 +15,19 @@ type ActiveCharacter = SelectSessionCharacter & {
  * Rule: a character who has never replied at all (within the given
  * `messages`) is always immediately due — this covers both a brand-new session
  * and a character newly added to one that's already in progress. Otherwise,
- * let N = personaIds.length + characterIds.length. Look at the last N
- * messages — if every cast member appears at least once in that window, the
- * rotation is "healthy" (nobody's been silently dropped from the
- * conversation). A character is due if the rotation is healthy AND they have
- * no message in the last N-1 of those messages. When more than one character
- * is due, whoever's most recent reply is furthest back goes first.
+ * let N = personaIds.length + characterIds.length. A character is due when
+ * they have no reply in the last N-1 messages; when more than one character
+ * is due, whoever's most recent reply is furthest back goes first. When every
+ * character has replied within those N-1 messages, nobody is due — it is the
+ * persona's turn.
+ *
+ * That lookback is the whole rule. There is no precondition on the window's
+ * shape: rows written outside the rotation — a character's form-answer lines,
+ * two persona sends in a row, two manual triggers on one character — push the
+ * other cast members further back and so make them due sooner, never leave
+ * the rotation with nobody to pick. A precondition that demands every cast
+ * member appear in the last N rows starves the session instead: once such
+ * rows land, nobody is due, and nobody can speak to mend the window.
  */
 function computeDueCharacter({
 	activeCharacters,
@@ -46,15 +53,12 @@ function computeDueCharacter({
 	}
 
 	// A character who has never replied at all is always due immediately,
-	// regardless of the healthy-window check below — that check requires
-	// every active character to already have a message in the recent window,
-	// which a character who has never spoken can never satisfy on their own.
-	// This covers both a brand-new session (nobody in the cast has replied yet,
-	// so no configured first/greeting message exists) and a character added
-	// to an already-established session (everyone else may be "healthy," but the
-	// newcomer would otherwise be permanently skipped). Among characters
-	// who've never replied, pick by position, so a brand-new session still
-	// starts with its first-listed character.
+	// ahead of the lookback below. This covers both a brand-new session
+	// (nobody in the cast has replied yet, so no configured first/greeting
+	// message exists) and a character added to an already-established session
+	// (the newcomer is owed a first turn before anyone is owed a repeat).
+	// Among characters who've never replied, pick by position, so a brand-new
+	// session still starts with its first-listed character.
 	const neverReplied = activeCharacters.filter(
 		(cc) => lastReplyIndex(cc.character.id) === -1
 	)
@@ -62,26 +66,8 @@ function computeDueCharacter({
 		return neverReplied[0].character.id
 	}
 
-	// Healthy-window check: has every cast member spoken at least once in the
-	// last `castSize` messages?
-	const recentWindow = messages.slice(Math.max(0, messages.length - castSize))
-	const everyoneRecentlyActive =
-		personaIds.every((pid) =>
-			recentWindow.some(
-				(msg) => msg.role === "user" && msg.personaId === pid
-			)
-		) &&
-		characterIds.every((cid) =>
-			recentWindow.some(
-				(msg) => msg.role === "assistant" && msg.characterId === cid
-			)
-		)
-
-	if (!everyoneRecentlyActive) return null
-
 	// A character is due if they have no message in the last `castSize - 1`
-	// messages — i.e. their last reply (if any) is at or before the edge of
-	// the healthy window.
+	// messages — one full rotation minus the slot their own reply would take.
 	const lookback = messages.slice(
 		Math.max(0, messages.length - (castSize - 1))
 	)
@@ -286,8 +272,7 @@ export function getNextCharacterTurn(
 	// Narrator response messages (isNarratorResponse, characterId: null) are
 	// narration, not a cast member's turn — excluded entirely rather than just
 	// failing to match a character id, so they can't occupy a slot in the
-	// recency windows below and skew the healthy-window/due checks for the
-	// real cast.
+	// lookback below and skew the due check for the real cast.
 	const messages = session.sessionMessages.filter(
 		(m) => !m.isHidden && !m.isNarratorResponse
 	)

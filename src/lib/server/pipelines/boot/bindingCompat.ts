@@ -36,7 +36,13 @@
  * `structuralCompat` directly; this file is the core-side application of it.
  */
 
-import { getDefinition, readsOf } from "@serene-pub/sdk"
+import {
+	allDefinitions,
+	getDefinition,
+	provisionalVerdict,
+	readsOf,
+	refusalText
+} from "@serene-pub/sdk"
 import {
 	requiresOf,
 	structuralCompat
@@ -129,4 +135,71 @@ export function assertCoreBindingsCompatible(): void {
 		`core's node bindings do not fit the types this build declares:\n · ` +
 			findings.join("\n · ")
 	)
+}
+
+/**
+ * Core definitions this build publishes and cannot run (plans/29 R-2).
+ *
+ * The other direction from point 1 above: there, a binding names a type no
+ * declaration backs; here, a declaration is published — a registry row, a
+ * picker entry, a pin a spec may take — with no handler behind it. Fifteen
+ * were, on 2026-09-17, and one of them (`attach-image`) had a working host
+ * commit nothing could reach. A definition a plan owns says so with
+ * `provisional: true`, which the registry badges and every listing that
+ * offers definitions leaves out; anything else unbound is a packaging error.
+ *
+ * `core:` only. The `test:` fixtures and the `chariot.*` examples the SDK
+ * registers beside the contracts are the SDK's teaching material, bound by the
+ * suite that places them; a plugin's definitions are bound from its manifest
+ * at run time (`pluginBindings.ts`). Judged against `coreBindings()` alone and
+ * not against the host's commit cases on purpose: a commit no binding reaches
+ * is exactly the defect this exists to find.
+ */
+export function checkUnboundDefinitions(): string[] {
+	return unboundDefinitionRefusals().map(([id]) => id)
+}
+
+/**
+ * Each unbound, unflagged core definition with the sentence
+ * `core:verdict/provisional` refuses its publication with — the registry
+ * door of R-2 (01 §13): the registry read against what this build can run.
+ */
+function unboundDefinitionRefusals(): Array<[id: string, refusal: string]> {
+	const bound = new Set(Object.keys(coreBindings()))
+	const out: Array<[string, string]> = []
+	for (const d of allDefinitions()) {
+		// An entry type is a row shape, never a node; nothing binds one.
+		if (!d.id.startsWith("core:") || d.kind === "entry") continue
+		const heard = provisionalVerdict.judge({
+			kind: "publication",
+			definitionId: d.id,
+			provisional: d.provisional === true,
+			bound: bound.has(d.id)
+		})
+		if (!heard.ok) out.push([d.id, refusalText(heard)])
+	}
+	return out.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+}
+
+/**
+ * The boot gate for `checkUnboundDefinitions`.
+ *
+ * Dev throws with the list, so the person who declared the definition sees
+ * it on the next reload; production says it once and starts, because a
+ * declaration nothing runs costs a picker entry and a legible halt, never
+ * the install. `mode` is a parameter so the test can ask for both answers.
+ * Each line is the verdict's own sentence and fix; the count is this door's.
+ */
+export function assertCoreDefinitionsBound(
+	mode: "dev" | "prod" = process.env.NODE_ENV === "production" ? "prod" : "dev"
+): string[] {
+	const refusals = unboundDefinitionRefusals()
+	const unbound = refusals.map(([id]) => id)
+	if (!unbound.length) return unbound
+	const message =
+		`core publishes ${unbound.length} definition(s) no handler runs and no plan ` +
+		`claims:\n · ${refusals.map(([, refusal]) => refusal).join("\n · ")}`
+	if (mode === "dev") throw new Error(message)
+	console.error(`[pipelines] ${message}`)
+	return unbound
 }

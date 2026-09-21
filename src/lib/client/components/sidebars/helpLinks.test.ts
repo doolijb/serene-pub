@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { resolveInViewLink } from "./helpLinks"
+import { helpAnchorId, resolveInViewLink } from "./helpLinks"
 
 /**
  * The Help view's link rule.
@@ -64,5 +64,38 @@ describe("resolveInViewLink", () => {
 		["", "an empty href"]
 	])("leaves %s to the browser (%s)", (href) => {
 		expect(resolveInViewLink(href, "characters")).toBeNull()
+	})
+})
+
+/**
+ * The Help view's anchor rule.
+ *
+ * The view renames every id inside its article so the same page open on
+ * `/docs` behind it keeps the ids it owns. This helper is the only thing that
+ * knows the new name, and it is handed anchors from four places — a Jump hit,
+ * the outline, a cross-page link's fragment, and a link inside the article
+ * whose href the same rewrite has already rebased — so it has to answer the
+ * same way for a name it has seen and one it has not.
+ */
+describe("helpAnchorId", () => {
+	it("scopes a bare doc anchor to this view", () => {
+		expect(helpAnchorId("the-rail")).toBe("help:the-rail")
+	})
+
+	it("leaves an anchor it has already scoped alone", () => {
+		expect(helpAnchorId("help:the-rail")).toBe("help:the-rail")
+	})
+
+	// The regression this prefix exists for: `help-and-about` is a real
+	// heading in the getting-started guide, and a `help-` prefix could not
+	// tell it from an id this view had already scoped.
+	it("scopes a doc anchor that itself begins with the word help", () => {
+		expect(helpAnchorId("help")).toBe("help:help")
+		expect(helpAnchorId("help-and-about")).toBe("help:help-and-about")
+	})
+
+	// The top of the page, which is not an element and must not become one.
+	it("leaves an empty anchor empty", () => {
+		expect(helpAnchorId("")).toBe("")
 	})
 })

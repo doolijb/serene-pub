@@ -392,10 +392,15 @@ export function sessionState() {
 		ledgerFor(messageId: number) {
 			return groupLinesByOwner(messageLines.get(messageId) ?? [])
 		},
-		/** The held changes anchored to one message. */
+		/**
+		 * The held changes anchored to one message — and the superseded ones
+		 * (U5f), which the list draws collapsed under the same message.
+		 */
 		pendingFor(messageId: number): Proposal[] {
 			return [...proposals.values()].filter(
-				(p) => p.messageId === messageId && p.status === "pending"
+				(p) =>
+					p.messageId === messageId &&
+					(p.status === "pending" || p.status === "superseded")
 			)
 		},
 		get pending(): Proposal[] {

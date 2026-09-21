@@ -14,6 +14,7 @@ import { migrate } from "drizzle-orm/pglite/migrator"
 import path from "path"
 import fsp from "fs/promises"
 import * as schema from "$lib/server/db/schema"
+import { guardTransactions } from "$lib/server/db/transactionGuard"
 
 export type TestDb = ReturnType<typeof drizzle<typeof schema, PGlite>>
 
@@ -30,6 +31,10 @@ export async function createTestDb(opts?: {
 	skipEntryTypes?: boolean
 }): Promise<TestDb> {
 	const client = new PGlite()
+	// As the app's own handle is guarded (`db/index.ts`): an outer-handle
+	// query awaited inside `db.transaction` fails the test at once, with the
+	// stacks, instead of hanging it to its timeout.
+	guardTransactions(client, "throw")
 	const db = drizzle(client, { schema })
 	await migrate(db, {
 		migrationsFolder: path.resolve(process.cwd(), "drizzle")

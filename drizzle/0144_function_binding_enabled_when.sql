@@ -1,0 +1,1 @@
+ALTER TABLE "pipeline_function_bindings" ADD COLUMN "enabled_when" jsonb;

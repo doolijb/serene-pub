@@ -117,10 +117,19 @@ export interface EnsureDefaultResult {
  * Shared by both callers rather than written twice, because the two disagreeing
  * about what a shipped default is would produce exactly that discrepancy again.
  *
- * `presetValues` is read by the `sampling-ref` branch alone, and only there
- * because sampling is the one reference a document ADDRESSES rather than
- * inherits: there is no per-node-type sampling pool for core to resolve a
- * default out of, so the row a stage runs on is whichever one the author named.
+ * `presetValues` is read by every `*-ref` branch, and it is what the author
+ * ADDRESSED rather than inherited. Sampling is the case that forced it: there is
+ * no per-node-type sampling pool for core to resolve a default out of, so the
+ * row a stage runs on is whichever one the author named (`{ seedKey }`).
+ *
+ * The three template branches gained the same door with R19: a document may now
+ * name the row it wants by **template id** (`{ templateId: 'core:template/…@1' }`)
+ * — and, for symmetry with sampling, by `{ seedKey }`. Before that, the only
+ * thing a spec could say about its prompt was nothing: the row was resolved by
+ * `defaultPromptFor`'s pool heuristics, which read `default_for_specs` — a list
+ * on CORE'S OWN catalog rows. A third-party spec added to a genre therefore had
+ * no way at all to say which of the genre's prompts it starts on. It has one now,
+ * and the heuristic stays as the answer when nothing is named.
  */
 async function refDefaults(
 	db: Db,
@@ -152,6 +161,16 @@ async function refDefaults(
 	for (const d of decls) {
 		const key = addr(d.nodeKey, d.slot, d.path)
 		if (d.control === "prompts-ref" && d.nodeDefinitionId) {
+			const named = await namedTemplateId(
+				db,
+				schema.pipelinePrompts,
+				templateRefOf(presetValues.get(key)),
+				{ specSlug, nodeKey: d.nodeKey, what: "prompt" }
+			)
+			if (named != null) {
+				out.set(key, named)
+				continue
+			}
 			const pool = promptPoolKeyFor(d.nodeDefinitionId, d.slot)
 			if (!prompts.has(pool))
 				prompts.set(
@@ -166,6 +185,16 @@ async function refDefaults(
 			continue
 		}
 		if (d.control === "context-template-ref" && d.nodeDefinitionId) {
+			const named = await namedTemplateId(
+				db,
+				schema.pipelineContextTemplates,
+				templateRefOf(presetValues.get(key)),
+				{ specSlug, nodeKey: d.nodeKey, what: "context template" }
+			)
+			if (named != null) {
+				out.set(key, named)
+				continue
+			}
 			// The engine is half the template pool now, so it is half this
 			// cache key too. Keyed on the node type alone, a node declaring
 			// another language would be handed whichever engine's row the first
@@ -187,6 +216,16 @@ async function refDefaults(
 			continue
 		}
 		if (d.control === "variable-template-ref" && d.variableId) {
+			const named = await namedTemplateId(
+				db,
+				schema.pipelineVariableTemplates,
+				templateRefOf(presetValues.get(key)),
+				{ specSlug, nodeKey: d.nodeKey, what: "variable layout" }
+			)
+			if (named != null) {
+				out.set(key, named)
+				continue
+			}
 			if (!layouts.has(d.variableId))
 				layouts.set(
 					d.variableId,
@@ -244,6 +283,99 @@ async function samplingIdFor(db: Db, seedKey: string): Promise<number | null> {
 		.where(eq(schema.samplingConfigs.seedKey, seedKey))
 		.limit(1)
 	return row?.id ?? null
+}
+
+/**
+ * The three tables a `templateId` may name a row in — one per template-like
+ * slot kind, which is what makes the lookup one function rather than three.
+ * `sampling_configs` is deliberately NOT among them: it is referenced by seed
+ * key from a document too, but a sampling config is not a template and giving
+ * it a `template_id` would make the word mean two things.
+ */
+type TemplateTable =
+	| typeof schema.pipelinePrompts
+	| typeof schema.pipelineContextTemplates
+	| typeof schema.pipelineVariableTemplates
+
+/** A template row a document named, in the two spellings it may name it. */
+interface TemplateRef {
+	templateId: string | null
+	seedKey: string | null
+}
+
+/**
+ * The template row an author preset named, if it named one (R19).
+ *
+ * `{ templateId: 'core:template/…@1' }` is the spelling to write. It is
+ * owner-namespaced and pinned, so a spec may name a row another party ships and
+ * a new major of that row is a different id rather than a silent reword.
+ *
+ * `{ seedKey }` is accepted beside it — sampling's spelling, and the same
+ * argument applies one table over — but it names nothing outside core: a seed
+ * key carries no owner, so no plugin can mint one safely. Both spellings are
+ * an OBJECT for sampling's reason, restated: a bare string would be
+ * indistinguishable from a name, and a bare number is already the id an admin's
+ * own selection stores.
+ */
+function templateRefOf(value: unknown): TemplateRef | null {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return null
+	const v = value as { templateId?: unknown; seedKey?: unknown }
+	const templateId =
+		typeof v.templateId === "string" && v.templateId ? v.templateId : null
+	const seedKey = typeof v.seedKey === "string" && v.seedKey ? v.seedKey : null
+	if (!templateId && !seedKey) return null
+	return { templateId, seedKey }
+}
+
+/**
+ * Resolve one named template reference to a row id, or null.
+ *
+ * **Order: `templateId` first, then `seedKey`.** Not a preference — the two
+ * name different things. A template id is the public, owner-namespaced identity
+ * and the one a document should be written against; a seed key is core's
+ * storage identity and is only ever correct for core's own rows. A value
+ * carrying both is a document mid-migration from one spelling to the other, and
+ * the newer spelling is the one that means what it says.
+ *
+ * An id nothing seeded is **said out loud and then fallen through**, in the
+ * voice `refDefaults`' sampling branch already uses and for the same reason: a
+ * throw here takes every OTHER pipeline's configuration with it, because
+ * `reconcilePublishedConfigs` walks specs this instance does not control.
+ *
+ * Where it does NOT match sampling is what happens next. An unresolved sampling
+ * reference leaves the slot unset, because unset is the state every stage was in
+ * before a document could name one. Unset is not that state here: a template
+ * slot with no row halts assemble with "has no template", and a prompts slot
+ * with no row renders blanks the model reads as instructions it should ignore.
+ * The state before a document could name one is the pool default — so the
+ * caller's heuristic runs, the pipeline works, and the log says which name
+ * found nothing.
+ */
+async function namedTemplateId(
+	db: Db,
+	table: TemplateTable,
+	ref: TemplateRef | null,
+	at: { specSlug: string; nodeKey: string; what: string }
+): Promise<number | null> {
+	if (!ref) return null
+	for (const [column, named] of [
+		[table.templateId, ref.templateId],
+		[table.seedKey, ref.seedKey]
+	] as const) {
+		if (!named) continue
+		const rows = await db
+			.select({ id: table.id })
+			.from(table)
+			.where(eq(column, named))
+			.limit(1)
+		const row = rows[0]
+		if (row) return row.id
+		console.warn(
+			`[pipelines] ${at.specSlug}: no ${at.what} is registered as ` +
+				`"${named}", so ${at.nodeKey}'s slot falls back to the shipped default`
+		)
+	}
+	return null
 }
 
 /**
@@ -371,10 +503,19 @@ export async function ensureDefaultConfig(
 			// `{ seedKey: ... }` at an address every reader treats as an
 			// integer.
 			// Every other slot keeps the preset on top of the shipped row,
-			// which is what a document setting its own template relies on.
+			// which is what a document setting its own template INLINE relies
+			// on — a `template` slot's `{ engine, source }` is a value, not a
+			// reference, and `templateRefOf` returns null for it.
+			// The three template controls read the same way as sampling since
+			// R19: `{ templateId }` / `{ seedKey }` is a NAME for a row, so it
+			// is resolved or it is dropped, never stored.
 			const seedRef =
-				d.control === "sampling-ref" &&
-				samplingSeedKeyOf(presetValues.get(key)) !== null
+				(d.control === "sampling-ref" &&
+					samplingSeedKeyOf(presetValues.get(key)) !== null) ||
+				((d.control === "prompts-ref" ||
+					d.control === "context-template-ref" ||
+					d.control === "variable-template-ref") &&
+					templateRefOf(presetValues.get(key)) !== null)
 			const value = seedRef
 				? refs.get(key)
 				: presetValues.has(key)

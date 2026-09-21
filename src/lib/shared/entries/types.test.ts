@@ -21,6 +21,7 @@ import {
 	ENTRY_EXPORT_KEY,
 	ENTRY_TYPE_IDS,
 	HISTORY_TYPE_ID,
+	LOCATION_TYPE_ID,
 	WORLD_LORE_TYPE_ID,
 	entriesOfType,
 	entryTypeIdOfExportKey,
@@ -73,11 +74,19 @@ describe("the shared shapes mirror the declarations", () => {
 })
 
 describe("export keys translate in both directions", () => {
-	it("round-trips every declared type", () => {
-		for (const typeId of ENTRY_TYPE_IDS)
-			expect(entryTypeIdOfExportKey(ENTRY_EXPORT_KEY[typeId])).toBe(
-				typeId
-			)
+	it("round-trips every type that has a marker", () => {
+		// Every type that HAS one: the table is partial on purpose (L3), and a
+		// type with no wire name has nothing to round-trip — it is exported as
+		// world lore and read back as world lore, which is the degrade
+		// `entryTypeIdOfExportKey` already performs for a foreign marker.
+		for (const typeId of ENTRY_TYPE_IDS) {
+			const key = ENTRY_EXPORT_KEY[typeId]
+			if (!key) continue
+			expect(entryTypeIdOfExportKey(key)).toBe(typeId)
+		}
+		expect(
+			ENTRY_TYPE_IDS.filter((t) => !ENTRY_EXPORT_KEY[t])
+		).toEqual([LOCATION_TYPE_ID])
 	})
 
 	it("falls back to world lore for a foreign or future marker", () => {

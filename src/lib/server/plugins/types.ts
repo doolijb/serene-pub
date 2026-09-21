@@ -14,6 +14,7 @@ import type {
 	PluginRowChange,
 	PluginRowSnapshotEntry
 } from "./storageHost"
+import type { HookCtxKind } from "./hookCtx"
 
 /** Which sandbox this is. Internal — never surfaced to a hook. */
 export type SandboxKind = "quickjs" | "ses"
@@ -35,6 +36,14 @@ export type Json =
 	| { [key: string]: Json }
 
 export interface InvokeOptions {
+	/**
+	 * What kind of hook this is, which decides what its `ctx` carries
+	 * (`hookCtx.ts`, plans/29 R-3): a task or chain link gets neither
+	 * `storage` nor `fetch`, an oracle gets both, the rest get `storage`.
+	 * Required — the sandbox throws on a call that names none, because a
+	 * default in either direction is a grant nobody decided.
+	 */
+	kind: HookCtxKind
 	/** The declared-variable bindings + free context handed to the hook. */
 	input: Record<string, unknown>
 	/** Wall-clock budget for this single call. The sandbox enforces it. */

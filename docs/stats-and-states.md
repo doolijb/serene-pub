@@ -73,6 +73,12 @@ would leave you with no way to disagree and nothing to point at afterwards.
 Accepting a proposal records it as the model's change that you agreed to, which is a different
 sentence from "you set it" — and it is what makes "why is my health 3" answerable.
 
+A proposal is a delta against the state the model read. The session keeps a **state version**
+that every applied change moves by one, and a proposal carries the version it was made against;
+accepting one whose value has not moved since applies it, and accepting one whose value *has*
+moved — you edited the same bar, say — marks it **superseded** instead: nothing applied, the line
+kept under its reply naming what moved, no buttons. See [Sessions](./sessions.md#stats-the-world-and-the-ledger).
+
 A proposal is checked against the slot before it is ever held for you. A stat has a type and
 bounds, and an option list has exactly the words it has, so a model asking for stamina 90 on a
 slot that stops at 10, or for weather "Overcast with Storm Clouds", gets a refusal recorded on
@@ -100,7 +106,9 @@ prompt.
 
 A pipeline reads them through the **Session state** step and changes them through the
 **Set state** step. Set state asks by default and applies only when the genre's author says so
-— see [Pipelines](./pipelines.md).
+— see [Pipelines](./pipelines.md). Session state also publishes the state **version** the turn
+read, and Set state takes it back as `base`: a change whose value moved since is refused on the
+receipt rather than applied over the newer value.
 
 ## Genres that bring slots
 

@@ -6,13 +6,19 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
 // koboldcpp-manager-specific modules this file imports so importing it never
 // touches a real subprocess/DB.
 const findFirstMock = vi.fn()
+const localModelsMock = vi.fn(async () => [] as any[])
 vi.mock("$lib/server/db", () => ({
 	db: {
 		query: {
 			systemSettings: { findFirst: vi.fn(async () => null) },
-			koboldCppSettings: { findFirst: () => findFirstMock() }
+			koboldCppSettings: { findFirst: () => findFirstMock() },
+			localModels: { findMany: () => localModelsMock() }
 		}
 	}
+}))
+const readdirMock = vi.fn()
+vi.mock("fs/promises", () => ({
+	readdir: (...args: any[]) => readdirMock(...args)
 }))
 vi.mock("$lib/server/embedding", () => ({
 	isModelReady: () => false,
@@ -161,7 +167,57 @@ describe("KoboldCppManagedAdapter — base URL resolution", () => {
 		)
 	})
 
-	test("listModels() also prefers the normalized manager base URL, and lists the directory as identifiers", async () => {
+	// The listing that decides `missing_since`. koboldcpp's admin API lists
+	// its --admindir (the BINARY directory), which has answered `[]` for every
+	// install since the models got their own directory — a successful, empty
+	// listing that marked the connection's one model missing and had the
+	// resolver refuse every run before preflight. Seen live 2026-09-19.
+	describe("listModels() with a models directory configured", () => {
+		beforeEach(() => {
+			findFirstMock.mockResolvedValue({
+				koboldCppManagerBaseUrl: "http://manager-host:5001/",
+				koboldCppManagerModelsDir: "/models/llm"
+			})
+			localModelsMock.mockResolvedValue([])
+		})
+
+		test("lists the ggufs in the text models directory and never asks the admin API", async () => {
+			readdirMock.mockResolvedValue([
+				"b.gguf",
+				"a.gguf",
+				"notes.txt",
+				"sd.safetensors"
+			])
+			const result = await exportsDefault.listModels(makeConnection({}))
+			expect(readdirMock).toHaveBeenCalledWith("/models/llm")
+			expect(fetchMock).not.toHaveBeenCalled()
+			expect(result.error).toBeUndefined()
+			expect(result.models).toEqual([
+				{ model: "a.gguf", name: "a.gguf" },
+				{ model: "b.gguf", name: "b.gguf" }
+			])
+		})
+
+		test("leaves out a file the Manager classified as an image model, and one still downloading", async () => {
+			readdirMock.mockResolvedValue(["chat.gguf", "sdxl.gguf", "half.gguf"])
+			localModelsMock.mockResolvedValue([
+				{ filename: "sdxl.gguf", kind: "image", status: "complete" },
+				{ filename: "half.gguf", kind: "text", status: "downloading" },
+				{ filename: "chat.gguf", kind: "text", status: "complete" }
+			])
+			const result = await exportsDefault.listModels(makeConnection({}))
+			expect(result.models).toEqual([{ model: "chat.gguf", name: "chat.gguf" }])
+		})
+
+		test("an unreadable directory is an ERROR, never an empty list", async () => {
+			readdirMock.mockRejectedValue(new Error("ENOENT"))
+			const result = await exportsDefault.listModels(makeConnection({}))
+			expect(result.models).toEqual([])
+			expect(result.error).toMatch(/could not be read/)
+		})
+	})
+
+	test("listModels() with no models directory falls back to the admin API, preferring the normalized manager base URL", async () => {
 		findFirstMock.mockResolvedValue({
 			koboldCppManagerBaseUrl: "http://manager-host:5001/"
 		})
@@ -184,7 +240,7 @@ describe("KoboldCppManagedAdapter — base URL resolution", () => {
 		])
 	})
 
-	test("listModels() answers with an ERROR when the admin API is unreachable, never an empty list", async () => {
+	test("listModels() (admin-API fallback) answers with an ERROR when the admin API is unreachable, never an empty list", async () => {
 		findFirstMock.mockResolvedValue({
 			koboldCppManagerBaseUrl: "http://manager-host:5001/"
 		})

@@ -25,7 +25,7 @@
 		ActionsV1,
 		PlacementInput
 	} from "$lib/shared/widgets/context"
-	import type { CoreVerbHandlers } from "$lib/shared/widgets/invokeAction"
+	import type { ActionDispatch } from "$lib/shared/widgets/invokeAction"
 
 	interface Props {
 		instance: PanelInstance
@@ -58,20 +58,20 @@
 		primaryChildren?: Snippet
 		/**
 		 * The session's action venues (`sessions:actions`; U5c review W4),
-		 * handed to a frame body as `actions.v1`. ⏳ Reaches this panel only
-		 * once the layouts lane threads it through `SessionLayout`, which
-		 * owns the hop from the page; `WidgetHost` (a native body) is that
-		 * lane's too. Absent, a frame gets no venues and its `invoke` refuses
-		 * everything by name.
+		 * handed to BOTH bodies as `actions.v1` — a frame over its port, a
+		 * native widget on its ctx. Threaded from the page through
+		 * `SessionLayout`. Absent (a panel outside a session), a body gets no
+		 * venues and its `invoke` refuses everything by name.
 		 */
 		actions?: ActionsV1
-		/** The host's handlers for core's verbs (W4) — see `actions`. */
-		coreVerbs?: CoreVerbHandlers
+		/** The host's routing for a press — core's verbs and its own fire (W4). */
+		actionDispatch?: ActionDispatch
 		onFrameAction?: (
 			fn: string,
 			messageId?: number,
 			payload?: Record<string, unknown>,
-			action?: string
+			action?: string,
+			blockId?: string
 		) => void
 	}
 
@@ -86,7 +86,7 @@
 		hideHeader = false,
 		primaryChildren,
 		actions,
-		coreVerbs,
+		actionDispatch,
 		onFrameAction
 	}: Props = $props()
 
@@ -269,10 +269,11 @@
 				props={{ panelId: instance.id, title: resolved.title }}
 				settings={resolved.settings}
 				skin={frameSkin}
+				surfaceId={instance.id}
 				{placement}
 				source={manager}
 				{actions}
-				{coreVerbs}
+				{actionDispatch}
 				{suspended}
 				onAction={onFrameAction}
 			/>
@@ -292,9 +293,10 @@
 			     25). Additive: NativeCmp still gets its legacy props, and a
 			     migrated one reads ctx via useWidgetContext(). Native passes the
 			     LIVE message array (not the frame's snapshot) so ctx stays
-			     reactive, the zone's measured `placement`, and the manager as
-			     the session event source — the same three the frame branch above
-			     posts over its port. A session-less panel (sessionId null) has
+			     reactive, the zone's measured `placement`, the manager as the
+			     session event source, and the session's venues + core-verb
+			     handlers — the same inputs the frame branch above posts over its
+			     port. A session-less panel (sessionId null) has
 			     nothing to project, so it renders bare. -->
 			{#if session}
 				<WidgetHost
@@ -310,6 +312,8 @@
 					settings={resolved.settings}
 					{placement}
 					source={manager}
+					{actions}
+					{actionDispatch}
 					onAction={onFrameAction}
 				>
 					<NativeCmp

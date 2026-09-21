@@ -84,8 +84,15 @@ const PUBLISHED: Record<string, string> = {
 	 * `envoy:mascot`, never a prompt row.
 	 */
 	// (was "cbca3b3df89e2") — moved with the genre surface, U5d; see create-chat.
-	"core:spec/create-guide@1.0.0": "fa7a3eb64e2a9",
-	"core:spec/guide-respond@1.0.0": "1d39898d4c7a0c",
+	// (was "fa7a3eb64e2a9") — moved again, R-B (2026-09-17): Guide's genre now
+	// declares `writes: { lore: false, scenes: false }`. Its lorebook is the
+	// documentation it answers out of, and a session about how the app works
+	// opens no scene; the declaration is what the write sites refuse from.
+	// `create-chat` and `adventure-create` are untouched — neither declares
+	// `writes`, and a genre that says nothing still means both on.
+	"core:spec/create-guide@1.0.0": "fad8888e9b78f",
+	// (was "1d39898d4c7a0c") — W9 shape pins, see the note above adventure-ask.
+	"core:spec/guide-respond@1.0.0": "e9e2afe8ba8fb",
 	/**
 	 * The Adventure genre (DESIGN-adventure-genre.md) — five new slugs, and
 	 * nothing above them moves. Every node they pin is either one core already
@@ -138,7 +145,18 @@ const PUBLISHED: Record<string, string> = {
 	// planner's voice on `sideCharacter` (was `speaker`) — the port rename
 	// on `build-side-character-context@1`, R-18 (3). Same value, same
 	// prompt. (was "5822ccf7f43da")
-	"core:spec/adventure-respond@1.0.0": "6471d909046c2",
+	// (was "6471d909046c2") — W9 shape pins, see the note above adventure-ask.
+	// Moved (U5f, R-15 *Staleness and order*, 2026-09-17): the keeper's
+	// resolver and both `set-state` arms wire `base` from the state query's
+	// `version` — the version this turn read, handed back with its deltas.
+	// (was "12faeb788b2f4c")
+	// Moved (W1, 2026-09-17): the voices `each` gained a per-speaker
+	// character-lore lane, its own pool and its own rank, so a voice reads its
+	// OWN private lore instead of every cast member's. `speaker` is the
+	// reference the voice's context node already resolved. The spine's
+	// character-lore lane stays the narrator's.
+	// (was "1d49758bb5b83c")
+	"core:spec/adventure-respond@1.0.0": "138f57a4301cd9",
 	// ⚠ MOVED, unreleased-genre terms (R-8, 2026-09-15): the three actions'
 	// `contextBudget` shares the writing step's connection for the model's
 	// own window, like every other budget node.
@@ -157,7 +175,12 @@ const PUBLISHED: Record<string, string> = {
 	// (`[{ kind: 'composer' }]`), `quick` and `label` in place of `i18n`.
 	// Content of the contribution, not of the run: nothing the pipeline
 	// sends changes. (was "15e41a328459f3")
-	"core:spec/adventure-look@1.0.0": "197bb42b7b2bb6",
+	// (was "197bb42b7b2bb6") — W9 shape pins, see the note above adventure-ask.
+	// Hash moved (plans/31 V2, 2026-09-17): every action spec below lost
+	// `contributes.actions[].function` — the key is the identity, and the
+	// compiled document carries one word for it. Content of the
+	// contribution, not of the run. The 28 old hashes are in git.
+	"core:spec/adventure-look@1.0.0": "fb15c2d04afa8",
 	// ⚠ MOVED, in place, on the same unreleased-genre terms: Rest and Time
 	// passes ask `core:oracle/generate-json@1` for the keeper's own shape
 	// instead of parsing prose out of a prefilled reply.
@@ -172,7 +195,9 @@ const PUBLISHED: Record<string, string> = {
 	// (`[{ kind: 'composer' }]`), `quick` and `label` in place of `i18n`.
 	// Content of the contribution, not of the run: nothing the pipeline
 	// sends changes. (was "4e32a33712802")
-	"core:spec/adventure-rest@1.0.0": "3755831896611",
+	// (was "3755831896611") — W9 shape pins, see the note above adventure-ask.
+	// (was "1a5601d7f3d4c") — `base` wired, U5f; see adventure-respond.
+	"core:spec/adventure-rest@1.0.0": "1594b5fa34f7cc",
 	// (was "135459cfe7c4c0" — R-8, see `adventure-look`)
 	// Hash moved (R-12, 2026-09-16): the generating step no longer wires
 	// `prompts: slot.prompts({ node: … })` — `core:oracle/generate-*@1`
@@ -184,7 +209,9 @@ const PUBLISHED: Record<string, string> = {
 	// (`[{ kind: 'composer' }]`), `quick` and `label` in place of `i18n`.
 	// Content of the contribution, not of the run: nothing the pipeline
 	// sends changes. (was "17168783bd30d0")
-	"core:spec/adventure-advance-time@1.0.0": "1173a06c378df0",
+	// (was "1173a06c378df0") — W9 shape pins, see the note above adventure-ask.
+	// (was "283effed6289d") — `base` wired, U5f; see adventure-respond.
+	"core:spec/adventure-advance-time@1.0.0": "c9dfbd1a0aa41",
 	/**
 	 * Forms (plans/29 R-15 *Forms*; 30 §U5d, 2026-09-17) — five new slugs,
 	 * and the three create specs above move with their genre surface. The
@@ -197,11 +224,36 @@ const PUBLISHED: Record<string, string> = {
 	 * question with choices to one of the cast — and `adventure-answer` is
 	 * what its options fire, by a click or by the answer pipeline.
 	 */
-	"core:spec/adventure-ask@1.0.0": "b2c4f4431d9a2",
-	"core:spec/adventure-answer@1.0.0": "1387dc7a4901d6",
-	"core:spec/answer-form-chat@1.0.0": "a2ddb2700ce09",
-	"core:spec/answer-form-adventure@1.0.0": "b89f3d6c0484b",
-	"core:spec/answer-form-guide@1.0.0": "1ddc286846b82d",
+	/**
+	 * ## The W9 shape pins (2026-09-17, U5d review) — fourteen moved at once
+	 *
+	 * `validate()` had never run over the catalog, and when it did (it runs
+	 * at `saveDocument` now) thirteen shipped specs carried a 01 §3 finding:
+	 * `session-history@1` DECLARED `context-candidates@1` on `main` and
+	 * `messages` while PUBLISHING transcript rows — every one of them wires
+	 * `history.messages` into `process-messages` / `prose-transcript` /
+	 * `query-windows` / a turn strategy, which take `messages@1`. The
+	 * declaration was wrong, not the rule: the port now says `messages@1`
+	 * (the intent rides `band` alone, as it always did), `vector-search@1`'s
+	 * `vectors` says `json@1` (a list of query vectors, which is what
+	 * `embed-text@1` publishes and the host reads). An edge's compiled
+	 * `shape` is part of the document, so every spec reading history moved;
+	 * `adventure-answer` moved for its `form` venue (S1) and the answer-form
+	 * specs for the outlet's timeout and two new out-ports (W2). Nothing the
+	 * runs send changes. (W9 had also made `messages@1` assignable to
+	 * `context-candidates@1` one way; the fix pass withdrew it — R-a — since
+	 * no shipped spec wires the transcript as candidates, no pin moved.)
+	 */
+	// (was "b2c4f4431d9a2") — W9 shape pins, see the note above adventure-ask.
+	"core:spec/adventure-ask@1.0.0": "f223539fbe04a",
+	// (was "1387dc7a4901d6") — W9 shape pins, see the note above adventure-ask.
+	"core:spec/adventure-answer@1.0.0": "11363c44f7099c",
+	// (was "a2ddb2700ce09") — W9 shape pins, see the note above adventure-ask.
+	"core:spec/answer-form-chat@1.0.0": "4398d5e3dcebc",
+	// (was "b89f3d6c0484b") — W9 shape pins, see the note above adventure-ask.
+	"core:spec/answer-form-adventure@1.0.0": "837f6311648d6",
+	// (was "1ddc286846b82d") — W9 shape pins, see the note above adventure-ask.
+	"core:spec/answer-form-guide@1.0.0": "1ff7e25eba1d7a",
 	"core:spec/create-chat@2.1.0": "ea80f2679383c",
 	"core:spec/create-chat@2.0.0": "a6281141b21ea",
 	// 1.16.0 / 1.10.0: the three lore gather branches and the narrator's trigger query
@@ -401,7 +453,8 @@ const PUBLISHED: Record<string, string> = {
 	// $.input.speaker` — the inlet's participant reference — so a picked
 	// character's row carries `metadata.speaker = character:<id>`, the same
 	// shape 0138 writes for a migrated row. (was "e3ab80dc58afa")
-	"core:spec/narrate-character@1.0.0": "174220ef023ed7",
+	// (was "174220ef023ed7") — W9 shape pins, see the note above adventure-ask.
+	"core:spec/narrate-character@1.0.0": "dc7fab4edc2c4",
 	// (was "b6ba835e86244", then "431aa4254af1", then "12971669b900fd",
 	//  then "bc304a8a52b71")
 	// ⚠ MOVED on the same terms as `narrate-character` above (09-B B4):
@@ -428,7 +481,8 @@ const PUBLISHED: Record<string, string> = {
 	// (`[{ kind: 'composer' }]`), `quick` and `label` in place of `i18n`.
 	// Content of the contribution, not of the run: nothing the pipeline
 	// sends changes. (was "11ca2223b19a22")
-	"core:spec/narrate@1.11.0": "3d0b93608ab5b",
+	// (was "3d0b93608ab5b") — W9 shape pins, see the note above adventure-ask.
+	"core:spec/narrate@1.11.0": "1b22fdf56d7757",
 	// ⚠ `core:spec/respond@1.20.0`'s hash MOVED for the SECOND time without a
 	// bump, on the same terms as the two paragraphs above and paired with
 	// `drizzle/0106_continuation_prefill_reprojection`, which deletes its
@@ -536,7 +590,8 @@ const PUBLISHED: Record<string, string> = {
 	// bare `characterId`, so an envoy can be the trigger's pick. Every
 	// downstream reader still takes `$.speaker.characterId`; nothing the run
 	// sends changes. (was "1ace29594a6283")
-	"core:spec/respond@1.20.0": "1c503cc437da52",
+	// (was "1c503cc437da52") — W9 shape pins, see the note above adventure-ask.
+	"core:spec/respond@1.20.0": "c0b92cae6b39d",
 	"core:spec/respond@1.19.0": "fdf2f7090f13c",
 	"core:spec/respond@1.18.0": "9315ce3ddeaa4",
 	"core:spec/respond@1.17.0": "118378cf44739b",
@@ -573,8 +628,15 @@ const PUBLISHED: Record<string, string> = {
 	// against. Shared rather than a picker of its own — a slot wired with
 	// `ofNode` is the owner's to configure (13 §12 finding i) — so an untouched
 	// pipeline gains no second Sampling control in the panel.
-	"core:spec/summarize-world@1.3.0": "6a5f107fa3641",
-	"core:spec/summarize-character@1.3.0": "102b4ae06e92a1",
+	// Moved (L3, contracts batch 2, 2026-09-17): `params: slot.params()` on
+	// the `create-lore-entry` node. That outlet now declares an `entryType`
+	// parameters slot, and a slot the spec never NAMES is not a config key
+	// — the panel would render the control, the scope chain would store
+	// what a person set, and the run would never read it
+	// (`paramsSlotWiring.test.ts`). The value is unchanged: the declared
+	// default is world lore, which is what this outlet wrote before.
+	"core:spec/summarize-world@1.3.0": "1506542abb583c",  // (was 6a5f107fa3641)
+	"core:spec/summarize-character@1.3.0": "a8021c35f8e63",  // (was 102b4ae06e92a1)
 	// ⚠ `summarize-scene@1.3.0`'s hash MOVED a SECOND time, again under an
 	// unchanged version, and again paired with a migration —
 	// `drizzle/0104_ice_scene_cast_extraction.sql` deletes its published
@@ -589,8 +651,8 @@ const PUBLISHED: Record<string, string> = {
 	// speech-gated proposal (100% precision, zero fabrications, no model) and
 	// whose mentioned half is derived from `message_annotations` instead.
 	// (was "9c990d835747a" between 0102 and this)
-	"core:spec/summarize-scene@1.3.0": "63c1e956ffead",
-	"core:spec/summarize-history@1.3.0": "d31fcf98fd3d6",
+	"core:spec/summarize-scene@1.3.0": "45c69db1aec6e",  // (was 63c1e956ffead)
+	"core:spec/summarize-history@1.3.0": "c6076cc61089a",  // (was d31fcf98fd3d6)
 	"core:spec/graph-build@1.2.0": "1cb6f0d989e99c",
 	// 1.12.0: the session rename (0141) — session-scope/-history/-cast ids
 	// and sessionId/sessionScope ports ripple into every pinned type.
@@ -618,7 +680,7 @@ const PUBLISHED: Record<string, string> = {
 	// (`[{ kind: 'composer' }]`), `quick` and `label` in place of `i18n`.
 	// Content of the contribution, not of the run: nothing the pipeline
 	// sends changes. (was "19cc4810162b94")
-	"core:spec/echo@1.0.0": "d249a44903c21",
+	"core:spec/echo@1.0.0": "c8727abf46258",
 	/**
 	 * The built-in writes (U5b, R-15, 2026-09-16) — five NEW slugs, one per
 	 * message verb core implements: `core:inlet/built-in-request@1` straight
@@ -639,7 +701,7 @@ const PUBLISHED: Record<string, string> = {
 	// (`[{ kind: 'composer' }]`), `quick` and `label` in place of `i18n`.
 	// Content of the contribution, not of the run: nothing the pipeline
 	// sends changes. (was "19338b1db2497c")
-	"core:spec/generate-image@1.0.0": "1d6cc6d87de48",
+	"core:spec/generate-image@1.0.0": "167183f5f621cc",
 	// 1.0.0: the tool-loop reference (20 §9, 01 §4a) — a bounded agentic turn
 	// written out, bound to no genre so it is never offered in a composer. New
 	// slug, not a bump: the 0.6 freeze forbids moving an existing semver and
@@ -660,7 +722,193 @@ const PUBLISHED: Record<string, string> = {
 	// declares no such slot any more; the share existed only to keep the
 	// panel from rendering a copy. Nothing the run sends changes.
 	// (was "9420cfdf9c246")
-	"core:spec/tool-loop@1.0.0": "1d560d3f202dd5"
+	// (was "1d560d3f202dd5") — W9 shape pins, see the note above adventure-ask.
+	"core:spec/tool-loop@1.0.0": "58c36603a5520",
+	/**
+	 * The **Lair** genre (plans/genres-and-showcase-plugins §3, U3) — nine new
+	 * slugs, and nothing above them moves. Every node they pin is one core
+	 * already shipped; no existing spec or type was edited.
+	 *
+	 * `lair-respond` is the reverse crawler's turn: plan, then a junction that
+	 * either halts at a room nobody built (a `choices` block addressed to the
+	 * OWNER) or narrates — and, in `cast` style, gives one voice call per
+	 * character the planner named. The write is on the spine for both arms,
+	 * because a write-class outlet may not sit inside a clause (01 §4).
+	 *
+	 * ⚠ **Recorded before the catalog's `dist` carries them.** These pins were
+	 * computed from `core-catalog/src` (the SDK suite's `lair.test.ts` records
+	 * the same nine), and this file reads the catalog through its **build**. So
+	 * until `npm run sdk:build` runs, `current()` does not contain these keys and
+	 * the first test skips them by construction (`now[pin] &&`) — they start
+	 * being checked the moment the build catches up, which is exactly when a
+	 * drift would matter.
+	 */
+	"core:spec/lair-create@1.0.0": "181409e22c0b57",
+	// Moved (W1, 2026-09-17): the same per-voice lore lane Adventure's
+	// respond gained, inside the `cast` branch's `each`.
+	// (was "7557cc5126f8e")
+	"core:spec/lair-respond@1.0.0": "17f42bf5411cc8",
+	// Moved twice on 2026-09-17. First (L3, contracts batch 2): `params:
+	// slot.params()` on the `create-lore-entry` node. That outlet now declares
+	// an `entryType` parameters slot, and a slot the spec never NAMES is not a
+	// config key — the panel would render the control, the scope chain would
+	// store what a person set, and the run would never read it
+	// (`paramsSlotWiring.test.ts`).
+	//
+	// Then by the Lair finish lane, two preset values on that same node: the
+	// review gate is turned ON (the docblock has promised it since the spec was
+	// written, and `resolvePosition` defaults an undeclared position to `off`,
+	// so a drafted room was landing unseen), and the entry type is
+	// `core:entry/location` — a room is a place, not world lore that happens to
+	// be laid out. The exits stay prose: `create-lore-entry@1`'s `links` port is
+	// unwired because nothing in core parses a drafted `Exits:` line into names.
+	// (was 15ceae616882db, then 94ce032b7c0b)
+	"core:spec/lair-build-room@1.0.0": "190c73e865eb9f",
+	// Moved (L1, 2026-09-17): the knock's options write the room. The one
+	// write-class outlet is `core:outlet/create-lore-entry` (was
+	// `create-message`), the `build` branch drafts the dungeon's room layout
+	// for the master to fill in, and a preset turns the review gate on. The
+	// action is now `effects: 'world'` in the `composer` venue — an
+	// owner-addressed block may name one.
+	// Moved again by the Lair finish lane: the room files as a
+	// `core:entry/location`, exactly as *Build room* now files one.
+	// (was "912b4d1226a36", then 1c5e452458312a, then 3899346f4eb21)
+	"core:spec/lair-room-answer@1.0.0": "11e6395a67d358",
+	"core:spec/lair-whisper@1.0.0": "7056f498d2824",
+	"core:spec/lair-nudge@1.0.0": "13f22ac089c1d3",
+	"core:spec/lair-trap@1.0.0": "bc6188056ee88",
+	"core:spec/lair-reveal@1.0.0": "10266438456afd",
+	/** The genre's answer pipeline — one graph, published once per shipped genre. */
+	"core:spec/answer-form-lair@1.0.0": "15c9296cf3ab70",
+	/**
+	 * The **Writing Room** (plans/genres-and-showcase-plugins §2, U2) — ten new
+	 * slugs, and nothing above them moves. Every node they pin is one core
+	 * already shipped; no existing spec or type was edited.
+	 *
+	 * `writing-room-respond` is the two-channel turn: ONE junction, on the
+	 * channel the trigger was raised on (`$.input.channel`). The manuscript arm
+	 * is a continuation with no seed line — the channel declares `voice: 'none'`
+	 * — and the talk arm is the companion's reply with the manuscript as a
+	 * folio in front of it. One row, created on the spine with
+	 * `channel: $.input.channel`, finished by whichever arm fired; the write is
+	 * on the spine for the same reason Lair's is (01 §4).
+	 *
+	 * `writing-room-create` is an INLET AND NOTHING ELSE: greeting is off, there
+	 * is nothing to seed, and a create pipeline that read the greetings and then
+	 * declined to write them would be two nodes agreeing to do nothing.
+	 *
+	 * ⚠ **Recorded before the catalog's `dist` carries them**, on exactly the
+	 * terms the Lair block above states: computed from `core-catalog/src` (the
+	 * SDK suite's `writingRoom.test.ts` records the same ten), skipped by
+	 * construction until `npm run sdk:build` catches up.
+	 */
+	"core:spec/writing-room-create@1.0.0": "183229685dbfb",
+	"core:spec/writing-room-respond@1.0.0": "14c09e41ae6abd",
+	"core:spec/writing-room-continue@1.0.0": "167b0adb63b018",
+	"core:spec/writing-room-rewrite@1.0.0": "31f36c88bf487",
+	"core:spec/writing-room-expand@1.0.0": "11351d7d9ca9d2",
+	"core:spec/writing-room-tighten@1.0.0": "13effa25d3bc60",
+	"core:spec/writing-room-brainstorm@1.0.0": "12e837aa3f8312",
+	"core:spec/writing-room-critique@1.0.0": "1877959eaff7ae",
+	// Moved (L3, contracts batch 2, 2026-09-17): `params: slot.params()` on
+	// the `create-lore-entry` node. That outlet now declares an `entryType`
+	// parameters slot, and a slot the spec never NAMES is not a config key
+	// — the panel would render the control, the scope chain would store
+	// what a person set, and the run would never read it
+	// (`paramsSlotWiring.test.ts`). The value is unchanged: the declared
+	// default is world lore, which is what this outlet wrote before.
+	"core:spec/writing-room-add-to-bible@1.0.0": "ee79fc44a3b4e",  // (was 15a7783fad90dc)
+	"core:spec/writing-room-export@1.0.0": "bf5b4e0b398c8",
+	/**
+	 * The genre's answer pipeline, added 2026-09-17 by the `form-addressed`
+	 * ruling: **every** shipped genre declares the event and every shipped
+	 * preset binds an answer pipeline, whoever its forms are addressed to
+	 * today. A genre cannot promise that no pipeline — its own, one a person
+	 * attaches, or a plugin's — will ever put a form to a participant the AI
+	 * portrays, and an unanswerable form is a stuck session; the scribe is an
+	 * envoy the AI portrays. One graph (`answerFormSpec`), published under
+	 * this genre's inlet lock, so nothing above it moves.
+	 *
+	 * ⚠ Recorded before the catalog's `dist` carries it, on the Lair block's
+	 * terms: computed from `core-catalog/src` and skipped by construction
+	 * until the build catches up. ⚠ `sdk-tests/writingRoom.test.ts` pins its
+	 * specs from an explicit list rather than by scanning `CORE_SPECS`, so
+	 * this document has no pin on the SDK side — this line is its only guard.
+	 */
+	"core:spec/answer-form-writing-room@1.0.0": "7a5c89502dd7a",
+	/**
+	 * The **Whodunit** genre (plans/genres-and-showcase-plugins §4, U4) — seven
+	 * new slugs, and nothing above them moves. Every node they pin is one core
+	 * already shipped; no existing spec or type was edited.
+	 *
+	 * `whodunit-respond` is Adventure's four-agent turn, and its character-lore
+	 * lane is **inside** the voices `each`, wired to that iteration's own speaker
+	 * (W1): a lane on the spine reads once on a scope that names no character, so
+	 * every voice would be handed every suspect's private entries, which in this
+	 * genre is the answer. `whodunit-verdict` is the one spec that reads
+	 * `core:query/lorebook-triggers@1`, the node that returns all three bands at
+	 * once: the judge is the only prompt in the genre shown the whole case.
+	 *
+	 * ⚠ **Recorded before the catalog's `dist` carries them**, on exactly the
+	 * terms the Lair block above states: computed from `core-catalog/src` (the
+	 * SDK suite's `whodunit.test.ts` records the same seven), skipped by
+	 * construction until `npm run sdk:build` catches up.
+	 */
+	// Moved twice on 2026-09-17, both recomputed from `core-catalog/src` the way
+	// this block's note says; `sdk-tests/whodunit.test.ts` records the same
+	// values.
+	//
+	// First by the genre's `difficulty` → `candour` rename (R1: Adventure owns
+	// `difficulty` over `story | normal | hard`). A create document carries the
+	// genre declaration itself — `spec({ genre: { shape … } })` — so the
+	// field's key, label, enum and default are inside it.
+	//
+	// Then by D-4a (`core:task/pick-by-hash@1` + `core:task/cast-choices@1`):
+	// the create run reads the cast and **derives the culprit**, three nodes
+	// that publish to nothing — the derivation is the record, and the one
+	// per-session store a spec can reach is the ledger two widgets render.
+	// (was "1e3ab7a4c2af5e", then "19d5dd6ff887f0")
+	"core:spec/whodunit-create@1.0.0": "1117893aafdd92",
+	// Moved (W1, 2026-09-17): the same per-voice lore lane, pool and rank
+	// Adventure's and Lair's respond specs gained — a suspect reads their own
+	// private entries, and only their own. (was "112b003db90fdb")
+	"core:spec/whodunit-respond@1.0.0": "1631751a942d1a",
+	// D-4a: the picker's `contextBudget → context → lines → prompt → write`
+	// chain — a whole `generate-json` call whose job was to read the cast back
+	// out as `{ key, label }` — is one `cast-choices` task, and the history lane
+	// that fed it went with it. The options are keyed by participant reference
+	// now, not by a name a model spelled. (was "80dd0b85bd53c")
+	"core:spec/whodunit-question@1.0.0": "5832beca7487a",
+	/** What the question's options fire — in no listing; see `whodunitActions.ts`. */
+	"core:spec/whodunit-answer@1.0.0": "1fdc133dbc3a7b",
+	"core:spec/whodunit-search@1.0.0": "10b9daa275052b",
+	// The same removal as `whodunit-question`. (was "1041c44a77e79")
+	"core:spec/whodunit-accuse@1.0.0": "15fb4fa0bbffdd",
+	/**
+	 * What the accusation's options fire — in no listing, and the one spec shown
+	 * the whole case.
+	 *
+	 * Moved 2026-09-17 by the verdict compare, on `core:task/pair@1`: the spec
+	 * re-derives the culprit with the create run's own two nodes
+	 * (`cast-choices` → `pick-by-hash`, same list, same scope), pairs it with the
+	 * accusation, and a junction decides — `{ path: 'accused', equalsPath:
+	 * 'culprit' }`. The `accused` node, wired to nothing since D-4a, is the first
+	 * half of that pair. The fold writes `core:slot/case@1`, so the outcome of
+	 * the game is the graph's and never a model's, and the judge became the
+	 * ending's planner: told the verdict and the culprit through its context's
+	 * `fields`, and answering with beats alone. (was "8be81c0e7bbf5")
+	 */
+	"core:spec/whodunit-verdict@1.0.0": "b92b02c30a527",
+	/**
+	 * Whodunit's answer pipeline, added by the same ruling and the same one
+	 * graph — and this is the genre with the clearest use for it: a narrator
+	 * putting a yes/no to a **suspect** is a form addressed to somebody the AI
+	 * portrays, and every suspect here is. Nothing reaches it today (every
+	 * form the genre ships is the detective's), which is why it is a promise
+	 * rather than a path. Inert until the build, as above;
+	 * `sdk-tests/whodunit.test.ts` records the same value.
+	 */
+	"core:spec/answer-form-whodunit@1.0.0": "93c213ce4323"
 }
 
 describe("published spec hashes", () => {

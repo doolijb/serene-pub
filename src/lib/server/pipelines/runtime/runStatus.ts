@@ -35,6 +35,7 @@ import {
 	fillStatusVars,
 	isParticipantRef,
 	sameStatus,
+	statusVarsMentioned,
 	type ParticipantRef,
 	type StatusText
 } from "@serene-pub/sdk"
@@ -207,10 +208,9 @@ export function createStatusRelay(opts: StatusRelayOptions): StatusRelay {
 		}).catch(() => undefined))
 
 	const fill = async (text: StatusText): Promise<StatusText> => {
-		// Only a text that mentions the variable pays for the read.
-		const mentions = Object.values(text.i18n).some(
-			(t) => typeof t === "string" && t.includes("{speaker}")
-		)
+		// Only a text that mentions the variable pays for the read — read
+		// through the SDK, which walks both spellings of `i18n` (R-20).
+		const mentions = statusVarsMentioned(text).includes("speaker")
 		if (!mentions || text.vars?.speaker !== undefined) return text
 		return fillStatusVars(text, { speaker: await speakerName() })
 	}

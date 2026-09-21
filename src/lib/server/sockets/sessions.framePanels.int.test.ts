@@ -4,8 +4,15 @@
  * it in `modePanels` with a resolved `/plugin-ui/...` src when the owning plugin
  * is installed, pass native panels through untouched, and drop a frame whose
  * plugin is absent to a placeholder (no src) — never an error.
+ *
+ * And, since the namespacing ruling (2026-09-17), the other half: a plugin's
+ * OWN widgets — the ones it declares under `surfaces.panels`, which belong to
+ * no genre — are seated in every session under `<pluginId>:<panelId>`, and
+ * disabling the plugin takes them off the wire without touching anything a
+ * person arranged.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
+import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 
@@ -137,5 +144,145 @@ describe("sessions:view — frame panels (21)", () => {
 		const map = res.modePanels.find((p) => p.id === "map")!
 		expect(map.surface).toMatchObject({ kind: "frame" })
 		expect(map.src).toBeUndefined()
+	})
+
+	/**
+	 * A plugin with two panels of its own and a genre that declares neither.
+	 * Deliberately declares a panel named `map` — the id the genre above uses —
+	 * so the namespacing is tested against the collision it exists to prevent.
+	 */
+	async function pluginOnlyScenario() {
+		const k = n++
+		const owner = await makeUser(`pw-owner-${k}`)
+		const pluginId = `acme.tray-${k}`
+		await testDb.insert(schema.plugins).values({
+			pluginId,
+			name: "Tray",
+			bundleSource: "// x",
+			bundleHash: "deadbeef",
+			enabled: true,
+			manifest: {
+				surfaces: {
+					panels: [
+						{
+							id: "map",
+							entry: "ui/tray.html",
+							title: "Dice tray",
+							channels: ["dice"],
+							settings: {
+								sides: { type: "number", default: 6 }
+							}
+						},
+						{ id: "log", entry: "ui/log.html", title: "Roll log" }
+					]
+				}
+			}
+		})
+		const typeId = `core:inlet/plainmode-${k}`
+		await testDb.insert(schema.pipelineDefinitionRegistry).values({
+			definitionId: typeId,
+			version: 1,
+			kind: "inlet",
+			status: "live",
+			sessionShape: {
+				panels: [
+					{
+						id: "map",
+						title: "The genre's own map",
+						role: "secondary",
+						surface: { kind: "native", component: "sample-notes" },
+						settings: { zoom: { type: "number", default: 1 } }
+					}
+				]
+			}
+		})
+		const [session] = await testDb
+			.insert(schema.sessions)
+			.values({
+				userId: owner.id,
+				isGroup: false,
+				genreId: `${typeId}@1`
+			})
+			.returning()
+		return { owner, session, pluginId }
+	}
+
+	const view = async (userId: number, sessionId: number) => {
+		const { sessionsViewHandler } = await import("./sessions")
+		return sessionsViewHandler.handler(
+			fakeSocket(userId),
+			{ sessionId } as any,
+			noop
+		)
+	}
+
+	test("an enabled plugin's own panels are seated under namespaced ids", async () => {
+		const s = await pluginOnlyScenario()
+		const res = await view(s.owner.id, s.session.id)
+
+		const mine = res.modePanels.filter((p) =>
+			p.id.startsWith(`${s.pluginId}:`)
+		)
+		expect(mine.map((p) => p.id).sort()).toEqual([
+			`${s.pluginId}:log`,
+			`${s.pluginId}:map`
+		])
+
+		const tray = mine.find((p) => p.id === `${s.pluginId}:map`)!
+		expect(tray.title).toBe("Dice tray")
+		expect(tray.role).toBe("secondary")
+		expect(tray.src).toBe(`/plugin-ui/${s.pluginId}/ui/tray.html`)
+		expect(tray.channels).toEqual(["dice"])
+		// The declared schema reaches the wire — without it the settings card
+		// draws no controls, whoever declared the widget.
+		expect(tray.settings).toEqual({ sides: { type: "number", default: 6 } })
+		// Offered, never on: an install must not rearrange a live session.
+		expect(tray.defaultActive).toBe(false)
+
+		// The genre's plain `map` is untouched and still first, and it now
+		// carries ITS declared settings too.
+		const genreMap = res.modePanels.find((p) => p.id === "map")!
+		expect(genreMap.title).toBe("The genre's own map")
+		expect(genreMap.surface).toMatchObject({ kind: "native" })
+		expect(genreMap.settings).toEqual({
+			zoom: { type: "number", default: 1 }
+		})
+		expect(res.modePanels.indexOf(genreMap)).toBeLessThan(
+			res.modePanels.indexOf(tray)
+		)
+
+		// ⏳ The pre-widget listing keeps the BARE declared id its readers
+		// were written against.
+		expect(
+			res.panels
+				.filter((f) => f.pluginId === s.pluginId)
+				.map((f) => f.panelId)
+				.sort()
+		).toEqual(["log", "map"])
+	})
+
+	test("disabling the plugin takes its widgets off the wire, and nothing else", async () => {
+		const s = await pluginOnlyScenario()
+		expect(
+			(await view(s.owner.id, s.session.id)).modePanels.some((p) =>
+				p.id.startsWith(`${s.pluginId}:`)
+			)
+		).toBe(true)
+
+		await testDb
+			.update(schema.plugins)
+			.set({ enabled: false })
+			.where(eq(schema.plugins.pluginId, s.pluginId))
+
+		const res = await view(s.owner.id, s.session.id)
+		// Gone from both lists — the client sees no instance and draws
+		// nothing. Its layout rows, settings and styles are untouched, which
+		// is what lets a re-enable bring the arrangement back.
+		expect(
+			res.modePanels.some((p) => p.id.startsWith(`${s.pluginId}:`))
+		).toBe(false)
+		expect(res.panels.some((f) => f.pluginId === s.pluginId)).toBe(false)
+		// The genre's own widget is not collateral.
+		expect(res.modePanels.some((p) => p.id === "map")).toBe(true)
 	})
 })

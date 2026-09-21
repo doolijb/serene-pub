@@ -25,6 +25,7 @@
 
 import {
 	run,
+	sessionEvents,
 	type FormAddressedPayload,
 	type FormBlock,
 	type NodeEvent,
@@ -38,7 +39,11 @@ import {
 	type RunLineage
 } from "$lib/server/pipelines/runtime/lineage"
 import { createReviewer } from "$lib/server/pipelines/runtime/reviewGate"
-import { createHost, type HostScope } from "$lib/server/pipelines/runtime/host"
+import {
+	createHost,
+	type HostScope,
+	type PendingFire
+} from "$lib/server/pipelines/runtime/host"
 import { buildWorld } from "$lib/server/pipelines/config/world"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
 import { pluginNodeBindings } from "$lib/server/pipelines/runtime/pluginBindings"
@@ -46,6 +51,7 @@ import {
 	loadPublished,
 	RESPOND_SPEC_ID
 } from "$lib/server/pipelines/boot/bootstrap"
+import { specOwnerPluginId } from "$lib/server/pipelines/boot/store"
 import {
 	saveReceipt,
 	type RunArtifact
@@ -70,6 +76,7 @@ import {
 import { createStatusRelay } from "$lib/server/pipelines/runtime/runStatus"
 import { narratingProvider } from "$lib/server/pipelines/runtime/specShape"
 import {
+	ownPresence,
 	resolvePortrayals,
 	turnRefs
 } from "$lib/server/pipelines/runtime/portrayals"
@@ -80,7 +87,9 @@ import {
 	peekSessionChanges,
 	pendingSessionChanges
 } from "$lib/server/messages/sessionChanges"
+import { resolveChannel } from "$lib/server/messages/channels"
 import type { PluginHookDispatch } from "$lib/server/pipelines/scripts/pluginDispatch"
+import type { RunProgress } from "$lib/shared/sockets/progress"
 import { v4 as uuidv4 } from "uuid"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
@@ -127,6 +136,17 @@ export interface TurnRequest {
 	 * counts against the budget like anything else in the prompt.
 	 */
 	continuationPrefill?: string
+	/**
+	 * Which channel the triggering message is on — the stored string, lane
+	 * included (`main`, `manuscript`, `phone:3`). Absent means `main`, which
+	 * is every session whose genre declares no channel of its own.
+	 *
+	 * It travels twice, because two different things need it: onto the
+	 * inlet's `channel` port, where a genre's junction can branch on it, and
+	 * onto the host scope, where the turn's channel is turned into the
+	 * declared `voice` the seed line takes (`HostScope.channel`).
+	 */
+	channel?: string
 	/**
 	 * The reply row this turn re-drives — a regenerate, swipe or continue of a
 	 * message that already exists. On the inlet's `messageId` port; the spec's
@@ -261,6 +281,14 @@ export interface SpecRunRequest {
 	 */
 	verb?: "regenerate" | "swipe" | "continue"
 	/**
+	 * Which channel this run's trigger is on (R-C, 2026-09-17). Reaches the
+	 * host scope, which is where the turn's channel becomes the declared
+	 * `voice` its seed line takes — see `HostScope.channel`. Absent means
+	 * `main`; the inlet's own `channel` port is shaped by the caller beside
+	 * this, on `input`.
+	 */
+	channel?: string
+	/**
 	 * What the verb's row held before its handler cleared it — a
 	 * regenerate's, and only a regenerate's (U5b review W3). Reaches the
 	 * host scope, where the finishing write records it as `previous` on the
@@ -269,6 +297,12 @@ export interface SpecRunRequest {
 	 * the only party that saw the text before it cleared the row.
 	 */
 	previous?: { content: string }
+	/**
+	 * The form this run answers (U5f) — set by `fireAction` for a press on a
+	 * block; reaches the host scope, where `create-message` stamps it on the
+	 * rows it writes as `metadata.answersForm`. See `HostScope.answersForm`.
+	 */
+	answersForm?: { messageId: number; blockId: string }
 	/**
 	 * Rows this run is producing that the caller already knows about. The
 	 * host records everything the run writes as it is written, so almost no
@@ -304,6 +338,16 @@ export interface SpecRunRequest {
 	 * watching a token estimate.
 	 */
 	onStatus?: (nodeKey: string, text: StatusText) => void
+	/**
+	 * This run, or a run dispatched under it, has parked at a review gate
+	 * (U5d review, R-b): the entry is stored and the person has the card.
+	 * Handed down to every child (`dispatchAddressedForms`, `dispatchFires`)
+	 * so the fact reaches whoever is holding an ack or a lock on the tree —
+	 * `fireAction` races its own run against it and answers `parked`
+	 * promptly rather than holding the session's trigger lock until the
+	 * owner decides. Told once per gate.
+	 */
+	onParked?: (run: { runId: string; specId: string }) => void
 	signal?: AbortSignal
 	/**
 	 * The same stop, in the shape the executor speaks (13 §3).
@@ -440,6 +484,12 @@ export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
 		sessionId: request.sessionId
 	})
 
+	// Whose document this is (D-6) — read from the spec ROW, joined to the
+	// plugin that installed it, never inferred from the id's namespace. One
+	// small query per run, beside the two the load above already costs, because
+	// the answer has to be a row's and a row is where it is.
+	const ownerPluginId = await specOwnerPluginId(request.db, specId)
+
 	// The same run id the executor stamps below, hoisted so a plugin link's
 	// invocation-log row soft-links to the run that fired it — and so the host
 	// scope built just below can name the run its effects belong to.
@@ -472,6 +522,16 @@ export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
 	 * reaches no host and collects nothing.
 	 */
 	const addressed: Array<{ payload: FormAddressedPayload; form: FormBlock }> = []
+
+	/**
+	 * The fires this run's `answer-form` commits collected (U5d review, W2):
+	 * each is the click an oracle's answer makes, dispatched through
+	 * `fireAction` **after this run's receipt is saved** — outside any node
+	 * timeout, as this run's child — for the same reason the addressed forms
+	 * are. A commit that ran the action inside itself would run a model call,
+	 * and a review gate, inside a write's timeout.
+	 */
+	const fires: PendingFire[] = []
 
 	/**
 	 * The run's live row — core's half of the pipeline owning its row. Which
@@ -558,20 +618,28 @@ export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
 		draftMessage: request.draftMessage,
 		portrayals,
 		verb: request.verb,
+		// The turn's channel, for the one answer the host derives from it:
+		// that channel's declared voice, on the cast read (R-C).
+		channel: request.channel,
 		previous: request.previous,
+		answersForm: request.answersForm,
 		// Which document this is, so the built-in writes can refuse to
 		// perform under any but their own (U5b review W8).
 		specId,
+		// …and whose it is (D-6). Absent for core's own specs, which is the
+		// same absence as "no plugin installed this" rather than a lookup that
+		// failed — `specOwnerPluginId` reads the row's owner, and core's is
+		// NULL by construction.
+		ownerPluginId,
 		// What this document contributes and how it was entered (U5d): the
 		// message writes stamp a block's action from the former and refuse a
 		// function the document declares no action for; `answer-form` refuses
 		// to perform under any inlet but `form-addressed@1` by the latter.
 		contributes: doc.contributes,
-		inletDefinitionId: doc.input
-			? `${doc.input.definitionId}@${doc.input.definitionVersion}`
-			: undefined,
+		inletDefinitionId: inletDefinitionIdOf(doc),
 		lineage: request.lineage,
 		addressed,
+		fires,
 		artifacts,
 		io: request.io,
 		live,
@@ -731,7 +799,10 @@ export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
 			userId: request.userId,
 			sessionId: request.sessionId,
 			specId,
-			signal: request.signal
+			signal: request.signal,
+			...(request.onParked
+				? { onParked: () => request.onParked!({ runId, specId }) }
+				: {})
 		})
 	})
 
@@ -779,10 +850,175 @@ export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
 	 */
 	if (addressed.length && receipt.outcome === "ok")
 		await dispatchAddressedForms(request, receipt, addressed)
+	/**
+	 * The fires this run's answers made (W2), dispatched now for the same
+	 * reasons — after the receipt, awaited, stoppable through this run's
+	 * signal, never failing this run. The caps were asked at the commit
+	 * (`answer-form`): a fire it refused carries the cap and is receipted
+	 * here, after this run's own row (S-b), on a run that halted on it;
+	 * every other fire is admitted and dispatched only when this run went
+	 * to the end. `fireAction`'s own refusals are receipted as halted runs
+	 * the tree's reader can see.
+	 */
+	if (fires.length) await dispatchFires(request, receipt, fires)
 	// A root that has finished takes its descendant count with it.
 	if (!request.lineage) releaseRoot(runId)
 
 	return receipt
+}
+
+/**
+ * Dispatch every fire a run's `answer-form` commits collected (U5d review,
+ * W2), in order, through `fireAction` — the road a click takes — as the
+ * addressee, under the run owner, as children of the run whose receipt was
+ * just saved. The run's pinned portrayals ride along (W3): the answer was
+ * the AI's when this run started, and a member joining as the addressee
+ * mid-answer does not flip it.
+ *
+ * **Every fire leaves a row under its own id** — the answer's receipt names
+ * `firedRunId`, and a run the inspector cannot find is worse than one that
+ * says why it never ran:
+ *
+ * - a fire the commit's cap **refused** (`refused`, S-b) is receipted here,
+ *   after the parent's row, and never dispatched;
+ * - a `refused` outcome — the form was answered meanwhile, the action turned
+ *   off — is receipted as a halted run;
+ * - a `stopped` outcome with no receipt — the parent was stopped before the
+ *   fire started (W-a) — is receipted as `cancelled`, actor and reason as
+ *   the executor would have stamped them;
+ * - a throw on the way (W-a) is receipted as a halt on the error's sentence,
+ *   and never fails this run;
+ * - a run **parked** at review (R-b) leaves no row yet: it keeps its handle,
+ *   its receipt lands when the owner decides, and this tree returns without
+ *   it so the trigger lock and the ack are released.
+ */
+async function dispatchFires(
+	request: SpecRunRequest,
+	receipt: Receipt,
+	fires: ReadonlyArray<PendingFire>
+): Promise<void> {
+	const { fireAction } = await import("$lib/server/pipelines/runtime/fireAction")
+	const { refusalReceipt } = await import(
+		"$lib/server/pipelines/runtime/sessionEvents"
+	)
+	const lineage = childLineage({ runId: receipt.runId, lineage: request.lineage })
+	const row = async (
+		fire: PendingFire,
+		reason: string,
+		stop?: { by: string }
+	) => {
+		try {
+			await refusalReceipt(request.db, {
+				runId: fire.runId,
+				specId: fire.specId,
+				sessionId: request.sessionId,
+				userId: request.userId,
+				lineage,
+				reason,
+				...(stop ? { outcome: "cancelled" as const, cancelledBy: stop.by } : {})
+			})
+		} catch (err) {
+			// The row is the last resort; failing to write it must not take
+			// the parent's return with it.
+			console.warn(`[forms] the fire ${fire.runId} could not be receipted:`, err)
+		}
+	}
+	for (const fire of fires) {
+		if (fire.refused) {
+			await row(fire, fire.refused)
+			continue
+		}
+		// A run that did not go to the end fires nothing: a fire collected
+		// by a run that was then stopped, or halted at a later node, is not
+		// an answer the story has. (A cap's own halt carries `refused` and
+		// was receipted above.)
+		if (receipt.outcome !== "ok") continue
+		try {
+			await announceChildStage(request, receipt, fire.specId)
+			const outcome = await fireAction(request.db, {
+				sessionId: request.sessionId,
+				action: fire.action,
+				messageId: fire.messageId,
+				blockId: fire.blockId,
+				payload: fire.payload,
+				actor: { userId: request.userId, as: fire.as },
+				runId: fire.runId,
+				io: request.io,
+				parentSignal: request.signal,
+				lineage,
+				portrayals: receipt.portrayals,
+				onProgress: request.sink?.onProgress,
+				onStatus: request.onStatus,
+				onParked: request.onParked,
+				// A child parked at review settles long after every root has
+				// pushed (U5e, review W-A2): its own settle re-sends the
+				// list, or the grey it left stays until someone reloads.
+				onSettled: () => {
+					void import("$lib/server/sessions/actionsPush").then(
+						({ pushSessionActions }) =>
+							pushSessionActions(request.io, request.sessionId)
+					)
+				}
+			})
+			if (outcome.kind === "refused") await row(fire, outcome.error)
+			else if (outcome.kind === "stopped" && !outcome.receipt)
+				await row(fire, outcome.reason, { by: outcome.by })
+		} catch (err) {
+			console.warn(
+				`[forms] the answer to form ${fire.blockId} on message ${fire.messageId} did not fire:`,
+				err
+			)
+			await row(
+				fire,
+				`the fire did not run: ${err instanceof Error ? err.message : String(err)}`
+			)
+		}
+	}
+}
+
+/**
+ * A child run is starting: one frame on the parent's progress card naming
+ * it (U5d review, S4) — *Answer a form (chat)*, the spec's display name —
+ * so the person who pressed sees the tree being made, before the child's
+ * own statuses arrive on the same card.
+ *
+ * The frame CLEARS the standing status (`status: null`), and has to: the
+ * card shows a status in place of the stage, and a status once sent stands
+ * until the next — so the parent's last status (*is thinking*) hid every
+ * child's stage, and the tree was invisible from the card (2026-09-17). A
+ * status is about the node that set it, and that node's run has ended; the
+ * child's own statuses replace the stage as they arrive, as before.
+ */
+async function announceChildStage(
+	request: SpecRunRequest,
+	receipt: Receipt,
+	specId: string
+): Promise<void> {
+	if (!request.sink?.onProgress) return
+	const [spec] = await request.db
+		.select({ name: schema.pipelineSpecs.name })
+		.from(schema.pipelineSpecs)
+		.where(eq(schema.pipelineSpecs.slug, specId))
+		.limit(1)
+	// No `runId` and no `specId`: the SINK keys the frame. On the trigger
+	// road `fireAction`'s wrapper stamps its own run's id and spec after the
+	// spread, so the child's stage lands on the root's card (S4); a sink that
+	// spreads the event LAST (`runReply.progress`) would otherwise take a key
+	// this function chose, and a frame keyed to a run the client never saw
+	// start is a card nobody can clear (2026-09-17 review, W2).
+	request.sink.onProgress({
+		sessionId: request.sessionId,
+		stage: spec?.name ?? specId,
+		status: null
+	} as RunProgress)
+}
+
+/** The document's inlet, pinned — `core:inlet/user-message@1` — or undefined for a document with none. */
+function inletDefinitionIdOf(doc: {
+	nodes: Array<{ kind: string; definitionId: string; definitionVersion: number }>
+}): string | undefined {
+	const inlet = doc.nodes.find((n) => n.kind === "inlet")
+	return inlet ? `${inlet.definitionId}@${inlet.definitionVersion}` : undefined
 }
 
 /**
@@ -809,17 +1045,32 @@ async function dispatchAddressedForms(
 		.limit(1)
 	const genreId = session?.genreId ?? "core:genre/chat"
 	const lineage = childLineage({ runId: receipt.runId, lineage: request.lineage })
+	const { resolveSessionEventSpec } = await import(
+		"$lib/server/pipelines/runtime/sessionEvents"
+	)
+	const answerSpec = await resolveSessionEventSpec(
+		request.db,
+		genreId,
+		sessionEvents.formAddressed,
+		{ sessionId: request.sessionId }
+	)
 	for (const { payload, form } of addressed) {
 		const parsed = parseParticipantRef(payload.addressee)
 		try {
+			if (answerSpec) await announceChildStage(request, receipt, answerSpec)
 			await dispatchSessionEvent(request.db, {
 				sessionId: request.sessionId,
 				userId: request.userId,
 				genreId,
-				event: "core:event/form-addressed@1",
+				event: sessionEvents.formAddressed,
 				lineage,
 				io: request.io,
 				signal: request.signal,
+				// The child's frames ride the parent's card (S4), and a park
+				// anywhere under it reaches whoever holds the ack (R-b).
+				sink: request.sink,
+				onStatus: request.onStatus,
+				onParked: request.onParked,
 				input: {
 					main: payload,
 					sessionScope: {
@@ -882,6 +1133,31 @@ export async function runTurn(request: TurnRequest): Promise<Receipt> {
 	 * assumed away. A change written while this run ran is left for the
 	 * next one either way.
 	 */
+	/**
+	 * Who **pressed** — the inlet's `presser` port (G9, 2026-09-17).
+	 *
+	 * The run's owner, as a participant reference: their persona in this
+	 * session where they have one (`character:<id>` — a persona IS a
+	 * character since 0132, and a line written as them is written as that
+	 * character), else themselves. The same resolution a form answered by
+	 * nobody in particular already used, so the two cannot disagree about who
+	 * a person is here.
+	 *
+	 * ⚠ Not `speaker`. `speaker` is whose turn it is — who the reply comes
+	 * out as — and on nearly every turn the two differ: a person types and a
+	 * character answers. This is the other end of that sentence, and the port
+	 * a spec wires into `create-message@1`'s `speaker` to write a line AS the
+	 * person who pressed.
+	 */
+	const presserPresence = await ownPresence(
+		request.db,
+		request.sessionId,
+		request.userId
+	)
+	const presser: ParticipantRef =
+		presserPresence !== null
+			? `character:${presserPresence}`
+			: `user:${request.userId}`
 	const looking = !!(request.preview || request.skipReceipt)
 	const pending = looking
 		? {
@@ -902,6 +1178,7 @@ export async function runTurn(request: TurnRequest): Promise<Receipt> {
 		draftMessage: request.draftMessage,
 		sideCharacter: request.sideCharacter ?? null,
 		verb: request.verb,
+		channel: request.channel,
 		previous: request.previous,
 		io: request.io,
 		onNode: request.onNode,
@@ -915,6 +1192,15 @@ export async function runTurn(request: TurnRequest): Promise<Receipt> {
 			 * whose input type declares no such port never resolve it.
 			 */
 			continuationPrefill: request.continuationPrefill ?? "",
+			/**
+			 * Which channel the triggering message is on (R-C, 2026-09-17).
+			 * Always supplied — `main` when the trigger named none — for the
+			 * same reason `continuationPrefill` always carries `""`: a port a
+			 * junction may compare against is no use if half the turns leave
+			 * it unresolved. Specs whose input type declares no such port
+			 * never resolve it.
+			 */
+			channel: resolveChannel(request.channel),
 			// The side-character trigger's first step, on the input node's own
 			// port — so the receipt answers "why did this turn sound like
 			// Vell" afterwards rather than only the trigger knowing. Null on
@@ -927,6 +1213,10 @@ export async function runTurn(request: TurnRequest): Promise<Receipt> {
 			// answer as a bare id, one release longer, for the readers that
 			// still take the id.
 			speaker,
+			// And who PRESSED — see above. Always supplied, for the reason
+			// `channel` always is: a port a spec may wire is no use if half
+			// the turns leave it unresolved.
+			presser,
 			// Both as ports and bundled. A query that wants the pair takes the
 			// scope; a node that wants only the speaker takes the id, instead
 			// of accepting the whole scope and reaching into it.

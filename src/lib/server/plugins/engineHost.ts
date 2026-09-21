@@ -143,6 +143,9 @@ function forwardingRenderer(
 				completionTemplate: ctx.completionTemplate ?? null
 			},
 			{
+				// A render is pure — template and variables in, a string out —
+				// so it gets a task's ctx: neither storage nor fetch (R-3).
+				kind: "task",
 				timeoutMs: ENGINE_TIMEOUT_MS,
 				maxOutputBytes: ENGINE_MAX_OUTPUT_BYTES,
 				// The run this render belongs to, forwarded so cancelling that run

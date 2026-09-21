@@ -11,9 +11,10 @@
  * the node that renders them is a Task, and a Task is handed no services (F11).
  */
 
-import { asc, eq } from "drizzle-orm"
+import { and, asc, eq, isNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
+import { coreTemplateIdFor } from "$lib/server/pipelines/entities/templateIds"
 import {
 	SHIPPED_VARIABLE_TEMPLATES,
 	seedKeyFor
@@ -75,11 +76,20 @@ export async function seedVariableTemplates(
 			 * variant now, so a rename is what it looks like — an update to a
 			 * row that keeps its identity and everyone's selection of it.
 			 */
-			if (existing.source !== t.source || existing.name !== t.name) {
+			// Derived from the seed key (R19), and in the drift check for the
+			// same reason `name` is: migration 0143 names the rows an upgraded
+			// install already had, and this names the ones seeded after it.
+			const templateId = coreTemplateIdFor(seedKey)
+			if (
+				existing.source !== t.source ||
+				existing.name !== t.name ||
+				existing.templateId !== templateId
+			) {
 				await db
 					.update(schema.pipelineVariableTemplates)
 					.set({
 						name: t.name,
+						templateId,
 						source: t.source,
 						engine: CORE_TEMPLATE_ENGINE,
 						updatedAt: new Date()
@@ -95,6 +105,7 @@ export async function seedVariableTemplates(
 		await db.insert(schema.pipelineVariableTemplates).values({
 			variableId: t.variableId,
 			seedKey,
+			templateId: coreTemplateIdFor(seedKey),
 			name: t.name,
 			source: t.source,
 			// Explicit rather than NULL: a template's engine travels on the
@@ -151,7 +162,17 @@ export async function defaultVariableTemplateFor(
 	const [first] = await db
 		.select()
 		.from(schema.pipelineVariableTemplates)
-		.where(eq(schema.pipelineVariableTemplates.variableId, variableId))
+		.where(
+			and(
+				eq(schema.pipelineVariableTemplates.variableId, variableId),
+				// Never a WITHDRAWN row (R19) — see `defaultPromptFor`. This
+				// fallback is "a variable core ships nothing for, which is any
+				// plugin's", so it is exactly where a disabled package's layout
+				// would otherwise become the shipped choice. NULL on every row
+				// that is not a plugin's.
+				isNull(schema.pipelineVariableTemplates.withdrawnAt)
+			)
+		)
 		.orderBy(asc(schema.pipelineVariableTemplates.id))
 		.limit(1)
 	return first?.id ?? null

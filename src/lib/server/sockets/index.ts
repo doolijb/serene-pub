@@ -54,6 +54,7 @@ import { registerTaskQueueHandlers } from "./taskQueue"
 import { registerActivityHandlers } from "./activity"
 import { registerCustomThemeHandlers } from "./customThemes"
 import { registerWidgetStyleHandlers } from "./widgetStyles"
+import { registerLayoutHandlers } from "./layouts"
 import { registerStateHandlers } from "./state"
 import { registerCardSourceHandlers } from "./cardSources"
 import { registerPipelineHandlers } from "./pipelines"
@@ -272,6 +273,7 @@ export function connectSockets(io: {
 		registerActivityHandlers(socket)
 		registerCustomThemeHandlers(socket, emitToUser, register)
 		registerWidgetStyleHandlers(socket, emitToUser, register)
+		registerLayoutHandlers(socket, emitToUser, register)
 		registerStateHandlers(socket, emitToUser, register)
 		registerPipelineHandlers(socket, emitToUser, register)
 		registerSessionAdminHandlers(socket, emitToUser, register)

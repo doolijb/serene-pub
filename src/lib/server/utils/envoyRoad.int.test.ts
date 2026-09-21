@@ -958,6 +958,38 @@ describe("who may act (U5g review, C1)", () => {
 		)
 		expect(ownDelete.error, ownDelete.error).toBeUndefined()
 	})
+	it("an orphaned row — an AI reply whose character was deleted globally, or a line whose author is gone — is the session owner's to delete, never a guest's", async () => {
+		const sessionId = await createGuideSession("orphan")
+		await db.insert(schema.sessionGuests).values({ sessionId, userId: guestId })
+		const { canActOnMessage } = await import("$lib/server/messages/permissions")
+		const { sessionMessagesDeleteHandler } = await import("$lib/server/sockets/sessions")
+
+		// The reply of a character that no longer exists: `character_id`
+		// nulled by `onDelete: set null`, no speaker reference, not narration.
+		// This is the row that renders as "Unknown", and before this rule
+		// nobody at all could delete it.
+		const [orphanReply] = await db
+			.insert(schema.sessionMessages)
+			.values({ sessionId, role: "assistant", content: "…", characterId: null } as any)
+			.returning()
+		expect(await canActOnMessage(db, orphanReply!.id, guestId)).toBe(false)
+		expect(await canActOnMessage(db, orphanReply!.id, userId)).toBe(true)
+		const deleted: any = await sessionMessagesDeleteHandler.handler(
+			fakeSocket(userId),
+			{ id: orphanReply!.id },
+			emit
+		)
+		expect(deleted.error, deleted.error).toBeUndefined()
+		expect((await messagesOf(sessionId)).some((m) => m.id === orphanReply!.id)).toBe(false)
+
+		// A person's line whose author account is gone (`user_id` nulled).
+		const [orphanLine] = await db
+			.insert(schema.sessionMessages)
+			.values({ sessionId, role: "user", content: "…", userId: null } as any)
+			.returning()
+		expect(await canActOnMessage(db, orphanLine!.id, guestId)).toBe(false)
+		expect(await canActOnMessage(db, orphanLine!.id, userId)).toBe(true)
+	})
 })
 
 describe("a branch keeps the seat (U5g review, C2); the shape facts count no characters (W2)", () => {

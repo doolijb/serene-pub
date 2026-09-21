@@ -320,6 +320,10 @@ export type SocketEventMap = {
 		params: Sockets.Plugins.Install.Params
 		response: Sockets.Plugins.Install.Response
 	}
+	"plugins:installLocal": {
+		params: Sockets.Plugins.InstallLocal.Params
+		response: Sockets.Plugins.InstallLocal.Response
+	}
 	"plugins:setEnabled": {
 		params: Sockets.Plugins.SetEnabled.Params
 		response: Sockets.Plugins.SetEnabled.Response
@@ -685,6 +689,12 @@ export type SocketEventMap = {
 	"sessions:runStatus": {
 		params: Sockets.Sessions.RunStatus.Params
 		response: Sockets.Sessions.RunStatus.Response
+	}
+	// Server-pushed only: a session's list row moved (a message landed, was
+	// edited, hidden, deleted, swiped, regenerated or streamed).
+	"sessions:rowChanged": {
+		params: Sockets.Sessions.RowChanged.Params
+		response: Sockets.Sessions.RowChanged.Response
 	}
 	"sessions:get": {
 		params: Sockets.Sessions.Get.Params

@@ -50,9 +50,13 @@ A pipeline and each of its **node definitions** — the declared shapes its step
 
 What a slug points at is a **content hash**: a short string computed from the pipeline's own document, or from the node definition's own declaration. Change the definition and the hash changes with it. Two installs running the same build compute the same hash for the same pipeline, which is what makes an imported pipeline verifiable rather than trusted.
 
+For a node definition the hash covers its **contract** — what a pipeline naming it runs against: its ports and shapes, its settings and their schema, what it may write, which fields a reviewer may edit, whether it may fail empty. It does not cover its **policy** — what is offered or shown: whether it is provisional, where its review gate starts, how long a step may take, what it is called. Policy is kept on the registry row beside the hash and refreshed in place, so changing it reaches every install without the slug moving.
+
 Serene Pub keeps every definition a slug has ever pointed at, filed under its hash, and remembers which one is **current**. Starting up compares the definitions in the build against the ones already stored: anything unseen is filed, and the slug's current pointer moves to it. Nothing stored is ever rewritten or removed.
 
 That is why an update to a shipped pipeline reaches you. Before 0.6 a pipeline was identified by its version number alone, so a corrected pipeline published under an unchanged version simply did not arrive: an install that had already started once kept running the old definition, silently, and each correction had to ship a repair step of its own to dislodge it.
+
+**A definition has a status.** Every node definition the registry holds is one of four things. **Live** is the ordinary case: bound to code that runs it, offered wherever definitions are offered. **Provisional** is declared but not yet runnable — a definition kept because a plan owns it (text-to-speech and the two MCP steps today). It appears nowhere a pipeline is built from, a pipeline that places one does not publish, and a stored pipeline that already places one halts at that step with a sentence saying so. **Removed** is a definition this build does not publish any more: starting up marks the row rather than deleting it, because a pipeline you kept may still name it — that pipeline's configurations get a notice reading _cannot run_ against the step, and the step halts legibly until the pipeline is edited. A removed definition that a later build publishes again simply comes back live. **Deprecated** is the one status a person sets, and an update never touches it.
 
 **A run's report names the document it used.** Open a run in the Runs panel and the header shows the slug, the version, and the first part of the hash. If the pipeline has been edited since — by an update, or by an extension being installed — the hash is marked _superseded_. The report is still an accurate account of that run; the mark is there because it is no longer a description of what the same button does today. One mark reads differently: _renamed_ with a date. The 0.6 release renamed the words every pipeline is written in — the five step kinds are **inlet · query · task · oracle · outlet**, the four grouping rules are **gather · each · loop · junction** — and every stored pipeline was rewritten to the new words and republished once. A report from before that day names the old document by its old hash; it still opens, and _renamed_ says the pipeline behind it is the same pipeline, not an edited one.
 
@@ -81,6 +85,92 @@ The message actions that alter history — delete, hide, edit, swipe, branch, an
 Every such event is written to the session's changes, and the next reply's input step publishes them on a `sessionChanges` port — a list, oldest first, each entry naming the event, the message, when, and what went: the deleted line's content, role and speaker; the text an edit replaced, and the reply a regenerate discarded; the alternative a swipe left behind and the index it selected; whether a hide hid or showed; how much of a stopped reply had arrived; the session and message a branch forked from (on the branched session — the source's history did not move). A pipeline reads it as `$.input.sessionChanges` — a context step of your own can tell the model that the line it remembers was rewritten — and the run's report shows the list on the input step. The reply pipelines Serene Pub ships do not yet render it into the prompt. (The port was `changes` until 2026-09-16; that word is the state ledger's, for a list of value changes, and a session change is about a message.)
 
 Each change reaches exactly one run: the reply that receives the list marks it as read — once the reply has landed, so a reply that fails at the model or is stopped before it wrote leaves the list for the next one — and the next reply starts from an empty one; a fresh reply's own save records nothing, since history growing is not history moving. The token estimate under the composer sees the list without marking it, so previewing never eats what the turn should see. The list is capped at the newest fifty changes: when more waited, the newest fifty arrive and the list ends with a `session-changes-truncated` entry saying how many older ones were dropped, and those are marked read without being delivered. Once a change has been read, the content it carried — the deleted line, the replaced text — is let go of; the event and the ids stay, and the run that made the write keeps what it published on its receipt. See [what a delete leaves behind](./sessions.md#floors-built-ins-and-what-each-action-emits) on the sessions page.
+
+## Questions a pipeline puts to the cast
+
+A message write — the placeholder step, or the save — takes a **blocks** port beside its text: a
+list of message blocks (text, tables, meters, and the two interactive kinds, **choices** and
+**form**). A `choices` block with an **addressee** and a **question** is a **form**: an action
+still awaiting its answer, addressed to one participant. The write validates the list, refuses a
+block naming a key this pipeline declares no action for (nothing would ever be held to an
+audience for it) or an action marked `world` (see the line, below), stamps every option with the
+identity of the action it fires and the block with an id, and stores the list as one part of the
+message. A block may name another pipeline's action on purpose — the Adventure genre's **Ask**
+points its options at **Answer** — and is then held to that installed declaration instead.
+
+Who portrays the addressee was pinned at the start of the run like everything else. A person: the
+block waits for their click, and a press on it — the block's id, the chosen option — is held to
+the addressee alone, whatever the action's own audience says. The AI: the run records
+`form-addressed` once its own receipt is saved, and the genre's binding for that event runs the
+**answer pipeline** as a child of the asking run. The shipped one (`core:spec/answer-form-chat`,
+`-adventure`, `-guide` — one graph, published once per genre because a preset binds a pipeline
+locked to its genre) reads the addressee's card and the conversation, lays the question and the
+options in as the last user turn, asks the model for one JSON object against the form's schema —
+an enum of the option keys, or the form's field schema — and its **answer-form** step commits the
+answer **exactly as a click would**: it checks the answer against the form, asks the cycle caps,
+and hands the press to the same server road a click takes — as the addressee, with the answer
+run's own reading of who portrays whom, so a member joining as the addressee while the model was
+answering does not flip it. The action itself runs **after the answer run's receipt is saved**, as
+its child, outside any step's timeout: the answer step's receipt names the action it fired and the
+child run's id, and the child's own row says how the action went. A step that could not make the
+fire — the model's answer named no option, the question was answered meanwhile, a cap refused —
+ends the answer run on a **halt** with the sentence, never an error. `form-answered` lands in the
+session's changes for the next reply's input step (`answeredBy: 'oracle'`; a click says `click`),
+and the block is marked **answered**: a question is answered once, a second press is refused naming
+who answered, and every client greys the block. Every run in the tree carries its parent, its root
+and its depth, and the run inspector shows them. Review may be turned on for the answer step like
+any other write, and the reviewer edits the answer alone; review on the *action's* own write parks
+the child at its gate and nothing else — the answer run has already ended. **A parked run
+releases the press.** The moment any run in the tree parks — the pressed action's own write, or
+the write of an action an answer fired — the press is acknowledged as *parked* and the session's
+trigger lock is released, so other triggers in the session go on working while the owner decides;
+before, one review held the lock and the ack across the whole tree, and the AI-answer path could
+reach that with nobody having clicked. The parked run keeps its handle: it can still be stopped,
+its review card is the same card, and approving it lands the line exactly as before — the person
+who pressed then receives the run's outcome as a push (the terminal frame on the progress card,
+and the same *success* / *error* / *cancelled* answer the press would have carried). A fire that
+never ran still leaves a row under the id the answer's receipt named: a cap refusal (receipted
+after the answer's own row, so the tree reads in dispatch order), a fire stopped before it
+started (`cancelled`, with who stopped it), or a fire that threw (a halt on the error's sentence).
+The `answer-form` step may be placed only in a pipeline on the `form-addressed` input —
+validation refuses it anywhere else, and so does the write.
+
+The person who pressed sees the tree being made: the answer run's stage — *Answer a form (chat)*
+— and its statuses ride the progress card of the run they started, and the press is acknowledged
+once the whole tree has finished, or as soon as any run in it has parked at a gate.
+
+Two caps hold the tree (01 §8): no run stands more than **four** dispatches deep, and no asking
+run fathers more than **sixteen**. A dispatch past either is refused **and receipted** — a halted
+run row naming the cap, its lineage filled — whether it was the answer pipeline being dispatched or
+the action an answer fires, so an answer that asks another question stops on a sentence in the
+inspector rather than looping.
+
+**The line.** An action declares which side of it the result falls: `fiction` (the default —
+messages, state proposals, narration, a branch) or `world` — cards, lorebook data, settings,
+permissions, connections. A `world` action may appear only in the composer, session settings,
+admin or review venues, its acting audience is the owner's (or an administrator's), no block may
+name it, and the answer pipeline refuses to answer it. Each rule is refused where the author is —
+at construction, in `validate()`, in a package's announcement — and again at the instance's publish
+and at the write. Serene Pub's own message verbs, including branch (a copy of a session is still
+the fiction), are `fiction`; writing lorebook entries and filing graph proposals are `world`.
+
+**Review fields.** Every step that writes or reaches outside declares which of its inputs a
+reviewer may edit at the gate — `review: { fields }` — and Serene Pub's own all do: the text of a
+message write, the prompt and the negative of an image render, the name and content of a lore
+entry, the answer of a form; nothing on a step whose payload is a compiled prompt or an
+identity (approve or refuse). The text-generating steps (`generate-text`, `generate-json`,
+`generate-with-tools`) declare no editable field on purpose: their pre-call gate is approve or
+reject, and the compiled prompt is inspected in the debug preview, not retyped at the gate. A
+definition that declares none still gates — the form is inferred from the whole payload, every
+field editable, which is what a plugin's step gets until it declares — but registering it records
+the omission, and validation warns on every pipeline that places it.
+
+**What the instance checks at publish.** Every document an instance stores — the shipped catalog,
+an import, a hand-written one — is run through the SDK's `validate()` when it is saved, and any
+finding of error severity refuses the save with the finding's own sentence: one input step first,
+one primary row, no branching, every wired port's shape accepted by the port it feeds, a built-in
+write only in its own pipeline, `answer-form` only under `form-addressed`, and the action model's
+rules above. A warning is let through and reported.
 
 ## Where the weights live
 

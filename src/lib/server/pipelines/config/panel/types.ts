@@ -389,7 +389,8 @@ export interface NamespaceView extends NamespaceSummary {
 	 * fact disagreeing.
 	 */
 	modeActions: {
-		function: string
+		/** The action's key; with `specSlug`, its identity (plans/31 V2). */
+		key: string
 		name: string
 		specSlug: string
 		origin: "companion" | "attachment"

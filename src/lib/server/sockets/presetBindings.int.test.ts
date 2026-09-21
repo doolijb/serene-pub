@@ -335,11 +335,11 @@ describe("the preset decides the run", () => {
 		).toBe(clone)
 
 		// …and the reply seam, which must not disagree with it.
-		const { resolveFunctionSpec } = await import(
+		const { resolveSubjectSpec } = await import(
 			"$lib/server/pipelines/entities/sessionGenres"
 		)
 		expect(
-			await resolveFunctionSpec(db as any, GENRE, "respond", { sessionId })
+			await resolveSubjectSpec(db as any, GENRE, "core:event/message-respond@1", { sessionId })
 		).toBe(clone)
 
 		// A session on no preset still gets the lock's own answer.
@@ -350,7 +350,7 @@ describe("the preset decides the run", () => {
 			.values({ userId: plainUser.id, genreId: GENRE, isGroup: false })
 			.returning()) as any[]
 		expect(
-			await resolveFunctionSpec(db as any, GENRE, "respond", {
+			await resolveSubjectSpec(db as any, GENRE, "core:event/message-respond@1", {
 				sessionId: plain.id
 			})
 		).toBe("core:spec/respond")
@@ -521,13 +521,13 @@ describe("the preset decides the run", () => {
 		expect(verdict.fallback?.reason).toMatch(/core:spec\/narrate/)
 
 		// The reply seam agrees with the dispatch seam, as it must.
-		const { resolveFunctionVerdict } = await import(
+		const { resolveSubjectVerdict } = await import(
 			"$lib/server/pipelines/entities/sessionGenres"
 		)
-		const reply = await resolveFunctionVerdict(
+		const reply = await resolveSubjectVerdict(
 			db as any,
 			GENRE,
-			"respond",
+			"core:event/message-respond@1",
 			{ sessionId }
 		)
 		expect(reply.spec).toBe("core:spec/respond")

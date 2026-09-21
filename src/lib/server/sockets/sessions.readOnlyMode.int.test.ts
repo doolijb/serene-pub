@@ -75,7 +75,7 @@ describe("a session whose mode is not registered", () => {
 
 		const fired = await sessionsTriggerFunctionHandler.handler(
 			fakeSocket(user.id),
-			{ sessionId: session.id, function: "anything" },
+			{ sessionId: session.id, key: "anything" },
 			noopEmit
 		)
 		expect(fired.error).toContain("read-only")

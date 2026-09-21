@@ -19,30 +19,19 @@
  * returns a fresh object, and the event copy here is the same guarantee for the
  * event lane.
  */
-import {
-	projectLayout,
-	type LayoutV1,
-	type PlacementInput,
-	type WidgetEvent
-} from "$lib/shared/widgets/context"
+import type { HostFrameMessage } from "@serene-pub/sdk"
+import { projectLayout, type PlacementInput, type WidgetEvent } from "$lib/shared/widgets/context"
 
 /**
- * Frame protocol v1: the host's placement push. See `PluginFrame.svelte`.
- *
- * Type aliases rather than interfaces for the same reason `FrameStyleMessage`
- * is one — they keep an implicit index signature, and `PluginFrame.post()`
- * takes the protocol's common `Record<string, unknown>`.
+ * The host's placement push, named off the protocol's own union rather than
+ * restated here: the wire is the SDK's declaration, and a host that kept its
+ * own copy of a member is a host that can disagree with the contract a plugin
+ * compiled against.
  */
-export type FrameLayoutMessage = {
-	t: "layout"
-	layout: LayoutV1
-}
+export type FrameLayoutMessage = Extract<HostFrameMessage, { t: "layout" }>
 
-/** Frame protocol v1: one host event, the port's analog of the `on` verb. */
-export type FrameEventMessage = {
-	t: "event"
-	event: WidgetEvent
-}
+/** One host event, the port's analog of the `on` verb. */
+export type FrameEventMessage = Extract<HostFrameMessage, { t: "event" }>
 
 /**
  * The `layout` message for a measured placement.

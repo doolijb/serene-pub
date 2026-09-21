@@ -213,6 +213,30 @@ describe("the §5f decisions are what the code says", () => {
 			"core:query/character-lore@1",
 			"core:query/history-entries@1"
 		])
+			expect(declared(id).ports, id).not.toContain("text")
+	})
+
+	/**
+	 * W1 (2026-09-17): the per-speaker visibility subject, on the two reads
+	 * that produce the character-lore band and on neither of the others.
+	 *
+	 * Stated as its own decision rather than folded into the `text` cull
+	 * above, because it is the opposite move: `text` went because nothing read
+	 * it, and this arrived because the host now does. World lore and history
+	 * are not gated by a lorebook binding, so a speaker on them would be
+	 * exactly the dead control R-12 exists to refuse.
+	 */
+	it("the lore scans: `speaker` is on the two gated reads and no others", () => {
+		for (const id of [
+			"core:query/lorebook-triggers@1",
+			"core:query/character-lore@1"
+		])
+			expect(declared(id).ports.sort(), id).toEqual(["scope", "speaker"])
+		for (const id of [
+			"core:query/world-lore@1",
+			"core:query/history-entries@1",
+			"core:query/lorebook-entries@1"
+		])
 			expect(declared(id).ports, id).toEqual(["scope"])
 	})
 

@@ -25,10 +25,21 @@
  * Read off the stored manifest, never guessed from a naming convention — the
  * same posture and the same reason as its three siblings: the manifest is the
  * one statement of what a plugin can do that core can read without executing it
- * (F6, 13 §10c). Note that this is the *app-runtime* manifest key, the family
- * `hookKinds`/`nodeDefinitions`/`engines` already belong to; the SDK packager's
- * compiled manifest spells hooks differently and reconciling the two is a
- * standing item, not something this module decides.
+ * (F6, 13 §10c).
+ *
+ * **Two spellings, reconciled here** (R5, D-6). `eventHooks` above is the
+ * app-runtime key, the family `hookKinds`/`nodeDefinitions`/`engines` already
+ * belongs to. The SDK packager writes the same declarations at
+ * `hooks.eventListeners`, and this module is their one reader, so this is where
+ * the two are translated rather than merged — the app key wins where a manifest
+ * carries both, because it is the richer of the two.
+ *
+ * ⚠ The packager's entries carry `{ event }` and **no hook name**, which is a
+ * gap in the packager rather than in this reader: `hookName` is the exported
+ * function `SandboxManager.dispatch` calls, and nothing else can supply it. So
+ * a package built today registers no subscription and `subscriptionsOf` says
+ * why, per entry, instead of the subscription disappearing between two
+ * vocabularies.
  *
  * ## One kind: notification
  *
@@ -91,7 +102,7 @@
  * and it is inert until something calls `notify`. It also does not implement the
  * *per-user* consent layer of 11 §4: the admin-effective permission gate below
  * is enforced, the per-user opt-in is not, and that is the next thing this needs
- * rather than something it quietly covers.
+ * rather than something it quietly covers — plans/29 R-5 ⏳ owns it.
  */
 
 import { eq } from "drizzle-orm"
@@ -254,7 +265,11 @@ interface RawEventHookDecl {
 }
 
 /**
- * Read `eventHooks` off a stored manifest, tolerant of its json being anything.
+ * Read the event subscriptions off a stored manifest, tolerant of its json
+ * being anything, in either spelling: `eventHooks` (the app-runtime key) or the
+ * packager's `hooks.eventListeners`. See the header — the app key wins where a
+ * manifest carries both, and `where` says which one the entries came from so a
+ * refusal can name the field the author would look at.
  *
  * Returns the raw entries in declaration order; `subscriptionsOf` is what
  * validates them. Split so the tolerant read and the policy that rejects an
@@ -262,15 +277,28 @@ interface RawEventHookDecl {
  * one are.
  */
 export function eventListenersOf(manifest: unknown): RawEventHookDecl[] {
-	const raw =
-		manifest && typeof manifest === "object"
-			? (manifest as any).eventHooks
-			: undefined
-	if (!Array.isArray(raw)) return []
-	return raw.filter(
+	return readEventListeners(manifest).entries
+}
+
+/** The same read, with the manifest field the entries came from. */
+export function readEventListeners(manifest: unknown): {
+	entries: RawEventHookDecl[]
+	where: string
+} {
+	const m = manifest && typeof manifest === "object" ? (manifest as any) : undefined
+	const app = m?.eventHooks
+	const packaged = m?.hooks?.eventListeners
+	const [raw, where] = Array.isArray(app)
+		? [app, "eventHooks"]
+		: Array.isArray(packaged)
+			? [packaged, "hooks.eventListeners"]
+			: [undefined, "eventHooks"]
+	if (!Array.isArray(raw)) return { entries: [], where }
+	const entries = raw.filter(
 		(e): e is RawEventHookDecl =>
 			!!e && typeof e === "object" && !Array.isArray(e)
 	)
+	return { entries, where }
 }
 
 /** A declared timeout, clamped so a manifest cannot grant itself the instance. */
@@ -321,10 +349,11 @@ export function subscriptionsOf(row: {
 	const granted = grantedEvents(row.manifest, row.adminDenied)
 	const seen = new Set<string>()
 
-	eventListenersOf(row.manifest).forEach((decl, index) => {
+	const { entries, where } = readEventListeners(row.manifest)
+	entries.forEach((decl, index) => {
 		const event = typeof decl.event === "string" ? decl.event : ""
 		const hookName = typeof decl.hook === "string" ? decl.hook : ""
-		const at = `'${row.pluginId}' eventHooks[${index}]`
+		const at = `'${row.pluginId}' ${where}[${index}]`
 		if (!EVENT_REF.test(event)) {
 			problems.push(
 				`${at}: '${event}' is not an event reference. The grammar is ` +
@@ -335,7 +364,13 @@ export function subscriptionsOf(row: {
 		if (!hookName) {
 			problems.push(
 				`${at}: no 'hook' — the entry names the event but not the ` +
-					`exported function that answers it, and core will not guess one.`
+					`exported function that answers it, and core will not guess one.` +
+					(where === "hooks.eventListeners"
+						? ` 'serene-pub build' has written the listener's name here ` +
+							`since D-6b, so this package was built before that: rebuild ` +
+							`it, or declare the subscription as 'eventHooks': ` +
+							`[{ event, hook }].`
+						: "")
 			)
 			return
 		}
@@ -568,6 +603,7 @@ export class PluginEventRegistry {
 				// seams use for the same reasons.
 				{ event, payload },
 				{
+					kind: "event",
 					// The budget is a ceiling, never an extension: whichever of
 					// the subscriber's own deadline and what is left of the
 					// fan-out's is shorter.

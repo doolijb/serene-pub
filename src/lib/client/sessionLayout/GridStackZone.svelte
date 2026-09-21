@@ -75,7 +75,12 @@
 	import { SvelteSet } from "svelte/reactivity"
 	import type { GridStack, GridStackNode } from "gridstack"
 	import "gridstack/dist/gridstack.min.css"
-	import { frameCovers, reexpress, seedPositions } from "./arrangedGeometry"
+	import {
+		clampPos,
+		frameCovers,
+		reexpress,
+		seedPositions
+	} from "./arrangedGeometry"
 
 	interface Props {
 		items: GsItem[]
@@ -96,8 +101,34 @@
 		pinned?: boolean
 		/** Flip that state. Absent = this zone cannot be pinned (the middle). */
 		onTogglePin?: () => void
+		/**
+		 * May a REQUIRED widget be dropped into this zone? The middle can (it is
+		 * where the conversation lives); a side zone cannot.
+		 *
+		 * `locked` on a `GsItem` is how required reaches this component, and it
+		 * used to mean only "hide the remove button" — so `messages` was fully
+		 * draggable INTO a side rail. The arrangement then moved it while the
+		 * widget grid went on holding it in the middle, and the session drew the
+		 * conversation twice. The refusal belongs here, at the drop, because
+		 * here is the only place that can say no while the card is still in the
+		 * air: gridstack's `acceptWidgets` callback is handed the dragged
+		 * `.grid-stack-item`, and a required card stamps `data-required` on its
+		 * content (see `cardHtml`). Dragging INSIDE the owning zone is
+		 * untouched — gridstack short-circuits `accept` for a card already in
+		 * the grid — so the card stays as movable and resizable as it ever was.
+		 *
+		 * `commitArrangement` keeps the same rule a second time, for a blob
+		 * written before this existed.
+		 */
+		acceptsRequired?: boolean
 		onChange?: (layout: GsLayout) => void
 		onRemove?: (id: string) => void
+		/**
+		 * A card was dragged INTO this zone from another one. The only report
+		 * that names a widget AND the zone that now holds it, which is how the
+		 * commit's one-zone-per-widget invariant breaks a tie.
+		 */
+		onDropped?: (id: string) => void
 		/**
 		 * A USER GESTURE happened in this zone (drag, resize, cross-zone drop,
 		 * fit/dock, anchor toggle, group/ungroup) — as opposed to the layout
@@ -119,8 +150,10 @@
 		frame,
 		pinned,
 		onTogglePin,
+		acceptsRequired = true,
 		onChange,
 		onRemove,
+		onDropped,
 		onGesture
 	}: Props = $props()
 
@@ -317,7 +350,10 @@
 		// recover it there (see `dropped`). Absent means pinned, so the only
 		// value worth carrying is the explicit `false`.
 		const pdata = groupPinned === false ? ` data-pinned="false"` : ""
-		return `<div class="gsc ${anchorClasses(a)}${gcls}"${gstyle}${gdata}${pdata}><span class="gsc-title">${esc(it.title)}</span><span class="gsc-ctrls">${ctrls}${rm}</span></div>`
+		// What a side zone's `acceptWidgets` reads to refuse this card in
+		// mid-air (see the prop). `locked` is how required reaches a GsItem.
+		const rdata = it.locked ? ` data-required=""` : ""
+		return `<div class="gsc ${anchorClasses(a)}${gcls}"${gstyle}${gdata}${pdata}${rdata}><span class="gsc-title">${esc(it.title)}</span><span class="gsc-ctrls">${ctrls}${rm}</span></div>`
 	}
 
 	// Whole cells that fit a measured length (partials culled, not drawn).
@@ -408,8 +444,16 @@
 				margin: 4,
 				float: true, // free placement — a card stays where you drop it
 				animate: true,
-				// Accept items dragged in from the OTHER zones (cross-zone drag).
-				acceptWidgets: true,
+				// Accept items dragged in from the OTHER zones (cross-zone drag)
+				// — except a REQUIRED card in a zone that may not hold one (see
+				// the `acceptsRequired` prop). gridstack hands the callback the
+				// dragged `.grid-stack-item`, so the stamp is looked for on it
+				// and inside it; a card already in this grid never reaches here.
+				acceptWidgets: acceptsRequired
+					? true
+					: (el: Element) =>
+							!el.querySelector?.("[data-required]") &&
+							!el.matches?.("[data-required]"),
 				removable: false,
 				// The drag helper lives on <body> so it isn't clipped by a zone's
 				// bounds and can travel across zones.
@@ -476,8 +520,20 @@
 		 * clamp is what loses a layout: narrow → wide would give back nothing
 		 * but the narrow column's coordinates, scaled up (see the
 		 * ResizeObserver below, and `reexpress` in ./arrangedGeometry).
+		 *
+		 * `restoring`, not `seedFrame` alone. A frame that does not account for
+		 * the items on screen accounts for the WRONG ones, and the commonest
+		 * such frame is the one a zone that was EMPTY when the editor opened
+		 * reported for itself: `{cols, rows, items: []}`. Taken as the reference
+		 * it makes `reexpress` return nothing, so every re-measure leaves
+		 * gridstack's own `column(n, "none")` clamp standing — which only ever
+		 * shrinks `w` — and nothing ever widens the card again. One trip through
+		 * a narrow preview and the widget is stuck at a fraction of its zone,
+		 * live and saved. The seeded positions are the honest reference there.
 		 */
-		let ref: GsLayout = seedFrame ?? { cols, rows, items: seeded }
+		let ref: GsLayout = restoring
+			? seedFrame!
+			: { cols, rows, items: seeded }
 		/**
 		 * True while the ResizeObserver is re-expressing. gridstack fires a
 		 * `change` for every node it moves; the re-measure reports its result
@@ -499,21 +555,36 @@
 			// this zone's arrangement, unclamped, and it stays that way.
 			if (!touched && restoring) return
 			const nodes = grid!.save(false) as GridStackNode[]
+			// CLAMPED into this zone's own cell grid. gridstack reports what its
+			// engine holds, and a card that arrived from another zone can be
+			// reported at a cell this zone does not have (seen live: x = 7 in a
+			// 7-column zone, straight after a cross-zone drop). Nothing
+			// downstream re-checks — the live view spends `x`/`w` directly as
+			// `grid-column`, where a column past `cols` adds IMPLICIT tracks and
+			// collapses the explicit `1fr` ones to 0px, shredding every other
+			// widget in the zone. `loadArranged` clamps on the way back in for
+			// blobs already written; this stops another one being written.
 			const layout: GsLayout = {
 				cols,
 				rows,
 				items: nodes.map((n) => {
 					const m = meta.get(String(n.id))
-					return {
-						id: String(n.id),
-						x: n.x ?? 0,
-						y: n.y ?? 0,
-						w: n.w ?? 1,
-						h: n.h ?? 1,
-						...(m && anyAnchor(m.anchor) ? { anchor: m.anchor } : {}),
-						...(m?.group ? { group: m.group } : {}),
-						...(m?.pinned === false ? { pinned: false } : {})
-					}
+					return clampPos(
+						{
+							id: String(n.id),
+							x: n.x ?? 0,
+							y: n.y ?? 0,
+							w: n.w ?? 1,
+							h: n.h ?? 1,
+							...(m && anyAnchor(m.anchor)
+								? { anchor: m.anchor }
+								: {}),
+							...(m?.group ? { group: m.group } : {}),
+							...(m?.pinned === false ? { pinned: false } : {})
+						},
+						cols,
+						rows
+					)
 				})
 			}
 			if (authored) ref = layout
@@ -522,7 +593,21 @@
 		gridEmit = emit
 		// gridstack hands its listeners an Event; `emit`'s first argument is
 		// whether the arrangement is the user's, so it is called by hand here.
-		grid!.on("change added removed", () => emit())
+		grid!.on("change added", () => emit())
+		// A card LEAVING this zone is an edit however it left, and it has to be
+		// reported as one or the zone keeps it.
+		//
+		// The X button already says so before it removes. The other way out is a
+		// drag into another zone, and there gridstack fires `removed` here while
+		// `dragstop` fires on the DESTINATION only ("if the item has moved to
+		// another grid, we're done here") — so this zone never became `touched`,
+		// its emit stayed guarded as a restore, and the widget stayed in its
+		// arrangement while the destination gained it: the same widget in two
+		// zones after Done.
+		grid!.on("removed", () => {
+			gesture()
+			emit()
+		})
 		// The gesture half of the same story: `change` covers both a drag and a
 		// re-column, but `dragstop`/`resizestop` fire ONLY for a hand on a card.
 		grid!.on("dragstop resizestop", gesture)
@@ -563,6 +648,9 @@
 				group: gsc?.dataset.group || undefined,
 				pinned: gsc?.dataset.pinned === "false" ? false : undefined
 			})
+			// Named before the emit, so a caller holding both has the drop's
+			// answer for this widget before it sees the arrangement it made.
+			onDropped?.(String(node.id))
 			emit()
 		}) as any)
 
@@ -783,8 +871,8 @@
 		box-shadow: 0 4px 14px -6px rgba(0, 0, 0, 0.6);
 	}
 	.gs-gbtn {
-		font-size: 0.7rem;
-		font-weight: 600;
+		font-size: 13px;
+		font-weight: 500;
 		line-height: 1.2;
 		padding: 0.1rem 0.4rem;
 		border-radius: 0.3rem;
@@ -826,8 +914,8 @@
 		align-items: flex-start;
 		gap: 0.4rem;
 		padding: 0.45rem 0.55rem;
-		font-size: 0.76rem;
-		font-weight: 600;
+		font-size: 13px;
+		font-weight: 500;
 		color: var(--color-surface-50);
 		background: color-mix(in oklab, var(--color-primary-500) 85%, black 4%);
 		border: 1px solid

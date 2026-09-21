@@ -126,13 +126,12 @@ async function makeSession(tag: string) {
 	/**
 	 * A cycle where Bram is due and Alice is not.
 	 *
-	 * The rotation looks at the last `castSize` messages (3 here: two
-	 * characters and a persona) to decide the window is healthy, then at the
-	 * last `castSize - 1` to decide who is owed a turn. Four messages ending
-	 * persona → Alice is the smallest arrangement that lands Bram outside the
-	 * second window while everybody is inside the first — a three-message
-	 * history leaves *nobody* due, which is a fixture that cannot tell a
-	 * rotation that moved from one that never could.
+	 * The rotation looks at the last `castSize - 1` messages (2 here: two
+	 * characters and a persona) to decide who is owed a turn. Four messages
+	 * ending persona → Alice land Bram outside that window and Alice inside
+	 * it, with both having replied once — so exactly one character is due,
+	 * which is a fixture that can tell a rotation that moved from one that
+	 * never could.
 	 */
 	const line = (over: Record<string, unknown>) => ({
 		sessionId: session.id,

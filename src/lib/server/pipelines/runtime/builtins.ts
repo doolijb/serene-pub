@@ -35,6 +35,7 @@ import type { Receipt } from "@serene-pub/sdk"
 import { runSpec } from "$lib/server/pipelines/runtime/runTurn"
 import type { SessionIo } from "$lib/server/pipelines/runtime/liveRow"
 import * as runRegistry from "$lib/server/pipelines/runtime/runRegistry"
+import { broadcastSessionRow } from "$lib/server/sessions/rowPush"
 
 export type { BuiltInKind }
 export { BUILTIN_SPEC_IDS }
@@ -131,6 +132,14 @@ export async function runBuiltIn(
 		return { receipt, ok: true, write }
 	} finally {
 		runRegistry.finish(runId)
+		// Every built-in alters message state, which is exactly what a
+		// session's list row quotes — so the sidebar, the detail panel and
+		// the home cards are told here rather than in each venue's handler.
+		// In the `finally` because a run that halted after its write node
+		// committed still moved the row; the debounce
+		// (`sessions/rowPush.ts`) makes a run that wrote nothing cost one
+		// re-read at most, and the gate usually skips even that.
+		broadcastSessionRow(request.io, request.sessionId)
 	}
 }
 

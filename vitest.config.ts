@@ -56,6 +56,18 @@ const shared = {
 export default defineConfig({
 	plugins: [sveltekit()],
 	test: {
+		/**
+		 * Remove what an earlier run could not.
+		 *
+		 * Each test file is handed a throwaway data directory and removes it
+		 * again (see vitest.setup.ts) — but a run that is killed never reaches
+		 * that teardown, and the leftovers do not expire on their own: they
+		 * reached 63,768 directories and 223 GB on one machine and filled the
+		 * root filesystem, which puts every PGlite instance on it at risk. This
+		 * pass runs once, before any file, and only touches leftovers old
+		 * enough that no run in progress can be inside them.
+		 */
+		globalSetup: ["./scripts/testTempDirs.ts"],
 		projects: [
 			{
 				extends: true,

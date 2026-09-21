@@ -12,10 +12,12 @@
 import { describe, it, expect } from "vitest"
 import "@serene-pub/contracts"
 import "@serene-pub/core-catalog"
-import { getDefinition } from "@serene-pub/sdk"
+import { getDefinition, describeTaskDefinition, S } from "@serene-pub/sdk"
 import {
 	assertCoreBindingsCompatible,
-	checkCoreBindings
+	assertCoreDefinitionsBound,
+	checkCoreBindings,
+	checkUnboundDefinitions
 } from "./bindingCompat"
 import {
 	boundTypeIds,
@@ -67,5 +69,70 @@ describe("core bindings fit the types this build declares", () => {
 					ok: true
 				})
 		}
+	})
+})
+
+/**
+ * The other direction (plans/29 R-2): every core definition this build
+ * publishes has a handler, or says it is provisional. Fifteen had neither on
+ * 2026-09-17 — ten were culled, two bound, three flagged — and the count this
+ * asserts is the count that must stay at zero.
+ */
+describe("core publishes nothing it cannot run", () => {
+	it("finds no unbound, unflagged core definition", () => {
+		expect(checkUnboundDefinitions()).toEqual([])
+		expect(assertCoreDefinitionsBound("dev")).toEqual([])
+	})
+
+	it("asked something — the three provisional ones are published and unbound", () => {
+		// The guard this test would be worthless without: a walk over an empty
+		// registry, or one whose `provisional` flags were dropped, must not be
+		// green by having asked nothing. The three plans 14/28 own are the
+		// control — declared, unbound, and excused by the flag alone.
+		const bound = new Set(boundTypeIds())
+		for (const id of [
+			"core:oracle/speak@1",
+			"core:oracle/mcp-tool@1",
+			"core:oracle/mcp-resource@1"
+		]) {
+			expect(getDefinition(id)?.provisional, id).toBe(true)
+			expect(bound.has(id), id).toBe(false)
+		}
+		// And the two bound that day are bound.
+		expect(bound.has("core:outlet/attach-image@1")).toBe(true)
+		expect(bound.has("core:outlet/attach-audio@1")).toBe(true)
+	})
+
+	it("an unbound core definition without the flag refuses a dev boot and is said once in production", () => {
+		// Declared here, in this file's own process: vitest isolates test files,
+		// so the registration reaches no other suite. Undone by the flag rather
+		// than by unregistering, which the SDK offers no door for.
+		const stray = describeTaskDefinition({
+			id: "core:task/stray-unbound@1",
+			timeoutMs: 100,
+			ports: { in: { text: S.text }, out: { main: S.json } }
+		})
+		expect(checkUnboundDefinitions()).toEqual(["core:task/stray-unbound@1"])
+		// The line is `core:verdict/provisional`'s own sentence and fix (01 §13).
+		expect(() => assertCoreDefinitionsBound("dev")).toThrow(
+			/core:task\/stray-unbound@1 is published with no handler behind it[\s\S]*\(R-2\)[\s\S]*provisional: true/
+		)
+		const said: string[] = []
+		const orig = console.error
+		console.error = (m: unknown) => {
+			said.push(String(m))
+		}
+		try {
+			expect(assertCoreDefinitionsBound("prod")).toEqual([
+				"core:task/stray-unbound@1"
+			])
+		} finally {
+			console.error = orig
+		}
+		expect(said).toHaveLength(1)
+		expect(said[0]).toMatch(/stray-unbound/)
+		// The flag is the whole excuse.
+		;(stray as { provisional?: true }).provisional = true
+		expect(checkUnboundDefinitions()).toEqual([])
 	})
 })

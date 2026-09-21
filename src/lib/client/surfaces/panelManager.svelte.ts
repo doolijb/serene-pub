@@ -27,6 +27,23 @@ import {
 // `Sockets` is an ambient global namespace (declared in shared/sockets/types).
 type ModePanel = Sockets.Sessions.View.ModePanel
 
+/**
+ * A message row as `witnessMessage` reads it: the four columns an event is
+ * derived from, and nothing else named.
+ *
+ * Tolerant on purpose, like `SurfaceMessage` and for the same reason — what
+ * the page has in hand is a row off the wire, and a row mid-flight is skipped
+ * rather than refused. It is NOT `MessageV1`: that is what a widget is
+ * promised after projection, and this is what the announcer needs before one.
+ */
+export interface WitnessedMessage {
+	id: number
+	channel?: string | null
+	content?: string | null
+	isGenerating?: boolean | null
+	generationOutcome?: string | null
+}
+
 /** The synthetic primary when a mode declares none — the standard chat log. */
 const DEFAULT_PRIMARY: ModePanel = {
 	id: "conversation",
@@ -92,11 +109,22 @@ export class SurfaceManager implements WidgetEventSource {
 		)
 	}
 
-	/** Panels currently in the drawer rail. */
+	/**
+	 * Panels currently in the drawer rail.
+	 *
+	 * An id with no instance is SKIPPED, never rendered and never thrown on: a
+	 * saved layout outlives the declaration it names — a plugin disabled since
+	 * the arrangement was made stops being listed by `sessions:view` while its
+	 * rows stay exactly where they were, so that it can come back — and a
+	 * missing widget must draw nothing rather than empty the rail. The filter
+	 * is a type guard, so the skip is what narrows the type: `.filter(Boolean)`
+	 * narrows nothing, and the `!` it would need makes the declared return type
+	 * a promise the code does not keep.
+	 */
 	get drawerInstances(): PanelInstance[] {
 		return this.placement.drawerIds
-			.map((id) => this.instances.find((p) => p.id === id)!)
-			.filter(Boolean)
+			.map((id) => this.instances.find((p) => p.id === id))
+			.filter((p): p is PanelInstance => !!p)
 	}
 
 	/** Inactive-but-declared panels — the "+ add panel" menu. */
@@ -327,6 +355,102 @@ export class SurfaceManager implements WidgetEventSource {
 				console.error("widget event subscriber threw", e.kind, err)
 			}
 		}
+	}
+
+	/** A row's channel, canonically, or undefined when the row names none. */
+	#channelOf(m: WitnessedMessage): string | undefined {
+		return typeof m.channel === "string"
+			? formatChannel(parseChannel(m.channel))
+			: undefined
+	}
+
+	/**
+	 * A message row as the wire pushed it, and the row it replaced when the
+	 * page already held one — `witness` because the manager reports what it
+	 * was shown rather than deciding anything: the page hands over the arrival
+	 * and this works out which events that arrival IS.
+	 *
+	 * It has to be worked out here because the wire carries no events. A
+	 * `sessionMessage` push is the WHOLE row every time, streaming chunks
+	 * included, so "a token arrived", "a person edited it" and "the run
+	 * finished" are all the same message on the socket and are told apart
+	 * only by the row they replaced:
+	 *
+	 *  - **`generation:start`** — the row is generating and was not (a fresh
+	 *    assistant row arrives already generating, which is the ordinary case).
+	 *  - **`message:delta`** — the new content EXTENDS the old while the row is
+	 *    (or was just) generating. `delta` is the appended text alone: one
+	 *    `startsWith` and one `slice` per chunk, no buffer, no second copy of
+	 *    the content, nothing retained between chunks.
+	 *  - **`message:updated`** — any other arrival of a row the page already
+	 *    held. The push IS the change; describing which column moved would
+	 *    mean diffing the row, and a widget re-reads `messages.v1` either way.
+	 *  - **`generation:end`** — it was generating and is not. `aborted` is the
+	 *    `stopped` outcome: a reply a person stopped, not an error.
+	 *
+	 * `message:created` belongs to every widget's own `WidgetMessageFeed` and
+	 * not here: it is per widget, already channel-scoped, and seeds silently so
+	 * mounting onto a loaded session is not a thousand arrivals. Two producers
+	 * for one kind would double every arrival.
+	 */
+	witnessMessage(next: WitnessedMessage, previous?: WitnessedMessage): void {
+		if (typeof next?.id !== "number") return
+		const channel = this.#channelOf(next)
+		const wasGenerating = !!previous?.isGenerating
+		const isGenerating = !!next.isGenerating
+
+		if (isGenerating && !wasGenerating)
+			this.#emit({ kind: "generation:start", messageId: next.id })
+
+		if (previous) {
+			const before = previous.content ?? ""
+			const after = next.content ?? ""
+			// Appended text, and only while the row is being filled: a person
+			// typing onto the end of an edited message is an update, not a
+			// delta, and an empty `before` cannot tell the two apart at all.
+			if (
+				(wasGenerating || isGenerating) &&
+				before &&
+				after.length > before.length &&
+				after.startsWith(before)
+			)
+				this.#emit({
+					kind: "message:delta",
+					messageId: next.id,
+					delta: after.slice(before.length),
+					...(channel ? { channel } : {})
+				})
+			else
+				this.#emit({
+					kind: "message:updated",
+					messageId: next.id,
+					...(channel ? { channel } : {})
+				})
+		}
+
+		if (wasGenerating && !isGenerating)
+			this.#emit({
+				kind: "generation:end",
+				messageId: next.id,
+				aborted: next.generationOutcome === "stopped"
+			})
+	}
+
+	/**
+	 * A row is gone (`sessionMessages:delete`). Takes the ROW rather than the
+	 * id so the announcement can name the channel it was on — a widget that
+	 * declared one channel should not be told about another's deletion. A
+	 * caller without the row in hand passes the id alone, and the event reaches
+	 * every widget, which is the honest answer for an unknown channel.
+	 */
+	witnessMessageDeleted(message: WitnessedMessage): void {
+		if (typeof message?.id !== "number") return
+		const channel = this.#channelOf(message)
+		this.#emit({
+			kind: "message:deleted",
+			messageId: message.id,
+			...(channel ? { channel } : {})
+		})
 	}
 
 	/**

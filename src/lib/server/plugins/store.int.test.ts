@@ -3,8 +3,10 @@ import fs from "fs"
 import os from "os"
 import path from "path"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
-import { pluginHookInvocations } from "$lib/server/db/schema"
+import { eq } from "drizzle-orm"
+import { pluginHookInvocations, plugins } from "$lib/server/db/schema"
 import {
+	manifestDisplayTextFindings,
 	upsertPlugin,
 	setEnabled,
 	setBackendPref,
@@ -57,6 +59,31 @@ describe("plugin store", () => {
 			backend: "quickjs",
 			sequential: false
 		})
+	})
+
+	it("a manifest whose name has no en, or is blank, is refused at install with the sentence; a string or a map with en installs (R-20, U5i)", async () => {
+		const install = (manifest: Record<string, unknown>) =>
+			upsertPlugin(db, {
+				pluginId: "acme/i18n",
+				name: "I18n",
+				bundleSource: BUNDLE,
+				bundleHash: "hash-i18n",
+				backends: ["quickjs"],
+				manifest
+			})
+		await expect(install({ name: { fr: "x" } })).rejects.toThrow(
+			/plugin 'acme\/i18n' cannot be installed: manifest\.name: a locale map with a required 'en' \(R-20\) — got an object without 'en'; write 'Title'/
+		)
+		await expect(install({ name: "Dice", description: "   " })).rejects.toThrow(
+			/manifest\.description is empty — give it text a person reads/
+		)
+		expect(manifestDisplayTextFindings({ name: "Dice" })).toEqual([])
+		expect(manifestDisplayTextFindings({ name: { en: "Dice", fr: "Dés" } })).toEqual([])
+		expect(manifestDisplayTextFindings(null)).toEqual([])
+		await install({ name: { en: "Dice", fr: "Dés" } })
+		const rows = await db.select().from(plugins).where(eq(plugins.pluginId, "acme/i18n"))
+		expect(rows).toHaveLength(1)
+		await removePlugin(db, "acme/i18n")
 	})
 
 	it("upsert replaces bundle + hash on reinstall", async () => {
@@ -165,7 +192,7 @@ describe("plugin store", () => {
 					"acme/quota-live",
 					"put",
 					{ n },
-					{ timeoutMs: 5000 }
+					{ kind: "oracle", timeoutMs: 5000 }
 				)
 				return r.ok ? (r.value as { stored: boolean }).stored : null
 			}
@@ -243,7 +270,7 @@ describe("plugin store", () => {
 					"probe",
 					{},
 					{
-						timeoutMs: 5000
+						kind: "oracle", timeoutMs: 5000
 					}
 				)
 				if (!r.ok) throw new Error(`hook failed: ${r.reason}`)
@@ -311,7 +338,7 @@ describe("plugin store", () => {
 				"v",
 				{ n: 5 },
 				{
-					timeoutMs: 500,
+					kind: "oracle", timeoutMs: 500,
 					user: "user-1",
 					runId: "run-xyz"
 				}

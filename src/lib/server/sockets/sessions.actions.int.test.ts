@@ -53,6 +53,23 @@
  *     admits the owner with no message and a guest on their own message.
  * 15. **The fire carries no channel** (W-B): audience is channel-free, so
  *     the field was deleted rather than accepted unread.
+ * 16. **Enabled-when** (U5e, 2026-09-17): a contributed action's predicate
+ *     over `state.world.location` lists `enabled: false` with its reason
+ *     while the slot is empty and `true` after `state:set`; the door refuses
+ *     with the sentence while empty and admits after. A genre's default
+ *     applies to an action declaring nothing (proven on a fixture genre —
+ *     no shipped genre declares one, review W8); the action's own beats
+ *     the default and an explicit `[]` opts out; a session binding
+ *     override beats both; clearing it restores. `swipe` on a non-newest
+ *     row is refused at the verb's door with the `notNewest` reason, and
+ *     the message venue carries the `item.*` predicates the client judges.
+ *     `session.generating` greys every verb but stop while a run is live.
+ * 17. **Review follow-ups (2026-09-17).** The floors ask their door: an
+ *     edit of a hidden row and a branch during generation are refused with
+ *     the predicate's sentence (W2). A press naming a row of another
+ *     session, or an `item.*` predicate with no row to judge, is refused
+ *     (W4). Every finished root pushes `sessions:actions` to each member
+ *     once (C1).
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
@@ -160,32 +177,48 @@ async function sessionWithGuest(tag: string) {
 async function publishActionSpec(
 	id: string,
 	action: Record<string, unknown> | Record<string, unknown>[],
-	opts: { function?: string; batch?: ReadonlySet<string>; version?: string } = {}
+	opts: {
+		/** The key every declaration gets unless it states one. */
+		key?: string
+		batch?: ReadonlySet<string>
+		version?: string
+		/**
+		 * The genre the spec serves; Chat unless said. Adventure brings the
+		 * world slots (U5e); a fixture declaration (`publishFixtureGenre`)
+		 * brings whatever the test gave it.
+		 */
+		genre?: "chat" | "adventure" | import("@serene-pub/sdk").GenreDecl
+	} = {}
 ) {
 	const { spec, compile } = await import("@serene-pub/sdk")
 	const C = await import("@serene-pub/contracts")
-	const { chatGenre } = await import("@serene-pub/core-catalog")
+	const { chatGenre, adventureGenre } = await import("@serene-pub/core-catalog")
+	const genre =
+		opts.genre === "adventure"
+			? adventureGenre
+			: opts.genre && typeof opts.genre === "object"
+				? opts.genre
+				: chatGenre
 	const declared = Array.isArray(action) ? action : [action]
 	const doc: SpecDocument = compile(
 		spec(id, {
 			version: opts.version ?? "1.0.0",
-			taxonomy: { role: "action", genre: CHAT },
+			taxonomy: { role: "action", genre: genre.id },
 			contributes: {
 				actions: declared.map((a) => {
-					const fn = opts.function ?? String(a.function ?? a.key)
+					const key = opts.key ?? String(a.key)
 					return {
-						key: fn,
-						function: fn,
-						genre: CHAT,
+						key,
+						genre: genre.id,
 						venue: { kind: "composer" },
-						label: { en: fn },
+						label: { en: key },
 						...a
 					} as any
 				})
 			}
 		})
 			.inlet("input", C.userMessage.v1(), {
-				genre: chatGenre,
+				genre,
 				event: "core:event/session-action@1"
 			})
 			.outlet("save", ($) => C.createMessage.v1({ text: $.input.text }))
@@ -196,6 +229,114 @@ async function publishActionSpec(
 		publish: true,
 		...(opts.batch ? { batch: opts.batch } : {})
 	})
+}
+
+/**
+ * A fixture genre under core's namespace (so `core:spec/…` actions are its
+ * companions), carrying the location slot — `state.world.location` — and
+ * whatever enabled-when defaults the test declares, plus the create spec
+ * every genre needs to be a genre (`getSessionGenre` reads the row). No
+ * shipped genre declares a default (review W8), so the mechanism is proven
+ * here on a genre of the test's own.
+ */
+async function publishFixtureGenre(
+	id: string,
+	enabledWhen?: Record<string, Record<string, unknown> | Record<string, unknown>[]>
+) {
+	const { genre, spec, compile, sessionEvents } = await import("@serene-pub/sdk")
+	const C = await import("@serene-pub/contracts")
+	const { locationSlot } = await import("@serene-pub/core-catalog")
+	const decl = genre(id, {
+		name: { en: "Fixture" },
+		family: "fixture",
+		shape: {
+			characters: { min: 0 },
+			personas: { min: 0 },
+			lorebook: "optional",
+			composer: "text",
+			voice: "character",
+			greeting: { enabled: false }
+		},
+		slots: [locationSlot as any],
+		...(enabledWhen ? { enabledWhen: enabledWhen as any } : {}),
+		events: {
+			[sessionEvents.messageRespond]: { required: true },
+			[sessionEvents.sessionAction]: { open: true }
+		}
+	})
+	const doc: SpecDocument = compile(
+		spec(`${id.replace(":genre/", ":spec/")}-create`, {
+			version: "1.0.0",
+			taxonomy: { role: "create", genre: id },
+			genre: {
+				name: decl.name,
+				family: decl.family,
+				shape: decl.shape,
+				events: decl.events as Record<string, { required?: boolean; open?: boolean }>
+			}
+		})
+			.inlet("input", C.sessionCreated.v1(), {
+				genre: decl,
+				event: sessionEvents.sessionCreated
+			})
+			.query("collect", ($) => C.sessionGreetings.v1({ scope: $.input.sessionScope }))
+			.outlet("seed", ($) =>
+				C.seedGreetings.v1({ greetings: $.collect.greetings, channel: "main" })
+			)
+			.build()
+	)
+	const { saveDocument } = await import("$lib/server/pipelines/boot/store")
+	await saveDocument(testDb as any, doc, { publish: true })
+	return decl
+}
+
+/**
+ * The half of a Socket.IO server the interest gate and the emit read — one
+ * connected socket per member, each holding `sessions:actions#<session>` as
+ * the session page declares it (W-A4), or another session's scope for the
+ * ids in `elsewhere` — so a server-side push (`pushSessionActions`) can be
+ * counted per user.
+ */
+function recordingIo(
+	userIds: number[],
+	sessionId: number,
+	elsewhere: Record<number, number> = {}
+) {
+	const emitted: Array<{ room: string; event: string; payload: any }> = []
+	const socketOf = (id: number, scope: number) => ({
+		id: `socket-${id}`,
+		user: { id, isAdmin: false },
+		interest: new Set([`sessions:actions#${scope}`])
+	})
+	const sockets = new Map<string, ReturnType<typeof socketOf>>([
+		...userIds.map((id): [string, ReturnType<typeof socketOf>] => [
+			`socket-${id}`,
+			socketOf(id, sessionId)
+		]),
+		...Object.entries(elsewhere).map(
+			([id, scope]): [string, ReturnType<typeof socketOf>] => [
+				`socket-${id}`,
+				socketOf(Number(id), scope)
+			]
+		)
+	])
+	const io = {
+		sockets: {
+			adapter: {
+				rooms: {
+					get: (room: string) => {
+						const m = /^user_(\d+)$/.exec(room)
+						return m && sockets.has(`socket-${m[1]}`) ? new Set([`socket-${m[1]}`]) : undefined
+					}
+				}
+			},
+			sockets: { get: (id: string) => sockets.get(id), values: () => sockets.values() }
+		},
+		to: (room: string) => ({
+			emit: (event: string, payload: any) => emitted.push({ room, event, payload })
+		})
+	}
+	return { io: io as any, emitted }
 }
 
 /** The specs that ran for a session, newest last. */
@@ -236,7 +377,7 @@ describe("listSessionActions — audiences", () => {
 			noopEmit
 		)
 		const narrate = all(forOwner.venues.composer).find(
-			(a) => a.function === "narrate"
+			(a) => a.key === "narrate"
 		)
 		expect(narrate).toMatchObject({
 			key: "narrate",
@@ -255,7 +396,7 @@ describe("listSessionActions — audiences", () => {
 			noopEmit
 		)
 		const guestNarrate = all(forGuest.venues.composer).find(
-			(a) => a.function === "narrate"
+			(a) => a.key === "narrate"
 		)
 		// Seen — `see: participant` — and grey: `act: owner`.
 		expect(guestNarrate?.canAct).toBe(false)
@@ -313,11 +454,11 @@ describe("listSessionActions — placement", () => {
 			noopEmit
 		)
 		const composer = res.venues.composer
-		expect(composer.primary.map((a) => a.function)).toContain("narrate")
+		expect(composer.primary.map((a) => a.key)).toContain("narrate")
 		// Echo ships without `quick`: the overflow lists it, the palette
 		// reaches it as `/echo`, and it is never on the primary row.
-		expect(composer.overflow.map((a) => a.function)).toContain("echo")
-		expect(composer.primary.map((a) => a.function)).not.toContain("echo")
+		expect(composer.overflow.map((a) => a.key)).toContain("echo")
+		expect(composer.primary.map((a) => a.key)).not.toContain("echo")
 
 		const message = res.venues.message
 		expect(message.primary.map((a) => a.key).sort()).toEqual([
@@ -372,7 +513,7 @@ describe("a newly installed action", () => {
 			noopEmit
 		)
 		const roll = before.venues.composer.overflow.find(
-			(a) => a.function === "roll"
+			(a) => a.key === "roll"
 		)
 		expect(roll).toMatchObject({
 			specSlug: "acme:spec/roll",
@@ -381,7 +522,7 @@ describe("a newly installed action", () => {
 			isNew: true
 		})
 		expect(
-			before.venues.composer.primary.find((a) => a.function === "roll")
+			before.venues.composer.primary.find((a) => a.key === "roll")
 		).toBeUndefined()
 
 		const seen = await sessionsActionsSeenHandler.handler(
@@ -397,7 +538,7 @@ describe("a newly installed action", () => {
 			noopEmit
 		)
 		expect(
-			after.venues.composer.overflow.find((a) => a.function === "roll")
+			after.venues.composer.overflow.find((a) => a.key === "roll")
 				?.isNew
 		).toBe(false)
 
@@ -412,7 +553,7 @@ describe("a newly installed action", () => {
 			noopEmit
 		)
 		expect(
-			all(forGuest.venues.composer).find((a) => a.function === "roll")
+			all(forGuest.venues.composer).find((a) => a.key === "roll")
 				?.isNew
 		).toBe(true)
 
@@ -433,7 +574,6 @@ describe("channels", () => {
 		// Core namespace → companion → on by default.
 		await publishActionSpec("core:spec/test-phone-text", {
 			key: "text",
-			function: "text",
 			venue: [{ kind: "composer", channel: "phone" }]
 		})
 
@@ -443,11 +583,11 @@ describe("channels", () => {
 			noopEmit
 		)
 		expect(main.channel).toBe("main")
-		expect(all(main.venues.composer).map((a) => a.function)).not.toContain(
+		expect(all(main.venues.composer).map((a) => a.key)).not.toContain(
 			"text"
 		)
 		// …but the ones declared with no channel are still there.
-		expect(all(main.venues.composer).map((a) => a.function)).toContain(
+		expect(all(main.venues.composer).map((a) => a.key)).toContain(
 			"narrate"
 		)
 
@@ -457,9 +597,9 @@ describe("channels", () => {
 			noopEmit
 		)
 		expect(phone.channel).toBe("phone")
-		const text = all(phone.venues.composer).find((a) => a.function === "text")
+		const text = all(phone.venues.composer).find((a) => a.key === "text")
 		expect(text).toMatchObject({ channel: "phone", slash: "text" })
-		expect(all(phone.venues.composer).map((a) => a.function)).toContain(
+		expect(all(phone.venues.composer).map((a) => a.key)).toContain(
 			"narrate"
 		)
 		// A lane of the channel is the channel (ruling 2026-09-09).
@@ -468,31 +608,28 @@ describe("channels", () => {
 			{ sessionId: session.id, channel: "phone:2" },
 			noopEmit
 		)
-		expect(all(lane.venues.composer).map((a) => a.function)).toContain("text")
+		expect(all(lane.venues.composer).map((a) => a.key)).toContain("text")
 	})
 })
 
 describe("sessions:triggerFunction reads the declaration it was handed", () => {
-	test("act: ['participant'] admits a guest; the default refuses one, naming the audience; no action named is the owner floor", async () => {
+	test("act: ['participant'] admits a guest; the default refuses one, naming the audience; a bare key resolves to its sole declarer (V2)", async () => {
 		const { sessionsTriggerFunctionHandler } = await import("./sessions")
 		const { owner, guest, session } = await sessionWithGuest("fire")
 
 		// Both core-namespaced so the companion rule turns them on.
 		await publishActionSpec("core:spec/test-open-action", {
 			key: "wave",
-			function: "wave",
 			audience: { see: ["participant"], act: ["participant"] }
 		})
 		await publishActionSpec("core:spec/test-owner-action", {
-			key: "bow",
-			function: "bow"
+			key: "bow"
 		})
 
 		const refused = await sessionsTriggerFunctionHandler.handler(
 			fakeSocket(guest.id),
 			{
 				sessionId: session.id,
-				function: "bow",
 				action: "core:spec/test-owner-action#bow"
 			},
 			noopEmit
@@ -505,7 +642,6 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 			fakeSocket(guest.id),
 			{
 				sessionId: session.id,
-				function: "wave",
 				action: "core:spec/test-open-action#wave"
 			},
 			noopEmit
@@ -515,46 +651,45 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 		expect(admitted.error ?? "").not.toMatch(/not yours to use|Session not found/)
 		expect(await runsOf(session.id)).toContain("core:spec/test-open-action")
 
-		// Legacy — no action named — is the owner floor, whatever the
-		// declaration widened its audience to (W1): the narrowest reading.
-		const legacy = await sessionsTriggerFunctionHandler.handler(
+		// A bare key (⏳) names its sole declarer, and THAT declaration's
+		// audience decides (plans/31 V2 — there is no narrower reading to
+		// fall to, because the key names one thing): the guest is admitted.
+		const bare = await sessionsTriggerFunctionHandler.handler(
 			fakeSocket(guest.id),
-			{ sessionId: session.id, function: "wave" },
+			{ sessionId: session.id, key: "wave" },
 			noopEmit
 		)
-		expect(legacy.error).toBe(
-			"'wave' is not yours to use here — its audience is owner."
+		expect(bare.error ?? "").not.toMatch(/not yours to use|Session not found/)
+		// …and a bare key nothing declares is refused as such.
+		const unknown = await sessionsTriggerFunctionHandler.handler(
+			fakeSocket(guest.id),
+			{ sessionId: session.id, key: "curtsy" },
+			noopEmit
 		)
+		expect(unknown.error).toBe("No action 'curtsy' is offered to this session.")
 
-		// A malformed identity is refused as such, never read as legacy.
+		// A malformed identity is refused as such, never read as a key.
 		const malformed = await sessionsTriggerFunctionHandler.handler(
 			fakeSocket(owner.id),
-			{ sessionId: session.id, function: "wave", action: "wave" },
+			{ sessionId: session.id, action: "wave" },
 			noopEmit
 		)
 		expect(malformed.error).toBe(
 			"'wave' is not an action — one is named '<spec slug>#<key>'."
 		)
-		// …and one naming a declaration that does not serve the function.
-		const mismatched = await sessionsTriggerFunctionHandler.handler(
+		// …and a press naming nothing at all.
+		const nothing = await sessionsTriggerFunctionHandler.handler(
 			fakeSocket(owner.id),
-			{
-				sessionId: session.id,
-				function: "wave",
-				action: "core:spec/test-owner-action#bow"
-			},
+			{ sessionId: session.id },
 			noopEmit
 		)
-		expect(mismatched.error).toBe(
-			"No action 'core:spec/test-owner-action#bow' serves 'wave' for this session."
-		)
+		expect(nothing.error).toBe("A press names the action it fires — '<spec slug>#<key>'.")
 
 		// The owner is admitted by the default, as ever — named or not.
 		for (const params of [
-			{ sessionId: session.id, function: "bow" },
+			{ sessionId: session.id, key: "bow" },
 			{
 				sessionId: session.id,
-				function: "bow",
 				action: "core:spec/test-owner-action#bow"
 			}
 		]) {
@@ -574,7 +709,6 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 			fakeSocket(stranger.id),
 			{
 				sessionId: session.id,
-				function: "wave",
 				action: "core:spec/test-open-action#wave"
 			},
 			noopEmit
@@ -582,7 +716,7 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 		expect(outside.error).toBe("Session not found.")
 	}, 60_000)
 
-	test("two actions on one function are two things: each audience honoured, each spec its own, enablement per action (W1)", async () => {
+	test("two actions sharing a key are two things: each audience honoured, each spec its own, enablement per action (W1)", async () => {
 		const { sessionsTriggerFunctionHandler, sessionsActionsHandler } =
 			await import("./sessions")
 		const { setSessionFunction, listSessionFunctions } = await import(
@@ -594,10 +728,9 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 		// Core's `sum` — the companion, owner-only by default — and a plugin's
 		// `sum` open to any participant. The attack this pins: the plugin's
 		// wider audience must not let a guest run core's spec.
-		await publishActionSpec("core:spec/test-sum", { key: "sum", function: "sum" })
+		await publishActionSpec("core:spec/test-sum", { key: "sum" })
 		await publishActionSpec("acme:spec/sum", {
 			key: "sum",
-			function: "sum",
 			audience: { see: ["participant"], act: ["participant"] }
 		})
 		// The attachment is off until an administrator includes it — by
@@ -635,7 +768,7 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 		).toEqual(["acme:spec/sum#sum"])
 		const listed = (
 			await listSessionFunctions(testDb as any, session.id, CHAT, owner.id)
-		).filter((f) => f.function === "sum")
+		).filter((f) => f.key === "sum")
 		expect(
 			Object.fromEntries(listed.map((f) => [f.specSlug, f.enabled]))
 		).toEqual({ "core:spec/test-sum": true, "acme:spec/sum": true })
@@ -646,7 +779,7 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 			{ sessionId: session.id },
 			noopEmit
 		)
-		const sums = all(forGuest.venues.composer).filter((a) => a.function === "sum")
+		const sums = all(forGuest.venues.composer).filter((a) => a.key === "sum")
 		expect(
 			Object.fromEntries(sums.map((a) => [a.specSlug, a.canAct]))
 		).toEqual({ "core:spec/test-sum": false, "acme:spec/sum": true })
@@ -656,7 +789,7 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 		const before = (await runsOf(session.id)).length
 		const viaPlugin = await sessionsTriggerFunctionHandler.handler(
 			fakeSocket(guest.id),
-			{ sessionId: session.id, function: "sum", action: "acme:spec/sum#sum" },
+			{ sessionId: session.id, action: "acme:spec/sum#sum" },
 			noopEmit
 		)
 		expect(viaPlugin.error ?? "").not.toMatch(/not yours|Session not found/)
@@ -667,30 +800,26 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 		// Firing core's is refused — the plugin's audience is the plugin's.
 		const viaCore = await sessionsTriggerFunctionHandler.handler(
 			fakeSocket(guest.id),
-			{ sessionId: session.id, function: "sum", action: "core:spec/test-sum#sum" },
+			{ sessionId: session.id, action: "core:spec/test-sum#sum" },
 			noopEmit
 		)
 		expect(viaCore.error).toBe(
 			"'sum' is not yours to use here — its audience is owner."
 		)
-		// …and the legacy call, naming neither, is the owner floor.
-		const legacy = await sessionsTriggerFunctionHandler.handler(
-			fakeSocket(guest.id),
-			{ sessionId: session.id, function: "sum" },
-			noopEmit
-		)
-		expect(legacy.error).toMatch(/not yours to use here — its audience is owner/)
+		// …and a bare key two specs declare names neither (V2): refused with
+		// the identities, for the guest and the owner alike — a press has to
+		// be about one thing, and no binding selects among two actions.
+		for (const who of [guest, owner]) {
+			const bare = await sessionsTriggerFunctionHandler.handler(
+				fakeSocket(who.id),
+				{ sessionId: session.id, key: "sum" },
+				noopEmit
+			)
+			expect(bare.error).toBe(
+				"'sum' names 2 actions here — core:spec/test-sum#sum, acme:spec/sum#sum. Say which."
+			)
+		}
 		expect((await runsOf(session.id)).length).toBe(before + 1)
-
-		// The owner's legacy call runs the companion — the verdict's own
-		// answer when nobody named a spec.
-		const ownerLegacy = await sessionsTriggerFunctionHandler.handler(
-			fakeSocket(owner.id),
-			{ sessionId: session.id, function: "sum" },
-			noopEmit
-		)
-		expect(ownerLegacy.error ?? "").not.toMatch(/not yours|Session not found/)
-		expect((await runsOf(session.id)).at(-1)).toBe("core:spec/test-sum")
 
 		// Switching core's off by identity leaves the plugin's on: the
 		// owner's named fire of core's is "turned off", the guest's of the
@@ -706,25 +835,26 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 		expect(off).toMatchObject({ ok: true, enabled: false })
 		const offFire = await sessionsTriggerFunctionHandler.handler(
 			fakeSocket(owner.id),
-			{ sessionId: session.id, function: "sum", action: "core:spec/test-sum#sum" },
+			{ sessionId: session.id, action: "core:spec/test-sum#sum" },
 			noopEmit
 		)
 		expect(offFire.error).toMatch(/'sum' is turned off for this session/)
 		const stillOn = await sessionsTriggerFunctionHandler.handler(
 			fakeSocket(guest.id),
-			{ sessionId: session.id, function: "sum", action: "acme:spec/sum#sum" },
+			{ sessionId: session.id, action: "acme:spec/sum#sum" },
 			noopEmit
 		)
 		expect(stillOn.error ?? "").not.toMatch(/turned off|not yours/)
 	}, 60_000)
 
-	test("a bare-function row written before the identity key still answers, until the next write replaces it (⏳)", async () => {
+	test("a session_functions row answers by identity only — a bare key names nothing (plans/31 V2)", async () => {
 		const { listSessionFunctions, setSessionFunction } = await import(
 			"$lib/server/pipelines/entities/sessionGenres"
 		)
 		const schema = await import("$lib/server/db/schema")
 		const { owner, session } = await sessionWithGuest("legacy-row")
-		// A person's pre-upgrade off-switch for narrate.
+		// A row keyed the pre-identity way decides nothing any more: the
+		// companion default answers, and the row is not read.
 		await testDb.insert(schema.sessionFunctions).values({
 			sessionId: session.id,
 			genreId: CHAT,
@@ -734,9 +864,9 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 		const narrate = (
 			await listSessionFunctions(testDb as any, session.id, CHAT, owner.id)
 		).find((f) => f.specSlug === "core:spec/narrate")
-		expect(narrate).toMatchObject({ enabled: false, source: "session", explicit: true })
+		expect(narrate).toMatchObject({ enabled: true, source: "default", explicit: false })
 
-		// The next write stores the identity and retires the bare row.
+		// A write stores the identity and answers from then on.
 		await setSessionFunction(
 			testDb as any,
 			session.id,
@@ -747,12 +877,19 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 		)
 		expect(
 			(
+				await listSessionFunctions(testDb as any, session.id, CHAT, owner.id)
+			).find((f) => f.specSlug === "core:spec/narrate")
+		).toMatchObject({ enabled: false, source: "session", explicit: true })
+		expect(
+			(
 				await testDb
 					.select({ functionKey: schema.sessionFunctions.functionKey })
 					.from(schema.sessionFunctions)
 					.where(eq(schema.sessionFunctions.sessionId, session.id))
-			).map((r) => r.functionKey)
-		).toEqual(["core:spec/narrate#narrate"])
+			)
+				.map((r) => r.functionKey)
+				.sort()
+		).toEqual(["core:spec/narrate#narrate", "narrate"])
 	}, 60_000)
 
 	test("a channel filters where an action is listed, never who may fire it (W2)", async () => {
@@ -761,7 +898,6 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 		const { guest, session } = await sessionWithGuest("phone")
 		await publishActionSpec("core:spec/test-phone-wave", {
 			key: "phone-wave",
-			function: "phone-wave",
 			venue: [{ kind: "composer", channel: "phone" }],
 			audience: { see: ["participant"], act: ["participant"] }
 		})
@@ -772,7 +908,7 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 			noopEmit
 		)
 		expect(
-			all(onPhone.venues.composer).find((a) => a.function === "phone-wave")
+			all(onPhone.venues.composer).find((a) => a.key === "phone-wave")
 		).toMatchObject({ canAct: true, channel: "phone" })
 		const onMain = await sessionsActionsHandler.handler(
 			fakeSocket(guest.id),
@@ -780,7 +916,7 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 			noopEmit
 		)
 		expect(
-			all(onMain.venues.composer).find((a) => a.function === "phone-wave")
+			all(onMain.venues.composer).find((a) => a.key === "phone-wave")
 		).toBeUndefined()
 
 		// …and fired by a guest it runs. The fire names no channel at all
@@ -790,7 +926,6 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 			fakeSocket(guest.id),
 			{
 				sessionId: session.id,
-				function: "phone-wave",
 				action: "core:spec/test-phone-wave#phone-wave"
 			},
 			noopEmit
@@ -802,13 +937,12 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 		).toBe(1)
 	}, 60_000)
 
-	test("a block's choice carries the writing spec's identity: a guest's submit from an `act: ['participant']` spec runs; a legacy block (no identity) is the owner floor (W-E)", async () => {
+	test("a block's choice carries the writing spec's identity: a guest's submit from an `act: ['participant']` spec runs; a legacy block (no identity) resolves its key to the sole declarer (W-E; V2)", async () => {
 		const { sessionsTriggerFunctionHandler } = await import("./sessions")
 		const schema = await import("$lib/server/db/schema")
 		const { guest, session } = await sessionWithGuest("block")
 		await publishActionSpec("core:spec/test-lock", {
 			key: "pick",
-			function: "pick-lock",
 			venue: { kind: "message" },
 			audience: { see: ["participant"], act: ["participant"] }
 		})
@@ -829,8 +963,7 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 				fakeSocket(guest.id),
 				{
 					sessionId: session.id,
-					function: "pick-lock",
-					...(action ? { action } : {}),
+					...(action ? { action } : { key: "pick" }),
 					messageId: reply!.id,
 					payload: { choice: "pick" }
 				},
@@ -840,15 +973,14 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 		expect(stamped.error ?? "").not.toMatch(/not yours|Session not found/)
 		expect(await runsOf(session.id)).toContain("core:spec/test-lock")
 
-		// A block stored before identities carries none: the owner floor,
-		// whatever the spec widened its audience to.
+		// A block stored before identities carries none: its key names the
+		// sole declarer (V2), and that declaration's audience — which admits
+		// a guest — decides. There is no narrower reading to fall to.
 		const legacy = await submit()
-		expect(legacy.error).toBe(
-			"'pick-lock' is not yours to use here — its audience is owner."
-		)
+		expect(legacy.error ?? "").not.toMatch(/not yours|Session not found/)
 		expect(
 			(await runsOf(session.id)).filter((s) => s === "core:spec/test-lock").length
-		).toBe(1)
+		).toBe(2)
 	}, 60_000)
 
 	test("a mixed audience admits either half: the owner without a message, a guest on their own message (S-A)", async () => {
@@ -857,7 +989,6 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 		const { owner, guest, session } = await sessionWithGuest("mixed")
 		await publishActionSpec("core:spec/test-mixed", {
 			key: "mixed",
-			function: "mixed",
 			venue: [{ kind: "composer" }, { kind: "message" }],
 			audience: { see: ["participant"], act: ["owner", "item"] }
 		})
@@ -866,7 +997,6 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 				fakeSocket(userId),
 				{
 					sessionId: session.id,
-					function: "mixed",
 					action: "core:spec/test-mixed#mixed",
 					...(messageId != null ? { messageId } : {})
 				},
@@ -973,16 +1103,14 @@ describe("a preset includes actions by identity (W-A)", () => {
 		const schema = await import("$lib/server/db/schema")
 		const { owner, session } = await sessionWithGuest("preset-identity")
 		await publishActionSpec("core:spec/test-summarize", {
-			key: "summarize",
-			function: "summarize"
+			key: "summarize"
 		})
 		await publishActionSpec("acme:spec/summarize", {
-			key: "summarize",
-			function: "summarize"
+			key: "summarize"
 		})
 		// `tally`: one declarer, an attachment — the sole-declarer rule
 		// (third pass W4+W2) promotes it regardless of origin.
-		await publishActionSpec("acme:spec/tally", { key: "tally", function: "tally" })
+		await publishActionSpec("acme:spec/tally", { key: "tally" })
 		const [preset] = await testDb
 			.insert(schema.sessionPresets)
 			.values({
@@ -1001,7 +1129,7 @@ describe("a preset includes actions by identity (W-A)", () => {
 		const byIdentity = async (fn: string) =>
 			Object.fromEntries(
 				(await listSessionFunctions(testDb as any, session.id, CHAT, owner.id))
-					.filter((f) => f.function === fn)
+					.filter((f) => f.key === fn)
 					.map((f) => [f.specSlug, { included: f.included, enabled: f.enabled }])
 			)
 		// A bare key two actions carry names none of them — never a
@@ -1150,8 +1278,8 @@ describe("a preset includes actions by identity (W-A)", () => {
 	}, 60_000)
 })
 
-describe("R-6 narrowing at sessions:bindFunction", () => {
-	test("a session owner may bind only to a spec whose action is enabled for the session", async () => {
+describe("R-6 narrowing at sessions:bindFunction (subjects, plans/31 V2)", () => {
+	test("a session owner may bind an action only while it is enabled for the session; the subject names its declarer", async () => {
 		const { sessionsBindFunctionHandler } = await import("./sessions")
 		const schema = await import("$lib/server/db/schema")
 		const { owner, session } = await sessionWithGuest("r6")
@@ -1159,15 +1287,14 @@ describe("R-6 narrowing at sessions:bindFunction", () => {
 		// A plugin's contribution: published, resolvable, and — being an
 		// attachment — not enabled until an administrator includes it.
 		await publishActionSpec("acme:spec/greet", {
-			key: "greet",
-			function: "greet"
+			key: "greet"
 		})
 
 		const refused = await sessionsBindFunctionHandler.handler(
 			fakeSocket(owner.id),
 			{
 				sessionId: session.id,
-				function: "greet",
+				subject: "acme:spec/greet#greet",
 				specSlug: "acme:spec/greet",
 				scope: "session"
 			},
@@ -1179,23 +1306,31 @@ describe("R-6 narrowing at sessions:bindFunction", () => {
 		expect(
 			await testDb
 				.select()
-				.from(schema.pipelineFunctionBindings)
-				.where(eq(schema.pipelineFunctionBindings.scopeId, session.id))
+				.from(schema.pipelineBindings)
+				.where(eq(schema.pipelineBindings.scopeId, session.id))
 		).toEqual([])
 
-		// The candidate rule still stands underneath: a spec that does not
-		// serve the function is refused as such, not as "not enabled".
+		// An action is served by its declarer: naming another spec for it is
+		// refused as such, not as "not enabled".
 		const wrongSpec = await sessionsBindFunctionHandler.handler(
 			fakeSocket(owner.id),
 			{
 				sessionId: session.id,
-				function: "greet",
+				subject: "acme:spec/greet#greet",
 				specSlug: "core:spec/narrate",
 				scope: "session"
 			},
 			noopEmit
 		)
-		expect(wrongSpec.error).toMatch(/does not serve 'greet'/)
+		expect(wrongSpec.error).toMatch(/does not serve 'acme:spec\/greet#greet'/)
+
+		// A bare word is not a subject at all.
+		const bare = await sessionsBindFunctionHandler.handler(
+			fakeSocket(owner.id),
+			{ sessionId: session.id, subject: "greet", specSlug: "acme:spec/greet", scope: "session" },
+			noopEmit
+		)
+		expect(bare.error).toMatch(/'greet' is not offered to this session's genre|is not something a binding is about/)
 
 		// The administrator widens availability: once included, the same
 		// bind succeeds — the choice was always within what was available.
@@ -1207,7 +1342,7 @@ describe("R-6 narrowing at sessions:bindFunction", () => {
 			testDb as any,
 			session.id,
 			CHAT,
-			"greet",
+			"acme:spec/greet#greet",
 			true,
 			{ userId: admin.id, isAdmin: true }
 		)
@@ -1216,7 +1351,7 @@ describe("R-6 narrowing at sessions:bindFunction", () => {
 			fakeSocket(owner.id),
 			{
 				sessionId: session.id,
-				function: "greet",
+				subject: "acme:spec/greet#greet",
 				specSlug: "acme:spec/greet",
 				scope: "session"
 			},
@@ -1227,17 +1362,17 @@ describe("R-6 narrowing at sessions:bindFunction", () => {
 			(
 				await testDb
 					.select()
-					.from(schema.pipelineFunctionBindings)
-					.where(eq(schema.pipelineFunctionBindings.scopeId, session.id))
-			).length
-		).toBe(1)
+					.from(schema.pipelineBindings)
+					.where(eq(schema.pipelineBindings.scopeId, session.id))
+			).map((r) => r.subject)
+		).toEqual(["acme:spec/greet#greet"])
 
 		// An enabled companion binds first time: `narrate` is on by default.
 		const companion = await sessionsBindFunctionHandler.handler(
 			fakeSocket(owner.id),
 			{
 				sessionId: session.id,
-				function: "narrate",
+				subject: "core:spec/narrate#narrate",
 				specSlug: "core:spec/narrate",
 				scope: "session"
 			},
@@ -1246,21 +1381,21 @@ describe("R-6 narrowing at sessions:bindFunction", () => {
 		expect(companion.error).toBeUndefined()
 	}, 60_000)
 
-	test("a contributor whose own action is not enabled is refused, even when another action of the function is (W1)", async () => {
+	test("two specs declaring one key are two subjects: the plugin's is refused until enabled, and never rides on core's (W1; V2)", async () => {
 		const { sessionsBindFunctionHandler, sessionsFunctionCandidatesHandler } =
 			await import("./sessions")
 		const { owner, session } = await sessionWithGuest("r6-two")
 		// Core's `greet2` is a companion (on); the plugin's is an attachment
-		// (off). The function IS enabled — through core's — and that must
-		// not admit the plugin's spec.
-		await publishActionSpec("core:spec/test-greet2", { key: "greet2", function: "greet2" })
-		await publishActionSpec("acme:spec/greet2", { key: "greet2", function: "greet2" })
+		// (off). Core's being enabled says nothing about the plugin's — they
+		// are two identities.
+		await publishActionSpec("core:spec/test-greet2", { key: "greet2" })
+		await publishActionSpec("acme:spec/greet2", { key: "greet2" })
 
 		const refused = await sessionsBindFunctionHandler.handler(
 			fakeSocket(owner.id),
 			{
 				sessionId: session.id,
-				function: "greet2",
+				subject: "acme:spec/greet2#greet2",
 				specSlug: "acme:spec/greet2",
 				scope: "session"
 			},
@@ -1269,21 +1404,28 @@ describe("R-6 narrowing at sessions:bindFunction", () => {
 		expect(refused.error).toMatch(
 			/'greet2' from 'acme:spec\/greet2' is not enabled for this session/
 		)
-		// The picker offers only what the bind would take (S8).
+		// The picker offers only what the bind would take (S8): the
+		// declarer, while its action is enabled.
 		const picker = await sessionsFunctionCandidatesHandler.handler(
 			fakeSocket(owner.id),
-			{ sessionId: session.id, function: "greet2" },
+			{ sessionId: session.id, subject: "acme:spec/greet2#greet2" },
 			noopEmit
 		)
-		expect(picker.candidates).toEqual(["core:spec/test-greet2"])
-		expect(picker.resolved).toBe("core:spec/test-greet2")
+		expect(picker.candidates).toEqual([])
+		const corePicker = await sessionsFunctionCandidatesHandler.handler(
+			fakeSocket(owner.id),
+			{ sessionId: session.id, subject: "core:spec/test-greet2#greet2" },
+			noopEmit
+		)
+		expect(corePicker.candidates).toEqual(["core:spec/test-greet2"])
+		expect(corePicker.resolved).toBe("core:spec/test-greet2")
 
 		// The companion's own binds.
 		const ok = await sessionsBindFunctionHandler.handler(
 			fakeSocket(owner.id),
 			{
 				sessionId: session.id,
-				function: "greet2",
+				subject: "core:spec/test-greet2#greet2",
 				specSlug: "core:spec/test-greet2",
 				scope: "session"
 			},
@@ -1311,7 +1453,7 @@ describe("R-6 narrowing at sessions:bindFunction", () => {
 			fakeSocket(owner.id),
 			{
 				sessionId: session.id,
-				function: "greet2",
+				subject: "acme:spec/greet2#greet2",
 				specSlug: "acme:spec/greet2",
 				scope: "session"
 			},
@@ -1320,13 +1462,11 @@ describe("R-6 narrowing at sessions:bindFunction", () => {
 		expect(now.error).toBeUndefined()
 		const widened = await sessionsFunctionCandidatesHandler.handler(
 			fakeSocket(owner.id),
-			{ sessionId: session.id, function: "greet2" },
+			{ sessionId: session.id, subject: "acme:spec/greet2#greet2" },
 			noopEmit
 		)
-		expect(widened.candidates.sort()).toEqual([
-			"acme:spec/greet2",
-			"core:spec/test-greet2"
-		])
+		expect(widened.candidates).toEqual(["acme:spec/greet2"])
+		expect(widened.resolved).toBe("acme:spec/greet2")
 	}, 60_000)
 })
 
@@ -1336,8 +1476,7 @@ describe("sessions:triggerFunction announces its run (R-19)", () => {
 		const { owner, session } = await sessionWithGuest("announce")
 
 		await publishActionSpec("core:spec/test-announce-action", {
-			key: "wink",
-			function: "wink"
+			key: "wink"
 		})
 
 		statusRelayHooks.ioSeen.length = 0
@@ -1346,7 +1485,6 @@ describe("sessions:triggerFunction announces its run (R-19)", () => {
 			socket,
 			{
 				sessionId: session.id,
-				function: "wink",
 				action: "core:spec/test-announce-action#wink"
 			},
 			noopEmit
@@ -1361,40 +1499,742 @@ describe("sessions:triggerFunction announces its run (R-19)", () => {
 	}, 60_000)
 })
 
+describe("enabled-when (U5e)", () => {
+	const ADVENTURE = "core:genre/adventure"
+	const LOCATION = "core:slot/location@1"
+	const LOOK_REASON = "Set a location first — Look describes where you are."
+
+	/** An Adventure session with an owner — the genre whose world has a location. */
+	async function adventureSession(tag: string) {
+		const schema = await import("$lib/server/db/schema")
+		const owner = await makeUser(`${tag}-owner`)
+		const [session] = await testDb
+			.insert(schema.sessions)
+			.values({ userId: owner.id, isGroup: false, genreId: ADVENTURE })
+			.returning()
+		return { owner, session }
+	}
+	const setLocation = async (userId: number, sessionId: number, value: string | null) => {
+		const { stateSet } = await import("./state")
+		await stateSet.handler(
+			fakeSocket(userId),
+			{ sessionId, owner: { kind: "session", id: sessionId }, slotId: LOCATION, value },
+			noopEmit
+		)
+	}
+	const listComposer = async (userId: number, sessionId: number) => {
+		const { sessionsActionsHandler } = await import("./sessions")
+		const res = await sessionsActionsHandler.handler(
+			fakeSocket(userId),
+			{ sessionId },
+			noopEmit
+		)
+		return all(res.venues.composer)
+	}
+	const fire = async (
+		userId: number,
+		sessionId: number,
+		action: string,
+		messageId?: number
+	) => {
+		const { sessionsTriggerFunctionHandler } = await import("./sessions")
+		return sessionsTriggerFunctionHandler.handler(
+			fakeSocket(userId),
+			{ sessionId, action, ...(messageId != null ? { messageId } : {}) },
+			noopEmit
+		)
+	}
+
+	test("a contributed predicate over state.world.location: grey with its reason while empty, enabled after state:set; the door refuses with the sentence and admits after", async () => {
+		const { owner, session } = await adventureSession("when")
+		await publishActionSpec(
+			"core:spec/test-when-survey",
+			{
+				key: "survey",
+				enabledWhen: {
+					on: "state.world.location",
+					truthy: true,
+					reason: { en: "Name a place to survey first." }
+				}
+			},
+			{ genre: "adventure" }
+		)
+
+		const before = (await listComposer(owner.id, session.id)).find(
+			(a) => a.key === "survey"
+		)
+		expect(before).toMatchObject({
+			canAct: true,
+			enabled: false,
+			reason: { i18n: { en: "Name a place to survey first." } }
+		})
+		expect(before?.itemPredicates).toBeUndefined()
+		// Listed — grey, never dropped (F38).
+		expect(before?.venue).toBe("composer")
+
+		const refused = await fire(owner.id, session.id, "core:spec/test-when-survey#survey")
+		expect(refused.error).toBe("Name a place to survey first.")
+		expect(await runsOf(session.id)).not.toContain("core:spec/test-when-survey")
+
+		await setLocation(owner.id, session.id, "The Vale")
+		const after = (await listComposer(owner.id, session.id)).find(
+			(a) => a.key === "survey"
+		)
+		expect(after).toMatchObject({ enabled: true })
+		expect(after?.reason).toBeUndefined()
+
+		const admitted = await fire(owner.id, session.id, "core:spec/test-when-survey#survey")
+		expect(admitted.error ?? "").not.toBe("Name a place to survey first.")
+		expect(await runsOf(session.id)).toContain("core:spec/test-when-survey")
+
+		// Cleared again: grey again, refused again — the verdict is the values', not a latch.
+		await setLocation(owner.id, session.id, null)
+		expect(
+			(await listComposer(owner.id, session.id)).find((a) => a.key === "survey")?.enabled
+		).toBe(false)
+		expect(
+			(await fire(owner.id, session.id, "core:spec/test-when-survey#survey")).error
+		).toBe("Name a place to survey first.")
+	}, 60_000)
+
+	test("the genre's default applies to an action declaring nothing; the action's own beats it (an explicit [] opts out); a session binding override beats both; clearing restores", async () => {
+		// A fixture genre with defaults keyed by identity (plans/31 V2; review
+		// W8: no shipped genre declares one), and three declarers of `look`
+		// under it: one saying nothing (the default's), one with its own
+		// predicate, one opting out of the default named for it.
+		const FIXTURE = "core:genre/test-when"
+		const LOOK_DEFAULT = { on: "state.world.location", truthy: true, reason: { en: LOOK_REASON } }
+		const fixture = await publishFixtureGenre(FIXTURE, {
+			"core:spec/test-when-default-look#look": LOOK_DEFAULT,
+			"core:spec/test-when-optout-look#look": LOOK_DEFAULT
+		})
+		const schema = await import("$lib/server/db/schema")
+		const owner = await makeUser("when-order-owner")
+		const [session] = await testDb
+			.insert(schema.sessions)
+			.values({ userId: owner.id, isGroup: false, genreId: FIXTURE })
+			.returning()
+		// Three declarers of one key are three identities under three slash
+		// names (V2: one slash name means one action).
+		await publishActionSpec(
+			"core:spec/test-when-default-look",
+			{ key: "look", slash: "look-default" },
+			{ genre: fixture }
+		)
+		await publishActionSpec(
+			"core:spec/test-when-look",
+			{
+				key: "look",
+				slash: "look-own",
+				enabledWhen: {
+					on: "state.world.location",
+					equals: "The Storm",
+					reason: { en: "Only in the storm." }
+				}
+			},
+			{ genre: fixture }
+		)
+		await publishActionSpec(
+			"core:spec/test-when-optout-look",
+			{ key: "look", slash: "look-optout", enabledWhen: [] },
+			{ genre: fixture }
+		)
+
+		const listed = await listComposer(owner.id, session.id)
+		expect(listed.find((a) => a.specSlug === "core:spec/test-when-default-look")).toMatchObject({
+			enabled: false,
+			reason: { i18n: { en: LOOK_REASON } }
+		})
+		expect(listed.find((a) => a.specSlug === "core:spec/test-when-look")).toMatchObject({
+			enabled: false,
+			reason: { i18n: { en: "Only in the storm." } }
+		})
+		expect(listed.find((a) => a.specSlug === "core:spec/test-when-optout-look")).toMatchObject({
+			enabled: true
+		})
+		expect(
+			(await fire(owner.id, session.id, "core:spec/test-when-default-look#look")).error
+		).toBe(LOOK_REASON)
+		expect(
+			(await fire(owner.id, session.id, "core:spec/test-when-look#look")).error
+		).toBe("Only in the storm.")
+		expect(
+			(await fire(owner.id, session.id, "core:spec/test-when-optout-look#look")).error ?? ""
+		).not.toMatch(/Only in the storm|Set a location/)
+
+		// The session's override, riding the binding row for ONE action
+		// (V2): beats that declaration's own predicate and the genre's
+		// default for it, and touches no other declarer of the key.
+		const { sessionsBindFunctionHandler } = await import("./sessions")
+		const bound = await sessionsBindFunctionHandler.handler(
+			fakeSocket(owner.id),
+			{
+				sessionId: session.id,
+				subject: "core:spec/test-when-look#look",
+				specSlug: "core:spec/test-when-look",
+				scope: "session",
+				enabledWhen: {
+					on: "state.world.location",
+					equals: "Nowhere",
+					reason: { en: "Go to Nowhere first." }
+				}
+			},
+			noopEmit
+		)
+		expect(bound.error).toBeUndefined()
+		const overridden = await listComposer(owner.id, session.id)
+		expect(overridden.find((a) => a.specSlug === "core:spec/test-when-look")).toMatchObject({
+			enabled: false,
+			reason: { i18n: { en: "Go to Nowhere first." } }
+		})
+		expect(overridden.find((a) => a.specSlug === "core:spec/test-when-default-look")).toMatchObject({
+			enabled: false,
+			reason: { i18n: { en: LOOK_REASON } }
+		})
+		expect(overridden.find((a) => a.specSlug === "core:spec/test-when-optout-look")).toMatchObject({
+			enabled: true
+		})
+		expect(
+			(await fire(owner.id, session.id, "core:spec/test-when-look#look")).error
+		).toBe("Go to Nowhere first.")
+		expect(
+			(await fire(owner.id, session.id, "core:spec/test-when-default-look#look")).error
+		).toBe(LOOK_REASON)
+		await setLocation(owner.id, session.id, "Nowhere")
+		expect(
+			(await listComposer(owner.id, session.id)).find(
+				(a) => a.specSlug === "core:spec/test-when-look"
+			)?.enabled
+		).toBe(true)
+
+		// An override that is not a predicate is refused with the SDK's sentence.
+		const bad = await sessionsBindFunctionHandler.handler(
+			fakeSocket(owner.id),
+			{
+				sessionId: session.id,
+				subject: "core:spec/test-when-look#look",
+				specSlug: "core:spec/test-when-look",
+				scope: "session",
+				enabledWhen: { on: "$.state.x", truthy: true, reason: { en: "r" } }
+			},
+			noopEmit
+		)
+		expect(bad.error).toMatch(/reads as a port reference/)
+		// …and an override with nothing to ride on.
+		const bare = await sessionsBindFunctionHandler.handler(
+			fakeSocket(owner.id),
+			{
+				sessionId: session.id,
+				subject: "core:spec/test-when-look#look",
+				specSlug: null,
+				scope: "session",
+				enabledWhen: { on: "state.world.location", truthy: true, reason: { en: "r" } }
+			},
+			noopEmit
+		)
+		expect(bare.error).toMatch(/rides the session's binding/)
+		// …and one on the primary turn, which has no button to grey.
+		const onEvent = await sessionsBindFunctionHandler.handler(
+			fakeSocket(owner.id),
+			{
+				sessionId: session.id,
+				subject: "core:event/message-respond@1",
+				specSlug: "core:spec/respond",
+				scope: "session",
+				enabledWhen: { on: "state.world.location", truthy: true, reason: { en: "r" } }
+			},
+			noopEmit
+		)
+		expect(onEvent.error).toMatch(/an action's — a turn's event has no button/)
+
+		// Clearing the override restores the layers beneath: the default's
+		// row the genre default (now satisfied — location is set), the
+		// declarer's its own, the opt-out nothing.
+		await setLocation(owner.id, session.id, "The Vale")
+		const cleared = await sessionsBindFunctionHandler.handler(
+			fakeSocket(owner.id),
+			{
+				sessionId: session.id,
+				subject: "core:spec/test-when-look#look",
+				specSlug: "core:spec/test-when-look",
+				scope: "session",
+				enabledWhen: null
+			},
+			noopEmit
+		)
+		expect(cleared.error).toBeUndefined()
+		const restored = await listComposer(owner.id, session.id)
+		expect(restored.find((a) => a.specSlug === "core:spec/test-when-default-look")).toMatchObject({
+			enabled: true
+		})
+		expect(restored.find((a) => a.specSlug === "core:spec/test-when-look")).toMatchObject({
+			enabled: false,
+			reason: { i18n: { en: "Only in the storm." } }
+		})
+		expect(restored.find((a) => a.specSlug === "core:spec/test-when-optout-look")).toMatchObject({
+			enabled: true
+		})
+		// The binding itself still stands: the override left, the spec stayed.
+		const [row] = await testDb
+			.select({
+				enabledWhen: schema.pipelineBindings.enabledWhen,
+				subject: schema.pipelineBindings.subject
+			})
+			.from(schema.pipelineBindings)
+			.where(eq(schema.pipelineBindings.scopeId, session.id))
+		expect(row).toEqual({ enabledWhen: null, subject: "core:spec/test-when-look#look" })
+	}, 60_000)
+
+	test("swipe on a non-newest row is refused at the verb's door with the notNewest reason; the message venue carries the item predicates", async () => {
+		const { sessionMessagesSwipeRightHandler, sessionsActionsHandler } =
+			await import("./sessions")
+		const { CORE_VERB_REASONS } = await import("@serene-pub/sdk")
+		const schema = await import("$lib/server/db/schema")
+		const { owner, session } = await sessionWithGuest("when-swipe")
+		const reply = async () =>
+			(
+				await testDb
+					.insert(schema.sessionMessages)
+					.values({
+						sessionId: session.id,
+						role: "assistant",
+						content: "a line",
+						isNarratorResponse: true,
+						userId: owner.id
+					})
+					.returning()
+			)[0]!
+		const older = await reply()
+		await reply()
+
+		const refused = await sessionMessagesSwipeRightHandler.handler(
+			fakeSocket(owner.id),
+			{ id: older.id },
+			noopEmit
+		)
+		expect(refused.error).toBe(CORE_VERB_REASONS.notNewest.en)
+
+		// The listing hands the client what it needs to grey the row itself.
+		const res = await sessionsActionsHandler.handler(
+			fakeSocket(owner.id),
+			{ sessionId: session.id },
+			noopEmit
+		)
+		const swipe = all(res.venues.message).find((a) => a.key === "swipe")!
+		expect(swipe.enabled).toBe(true)
+		const paths = (a: { itemPredicates?: { on: string }[] }) => a.itemPredicates?.map((p) => p.on)
+		expect(paths(swipe)).toEqual(["item.isNewest", "item.hasSwipes"])
+		const retry = all(res.venues.message).find((a) => a.key === "retry")!
+		expect(paths(retry)).toEqual([
+			"item.isNewest",
+			"item.greeting",
+			"item.hidden"
+		])
+		// Stop declares nothing; every other verb waited for the session and passed.
+		for (const a of all(res.venues.message)) expect(a.enabled, a.key).toBe(true)
+		expect(all(res.venues.message).find((a) => a.key === "stop")?.itemPredicates).toBeUndefined()
+	}, 60_000)
+
+	test("session.generating greys every verb but stop while a run is live, and lifts when it ends", async () => {
+		const { sessionsActionsHandler } = await import("./sessions")
+		const { CORE_VERB_REASONS } = await import("@serene-pub/sdk")
+		const runRegistry = await import("$lib/server/pipelines/runtime/runRegistry")
+		const { owner, session } = await sessionWithGuest("when-busy")
+		await publishActionSpec("core:spec/test-when-quiet", {
+			key: "quiet",
+			enabledWhen: {
+				on: "session.generating",
+				equals: false,
+				reason: { en: "Let the reply land first." }
+			}
+		})
+
+		const handle = runRegistry.start({
+			runId: `when-busy-${session.id}`,
+			userId: owner.id,
+			sessionId: session.id,
+			specId: "core:spec/test",
+			kind: "action"
+		})
+		try {
+			const busy = await sessionsActionsHandler.handler(
+				fakeSocket(owner.id),
+				{ sessionId: session.id },
+				noopEmit
+			)
+			// Core's verbs: every one but stop declares the busy rule. (A
+			// contributed message action from an earlier test declares none
+			// of its own, and is not held to one it did not write.)
+			for (const a of all(busy.venues.message).filter((a) => a.specSlug === "core")) {
+				if (a.key === "stop") expect(a.enabled).toBe(true)
+				else
+					expect(a, a.key).toMatchObject({
+						enabled: false,
+						reason: { i18n: CORE_VERB_REASONS.generating }
+					})
+			}
+			expect(all(busy.venues.composer).find((a) => a.key === "quiet")).toMatchObject({
+				enabled: false,
+				reason: { i18n: { en: "Let the reply land first." } }
+			})
+			// The door, too — a hand-made fire while a run is live.
+			const { sessionsTriggerFunctionHandler } = await import("./sessions")
+			const refused = await sessionsTriggerFunctionHandler.handler(
+				fakeSocket(owner.id),
+				{ sessionId: session.id, action: "core:spec/test-when-quiet#quiet" },
+				noopEmit
+			)
+			expect(refused.error).toBe("Let the reply land first.")
+		} finally {
+			runRegistry.finish(handle.runId)
+		}
+		const quiet = await sessionsActionsHandler.handler(
+			fakeSocket(owner.id),
+			{ sessionId: session.id },
+			noopEmit
+		)
+		for (const a of all(quiet.venues.message)) expect(a.enabled, a.key).toBe(true)
+		expect(all(quiet.venues.composer).find((a) => a.key === "quiet")?.enabled).toBe(true)
+	}, 60_000)
+})
+
+describe("enabled-when — the review's follow-ups (2026-09-17)", () => {
+	const reply = async (sessionId: number, userId: number, over: Record<string, unknown> = {}) => {
+		const schema = await import("$lib/server/db/schema")
+		return (
+			await testDb
+				.insert(schema.sessionMessages)
+				.values({
+					sessionId,
+					role: "assistant",
+					content: "a line",
+					isNarratorResponse: true,
+					userId,
+					...over
+				})
+				.returning()
+		)[0]!
+	}
+
+	test("the floors ask their door (W2): editing a hidden row is refused with 'unhide it first'; branching while a run is live is refused with the busy sentence", async () => {
+		const { sessionMessagesUpdateHandler, sessionsBranchHandler } = await import("./sessions")
+		const { CORE_VERB_REASONS } = await import("@serene-pub/sdk")
+		const runRegistry = await import("$lib/server/pipelines/runtime/runRegistry")
+		const { owner, session } = await sessionWithGuest("when-floors")
+		const hidden = await reply(session.id, owner.id, { isHidden: true })
+
+		const edit = await sessionMessagesUpdateHandler.handler(
+			fakeSocket(owner.id),
+			{ id: hidden.id, content: "rewritten" },
+			noopEmit
+		)
+		expect(edit.error).toBe(CORE_VERB_REASONS.hidden.en)
+		// Unhiding it is the hide verb's, which has no such rule: admitted.
+		const unhide = await sessionMessagesUpdateHandler.handler(
+			fakeSocket(owner.id),
+			{ id: hidden.id, isHidden: false },
+			noopEmit
+		)
+		expect(unhide.error).toBeUndefined()
+		const edited = await sessionMessagesUpdateHandler.handler(
+			fakeSocket(owner.id),
+			{ id: hidden.id, content: "rewritten" },
+			noopEmit
+		)
+		expect(edited.error).toBeUndefined()
+
+		const handle = runRegistry.start({
+			runId: `when-floors-${session.id}`,
+			userId: owner.id,
+			sessionId: session.id,
+			specId: "core:spec/test",
+			kind: "action"
+		})
+		try {
+			const branch = await sessionsBranchHandler.handler(
+				fakeSocket(owner.id),
+				{ sessionId: session.id, messageId: hidden.id, title: "fork" },
+				noopEmit
+			)
+			expect(branch.error).toBe(CORE_VERB_REASONS.generating.en)
+			const busyEdit = await sessionMessagesUpdateHandler.handler(
+				fakeSocket(owner.id),
+				{ id: hidden.id, content: "again" },
+				noopEmit
+			)
+			expect(busyEdit.error).toBe(CORE_VERB_REASONS.generating.en)
+		} finally {
+			runRegistry.finish(handle.runId)
+		}
+		const branch = await sessionsBranchHandler.handler(
+			fakeSocket(owner.id),
+			{ sessionId: session.id, messageId: hidden.id, title: "fork" },
+			noopEmit
+		)
+		expect(branch.error).toBeUndefined()
+	}, 60_000)
+
+	test("a press naming a row of another session is refused at the door; an item.* predicate with no row to judge is refused with its reason (W4)", async () => {
+		const { sessionsTriggerFunctionHandler } = await import("./sessions")
+		const { enablementVerdict } = await import(
+			"$lib/server/pipelines/entities/sessionActions"
+		)
+		const { owner, session } = await sessionWithGuest("when-w4")
+		const other = await sessionWithGuest("when-w4-other")
+		const theirs = await reply(other.session.id, other.owner.id)
+		await publishActionSpec("core:spec/test-when-annotate", {
+			key: "annotate",
+			venue: [{ kind: "composer" }, { kind: "message" }],
+			enabledWhen: { on: "item.hidden", equals: false, reason: { en: "Not on a hidden line." } }
+		})
+
+		// The door itself, with the verdict's own reading.
+		const foreign = await enablementVerdict(
+			testDb as any,
+			session.id,
+			CHAT,
+			{ userId: owner.id },
+			{ specSlug: "core:spec/test-annotate", key: "annotate", enabledWhen: [] },
+			theirs.id
+		)
+		expect(foreign).toMatchObject({
+			enabled: false,
+			reason: { i18n: { en: "That message is not part of this session." } }
+		})
+		const noRow = await enablementVerdict(
+			testDb as any,
+			session.id,
+			CHAT,
+			{ userId: owner.id },
+			{
+				specSlug: "core:spec/test-annotate",
+				key: "annotate",
+				enabledWhen: [{ on: "item.hidden", equals: false, reason: { en: "Not on a hidden line." } }]
+			}
+		)
+		expect(noRow).toMatchObject({
+			enabled: false,
+			reason: { i18n: { en: "Not on a hidden line." } },
+			itemPredicates: []
+		})
+
+		// …and over the real handler: a composer press names no row.
+		const pressed = await sessionsTriggerFunctionHandler.handler(
+			fakeSocket(owner.id),
+			{ sessionId: session.id, action: "core:spec/test-when-annotate#annotate" },
+			noopEmit
+		)
+		expect(pressed.error).toBe("Not on a hidden line.")
+		const onForeign = await sessionsTriggerFunctionHandler.handler(
+			fakeSocket(owner.id),
+			{
+				sessionId: session.id,
+				action: "core:spec/test-when-annotate#annotate",
+				messageId: theirs.id
+			},
+			noopEmit
+		)
+		expect(onForeign.error).toBe("That message is not part of this session.")
+		// A row of this session admits it.
+		const mine = await reply(session.id, owner.id)
+		const onMine = await sessionsTriggerFunctionHandler.handler(
+			fakeSocket(owner.id),
+			{
+				sessionId: session.id,
+				action: "core:spec/test-when-annotate#annotate",
+				messageId: mine.id
+			},
+			noopEmit
+		)
+		expect(onMine.error ?? "").not.toMatch(/Not on a hidden line|not part of this session/)
+		expect(await runsOf(session.id)).toContain("core:spec/test-when-annotate")
+	}, 60_000)
+
+	test("a root pushes sessions:actions to each member once at its start (retry grey, generating) and once at its end (retry enabled) — never per child (C1, W-A1)", async () => {
+		const { sessionsTriggerFunctionHandler } = await import("./sessions")
+		const { CORE_VERB_REASONS } = await import("@serene-pub/sdk")
+		const { owner, guest, session } = await sessionWithGuest("when-push")
+		await reply(session.id, owner.id)
+		await publishActionSpec("core:spec/test-when-nudge", { key: "nudge" })
+		const { io, emitted } = recordingIo([owner.id, guest.id], session.id)
+		const socket = { user: { id: owner.id, isAdmin: false }, io } as any
+
+		const res = await sessionsTriggerFunctionHandler.handler(
+			socket,
+			{ sessionId: session.id, action: "core:spec/test-when-nudge#nudge" },
+			noopEmit
+		)
+		expect(res.error ?? "").not.toMatch(/not yours|Session not found/)
+		expect(await runsOf(session.id)).toContain("core:spec/test-when-nudge")
+
+		const pushes = emitted.filter((e) => e.event === "sessions:actions")
+		// Two per member — the rise and the fall — each their own list, in order.
+		for (const room of [`socket-${owner.id}`, `socket-${guest.id}`]) {
+			const mine = pushes.filter((p) => p.room === room)
+			expect(mine, room).toHaveLength(2)
+			const retryOf = (push: (typeof mine)[number]) =>
+				all(push.payload.venues.message).find((a: any) => a.key === "retry")
+			expect(mine[0]!.payload.sessionId).toBe(session.id)
+			expect(retryOf(mine[0]!)).toMatchObject({
+				enabled: false,
+				reason: { i18n: CORE_VERB_REASONS.generating }
+			})
+			expect(retryOf(mine[1]!)).toMatchObject({ enabled: true })
+			expect(retryOf(mine[1]!).reason).toBeUndefined()
+		}
+		// The owner's list says the owner may act; the guest's says a guest may see.
+		const forGuest = pushes.filter((p) => p.room === `socket-${guest.id}`).pop()!
+		expect(all(forGuest.payload.venues.composer).find((a: any) => a.key === "nudge")?.canAct).toBe(false)
+	}, 60_000)
+
+	test("a member whose only tab is on another session is sent nothing, and no list is built for them (W-A4)", async () => {
+		const { sessionsTriggerFunctionHandler } = await import("./sessions")
+		const { __actionsPushBuildsForTests } = await import("$lib/server/sessions/actionsPush")
+		const { owner, guest, session } = await sessionWithGuest("when-scope")
+		const elsewhere = await sessionWithGuest("when-scope-elsewhere")
+		await publishActionSpec("core:spec/test-when-wave2", { key: "wave2" })
+		// The owner watches this session; the guest's socket watches another.
+		const { io, emitted } = recordingIo([owner.id], session.id, {
+			[guest.id]: elsewhere.session.id
+		})
+		const before = __actionsPushBuildsForTests()
+		const res = await sessionsTriggerFunctionHandler.handler(
+			{ user: { id: owner.id, isAdmin: false }, io } as any,
+			{ sessionId: session.id, action: "core:spec/test-when-wave2#wave2" },
+			noopEmit
+		)
+		expect(res.error ?? "").not.toMatch(/not yours|Session not found/)
+		const pushes = emitted.filter((e) => e.event === "sessions:actions")
+		expect(pushes.map((p) => p.room)).toEqual([`socket-${owner.id}`, `socket-${owner.id}`])
+		// Two lists built — the owner's rise and fall — and none for the guest.
+		expect(__actionsPushBuildsForTests() - before).toBe(2)
+
+		// Nobody watching the session at all: the roster is not even read
+		// (the interest rule — a socket that wants nothing costs no query),
+		// and nothing is built.
+		const { pushSessionActions } = await import("$lib/server/sessions/actionsPush")
+		const nobody = recordingIo([], session.id, { [guest.id]: elsewhere.session.id })
+		const roster = vi.spyOn(testDb.query.sessionGuests, "findMany")
+		const quiet = __actionsPushBuildsForTests()
+		try {
+			await pushSessionActions(nobody.io, session.id)
+			expect(roster).not.toHaveBeenCalled()
+		} finally {
+			roster.mockRestore()
+		}
+		expect(__actionsPushBuildsForTests() - quiet).toBe(0)
+		expect(nobody.emitted).toEqual([])
+	}, 60_000)
+
+	test("a client's own request made while a push is in flight is answered after it, on the same chain (pass 3)", async () => {
+		const { sessionsActionsHandler } = await import("./sessions")
+		const { pushSessionActions } = await import("$lib/server/sessions/actionsPush")
+		const { owner, session } = await sessionWithGuest("when-chain")
+		await reply(session.id, owner.id)
+		const { io, emitted } = recordingIo([owner.id], session.id)
+		const ownEmit = (event: string, payload: any) =>
+			emitted.push({ room: "caller", event, payload })
+
+		// The end push goes out; the request lands while it is still building.
+		const push = pushSessionActions(io, session.id)
+		const reply2 = sessionsActionsHandler.handler(
+			fakeSocket(owner.id),
+			{ sessionId: session.id },
+			ownEmit
+		)
+		await Promise.all([push, reply2])
+		const events = emitted.filter((e) => e.event === "sessions:actions").map((e) => e.room)
+		expect(events).toEqual([`socket-${owner.id}`, "caller"])
+		expect(all((await reply2).venues.message).find((a: any) => a.key === "retry")).toMatchObject({
+			enabled: true
+		})
+	}, 60_000)
+
+	test("the list follows a genre field write and a membership change (W-A5)", async () => {
+		const { sessionsUpdateHandler, sessionsAddGuestHandler, sessionsRemoveGuestHandler } =
+			await import("./sessions")
+		const { owner, guest, session } = await sessionWithGuest("when-moves")
+		const { io, emitted } = recordingIo([owner.id, guest.id], session.id)
+		const socket = { user: { id: owner.id, isAdmin: false }, io } as any
+		const count = () => emitted.filter((e) => e.event === "sessions:actions").length
+
+		// A genre field: one push per member.
+		let before = count()
+		const updated = await sessionsUpdateHandler.handler(
+			socket,
+			{ session: { id: session.id, genreFields: { tone: "grim" } } } as any,
+			noopEmit
+		)
+		expect((updated as any).error).toBeUndefined()
+		expect(count() - before).toBe(2)
+		// A write that names no field and no member moves nothing.
+		before = count()
+		await sessionsUpdateHandler.handler(
+			socket,
+			{ session: { id: session.id, name: "renamed" } } as any,
+			noopEmit
+		)
+		expect(count() - before).toBe(0)
+
+		// A member joins: the owner, the guest and the newcomer each get a list.
+		const newcomer = await makeUser("when-moves-newcomer")
+		const { io: io3, emitted: emitted3 } = recordingIo([owner.id, guest.id, newcomer.id], session.id)
+		const added = await sessionsAddGuestHandler.handler(
+			{ user: { id: owner.id, isAdmin: false }, io: io3 } as any,
+			{ sessionId: session.id, guestUserId: newcomer.id },
+			noopEmit
+		)
+		expect((added as any).error).toBeUndefined()
+		expect(
+			emitted3.filter((e) => e.event === "sessions:actions").map((p) => p.room).sort()
+		).toEqual([`socket-${guest.id}`, `socket-${newcomer.id}`, `socket-${owner.id}`].sort())
+
+		// …and leaves: the ones who remain relist.
+		const { io: io4, emitted: emitted4 } = recordingIo([owner.id, guest.id, newcomer.id], session.id)
+		const removed = await sessionsRemoveGuestHandler.handler(
+			{ user: { id: owner.id, isAdmin: false }, io: io4 } as any,
+			{ sessionId: session.id, guestUserId: newcomer.id },
+			noopEmit
+		)
+		expect((removed as any).error).toBeUndefined()
+		expect(
+			emitted4.filter((e) => e.event === "sessions:actions").map((p) => p.room).sort()
+		).toEqual([`socket-${guest.id}`, `socket-${owner.id}`].sort())
+	}, 60_000)
+})
+
 // ⚠ Nothing after this point: the next block deliberately leaves the
 // install's slash names colliding, to prove `assertInstallSlashNamesFree`
 // catches it (S2) — every later `publishActionSpec` in this file would
 // inherit that broken state and fail to publish at all.
-describe("one slash name means one function across the install", () => {
-	test("publishing a second spec claiming a name for a different function is refused", async () => {
+describe("one slash name means one action across the install (plans/31 V2)", () => {
+	test("publishing a second spec claiming a name is refused — for another key, and for the same key alike", async () => {
 		await publishActionSpec("core:spec/test-slash-one", {
 			key: "conjure",
-			function: "conjure",
 			slash: "cast"
 		})
 		await expect(
 			publishActionSpec("core:spec/test-slash-two", {
 				key: "hex",
-				function: "hex",
 				slash: "cast"
 			})
 		).rejects.toThrow(/'\/cast' is claimed twice for genre 'core:genre\/chat'/)
 
-		// …while the same function under one name is an alternative.
+		// Until V2 the same *function* under one name was an alternative a
+		// binding selected among; the function is gone, and two specs
+		// declaring one key are two identities a palette could not tell apart.
 		await expect(
 			publishActionSpec("core:spec/test-slash-three", {
 				key: "conjure",
-				function: "conjure",
 				slash: "cast"
 			})
-		).resolves.toMatchObject({ written: true })
+		).rejects.toThrow(/'\/cast' is claimed twice.*by 'core:spec\/test-slash-one' for 'conjure' and by 'core:spec\/test-slash-three' for 'conjure'/)
 	}, 60_000)
 
 	test("a core spec cannot shadow a core verb's slash (S1)", async () => {
 		await expect(
 			publishActionSpec("core:spec/test-shadow-retry", {
 				key: "redo",
-				function: "redo",
 				slash: "retry"
 			})
 		).rejects.toThrow(/'\/retry' is claimed twice.*by 'core' for 'retry'/)
@@ -1407,14 +2247,14 @@ describe("one slash name means one function across the install", () => {
 		const A = "core:spec/test-swap-a"
 		const B = "core:spec/test-swap-b"
 		// Release N: A claims /swap-x for `alpha`, B claims /swap-y for `beta`.
-		await publishActionSpec(A, { key: "alpha", function: "alpha", slash: "swap-x" })
-		await publishActionSpec(B, { key: "beta", function: "beta", slash: "swap-y" })
+		await publishActionSpec(A, { key: "alpha", slash: "swap-x" })
+		await publishActionSpec(B, { key: "beta", slash: "swap-y" })
 
 		// Release N+1 swaps them. One at a time, A' meets B's old claim.
 		await expect(
 			publishActionSpec(
 				A,
-				{ key: "alpha", function: "alpha", slash: "swap-y" },
+				{ key: "alpha", slash: "swap-y" },
 				{ version: "1.1.0" }
 			)
 		).rejects.toThrow(/'\/swap-y' is claimed twice/)
@@ -1424,14 +2264,14 @@ describe("one slash name means one function across the install", () => {
 		await expect(
 			publishActionSpec(
 				A,
-				{ key: "alpha", function: "alpha", slash: "swap-y" },
+				{ key: "alpha", slash: "swap-y" },
 				{ version: "1.1.0", batch }
 			)
 		).resolves.toMatchObject({ written: true })
 		await expect(
 			publishActionSpec(
 				B,
-				{ key: "beta", function: "beta", slash: "swap-x" },
+				{ key: "beta", slash: "swap-x" },
 				{ version: "1.1.0", batch }
 			)
 		).resolves.toMatchObject({ written: true })
@@ -1445,7 +2285,7 @@ describe("one slash name means one function across the install", () => {
 		await expect(
 			publishActionSpec(
 				C,
-				{ key: "gamma", function: "gamma", slash: "swap-y" },
+				{ key: "gamma", slash: "swap-y" },
 				{ batch: new Set([C, A]) }
 			)
 		).resolves.toMatchObject({ written: true })

@@ -164,7 +164,7 @@ describe("a session's cast reaches its lorebook without being asked", () => {
 
 		await sessionsSetLorebookHandler.handler(
 			fakeSocket(user.id),
-			{ sessionId: created.session.id, lorebookId: lorebook.id } as any,
+			{ sessionId: created.session!.id, lorebookId: lorebook.id } as any,
 			noEmit
 		)
 
@@ -201,7 +201,7 @@ describe("a session's cast reaches its lorebook without being asked", () => {
 		await sessionsUpdateHandler.handler(
 			fakeSocket(user.id),
 			{
-				session: { id: created.session.id },
+				session: { id: created.session!.id },
 				characterIds: [first.id, late.id]
 			} as any,
 			noEmit
@@ -234,7 +234,7 @@ describe("a session's cast reaches its lorebook without being asked", () => {
 
 		await sessionsAddPersonaHandler.handler(
 			fakeSocket(user.id),
-			{ sessionId: created.session.id, personaId: persona.id } as any,
+			{ sessionId: created.session!.id, personaId: persona.id } as any,
 			noEmit
 		)
 
@@ -267,7 +267,7 @@ describe("a session's cast reaches its lorebook without being asked", () => {
 
 		await sessionsUpdateHandler.handler(
 			fakeSocket(user.id),
-			{ session: { id: created.session.id }, characterIds: [] } as any,
+			{ session: { id: created.session!.id }, characterIds: [] } as any,
 			noEmit
 		)
 
@@ -292,7 +292,7 @@ describe("a session's cast reaches its lorebook without being asked", () => {
 		)
 		await sessionsSetLorebookHandler.handler(
 			fakeSocket(user.id),
-			{ sessionId: created.session.id, lorebookId: lorebook.id } as any,
+			{ sessionId: created.session!.id, lorebookId: lorebook.id } as any,
 			noEmit
 		)
 

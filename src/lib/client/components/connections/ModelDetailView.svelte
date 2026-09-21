@@ -12,7 +12,7 @@
 	 * Availability leads. A model the host has stopped listing is refused
 	 * everywhere, and this is the one screen that can say since when, what
 	 * that means, and what to do about it — refresh once the host serves it
-	 * again, remove it, or go to the manager that owns it.
+	 * again, remove it, or go to the connection whose runtime owns it.
 	 */
 	import * as Icons from "@lucide/svelte"
 	import { Menu, Portal, Switch } from "@skeletonlabs/skeleton-svelte"
@@ -48,7 +48,13 @@
 		) => void
 		/** Ask the host again (forced). */
 		onRefresh: () => void
-		/** Open the manager that owns this endpoint's models. */
+		/**
+		 * Open the connection whose runtime owns this endpoint's models.
+		 *
+		 * It used to open a manager PANEL; the managers fold into their
+		 * connection with the 2026-09-17 ruling (R2), so the same press now
+		 * lands on that connection's view — which is where the models are.
+		 */
 		onOpenManager: (manager: ModelManager) => void
 		/** The model row is gone (removed elsewhere) — leave the view. */
 		onRemoved: () => void
@@ -506,7 +512,7 @@
 						onclick={() => onOpenManager(manager)}
 					>
 						<Icons.ExternalLink size={14} aria-hidden="true" />
-						Manage in the {manager.label}
+						Manage in {manager.label}
 					</button>
 					<p class="text-muted text-xs">{sourceHint}</p>
 				{:else if sourceHint}

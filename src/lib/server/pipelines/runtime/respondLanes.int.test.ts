@@ -85,11 +85,12 @@ beforeAll(async () => {
 			}
 		])
 	)
-	// Bound, because unbound character lore is never visible to anybody —
-	// `isCharacterLoreEntryVisible` returns false on a missing binding, which
-	// is the "private self-knowledge" rule and not an accident. A binding with
-	// neither a character nor a persona is a background one, visible in
-	// narrator mode, which is the mode this run is in.
+	// Bound, because a binding is what decides who may see a character-lore
+	// entry — the "private self-knowledge" rule. A binding with neither a
+	// character nor a persona is a background one, visible in narrator mode,
+	// which is the mode this run is in. (An entry bound to nothing at all is
+	// the narrator's as well since W3, 2026-09-17; this one is bound so the
+	// lane under test is the ordinary one.)
 	const [binding] = await db
 		.insert(schema.lorebookBindings)
 		.values({

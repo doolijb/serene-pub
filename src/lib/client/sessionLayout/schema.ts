@@ -116,6 +116,35 @@ export function defaultZoneLayout(rightWidgets: string[] = []): ZoneLayout {
 	}
 }
 
+/**
+ * Does dropping a widget into this side zone also PIN it? (Ruled 2026-09-17.)
+ *
+ * `defaultZoneLayout` ships Left unpinned, because a fresh session has nothing
+ * on the left and an icon strip for an empty column is the honest default. But
+ * somebody who has just arranged widgets into that column meant a column, not a
+ * strip of icons — so the first drop takes the default with it.
+ *
+ * The two cases are told apart by whether the zone had any WIDGETS when the
+ * editor opened, not by any extra flag:
+ *
+ *   - shipped unpinned — the zone was empty, so there was never a rail to
+ *     unpin and `pinned: false` can only be the default talking. The drop pins.
+ *   - explicitly unpinned — you unpin a rail you can see, which means widgets
+ *     were in it. `pinned: false` is then a decision, and it stands.
+ *
+ * `hadWidgets` is read from the snapshot the editor took when it opened, so a
+ * second drop in the same session cannot re-pin a zone the user unpinned after
+ * the first one.
+ */
+export function pinsOnFirstDrop(o: {
+	/** The zone's current pin. Absent means pinned (schema default). */
+	pinned?: boolean
+	/** Did this zone hold any widgets when the editor opened? */
+	hadWidgets: boolean
+}): boolean {
+	return o.pinned === false && !o.hadWidgets
+}
+
 /* ── resolution ─────────────────────────────────────────────────────── */
 
 /** Ascending cumulative merge — each rule inherits what came before it. */

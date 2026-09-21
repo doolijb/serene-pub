@@ -1,0 +1,182 @@
+{
+  "schemaVersion": 1,
+  "slug": "demo.unified",
+  "name": "Tally",
+  "version": "1.0.0",
+  "description": "Counts words and says so.",
+  "engines": {
+    "serene-pub": ">=0.7 <0.8"
+  },
+  "nodeDefinitions": [
+    {
+      "id": "demo.unified:task/tally@1",
+      "binding": "tally",
+      "kind": "task",
+      "version": 1,
+      "ports": {
+        "in": [
+          "text"
+        ],
+        "out": [
+          "main"
+        ]
+      },
+      "slots": [],
+      "timeoutMs": 500,
+      "declaration": {
+        "id": "demo.unified:task/tally@1",
+        "i18n": {
+          "name": {
+            "en": "Tally"
+          }
+        },
+        "timeoutMs": 500,
+        "ports": {
+          "in": {
+            "text": "core:shape/text@1"
+          },
+          "out": {
+            "main": "core:shape/json@1"
+          }
+        },
+        "kind": "task"
+      }
+    }
+  ],
+  "hooks": {
+    "handlers": [
+      {
+        "definitionId": "demo.unified:task/tally@1",
+        "visibility": "private",
+        "runtime": "process"
+      }
+    ],
+    "lifecycleCallbacks": [],
+    "eventListeners": [],
+    "nodeHandlers": {
+      "demo.unified:task/tally@1": "tallyHandler"
+    }
+  },
+  "components": [],
+  "pipelines": [
+    {
+      "id": "demo.unified:spec/create-session",
+      "version": "1.0.0",
+      "nodes": 1,
+      "presets": []
+    },
+    {
+      "id": "demo.unified:spec/respond",
+      "version": "1.0.0",
+      "nodes": 2,
+      "presets": []
+    }
+  ],
+  "permissions": [
+    "event:core:event/message-respond@1",
+    "event:core:event/session-created@1",
+    "storage:4194304"
+  ],
+  "peerTypes": [],
+  "genres": [
+    {
+      "id": "demo.unified:genre/tally",
+      "name": {
+        "en": "Tally"
+      },
+      "family": "game",
+      "description": {
+        "en": "Somebody is counting."
+      },
+      "shape": {
+        "characters": {
+          "min": 1,
+          "max": 1
+        },
+        "personas": {
+          "min": 0,
+          "max": 1
+        },
+        "lorebook": "optional",
+        "composer": "text",
+        "voice": "character",
+        "writes": {
+          "lore": false,
+          "scenes": false
+        }
+      },
+      "events": {
+        "core:event/message-respond@1": {
+          "required": true
+        },
+        "core:event/session-created@1": {
+          "required": true
+        }
+      }
+    }
+  ],
+  "surfaces": {
+    "panels": [
+      {
+        "id": "tally",
+        "entry": "ui/tally.html",
+        "title": "Tally",
+        "channels": [
+          "main"
+        ]
+      }
+    ]
+  },
+  "presets": [
+    {
+      "slug": "tally",
+      "genre": "demo.unified:genre/tally",
+      "label": "Tally",
+      "description": "Counts what you say.",
+      "bindings": {
+        "core:event/session-created@1": {
+          "spec": "demo.unified:spec/create-session"
+        },
+        "core:event/message-respond@1": {
+          "spec": "demo.unified:spec/respond",
+          "config": "tally-default"
+        }
+      }
+    }
+  ],
+  "configs": [
+    {
+      "spec": "demo.unified:spec/respond",
+      "slug": "tally-default",
+      "label": "Tally",
+      "description": "As shipped.",
+      "values": {
+        "tally": {
+          "params": {
+            "trim": true
+          }
+        }
+      }
+    },
+    {
+      "spec": "core:spec/respond",
+      "slug": "tally-flavoured",
+      "label": "Tally flavoured",
+      "values": {}
+    }
+  ],
+  "prompts": [
+    {
+      "nodeType": "core:task/build-template-context",
+      "slot": "prompts",
+      "slug": "tally-referee",
+      "label": "Tally referee",
+      "fields": {
+        "systemPrompt": "Count, and say the number."
+      }
+    }
+  ],
+  "requires": [
+    "core:spec/respond"
+  ]
+}

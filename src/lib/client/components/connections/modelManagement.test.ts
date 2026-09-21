@@ -172,7 +172,11 @@ describe("rowAction", () => {
 })
 
 describe("orderOnnxRows", () => {
-	function row(name: string, tier?: "fast" | "balanced" | "best", sizeMb?: number) {
+	function row(
+		name: string,
+		tier?: "fast" | "balanced" | "best",
+		sizeMb?: number
+	) {
 		return { name, local: { catalog: { tier, sizeMb } } }
 	}
 

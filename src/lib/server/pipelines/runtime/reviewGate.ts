@@ -248,6 +248,14 @@ export function createReviewer(scope: {
 	sessionId?: number
 	specId: string
 	signal?: AbortSignal
+	/**
+	 * The run has parked — the entry is stored and the person has been
+	 * pushed the form (U5d review, R-b). What `fireAction` races its run
+	 * against, so a parked action releases the trigger lock and the ack
+	 * instead of holding both until the owner decides. Told once per gate;
+	 * a run that parks at two gates says so twice.
+	 */
+	onParked?: () => void
 }): Reviewer {
 	return async (req) => {
 		// The whole payload, or the definition's declared fields where it
@@ -318,6 +326,9 @@ export function createReviewer(scope: {
 				"pipelines:reviewRequested",
 				viewOf(entry)
 			)
+			// After the push, so a caller that answers "parked" on this is
+			// answering about a card the person can already see.
+			scope.onParked?.()
 		})
 	}
 }

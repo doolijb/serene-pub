@@ -52,10 +52,12 @@ import {
 } from "$lib/server/pipelines/entities/sideCharacter"
 import {
 	envoySlugOfRef,
+	sessionEvents,
 	type EnvoyRef,
 	type ParticipantRef,
 	type Receipt
 } from "@serene-pub/sdk"
+import { CORE_ACTION_SPEC } from "$lib/shared/actions/identity"
 
 /** A node key as a person reads it: `voices.item.say` → "voices say". */
 function stageOf(nodeKey: string): string {
@@ -112,6 +114,19 @@ export interface ReplyRequest {
 	sessionId: number
 	userId: number
 	turn: ReplyTurn
+	/**
+	 * Which channel this reply is being asked for on — the stored string,
+	 * lane included (`main`, `manuscript`, `phone:3`). Absent means `main`,
+	 * which is every session whose genre declares no channel of its own, and
+	 * every trigger that has not grown a per-channel composer yet.
+	 *
+	 * ⚠ A **verb** does not take it from here: the row it re-drives is the
+	 * trigger, and that row already stores which channel it is on. A caller
+	 * that passed a different one would be asking to regenerate a line of the
+	 * manuscript into the conversation, so the row wins and this is read only
+	 * on a fresh turn.
+	 */
+	channel?: string
 }
 
 export interface ReplyOutcome {
@@ -132,18 +147,22 @@ export interface ReplyOutcome {
 }
 
 /**
- * Which function key and floor spec serve a turn. Three functions since the
- * narrator split (ruling 2026-09-07), and a fourth for the continue verb
- * (ruling 2026-09-08, D-2): a continue is a turn of its own that happens to
- * start from text, keyed separately so a genre can bind it, with `respond`
- * as its floor because that is the spec carrying the `continuationPrefill`
- * port.
+ * Which **subject** and floor spec serve a turn (plans/31 V2: one identity).
+ * The primary turn is the core event `message-respond`, which a preset or a
+ * session binding routes among the bucket. The two narrator turns (the
+ * narrator split, ruling 2026-09-07) are the narrator actions by identity —
+ * their declarer serves them. The continue verb (ruling 2026-09-08, D-2) is
+ * a turn of its own that happens to start from text: its subject is the
+ * verb's identity `core#continue`, which no spec declares, so it always
+ * takes its floor — `respond`, the spec carrying the `continuationPrefill`
+ * port. `label` is the short word the progress card shows.
  */
 async function routeFor(
 	turn: ReplyTurn,
 	existing: SelectSessionMessage | null
 ): Promise<{
-	functionKey: string
+	subject: string
+	label: string
 	floorSpecId: string
 	currentCharacterId: number | null
 	/** The side-character fact, on a narrate-character turn. */
@@ -164,7 +183,8 @@ async function routeFor(
 	)
 	if (turn.kind === "respond")
 		return {
-			functionKey: "respond",
+			subject: sessionEvents.messageRespond,
+			label: "respond",
 			floorSpecId: RESPOND_SPEC_ID,
 			currentCharacterId: turn.speaker ? null : turn.characterId,
 			speaker: null,
@@ -173,7 +193,8 @@ async function routeFor(
 		}
 	if (turn.kind === "narrate")
 		return {
-			functionKey: "narrate",
+			subject: `${NARRATE_SPEC_ID}#narrate`,
+			label: "narrate",
 			floorSpecId: NARRATE_SPEC_ID,
 			currentCharacterId: null,
 			speaker: null,
@@ -181,7 +202,8 @@ async function routeFor(
 		}
 	if (turn.kind === "narrate-character")
 		return {
-			functionKey: "narrate-character",
+			subject: `${NARRATE_CHARACTER_SPEC_ID}#narrate-character`,
+			label: "narrate-character",
 			floorSpecId: NARRATE_CHARACTER_SPEC_ID,
 			// The side character's id reaches the RUN but never the row: it
 			// is what makes character lore bound to them visible, while the
@@ -207,21 +229,24 @@ async function routeFor(
 	if (narration)
 		return speaker
 			? {
-					functionKey: "narrate-character",
+					subject: `${NARRATE_CHARACTER_SPEC_ID}#narrate-character`,
+					label: "narrate-character",
 					floorSpecId: NARRATE_CHARACTER_SPEC_ID,
 					currentCharacterId: speaker.characterId,
 					speaker,
 					narration
 				}
 			: {
-					functionKey: "narrate",
+					subject: `${NARRATE_SPEC_ID}#narrate`,
+					label: "narrate",
 					floorSpecId: NARRATE_SPEC_ID,
 					currentCharacterId: null,
 					speaker: null,
 					narration
 				}
 	return {
-		functionKey: turn.kind === "continue" ? "continue" : "respond",
+		subject: turn.kind === "continue" ? `${CORE_ACTION_SPEC}#continue` : sessionEvents.messageRespond,
+		label: turn.kind === "continue" ? "continue" : "respond",
 		floorSpecId: RESPOND_SPEC_ID,
 		currentCharacterId: existing?.characterId ?? null,
 		speaker: null,
@@ -248,6 +273,15 @@ export async function runReply(request: ReplyRequest): Promise<ReplyOutcome> {
 				})) ?? null)
 			: null
 	const messageId = existing?.id
+	/**
+	 * The channel this turn is triggered on (R-C, 2026-09-17) — the row's own
+	 * when a verb re-drives one, else what the trigger said, else `main`.
+	 *
+	 * The row first because it *is* the trigger for a verb: a regenerate of a
+	 * line of the manuscript is a turn on the manuscript however the caller
+	 * spelled its request.
+	 */
+	const channel = existing?.channel ?? request.channel
 	const refuse = async (reason: string): Promise<ReplyOutcome> => {
 		if (messageId !== undefined)
 			await persistGenerationErrorRow(
@@ -273,13 +307,14 @@ export async function runReply(request: ReplyRequest): Promise<ReplyOutcome> {
 	const route = await routeFor(turn, existing)
 
 	/**
-	 * Function routing (19 §3): the trigger names a function, the genre's
-	 * contributors answer it. The verdict rather than the slug (ruled
-	 * 2026-09-10): a preset binding that stopped resolving must not refuse
-	 * the reply, and the run it falls back to has to be able to say what it
-	 * substituted. A null resolution falls to the F29 floor.
+	 * Subject routing (19 §3; plans/31 V2): the turn names its subject — the
+	 * primary turn's event, a narrator action's identity — and the genre's
+	 * bucket or the declarer answers it. The verdict rather than the slug
+	 * (ruled 2026-09-10): a preset binding that stopped resolving must not
+	 * refuse the reply, and the run it falls back to has to be able to say
+	 * what it substituted. A null resolution falls to the F29 floor.
 	 */
-	const { resolveFunctionVerdict, STANDARD_GENRE_ID } = await import(
+	const { resolveSubjectVerdict, STANDARD_GENRE_ID } = await import(
 		"$lib/server/pipelines/entities/sessionGenres"
 	)
 	const [sessionRow] = await db
@@ -288,10 +323,10 @@ export async function runReply(request: ReplyRequest): Promise<ReplyOutcome> {
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
 	if (!sessionRow) return await refuse("Session not found.")
-	const routed = await resolveFunctionVerdict(
+	const routed = await resolveSubjectVerdict(
 		db,
 		sessionRow.genreId ?? STANDARD_GENRE_ID,
-		route.functionKey,
+		route.subject,
 		{ sessionId }
 	)
 	const specId = routed.spec ?? route.floorSpecId
@@ -319,11 +354,21 @@ export async function runReply(request: ReplyRequest): Promise<ReplyOutcome> {
 		kind: "reply",
 		liveRow: messageId
 	})
-	const label = route.functionKey
+	const label = route.label
+	// `session.generating` just rose: every member's action list follows
+	// (U5e, review W-A1) — once per root at its start, the end push queued
+	// behind it on the same session so a fast run cannot overtake it.
+	const { pushSessionActions } = await import(
+		"$lib/server/sessions/actionsPush"
+	)
+	void pushSessionActions(socket.io, sessionId)
 
 	let declaredStages = doc ? spineProviders(doc).length : 0
 	let stagesSeen = 0
 	const spine = new Set(doc ? spineProviders(doc).map((n) => n.key) : [])
+	// `...event` is spread LAST, so it must never carry `runId` (or `specId`):
+	// this run's key is decided here, and a frame keyed to another run — a
+	// child's stage, say — would be a card the client never saw start.
 	const progress = (event: Record<string, unknown>) =>
 		emitToUser("pipelines:progress", {
 			runId,
@@ -407,6 +452,9 @@ export async function runReply(request: ReplyRequest): Promise<ReplyOutcome> {
 				turn.kind === "continue" && existing?.content
 					? existing.content
 					: undefined,
+			// Which channel the trigger is on, for the inlet's `channel` port
+			// and for the seed line the channel's voice calls for (R-C).
+			channel,
 			// The row a verb re-drives, for the placeholder outlet to claim —
 			// and which verb, so the finishing write's `message-updated`
 			// says so for the next reply's inlet (R-15).
@@ -450,8 +498,6 @@ export async function runReply(request: ReplyRequest): Promise<ReplyOutcome> {
 		// oracle that halted on its abort; the registry is still read because
 		// it is the source, and it knows who.
 		stopped = runRegistry.cancellation(handle)
-
-		await announceStateChanges(socket.io, sessionId, receipt)
 
 		if (stopped) return { ok: false, stopped: true, receipt }
 		if (receipt.outcome !== "ok")
@@ -518,6 +564,8 @@ export async function runReply(request: ReplyRequest): Promise<ReplyOutcome> {
 		const outcome: NonNullable<RunProgress["outcome"]> = stopped
 			? "cancelled"
 			: (receipt?.outcome ?? "err")
+		// The terminal frame first (review W-A6), as the trigger road orders
+		// it: the card clears, then the list.
 		progress({
 			done: true,
 			outcome,
@@ -534,5 +582,24 @@ export async function runReply(request: ReplyRequest): Promise<ReplyOutcome> {
 				? { haltNodeKey: receipt.haltNodeKey }
 				: {})
 		})
+		// The action list follows the run's end (U5e, review C1): the reply
+		// is the newest row now and nothing is generating, so every member's
+		// verdicts are re-sent by the server, once per finished root.
+		try {
+			await pushSessionActions(socket.io, sessionId)
+		} catch (e) {
+			console.warn("[runReply] the action list could not be re-sent:", e)
+		}
+		// The world's changes are announced AFTER the run has left the
+		// registry and the list has gone out (review W-A3): a client that
+		// relists on `state:changed` — a hand-set slot's road — then reads
+		// `session.generating` false, and cannot race the push above.
+		if (receipt) {
+			try {
+				await announceStateChanges(socket.io, sessionId, receipt)
+			} catch (e) {
+				console.warn("[runReply] the state changes could not be announced:", e)
+			}
+		}
 	}
 }

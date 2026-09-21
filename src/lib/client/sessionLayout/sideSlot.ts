@@ -2,20 +2,18 @@
  * Where a side zone's ONE mount currently lives.
  *
  * The side zones used to be written twice in the live render — once as an
- * in-flow flex child, once inside the fixed margin layer — and the
- * `marginMode` flip swapped which `{#if}` was live. Two call sites means two
- * subtrees: Svelte destroyed one and built the other, so every iframe in a
- * side zone reloaded (the sample frame's "alive for" counter reset to 0) and
- * every native panel lost its local state. That is exactly what the no-reload
- * law forbids — the flyout, the mobile overlay and the tab groups all keep the
- * same element and only change where it is drawn.
+ * in-flow flex child, once inside a fixed layer — and a flag swapped which
+ * `{#if}` was live. Two call sites means two subtrees: Svelte destroyed one and
+ * built the other, so every iframe in a side zone reloaded (the sample frame's
+ * "alive for" counter reset to 0) and every native panel lost its local state.
+ * That is exactly what the no-reload law forbids — the flyout, the mobile
+ * overlay and the tab groups all keep the same element and only change where it
+ * is drawn.
  *
  * So the mount is written ONCE and this decides its container:
  *
  *   inline  — an in-flow child of `.layout-body` (`display: contents`, so the
  *             zones themselves stay the flex items they have always been).
- *   margin  — the `position: fixed` margin layer, reclaiming the space a
- *             closed sidebar reserves.
  *   stowed  — mounted, `display: none`: no layout space, no tab stop, no
  *             a11y tree — but the iframes keep running and the panels keep
  *             their state. This is the state that used to be an unmount.
@@ -27,34 +25,32 @@
  *             iframe in it. The sheet's chrome (header, close, backdrop, focus
  *             trap) is unchanged; it just wraps the one mount now.
  *
+ * There was a fourth container, `margin`: a fixed layer a side was lifted into
+ * to reclaim the dead space a closed sidebar still reserved in the two-sidebar
+ * shell. The one-rail shell (2026-09-15) reserves no such space — `<main>`
+ * spans everything right of the nav rail, and what was measured as the left
+ * margin is the rail itself — so there was no margin left to lift a side into
+ * and the slot was retired 2026-09-17. The no-reload law is unchanged: still
+ * one mount, still this function choosing the container around it.
+ *
  * There is deliberately no "not rendered" value left: every state a side can be
  * in is a container, which is what makes the no-reload law hold by construction
  * rather than by remembering.
  */
 
-/** A margin thinner than this is a sliver, not a rail. */
-export const MIN_MARGIN_PX = 40
-
-export type SideSlot = "inline" | "margin" | "stowed" | "overlay"
+export type SideSlot = "inline" | "stowed" | "overlay"
 
 export interface SideSlotInput {
 	/** Below the app's 1024px breakpoint (P6): sides take no layout space. */
 	narrow: boolean
 	/** The mobile overlay is currently showing THIS side. */
 	overlayOwns: boolean
-	/** Standard width on desktop: the sidebars' dead space is reclaimable. */
-	marginMode: boolean
-	/** This side's margin is not already taken by an open sidebar panel. */
-	marginFree: boolean
-	/** Measured width of this side's margin. */
-	marginPx: number
 }
 
 export function sideSlot(o: SideSlotInput): SideSlot {
 	if (o.overlayOwns) return "overlay"
 	if (o.narrow) return "stowed"
-	if (!o.marginMode) return "inline"
-	return o.marginFree && o.marginPx > MIN_MARGIN_PX ? "margin" : "stowed"
+	return "inline"
 }
 
 /* ── how wide a side is in the `inline` slot ─────────────────────────────
@@ -64,8 +60,7 @@ export function sideSlot(o: SideSlotInput): SideSlot {
  * as a flex child of `.layout-body` asked for the WHOLE body. Two of those
  * plus the centre overflowed, flexbox shrank all three by their basis, and at
  * 1838px each side took 903px while `.layout-center` was squeezed to 0: the
- * chat disappeared. (Margin mode never showed it — there the width comes from
- * the measured margin the wrapper sets.)
+ * chat disappeared.
  *
  * The un-arranged rail has always had a definite width for this: the ladder's
  * answer at the current container width, `z.width * z.columns` (see
@@ -101,9 +96,9 @@ export interface SideFlowInput {
 
 /**
  * What a side occupies in `.layout-body`'s row, by whichever path it draws.
- * Only the `inline` slot is in that row at all: a margin side is a fixed layer
- * sized to the measured margin, and a stowed or overlay one has no box in the
- * flow — neither may reserve width the centre would then not get.
+ * Only the `inline` slot is in that row at all: a stowed side has no box in the
+ * flow and an overlay one is a fixed sheet — neither may reserve width the
+ * centre would then not get.
  *
  * Two deliberate omissions. An icon strip is not counted: it is a fixed
  * 2.25rem that the ladder does not size and the clamp does not touch. And a

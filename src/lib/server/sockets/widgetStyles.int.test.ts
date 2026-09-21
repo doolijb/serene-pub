@@ -46,7 +46,7 @@ beforeAll(async () => {
 	const dbModule = await import("$lib/server/db")
 	testDb = dbModule.db as unknown as TestDb
 	// The system half of the table, seeded exactly as boot seeds it.
-	const { CORE_WIDGETS } = await import("@serene-pub/core-catalog")
+	const { CORE_WIDGETS } = await import("$lib/shared/widgets/types")
 	const { syncWidgetStyles } = await import("$lib/server/db/widgetStyles")
 	await syncWidgetStyles(CORE_WIDGETS, "test")
 }, 60_000)
@@ -56,6 +56,13 @@ afterAll(async () => {
 })
 
 const handlers = () => import("./widgetStyles")
+
+/** `widgetStyles:create` called straight, for the refusals. */
+const createRaw = async (
+	socket: any,
+	params: any,
+	emit: (event: string, data: any) => void | Promise<void>
+) => (await handlers()).widgetStylesCreate.handler(socket, params, emit)
 
 const WIDGET = "messages"
 
@@ -243,6 +250,82 @@ describe("widgetStyles:create", () => {
 			)
 		).rejects.toThrow(/not a widget/i)
 		expect(cap.errorFor("widgetStyles:create")).toMatch(/not a widget/i)
+	})
+
+	/**
+	 * A plugin's widgets ship no style presets, so nothing ever seeds them into
+	 * this table — the allow-list has to read the manifests or a person could
+	 * never skin a plugin's panel at all. Namespaced, because that is the id
+	 * the session view seats it under and a style keys on the same string.
+	 */
+	describe("a plugin's own widget", () => {
+		const installTray = async (enabled: boolean) => {
+			const pluginId = `acme.tray-${n++}`
+			await testDb.insert(schema.plugins).values({
+				pluginId,
+				name: "Tray",
+				bundleSource: "// x",
+				bundleHash: "deadbeef",
+				enabled,
+				manifest: {
+					surfaces: {
+						panels: [{ id: "tray", entry: "ui/tray.html" }]
+					}
+				}
+			})
+			return pluginId
+		}
+
+		test("accepts its namespaced id while the plugin is enabled", async () => {
+			const alice = await makeUser()
+			const pluginId = await installTray(true)
+			const style = await create(alice.id, {
+				widgetSlug: `${pluginId}:tray`,
+				title: "Felt"
+			})
+			expect(style.widgetSlug).toBe(`${pluginId}:tray`)
+			// The minted slug still cannot land on a system row's target: it
+			// is five segments where a system slug for this widget is three.
+			expect(
+				(await rowById(style.id)).slug.startsWith(`user:${alice.id}:`)
+			).toBe(true)
+		})
+
+		test("refuses a panel the plugin does not declare", async () => {
+			const alice = await makeUser()
+			const pluginId = await installTray(true)
+			const cap = capture()
+			await expect(
+				createRaw(
+					fakeSocket(alice.id),
+					{ widgetSlug: `${pluginId}:ghost`, title: "Nope" },
+					cap.emit
+				)
+			).rejects.toThrow(/not a widget/i)
+		})
+
+		test("refuses the bare panel id, and any id of a disabled plugin", async () => {
+			const alice = await makeUser()
+			const pluginId = await installTray(false)
+			// Bare: the id the package declared is not the id it is seated
+			// under, and a style keyed on it would never be asked for.
+			await expect(
+				createRaw(
+					fakeSocket(alice.id),
+					{ widgetSlug: "tray", title: "Nope" },
+					capture().emit
+				)
+			).rejects.toThrow(/not a widget/i)
+			// Disabled: its rows survive, but no NEW one may be made — the
+			// session view does not offer the widget, so nothing would read it.
+			await expect(
+				createRaw(
+					fakeSocket(alice.id),
+					{ widgetSlug: `${pluginId}:tray`, title: "Nope" },
+					capture().emit
+				)
+			).rejects.toThrow(/not a widget/i)
+		})
 	})
 
 	test("refuses oversized CSS and a var key that is not a custom property", async () => {

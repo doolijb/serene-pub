@@ -120,6 +120,8 @@ let db: TestDb
 let sessionId: number
 let userId: number
 let characterId: number
+/** The run owner's own presence in this session — their persona (0132). */
+let personaId: number
 
 beforeAll(async () => {
 	db = await createTestDb()
@@ -181,6 +183,7 @@ beforeAll(async () => {
 		isActive: true,
 		visibility: "visible"
 	})
+	personaId = persona.id
 	await db
 		.insert(schema.sessionPersonas)
 		.values({ sessionId, personaId: persona.id })
@@ -489,6 +492,16 @@ describe("who portrays whom on a turn", () => {
 		const speaker = receipt.nodes.find((n: any) => n.nodeKey === "speaker")
 		expect(speaker.output.speaker).toBe(`character:${characterId}`)
 		expect(speaker.output.characterId).toBe(characterId)
+		/**
+		 * And who PRESSED, beside who is speaking (G9, 2026-09-17) — the two
+		 * differ on nearly every turn, which is the whole reason the port
+		 * exists: a person types and a character answers. The run owner holds
+		 * a persona here, so their reference is that character's; a persona
+		 * IS a character (0132), and a line written as them is written as that
+		 * character.
+		 */
+		expect(inlet.output.presser).toBe(`character:${personaId}`)
+		expect(inlet.output.presser).not.toBe(inlet.output.speaker)
 		// Stored with the receipt, as the blob is.
 		const [row] = await db
 			.select({ receipt: schema.pipelineRuns.receipt })
@@ -1147,5 +1160,63 @@ describe("script chains on a turn", () => {
 		expect(apps).toMatchObject([
 			{ name: "Turn reminder", result: "ok", changed: true }
 		])
+	})
+})
+
+/**
+ * The presser's own line (G9, contracts batch 2, 2026-09-17).
+ *
+ * The inlet publishes `presser` — asserted on the receipt above — and the
+ * half that makes it worth publishing is what a spec can then DO with it:
+ * wire it into `create-message@1`'s `speaker` and the row is written as the
+ * person who pressed, not as the model. The host path existed already
+ * (`speaker: 'user:<id>'` naming the run owner, with no character at all, is
+ * `role: user` under their id and no persona); nothing carried the reference
+ * to put in it, so a plugin that wanted the player's own line had to ride it
+ * on the opponent's reply as a block (plan §12).
+ *
+ * `speaker` is handed the exact string `$.input.presser` resolves to, which
+ * is the wiring under test — the node between them is the executor's, and
+ * `resolveInput` copying a port into a config key is proved everywhere else
+ * in this file.
+ */
+describe("a line written as whoever pressed", () => {
+	it("writes a user-role row for the presser, with no persona", async () => {
+		const { createHost } = await import(
+			"$lib/server/pipelines/runtime/host"
+		)
+		const host = createHost(db as any, { sessionId, userId })
+		const res = (await host.commit!(
+			{ text: "I press the button.", speaker: `user:${userId}` },
+			{ key: "say", definitionId: "core:outlet/create-message" } as any
+		)) as { id: number }
+
+		const [row] = await db
+			.select()
+			.from(schema.sessionMessages)
+			.where(eq(schema.sessionMessages.id, res.id))
+		expect(row!.role).toBe("user")
+		expect(row!.userId).toBe(userId)
+		// A persona-less line is its author's: no persona, no character.
+		expect(row!.personaId).toBeNull()
+		expect(row!.characterId).toBeNull()
+		// And the reference is on the row, which is what the client renders by.
+		expect((row!.metadata as any)?.speaker).toBe(`user:${userId}`)
+	})
+
+	it("is still the model's line when nobody is named", async () => {
+		const { createHost } = await import(
+			"$lib/server/pipelines/runtime/host"
+		)
+		const host = createHost(db as any, { sessionId, userId })
+		const res = (await host.commit!(
+			{ text: "The wind picks up." },
+			{ key: "say", definitionId: "core:outlet/create-message" } as any
+		)) as { id: number }
+		const [row] = await db
+			.select()
+			.from(schema.sessionMessages)
+			.where(eq(schema.sessionMessages.id, res.id))
+		expect(row!.role).toBe("assistant")
 	})
 })

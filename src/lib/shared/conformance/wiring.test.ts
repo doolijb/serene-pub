@@ -68,9 +68,11 @@
  *     be noise with three real findings hidden in it. The out-port direction is
  *     covered at the SHAPE level instead (§1a), where "nothing can consume
  *     this" is a fact about the vocabulary rather than about one pipeline.
- *   - **Node types no core spec uses at all.** `speak`, `roll`, `chunk-text`
- *     and thirty others are a vocabulary offered to whoever builds a pipeline
- *     in the editor. Unused by core is their normal state, not a defect.
+ *   - **Node types no core spec uses at all.** `attach-image`, `roll`,
+ *     `summarize-request` and thirty others are a vocabulary offered to
+ *     whoever builds a pipeline in the editor. Unused by core is their normal
+ *     state, not a defect. (Unused AND unbound is one — `bindingCompat.ts`
+ *     holds that line at boot, plans/29 R-2.)
  *   - **Socket emitters, as distinct from handlers.** See §4: emit sites go
  *     through named helpers (`emitToUser`, `broadcastToSessionUsers`) and every
  *     `*:error` event is emitted from a template literal inside `register()`,
@@ -248,12 +250,27 @@ const UNPRODUCED_IN_SHAPES: Deliberate[] = []
 /**
  * Shapes some port emits, that no port anywhere declares it accepts.
  *
- * All three below are deliberate, all three are documented at the declaration
- * site in the SDK's `shapes.ts`, and none of them is a mistake — which is
- * exactly why they need to be *said*. A fourth appearing quietly beside them is
- * the case this list exists for.
+ * Each entry below is deliberate, documented at the declaration site in the
+ * SDK's `shapes.ts`, and not a mistake — which is exactly why they need to be
+ * *said*. One more appearing quietly beside them is the case this list exists
+ * for. (`rendered-blocks@1` left the list with `render-entries`, culled
+ * unbound under plans/29 R-2 — nothing publishes the shape now.)
  */
 const UNCONSUMED_OUT_SHAPES: Deliberate[] = [
+	{
+		subject: shapeSubject(
+			"core:shape/form-addressed@1",
+			OUT_PORTS.filter((p) => p.shape === "core:shape/form-addressed@1")
+		),
+		reason:
+			"An event's payload, whole (R-15 *Forms*, U5d). `core:inlet/" +
+			"form-addressed@1.main` republishes what `core:event/form-addressed@1` " +
+			"carried, the way `session-created@1.main` does its request; the " +
+			"answer pipeline reads the parts beside it — `form`, `addressee`, " +
+			"`messageId`, `blockId` — port by port, and nothing wants the " +
+			"envelope as one value. The shape exists so the event registry's " +
+			"`payload_shape` names it, not as a wire."
+	},
 	{
 		subject: shapeSubject(
 			"core:shape/speaker-selection@1",
@@ -270,15 +287,18 @@ const UNCONSUMED_OUT_SHAPES: Deliberate[] = [
 	},
 	{
 		subject: shapeSubject(
-			"core:shape/rendered-blocks@1",
-			OUT_PORTS.filter((p) => p.shape === "core:shape/rendered-blocks@1")
+			"core:shape/vector@1",
+			OUT_PORTS.filter((p) => p.shape === "core:shape/vector@1")
 		),
 		reason:
-			"`render-entries` is the node that owns 'how one retrieved entry is " +
-			"written into the context' — the job `lorebook-triggers` had a " +
-			"template slot for and never did. No shipped spec runs it yet, so " +
-			"nothing declares an in-port for what it publishes. Declared ahead " +
-			"of the spec that will use it."
+			"One embedding, on `embed-text@1`'s `main` and `vector` — what a " +
+			"single-text call publishes beside its `vectors` list. The one " +
+			"consumer, `vector-search@1`, takes the LIST (`json@1`, U5d review " +
+			"W9: several query vectors, one ranked list each — what `vectors` " +
+			"publishes and the host reads); a lone vector wired into it is " +
+			"accepted as anything into `json` is. The singular ports stay for " +
+			"a node that wants one embedding — an entity write, a similarity — " +
+			"which no shipped spec pins yet."
 	}
 ]
 
@@ -355,6 +375,26 @@ const unfilledInPorts = (): string[] => {
  * shipped run can reach.
  */
 const UNFILLED_IN_PORTS: Deliberate[] = [
+	{
+		subject: "core:outlet/update-message@1.blocks",
+		reason:
+			"A reply may end with a question put to the cast (R-15 *Forms*, " +
+			"U5d): the port is the same list `create-message@1.blocks` takes, " +
+			"appended once the text lands. The shipped reply pipelines end in " +
+			"prose alone — the Adventure genre's Ask writes its question through " +
+			"`create-message` on a narration row — and the port is read by the " +
+			"host's `writeBlocks` on both writes. Delete this entry when a " +
+			"shipped reply wires it."
+	},
+	{
+		subject: "core:task/make-choices@1.addressee",
+		reason:
+			"The override: a spec that already knows whom it is asking wires a " +
+			"participant reference here and it wins over the oracle's document. " +
+			"The Adventure genre's Ask lets the oracle choose the addressee by " +
+			"name and resolves it against the cast instead, so no shipped spec " +
+			"fills the port; the binding reads it (`wired ?? resolveAddresseeName`)."
+	},
 	{
 		subject: "core:oracle/generate-text@1.attachments",
 		reason:
@@ -755,6 +795,12 @@ const RUN_OPTIONS: Record<string, true | string> = {
 	// every reply row saying *working* and the receipt's `lastStatus` still
 	// present but never shown — quietly, which is why this line exists.
 	onStatus: true,
+	// Where a run stands in a tree of runs (01 §8, R-21 (5), U5d): a
+	// `form-addressed` child and the action its answer fires carry their
+	// parent, root and depth here, and the receipt pins them. `runSpec`
+	// passes `request.lineage` through; unwiring it leaves every child
+	// receipt claiming to be a root and the cycle caps counting nothing.
+	lineage: true,
 	dry:
 		"Defaults to the preview flag inside the executor, and every preview " +
 		"the app runs (`sessions:promptTokenCount`, the retrieval previews, " +
@@ -1386,6 +1432,13 @@ function endowedCtx(relPath: string): string[] {
 		// `__PRELUDE` is the only free name buildProgram closes over. A new one
 		// arrives here as a ReferenceError, which is the loud failure this
 		// wants — not a program missing the lines that referenced it.
+		//
+		// `grants` is the sixth argument (plans/29 R-3): what the hook's kind
+		// lets its ctx carry, derived host-side by `plugins/hookCtx.ts`. Read
+		// at its WIDEST — an oracle's, both members — because this section
+		// asks whether every declared member is one a backend can endow at
+		// all; which kind gets which is that table's, proven by the sandbox
+		// tests (`Object.keys(ctx)` per kind) and the boot's probe.
 		program = (
 			new Function(
 				"__PRELUDE",
@@ -1395,9 +1448,13 @@ function endowedCtx(relPath: string): string[] {
 				hookName: string,
 				inputJson: string,
 				seedLabel: string,
-				nowMs: number
+				nowMs: number,
+				grants: { storage: boolean; fetch: boolean }
 			) => string
-		)("", "conformanceProbe", "{}", "conformance", 0)
+		)("", "conformanceProbe", "{}", "conformance", 0, {
+			storage: true,
+			fetch: true
+		})
 	} catch (e) {
 		throw new Error(
 			`§5 could not build ${relPath}'s guest program: ${String(e)}. ` +

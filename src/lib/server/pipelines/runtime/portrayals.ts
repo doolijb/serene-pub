@@ -42,7 +42,7 @@
  */
 
 import * as schema from "$lib/server/db/schema"
-import { and, eq, inArray, isNull, isNotNull } from "drizzle-orm"
+import { and, asc, eq, inArray, isNull, isNotNull } from "drizzle-orm"
 import { sessionDeclaredEnvoys } from "$lib/server/pipelines/entities/envoys"
 import {
 	formatParticipantRef,
@@ -243,6 +243,44 @@ export async function resolvePortrayals(
 		portrayals[key] = portrayal
 	}
 	return portrayals
+}
+
+/**
+ * The character a member speaks THROUGH in this session — their own
+ * presence: the first live `session_personas` row, by seat, whose character
+ * they own. Null when they have none here. A user who has seated two of
+ * their characters speaks through the first by seat position — the row the
+ * cast lists first — and never through both. The same rows `resolvePortrayals`
+ * reads to answer `person`, asked the other way round: not "who portrays
+ * this participant" but "whom does this person speak as" — what a press on
+ * a question put to nobody in particular needs, so the answer lands as the
+ * presser's persona's line rather than nobody's (2026-09-17).
+ */
+export async function ownPresence(
+	db: Db,
+	sessionId: number,
+	userId: number
+): Promise<number | null> {
+	const [row] = await db
+		.select({ characterId: schema.sessionPersonas.personaId })
+		.from(schema.sessionPersonas)
+		.innerJoin(
+			schema.characters,
+			eq(schema.characters.id, schema.sessionPersonas.personaId)
+		)
+		.where(
+			and(
+				eq(schema.sessionPersonas.sessionId, sessionId),
+				isNull(schema.sessionPersonas.removedAt),
+				eq(schema.characters.userId, userId)
+			)
+		)
+		.orderBy(
+			asc(schema.sessionPersonas.position),
+			asc(schema.sessionPersonas.personaId)
+		)
+		.limit(1)
+	return row?.characterId ?? null
 }
 
 /**

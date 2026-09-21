@@ -8,9 +8,11 @@
 	 * hides while the overlay is up: the overlay's own input is the same
 	 * control, and two of them on screen at once is one too many.
 	 *
-	 * z-46 — above the shell (z-10) and the mobile sheets (40/45), strictly
-	 * below the modal layer (z-50) every dialog in this app portals to. See the
-	 * note on the sidebar in Layout.svelte for what happens above z-50.
+	 * z-44 — above the shell (z-10) and the mobile sheets (z-40), strictly
+	 * below the sidebar / full-page view (z-45, see Layout.svelte) and the
+	 * modal layer (z-50) every dialog in this app portals to. It sits under
+	 * an open sidebar or full-page view; the shortcut is the way in while
+	 * one is open.
 	 */
 	import * as Icons from "@lucide/svelte"
 	import type { JumpCtx } from "$lib/client/shell/jump.svelte"
@@ -36,12 +38,43 @@
 			? "Jump to anything"
 			: `Search ${jumpCtx.scope.label}`
 	)
+
+	/**
+	 * How wide the pill is drawing itself, published to the document as
+	 * `--jump-pill-width` so a surface whose own controls reach this corner can
+	 * keep clear of it — today that is a sidebar view in full page, whose 56px
+	 * header row IS the band the pill sits in (STYLE-GUIDE §4.2, §6.8).
+	 *
+	 * Measured and not a constant: the label names the scope, so the same pill
+	 * is 190px over Admin and 247px over Documentation, and the base face it is
+	 * set in is the theme's — which a custom theme may change. `offsetWidth`
+	 * rather than `clientWidth` because the 1px border is part of what has to
+	 * be cleared.
+	 */
+	let pillWidth = $state(0)
+
+	$effect(() => {
+		// On the document element rather than passed as a prop: the header that
+		// spends this is in another subtree entirely (Layout.svelte's sidebar
+		// chrome) and the pill is a leaf, so a custom property is the one seam
+		// that reaches it without a store.
+		//
+		// Never written back to zero. The pill unmounts while the overlay is
+		// up, and a reserve that collapsed and grew again around that would
+		// shift the header underneath the overlay and back.
+		if (pillWidth > 0)
+			document.documentElement.style.setProperty(
+				"--jump-pill-width",
+				`${pillWidth}px`
+			)
+	})
 </script>
 
 {#if !jumpCtx.isOpen}
 	<button
 		type="button"
-		class="bg-surface-950/90 border-surface-800 text-surface-400 hover:text-surface-50 hover:border-surface-700 focus-visible:outline-primary-500 fixed top-2 right-4 z-[46] flex h-[34px] w-[34px] items-center justify-center gap-2 rounded-lg border text-sm backdrop-blur transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 lg:w-auto lg:justify-start lg:px-2.5"
+		bind:offsetWidth={pillWidth}
+		class="bg-surface-950/90 border-surface-800 text-surface-400 hover:text-surface-50 hover:border-surface-700 focus-visible:outline-primary-500 fixed top-2 right-4 z-[44] flex h-[34px] w-[34px] items-center justify-center gap-2 rounded-lg border text-sm backdrop-blur transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 lg:w-auto lg:justify-start lg:px-2.5"
 		title="{label} ({hint})"
 		aria-label="{label} ({hint})"
 		aria-keyshortcuts={isMac ? "Meta+K" : "Control+K"}

@@ -31,6 +31,10 @@
 		) => void
 		/** The message body, so a form's question is not shown twice. */
 		bodyText?: string
+		/** The viewer's verdict on a form's addressee (U5d review, W7) — see `MessageBlocksView`. */
+		canAnswer?: (addressee: string | undefined) => boolean
+		/** Whether the channel has moved past a form (U5f) — see `MessageBlocksView`. */
+		isStale?: (block: { head?: unknown; answered?: unknown }) => boolean
 	}
 
 	let {
@@ -39,7 +43,9 @@
 		activeRevisions,
 		onContentClick,
 		onAction,
-		bodyText
+		bodyText,
+		canAnswer,
+		isStale
 	}: Props = $props()
 
 	/** Expanded state per collapsible, keyed by part id. Default collapsed. */
@@ -192,7 +198,13 @@
 		{:else if Array.isArray((part.data as any)?.blocks)}
 			<!-- A block tree (20 §6): plugin content as data, core's renderer,
 			     whatever the part's namespace — the convention, not a registry. -->
-			<MessageBlocksView blocks={(part.data as any).blocks} {onAction} {bodyText} />
+			<MessageBlocksView
+				blocks={(part.data as any).blocks}
+				{onAction}
+				{bodyText}
+				{canAnswer}
+				{isStale}
+			/>
 		{:else}
 			{@render collapsible(part, part.type, "puzzle", unknownBody(part))}
 		{/if}

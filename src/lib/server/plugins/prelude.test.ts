@@ -30,6 +30,7 @@ const HOOK = `module.exports = { hooks: { ambient: function (input, ctx) {
 
 const opts = {
 	input: {},
+	kind: "task" as const,
 	timeoutMs: 1000,
 	seedLabel: "s",
 	nowMs: 1
@@ -137,7 +138,7 @@ describe("ctx.log", () => {
 		await rt.load("l", LOG_HOOK, "h")
 		return rt.invoke(
 			{ pluginId: "l", hookName: "logs" },
-			{ input: {}, timeoutMs: 2000, seedLabel: "s", nowMs: 1 }
+			{ kind: "task", input: {}, timeoutMs: 2000, seedLabel: "s", nowMs: 1 }
 		)
 	}
 
@@ -177,7 +178,7 @@ describe("Buffer", () => {
 		await rt.load("b", BUF_HOOK, "h")
 		return rt.invoke(
 			{ pluginId: "b", hookName: "buf" },
-			{ input: {}, timeoutMs: 2000, seedLabel: "s", nowMs: 1 }
+			{ kind: "task", input: {}, timeoutMs: 2000, seedLabel: "s", nowMs: 1 }
 		)
 	}
 
@@ -217,7 +218,7 @@ describe("crypto (real entropy)", () => {
 		await rt.load("c", CRYPTO_HOOK, "h")
 		return rt.invoke(
 			{ pluginId: "c", hookName: "c" },
-			{ input: {}, timeoutMs: 2000, seedLabel: "s", nowMs: 1 }
+			{ kind: "task", input: {}, timeoutMs: 2000, seedLabel: "s", nowMs: 1 }
 		)
 	}
 
@@ -280,7 +281,7 @@ describe("AbortController", () => {
 			await rt.load("ac", AC_HOOK, "h")
 			const r = await rt.invoke(
 				{ pluginId: "ac", hookName: "ac" },
-				{ input: {}, timeoutMs: 2000, seedLabel: "s", nowMs: 1 }
+				{ kind: "task", input: {}, timeoutMs: 2000, seedLabel: "s", nowMs: 1 }
 			)
 			expect(r.ok).toBe(true)
 			if (r.ok) results.push(r.value)

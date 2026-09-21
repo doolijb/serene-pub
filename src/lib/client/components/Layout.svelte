@@ -8,8 +8,6 @@
 	import AdminSidebar from "./sidebars/AdminSidebar.svelte"
 	import SamplingSidebar from "./sidebars/SamplingSidebar.svelte"
 	import ConnectionsSidebar from "./sidebars/ConnectionsSidebar.svelte"
-	import OllamaSidebar from "./sidebars/OllamaSidebar.svelte"
-	import KoboldCppSidebar from "./sidebars/KoboldCppSidebar.svelte"
 	import LegacySidebar from "./sidebars/LegacySidebar.svelte"
 	import LorebooksSidebar from "./sidebars/LorebooksSidebar.svelte"
 	import CharactersSidebar from "./sidebars/CharactersSidebar.svelte"
@@ -41,7 +39,6 @@
 	import UpdateNoticeBar from "$lib/client/components/UpdateNoticeBar.svelte"
 	import type { Snippet } from "svelte"
 	import { Theme } from "$lib/client/consts/Theme"
-	import OllamaIcon from "./icons/OllamaIcon.svelte"
 	import { page } from "$app/state"
 	import { goto } from "$app/navigation"
 	import {
@@ -49,6 +46,9 @@
 		isAdminPath,
 		JUMP_CONTEXT
 	} from "$lib/client/shell/jump.svelte"
+	// While a session's DESKTOP layout editor is open its toolbar owns the top
+	// band, so the session header and the Jump pill step out of it.
+	import { layoutEditor } from "$lib/client/sessionLayout/layoutEditor.svelte"
 	import JumpPill from "$lib/client/components/shell/JumpPill.svelte"
 	import JumpOverlay from "$lib/client/components/shell/JumpOverlay.svelte"
 	// The one `lg` answer. Anything that needs `window.innerWidth < 1024`
@@ -332,17 +332,10 @@
 			void openView(next, { toggle: false })
 		},
 		isMobileMenuOpen: false,
-		// Persisted per browser: the width toggle is a lasting preference, not
+		// Persisted per browser: the rail's form is a lasting preference, not
 		// a per-visit whim. Guarded for SSR; the write lives in an $effect
-		// below (effects never run server-side). Nothing in this shell reads it
-		// any more — SessionLayout does. See app.d.ts.
-		wideContent:
-			typeof localStorage !== "undefined" &&
-			localStorage.getItem("serene-pub:wideContent") === "true",
-		// Persisted for the same reason as `wideContent` above: the rail's form
-		// is a lasting preference, not a per-visit whim. Guarded for SSR; the
-		// write lives in an $effect below. Desktop only — the bottom bar is the
-		// rail below `lg`.
+		// below (effects never run server-side). Desktop only — the bottom bar
+		// is the rail below `lg`.
 		railWide:
 			typeof localStorage !== "undefined" &&
 			localStorage.getItem(RAIL_WIDE_KEY) === "true",
@@ -376,8 +369,6 @@
 			"pipelines",
 			"settings",
 			"users",
-			"ollama",
-			"koboldcpp",
 			"legacy"
 		],
 		rightNavOrder: [
@@ -411,16 +402,6 @@
 		capabilityDefaults: {}
 	})
 
-	// Persist the width toggle (see wideContent's init above).
-	$effect(() => {
-		try {
-			localStorage.setItem(
-				"serene-pub:wideContent",
-				String(panelsCtx.wideContent)
-			)
-		} catch {}
-	})
-
 	// Persist the rail's form (see railWide's init above).
 	$effect(() => {
 		try {
@@ -445,6 +426,8 @@
 	let openSessionCtx: OpenSessionCtx = $state({
 		sessionId: null,
 		sessionName: null,
+		cast: [],
+		genreName: null,
 		lorebookId: null,
 		isOwner: false
 	})
@@ -536,12 +519,6 @@
 		const path = page.url.pathname
 		return !path.startsWith("/sessions/") && !path.startsWith("/admin")
 	})
-	// Managed local model runners need a binary we don't/can't bundle for
-	// Android — Ollama Manager and KoboldCPP Manager are hidden in this wrapper
-	// regardless of their underlying DB flags. Embeddings/Vectorization isn't:
-	// local ONNX models can't load under Bionic, but external-API embeddings
-	// work fine, so its nav entry stays visible and the sidebar itself gates
-	// the local-model option (VectorizationSetupScreen).
 	// The session currently on screen, when there is one. 05 §0a: configuring a
 	// pipeline from the list writes at user scope, and configuring it from
 	// inside a session you own writes at session scope — so the panel has to know
@@ -552,11 +529,8 @@
 		return Number.isFinite(id) ? id : undefined
 	})
 
-	let isAndroidWrapper = $derived(
-		!!systemSettingsCtx?.settings?.isAndroidWrapper
-	)
-
-	// Update leftNav based on Ollama Manager setting
+	// The rail's registry, kept in step with who is signed in and what this
+	// instance has switched on.
 	$effect(() => {
 		if (!isSettingsLoaded) return
 
@@ -582,33 +556,13 @@
 			delete panelsCtx.leftNav.admin
 		}
 
-		// Add/remove Ollama Manager based on setting
-		if (
-			ollamaSettingsCtx?.settings?.ollamaManagerEnabled &&
-			isAdmin &&
-			!isAndroidWrapper
-		) {
-			panelsCtx.leftNav.ollama = {
-				icon: OllamaIcon,
-				title: "Ollama Manager"
-			}
-		} else {
-			delete panelsCtx.leftNav.ollama
-		}
-
-		// Add/remove KoboldCPP Manager based on setting
-		if (
-			koboldCppSettingsCtx?.settings?.koboldCppManagerEnabled &&
-			isAdmin &&
-			!isAndroidWrapper
-		) {
-			panelsCtx.leftNav.koboldcpp = {
-				imgSrc: "/koboldcpp/koboldcpp-icon.svg",
-				title: "KoboldCPP Manager"
-			}
-		} else {
-			delete panelsCtx.leftNav.koboldcpp
-		}
+		// ⚠ No rail items for the managers. The Ollama Manager and the
+		// KoboldCPP Manager were entries here until the 2026-09-17 concept
+		// ruling (R2); each is now the connection VIEW of its connection, so
+		// the one door is the Connections list and there is nothing to
+		// register or delete as the flags move. The flags themselves stay —
+		// the server reads them to decide whether it may spawn or reach a
+		// process at all.
 
 		if (isAdmin) {
 			panelsCtx.leftNav.sampling = {
@@ -689,6 +643,50 @@
 		// on screen — a blank window with no way back.
 		fullPageView = null
 	}
+
+	/* ── the session layout editor takes the window ────────────────────────
+	 * Ruled 2026-09-17: opening the DESKTOP layout editor closes the sidebar,
+	 * and closing the editor puts it back.
+	 *
+	 * The editor is not a panel inside `<main>` — its toolbar owns the header's
+	 * band and its canvas is laid out across the whole viewport, nav rail
+	 * included. A sidebar left on screen therefore sits ON TOP of the editor's
+	 * Add tray and its whole Left zone, with the rail it would be closed from
+	 * covered by the editor's own scrim.
+	 *
+	 * This file owns the sidebar's state, so the reaction lives here and the
+	 * store is the only thing that crosses — exactly as the header and the Jump
+	 * pill already react to `layoutEditor.open`. SessionLayout never reaches in.
+	 *
+	 * Collapsing keeps the tab and everything in it (see `collapseSidebar`), so
+	 * putting it back is only making it active again — and only if the user has
+	 * not put something else on screen while the editor was up: they asked for
+	 * that, and this did not.
+	 */
+	let stowedForEditor: {
+		view: string | null
+		fullPage: string | null
+	} | null = null
+	$effect(() => {
+		const open = layoutEditor.open
+		// Everything below is read AND written here; only `open` may retrigger.
+		untrack(() => {
+			if (open) {
+				if (stowedForEditor) return
+				stowedForEditor = { view: activeView, fullPage: fullPageView }
+				if (activeView !== null) collapseSidebar()
+				return
+			}
+			const stowed = stowedForEditor
+			if (!stowed) return
+			stowedForEditor = null
+			if (activeView !== null) return
+			if (!stowed.view || !openViews.includes(stowed.view)) return
+			activeView = stowed.view
+			touchRecency(stowed.view)
+			fullPageView = stowed.fullPage
+		})
+	})
 
 	/**
 	 * Open a view in the sidebar and make it active.
@@ -957,10 +955,9 @@
 		])) {
 			entries.push({ ...item, kind: "view", group: "system" })
 		}
-		// Help is the foot of Tune, under whatever managers this instance has
-		// switched on — so it is excluded from the loop above and pushed here
-		// rather than left to that loop's "anything registered later appends"
-		// tail, which would land it above Ollama, KoboldCPP and Legacy.
+		// Help is the foot of Tune — so it is excluded from the loop above and
+		// pushed here rather than left to that loop's "anything registered
+		// later appends" tail, which would land it above Legacy.
 		const help = panelsCtx.leftNav.help
 		if (help) {
 			entries.push({
@@ -2173,7 +2170,13 @@
 					/>
 				</div>
 
-				<!-- Desktop chrome -->
+				<!-- Desktop chrome.
+
+				     In full page this row runs to the right edge of the window.
+				     The Jump pill is not rendered while a view is full page
+				     (ruled 2026-09-17: the pill sits under sidebars; Ctrl K is
+				     the way in while one covers its corner), so the row keeps
+				     its own padding and reserves nothing. -->
 				<div
 					class="border-surface-900 hidden h-14 shrink-0 items-center gap-1.5 border-b pr-2.5 pl-4 lg:flex"
 				>
@@ -2284,11 +2287,15 @@
 				tabindex="-1"
 			>
 				<!-- Header carries only session concerns now (the Layout
-				     pull-tab's hover region and the mobile panels button —
-				     see Header.svelte's own comment), so every other page
-				     renders it here only to waste 48px on a bar with just
-				     the title. Session pages alone get it. -->
-				{#if page.url.pathname.startsWith("/sessions/")}
+				     button and the mobile panels button — see Header.svelte's
+				     own comment), so every other page renders it here only to
+				     waste 48px on a bar with just the title. Session pages
+				     alone get it.
+
+				     And not even those while the desktop layout editor is
+				     open: the editor's toolbar takes this band, so the header
+				     steps out rather than being covered by it. -->
+				{#if page.url.pathname.startsWith("/sessions/") && !layoutEditor.open}
 					<Header />
 				{/if}
 				<!-- 🚧 Interim reading width. Before the single-sidebar shell
@@ -2306,10 +2313,10 @@
 				     Sessions and Admin manage their own width (the session
 				     surface grid spends the whole viewport; the admin shell
 				     switches on ITS container's width), so they are exempt.
-				     This is unrelated to `wideContent`, which nothing in the
-				     shell has read since S1 — SessionLayout is its only reader
-				     and sessions are exempt here, so there is still one rule
-				     per question. -->
+				     One rule, one question: the two-sidebar shell's full-width
+				     toggle was the other answer to it and was retired with the
+				     margin slot (2026-09-17), so there is nothing left to
+				     reconcile this with. -->
 				<div
 					class="flex-1 overflow-auto {constrainContentWidth
 						? 'mx-auto w-full max-w-[1120px]'
@@ -2370,8 +2377,20 @@
 		     Both live behind `{#if shouldShowApp}`, which is the same thing as
 		     "there is a `panelsCtx`" — the overlay resolves a hit through it,
 		     so there is nothing for Jump to do before a user is known, and
-		     Document View has its own shell and never renders this file. -->
-		<JumpPill {jumpCtx} />
+		     Document View has its own shell and never renders this file.
+
+		     The pill leaves while the session layout editor's toolbar owns the
+		     top band, and while a sidebar view is full page: the pill sits
+		     UNDER sidebars (ruled 2026-09-17), and a full-page view is a
+		     sidebar view given the whole window, so the corner is its. Below
+		     `lg` an open view is a sheet inside the shell's own stacking
+		     context, where z-45 over z-44 decides nothing — so the pill is
+		     unrendered there too, exactly as for full page, rather than
+		     merely stacked under. Ctrl-K opens the overlay in every one of
+		     those states. -->
+		{#if !layoutEditor.open && fullPageView === null && (desktop.matches || activeView === null)}
+			<JumpPill {jumpCtx} />
+		{/if}
 		{#if jumpCtx.isOpen}
 			<JumpOverlay {jumpCtx} />
 		{/if}
@@ -2462,10 +2481,6 @@
 			<ConnectionsSidebar bind:onclose={viewCloseGates[key]} />
 		{:else if key === "users"}
 			<UsersSidebar bind:onclose={viewCloseGates[key]} />
-		{:else if key === "ollama"}
-			<OllamaSidebar bind:onclose={viewCloseGates[key]} />
-		{:else if key === "koboldcpp"}
-			<KoboldCppSidebar bind:onclose={viewCloseGates[key]} />
 		{:else if key === "legacy"}
 			<LegacySidebar bind:onclose={viewCloseGates[key]} />
 		{:else if key === "pipelines"}

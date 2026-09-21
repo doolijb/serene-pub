@@ -128,7 +128,7 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.4rem;
-		font-size: 0.72rem;
+		font-size: 14px;
 	}
 	.wsx-head {
 		display: flex;
@@ -136,11 +136,9 @@
 		gap: 0.35rem;
 	}
 	.wsx-head-label {
-		font-size: 0.62rem;
-		font-weight: 700;
-		letter-spacing: 0.06em;
-		text-transform: uppercase;
-		opacity: 0.62;
+		font-size: 12px;
+		font-weight: 400;
+		opacity: 0.72;
 	}
 	.wsx-reset {
 		display: inline-flex;
@@ -149,7 +147,7 @@
 		margin-inline-start: auto;
 		padding: 0.1rem 0.3rem;
 		border-radius: 0.25rem;
-		font-size: 0.62rem;
+		font-size: 12px;
 		opacity: 0.72;
 	}
 	.wsx-reset:hover,
@@ -162,12 +160,10 @@
 		align-items: center;
 		gap: 0.25rem;
 		padding: 0.15rem 0;
-		font-size: 0.62rem;
-		font-weight: 700;
-		letter-spacing: 0.06em;
-		text-transform: uppercase;
+		font-size: 12px;
+		font-weight: 400;
 		cursor: pointer;
-		opacity: 0.62;
+		opacity: 0.72;
 		list-style: none;
 	}
 	.wsx-summary::-webkit-details-marker {

@@ -37,6 +37,7 @@
 		eventInScope,
 		WIDGET_CONTEXT_KEY,
 		WidgetMessageFeed,
+		type ActionsV1,
 		type Payload,
 		type PlacementInput,
 		type ProjectInput,
@@ -45,6 +46,7 @@
 		type WidgetContextRef,
 		type WidgetEventSource
 	} from "$lib/shared/widgets/context"
+	import type { ActionDispatch } from "$lib/shared/widgets/invokeAction"
 	import type { WidgetScope } from "$lib/shared/widgets/types"
 	import {
 		effectiveWidgetSkin,
@@ -73,11 +75,29 @@
 		 * widget only ever hears about the channels it declared.
 		 */
 		source?: WidgetEventSource
+		/**
+		 * The session's action venues (`sessions:actions`), threaded down from
+		 * the page — the `actions.v1` section. Absent (a mount outside a
+		 * session) leaves it `{}`, and `invoke` then refuses every key by
+		 * name, which is the honest answer for a host that offers nothing.
+		 */
+		actions?: ActionsV1
+		/**
+		 * The host's own routing for a press (U5c review, W4): its handlers
+		 * for core's verbs, so a widget's `invoke('core#continue')` reaches
+		 * the same handler the message row's own button does rather than a
+		 * fire the server refuses — and its `fire` for a contributed action,
+		 * so that press is the same one the chips make, named as a run and
+		 * taking the bespoke client flows.
+		 */
+		actionDispatch?: ActionDispatch
 		/** Routes to the audited trigger path (same as a frame's action). */
 		onAction?: (
 			fn: string,
 			messageId?: number,
-			payload?: Record<string, unknown>
+			payload?: Record<string, unknown>,
+			action?: string,
+			blockId?: string
 		) => void
 		children: Snippet
 	}
@@ -93,6 +113,8 @@
 		scoped,
 		placement,
 		source,
+		actions,
+		actionDispatch,
 		onAction,
 		children
 	}: Props = $props()
@@ -135,8 +157,13 @@
 
 	// request/menu are not wired to a real host yet — a native widget that
 	// reaches for them gets a clean, explicit failure rather than a silent no-op
-	// that looks like it worked. `action` and `on` ARE real: action rides the
-	// same audited trigger path a frame's action does, and `on` is the bus.
+	// that looks like it worked. `action`, `invoke` and `on` ARE real: action
+	// rides the same audited trigger path a frame's action does, `invoke`
+	// resolves against the venues threaded in above and routes the press
+	// through `actionDispatch` — core's verbs to the host's handlers, a
+	// contributed action to the host's OWN fire (`makeInvoke`, inside
+	// `buildNativeContext`) — and `on` is the bus. A mount given no `actions`
+	// keeps an `invoke` that refuses by name.
 	let ctx = $derived<WidgetContext>(
 		buildNativeContext(
 			{
@@ -145,13 +172,15 @@
 				channels,
 				props,
 				settings,
+				actions,
 				placement: placement ?? UNPLACED,
 				grants,
 				scoped
 			},
 			widget,
 			{
-				action: (fn, messageId, payload) => {
+				actionDispatch,
+				action: (fn, messageId, payload, action, blockId) => {
 					// Loud, on the same rule `request` follows below: a host
 					// with no trigger path behind it has NOT run the action, and
 					// a silent `?.()` would tell the widget it had. A widget that
@@ -163,7 +192,11 @@
 						throw new Error(
 							`widget "${widget.id}" called action("${fn}") on a host with no trigger path wired`
 						)
-					onAction(fn, messageId, payload)
+					// All five, so the pressed declaration's identity and the
+					// form a press answers survive the hop: the server checks
+					// THAT action's audience and reads the block off the row,
+					// rather than reading every widget press as legacy.
+					onAction(fn, messageId, payload, action, blockId)
 				},
 				request: async (kind) => {
 					throw new Error(

@@ -112,14 +112,16 @@ describe("type registry sync", () => {
 		// Built as a plain descriptor rather than through describeTaskDefinition,
 		// because a type id may only be registered once per process (F5) — and
 		// what this test simulates is core's *next build*, not a second
-		// declaration in this one.
+		// declaration in this one. The slug is one of the SDK's own `test:`
+		// fixtures, published beside the contracts and bound by nothing here —
+		// a declaration this file may move without any binding noticing.
 		const drifted = {
 			kind: "task",
-			id: "core:task/chunk-text@1",
-			timeoutMs: 1000,
+			id: "test:task/sloppy-stream@1",
+			timeoutMs: 5000,
 			ports: {
-				in: { text: S.text },
-				out: { main: S.json, chunks: S.json }
+				in: { main: S.textStream },
+				out: { main: S.json, first: S.json }
 			}
 		} as unknown as Descriptor
 
@@ -131,7 +133,7 @@ describe("type registry sync", () => {
 					and(
 						eq(
 							schema.pipelineDefinitionRegistry.definitionId,
-							"core:task/chunk-text"
+							"test:task/sloppy-stream"
 						),
 						eq(schema.pipelineDefinitionRegistry.version, 1)
 					)
@@ -141,7 +143,7 @@ describe("type registry sync", () => {
 		const moved = await syncDefinitionRegistry(db, [drifted], {
 			release: "0.6.1"
 		})
-		expect(moved.republished).toContain("core:task/chunk-text@1")
+		expect(moved.republished).toContain("test:task/sloppy-stream@1")
 
 		// Idempotent from there: the same declaration a second time is not a
 		// second pointer move.
@@ -167,19 +169,19 @@ describe("type registry sync", () => {
 	it("a new version lands beside the old one rather than replacing it", async () => {
 		const v2 = {
 			kind: "task",
-			id: "core:task/chunk-text@2",
-			timeoutMs: 1000,
+			id: "test:task/sloppy-stream@2",
+			timeoutMs: 5000,
 			ports: {
-				in: { text: S.text },
-				out: { main: S.json, chunks: S.json }
+				in: { main: S.textStream },
+				out: { main: S.json, first: S.json }
 			}
 		} as unknown as Descriptor
 		const r = await syncDefinitionRegistry(db, [v2], { release: "0.6.1" })
-		expect(r.inserted).toEqual(["core:task/chunk-text@2"])
+		expect(r.inserted).toEqual(["test:task/sloppy-stream@2"])
 
 		const registry = await readDefinitionRegistry(db)
 		const versions = registry
-			.filter((e) => e.id === "core:task/chunk-text")
+			.filter((e) => e.id === "test:task/sloppy-stream")
 			.map((e) => e.version)
 			.sort()
 		// The old version stays: specs that pinned @1 are still pinning @1, and
@@ -632,5 +634,223 @@ describe("a registry row round-trips through the reader", () => {
 				definitionContentHash(projected!)
 			)
 		}
+	})
+})
+
+/**
+ * The registry statuses the sync writes (plans/29 R-2, 2026-09-17).
+ *
+ * `provisional` is the declaration's word — read off `Descriptor.provisional`,
+ * carried in the row's `policy` (plans/31 V6: policy, outside the hash),
+ * written on insert and healed on a row that predates the flag. `removed` is
+ * the reverse-diff's: a `complete` sync marks every row of the
+ * owner whose slug the build no longer publishes, keeps the row, dates it
+ * once, and brings it back the day the slug is published again. A partial
+ * sync — every other call in this file — withdraws nothing.
+ */
+describe("registry statuses (R-2)", () => {
+	const statusOf = async (definitionId: string, version = 1) =>
+		(
+			await db
+				.select({
+					status: schema.pipelineDefinitionRegistry.status,
+					removedAt: schema.pipelineDefinitionRegistry.removedAt
+				})
+				.from(schema.pipelineDefinitionRegistry)
+				.where(
+					and(
+						eq(schema.pipelineDefinitionRegistry.definitionId, definitionId),
+						eq(schema.pipelineDefinitionRegistry.version, version)
+					)
+				)
+		)[0]
+
+	it("writes provisional for a flagged declaration, live for the rest", async () => {
+		await syncDefinitionRegistry(db, allDefinitions(), { release: "0.6.0" })
+		expect((await statusOf("core:oracle/speak"))?.status).toBe("provisional")
+		expect((await statusOf("core:oracle/mcp-tool"))?.status).toBe("provisional")
+		expect((await statusOf("core:outlet/attach-image"))?.status).toBe("live")
+		// The reader carries it back in the policy half, so the round trip is
+		// lossless — and the hash never saw it.
+		const back = (await readDefinitionRegistry(db)).find(
+			(e) => `${e.id}@${e.version}` === "core:oracle/speak@1"
+		)
+		expect(back?.policy?.provisional).toBe(true)
+	})
+
+	it("heals a row written before the flag existed — a policy refresh, not a pointer move", async () => {
+		await db
+			.update(schema.pipelineDefinitionRegistry)
+			.set({ status: "live", policy: null })
+			.where(eq(schema.pipelineDefinitionRegistry.definitionId, "core:oracle/speak"))
+		const result = await syncDefinitionRegistry(db, allDefinitions(), { release: "0.6.0" })
+		expect((await statusOf("core:oracle/speak"))?.status).toBe("provisional")
+		expect(result.republished).not.toContain("core:oracle/speak@1")
+		const [row] = await db
+			.select({ policy: schema.pipelineDefinitionRegistry.policy })
+			.from(schema.pipelineDefinitionRegistry)
+			.where(eq(schema.pipelineDefinitionRegistry.definitionId, "core:oracle/speak"))
+		expect((row?.policy as any)?.provisional).toBe(true)
+	})
+
+	it("binding a provisional definition moves no pointer: the row's status and policy move, its hash stays", async () => {
+		// V6's reversal of U6's choice, at the door that matters: the sync.
+		const speak = allDefinitions().find((d) => d.id === "core:oracle/speak@1")!
+		const { provisional: _p, ...bound } = speak
+		const before = (await readDefinitionRegistry(db)).find(
+			(e) => `${e.id}@${e.version}` === "core:oracle/speak@1"
+		)
+		const result = await syncDefinitionRegistry(db, [bound as any], { release: "0.6.0" })
+		expect(result.republished).toEqual([])
+		expect((await statusOf("core:oracle/speak"))?.status).toBe("live")
+		const after = (await readDefinitionRegistry(db)).find(
+			(e) => `${e.id}@${e.version}` === "core:oracle/speak@1"
+		)
+		expect(after?.policy?.provisional).toBeUndefined()
+		const { definitionContentHash } = await import(
+			"$lib/server/pipelines/boot/registrySync"
+		)
+		expect(definitionContentHash(after!)).toBe(definitionContentHash(before!))
+		// Put the flag back for the tests that follow.
+		await syncDefinitionRegistry(db, allDefinitions(), { release: "0.6.0" })
+		expect((await statusOf("core:oracle/speak"))?.status).toBe("provisional")
+	})
+
+	it("a complete sync marks a slug the build no longer publishes removed — and only then", async () => {
+		const all = allDefinitions()
+		const without = all.filter((d) => d.id !== "core:outlet/attach-audio@1")
+
+		// Partial: the same subset without `complete` withdraws nothing.
+		const partial = await syncDefinitionRegistry(db, without, { release: "0.6.1" })
+		expect(partial.removed).toEqual([])
+		expect((await statusOf("core:outlet/attach-audio"))?.status).toBe("live")
+
+		const culled = await syncDefinitionRegistry(db, without, {
+			release: "0.6.1",
+			complete: true
+		})
+		expect(culled.removed).toContain("core:outlet/attach-audio@1")
+		const row = await statusOf("core:outlet/attach-audio")
+		expect(row?.status).toBe("removed")
+		expect(row?.removedAt).toBeTruthy()
+		// Marked, never deleted — the row still answers by slug.
+		expect(
+			(await readDefinitionRegistry(db)).some(
+				(e) => `${e.id}@${e.version}` === "core:outlet/attach-audio@1"
+			)
+		).toBe(true)
+
+		// Dated once: a second complete sync neither re-reports nor re-dates.
+		const again = await syncDefinitionRegistry(db, without, {
+			release: "0.6.1",
+			complete: true
+		})
+		expect(again.removed).toEqual([])
+		expect((await statusOf("core:outlet/attach-audio"))?.removedAt).toEqual(row?.removedAt)
+
+		// Published again: back to live, the date cleared.
+		const restored = await syncDefinitionRegistry(db, all, {
+			release: "0.6.1",
+			complete: true
+		})
+		expect(restored.removed).toEqual([])
+		const back = await statusOf("core:outlet/attach-audio")
+		expect(back?.status).toBe("live")
+		expect(back?.removedAt).toBeNull()
+	})
+
+	it("withdraws nothing when handed too few declarations to be a build", async () => {
+		// A registry read before the contracts loaded, a hot reload that
+		// re-evaluated half a module: "declares nothing" is never a build, and
+		// culling every row on that evidence must not happen (U6 review, 3).
+		const all = allDefinitions()
+		const empty = await syncDefinitionRegistry(db, [], {
+			release: "0.6.1",
+			complete: true
+		})
+		expect(empty.removed).toEqual([])
+		expect(empty.reverseDiffSkipped).toMatch(/too few to be a build/)
+		expect((await statusOf("core:outlet/attach-audio"))?.status).toBe("live")
+
+		const thin = await syncDefinitionRegistry(db, all.slice(0, 3), {
+			release: "0.6.1",
+			complete: true
+		})
+		expect(thin.removed).toEqual([])
+		expect(thin.reverseDiffSkipped).toBeTruthy()
+		expect((await statusOf("core:oracle/generate-text"))?.status).toBe("live")
+
+		// Half or more IS a build: the diff runs, and reports nothing skipped.
+		const most = await syncDefinitionRegistry(
+			db,
+			all.filter((d) => d.id !== "core:outlet/attach-audio@1"),
+			{ release: "0.6.1", complete: true }
+		)
+		expect(most.reverseDiffSkipped).toBeUndefined()
+		expect(most.removed).toContain("core:outlet/attach-audio@1")
+		await syncDefinitionRegistry(db, all, { release: "0.6.1", complete: true })
+		expect((await statusOf("core:outlet/attach-audio"))?.status).toBe("live")
+	})
+
+	it("an administrator's `deprecated` survives the cull and the restore", async () => {
+		// `deprecated` is the one status no declaration carries (U6 review, 6):
+		// the reverse-diff leaves the row alone and names it, and a later
+		// sync — the same contract, or a moved one — never heals it to live.
+		const all = allDefinitions()
+		await db
+			.update(schema.pipelineDefinitionRegistry)
+			.set({ status: "deprecated" })
+			.where(eq(schema.pipelineDefinitionRegistry.definitionId, "core:outlet/attach-audio"))
+
+		const culled = await syncDefinitionRegistry(
+			db,
+			all.filter((d) => d.id !== "core:outlet/attach-audio@1"),
+			{ release: "0.6.1", complete: true }
+		)
+		expect(culled.removed).not.toContain("core:outlet/attach-audio@1")
+		expect(culled.deprecatedUnpublished).toEqual(["core:outlet/attach-audio@1"])
+		expect((await statusOf("core:outlet/attach-audio"))?.status).toBe("deprecated")
+
+		// Published again, same contract: still the administrator's word.
+		const restored = await syncDefinitionRegistry(db, all, {
+			release: "0.6.1",
+			complete: true
+		})
+		expect(restored.deprecatedUnpublished).toEqual([])
+		expect((await statusOf("core:outlet/attach-audio"))?.status).toBe("deprecated")
+
+		// Published under a moved declaration — the pointer moves, the word stays.
+		const base = all.find((d) => d.id === "core:outlet/attach-audio@1")! as any
+		const moved = {
+			...base,
+			ports: { ...base.ports, out: { ...base.ports.out, extra: S.json } }
+		}
+		const republished = await syncDefinitionRegistry(db, [moved], { release: "0.6.2" })
+		expect(republished.republished).toContain("core:outlet/attach-audio@1")
+		expect((await statusOf("core:outlet/attach-audio"))?.status).toBe("deprecated")
+
+		// Back to the build's own declaration and status for the tests after.
+		await syncDefinitionRegistry(db, [base], { release: "0.6.1" })
+		await db
+			.update(schema.pipelineDefinitionRegistry)
+			.set({ status: "live" })
+			.where(eq(schema.pipelineDefinitionRegistry.definitionId, "core:outlet/attach-audio"))
+	})
+
+	it("the reverse-diff is scoped to the owner — a plugin's rows are not core's to withdraw", async () => {
+		await db.insert(schema.pipelineDefinitionRegistry).values({
+			definitionId: "acme.demo:task/theirs",
+			version: 1,
+			kind: "task",
+			ownerPluginId: 424242,
+			transport: "process",
+			ports: { in: {}, out: { main: "core:shape/json@1" } },
+			slots: {}
+		})
+		await syncDefinitionRegistry(db, allDefinitions(), {
+			release: "0.6.1",
+			complete: true
+		})
+		expect((await statusOf("acme.demo:task/theirs"))?.status).toBe("live")
 	})
 })

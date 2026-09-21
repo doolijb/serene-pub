@@ -136,7 +136,7 @@ describe("delivery through the manager", () => {
 			settings
 		})
 		mgr.markReady()
-		const r = await mgr.callHook("p", "v", { n: 7 }, { timeoutMs: 2000 })
+		const r = await mgr.callHook("p", "v", { n: 7 }, { kind: "task", timeoutMs: 2000 })
 		expect(r.ok).toBe(true)
 		expect((r as any).value).toEqual({
 			key: "sk-live-123",
@@ -158,7 +158,7 @@ describe("delivery through the manager", () => {
 			sequential: false
 		})
 		mgr.markReady()
-		const r = await mgr.callHook("q", "v", { n: 1 }, { timeoutMs: 2000 })
+		const r = await mgr.callHook("q", "v", { n: 1 }, { kind: "task", timeoutMs: 2000 })
 		expect(r.ok).toBe(true)
 		expect((r as any).value).toEqual(["n"])
 	})

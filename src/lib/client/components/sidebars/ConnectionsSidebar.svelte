@@ -58,9 +58,26 @@
 	import OnnxEndpointView from "$lib/client/components/connections/OnnxEndpointView.svelte"
 	import type { PairDefaultSelection } from "$lib/client/components/connections/modelSystemDefaults"
 	import {
+		endpointKind,
 		isLocalOnnxType,
 		type ModelManager
 	} from "$lib/client/components/connections/modelManagement"
+	import {
+		enableManager,
+		type ManagerKind
+	} from "$lib/client/components/connections/managers"
+	import ManagedConnectionView from "$lib/client/components/connections/ManagedConnectionView.svelte"
+	import { managedConnectionIds } from "$lib/client/components/connections/managedConnectionView"
+	import CapabilityView from "$lib/client/components/connections/CapabilityView.svelte"
+	import ModelFinderView from "$lib/client/components/connections/ModelFinderView.svelte"
+	import SetupChatFlow from "$lib/client/components/connections/SetupChatFlow.svelte"
+	import {
+		modelsHeadline,
+		statusLine,
+		type LastTest
+	} from "$lib/client/components/connections/connectionViewChrome"
+	import { manualAddAllowed } from "$lib/client/components/connections/modelManagement"
+	import DownloadsView from "$lib/client/components/connections/DownloadsView.svelte"
 	import { timeAgo } from "$lib/client/utils/timeAgo"
 	import {
 		sectionForCapability,
@@ -111,6 +128,14 @@
 	const socket = useTypedSocket()
 
 	type ListRow = Sockets.Connections.List.Row
+	/** Same five tones the index row uses, so one dot means one thing app-wide. */
+	const CHROME_DOT: Record<string, string> = {
+		ok: "bg-success-500",
+		pending: "bg-warning-500 animate-pulse",
+		warning: "bg-warning-500",
+		error: "bg-error-500",
+		quiet: "bg-surface-400-600"
+	}
 
 	// ── View state ──────────────────────────────────────────────────────────
 	/**
@@ -120,8 +145,26 @@
 	 * screen" and means only "what, if anything, is open on the right".
 	 */
 	const viewMode = new ViewModeTracker()
-	type View = "index" | "connection" | "model"
+	/**
+	 * Six kinds since the 2026-09-17 concept rebuild. `capability`, `finder`
+	 * and `downloads` are the three the index gained when models left it: a
+	 * readiness row opens a CAPABILITY rather than a model, "Get a model"
+	 * opens the one finder (ruling R3), and the tray opens the one downloads
+	 * list (R4).
+	 */
+	type View =
+		| "index"
+		| "connection"
+		| "model"
+		| "capability"
+		| "finder"
+		| "downloads"
+		| "setup-chat"
 	let view = $state<View>("index")
+	/** The transform the capability view is open on. Set with the view. */
+	let selectedCapability = $state<string | null>(null)
+	/** What the finder is scoped to, if anything. */
+	let finderScope = $state<{ capability?: string; connectionId?: number }>({})
 	/** The model whose detail view is open. Set with the view. */
 	let selectedModelId = $state<number | null>(null)
 	/** Where the model view returns to. Not $state: read only on navigate. */
@@ -178,6 +221,18 @@
 	)
 	const selectedMissingCount = $derived(
 		(selectedRow?.models ?? []).filter((m) => m.missingSince != null).length
+	)
+	/**
+	 * Whether the open connection is a runtime this pub RUNS, and which.
+	 *
+	 * Read off the LIST row first, not the loaded draft: the draft arrives one
+	 * round trip later, and branching on it would show the ordinary form for a
+	 * frame before the managed view replaced it.
+	 */
+	const openManagedKind = $derived(
+		view === "connection"
+			? managedViewKind(selectedRow?.type ?? connection?.type)
+			: null
 	)
 
 	function serviceLabelOf(type: string | null | undefined): string {
@@ -294,8 +349,66 @@
 		announce("Model details opened")
 	}
 
+	/**
+	 * One capability's own view.
+	 *
+	 * The readiness rows' destination, and the only place a pair is changed
+	 * from this panel — which is what keeps the costed confirmation in front
+	 * of an embeddings or entities switch.
+	 */
+	async function openCapability(capability: string) {
+		if (!(await handleOnClose())) return
+		selectedCapability = capability
+		view = "capability"
+	}
+	function openFinder(
+		opts: { capability?: string; connectionId?: number } = {}
+	) {
+		finderScope = opts
+		view = "finder"
+	}
+	/** The Set up chat flow (U5). Its step is derived from the facts, so
+	 * there is nothing to seed here. */
+	async function openSetupChat() {
+		if (!(await handleOnClose())) return
+		view = "setup-chat"
+	}
+	/** Where Back from the downloads view lands: the index, or the connection
+	 * view it was opened from (a managed view's Downloads tab). */
+	let downloadsReturnView: "index" | "connection" = "index"
+	function openDownloads(from: "index" | "connection" = "index") {
+		downloadsReturnView = from
+		view = "downloads"
+	}
+	function navigateBackFromDownloads() {
+		if (
+			downloadsReturnView === "connection" &&
+			selectedConnectionId != null
+		)
+			view = "connection"
+		else backToIndex(null)
+	}
+	/**
+	 * Switch a manager on, and land on the connection it is about.
+	 *
+	 * Both halves, because the flag alone is invisible: before the rebuild the
+	 * switch lived in Settings → System and the connection had to be created
+	 * separately, which is two screens for one intention. A row that already
+	 * exists is opened; a missing one is created, and `handleConnectionsCreate`
+	 * opens it when the server answers.
+	 */
+	function handleEnableManager(kind: ManagerKind) {
+		const { connectionId } = enableManager(kind, socket, connectionsList)
+		if (connectionId != null) {
+			const row = connectionsList.find((c) => c.id === connectionId)
+			if (row) void openConnection(row)
+		}
+	}
+
 	function backToIndex(focusId: number | null) {
 		indexFocusId = focusId
+		selectedCapability = null
+		finderScope = {}
 		view = "index"
 		// The highlight is a one-time landing cue, not a selection.
 		setTimeout(() => (indexFocusId = null), 1500)
@@ -321,10 +434,66 @@
 		toaster.success({ title: "Model removed" })
 		navigateBackFromModel()
 	}
+	/**
+	 * Which runtime's VIEW a connection is, or null for an ordinary endpoint.
+	 *
+	 * Only the two rows that stand for an install: the KoboldCPP image row is
+	 * the same install's second connection and is reached from inside the
+	 * KoboldCPP view's Image list, so it keeps the ordinary connection pane.
+	 */
+	function managedViewKind(
+		type: string | null | undefined
+	): ManagerKind | null {
+		if (type === CONNECTION_TYPE.KOBOLDCPP_MANAGED) return "koboldcpp"
+		if (type === CONNECTION_TYPE.OLLAMA) return "ollama"
+		return null
+	}
+	/**
+	 * A door that used to open a manager panel, now opening its connection.
+	 *
+	 * The managers fold into their connection with the 2026-09-17 ruling (R2),
+	 * so "open the KoboldCPP manager" and "open the KoboldCPP connection" are
+	 * one act. A manager nobody has switched on has no row to open, so the
+	 * press switches it on and lands on the row that appears — the same two
+	 * halves the Add menu does.
+	 */
 	function openManager(manager: ModelManager | "ollama" | "koboldcpp") {
-		panelsCtx.openPanel({
-			key: typeof manager === "string" ? manager : manager.panel
-		})
+		const kind: ManagerKind =
+			typeof manager === "string" ? manager : manager.panel
+		const type =
+			kind === "koboldcpp"
+				? CONNECTION_TYPE.KOBOLDCPP_MANAGED
+				: CONNECTION_TYPE.OLLAMA
+		const row = connectionsList.find((c) => c.type === type && c.id != null)
+		if (row) void openConnection(row)
+		else handleEnableManager(kind)
+	}
+	/**
+	 * "Remove KoboldCPP from this pub": the flag AND the rows.
+	 *
+	 * Both halves, because either one alone is a half-removed install — a flag
+	 * off with a row still listed is a connection that can never answer, and a
+	 * row deleted with the flag on is a manager the server will still spawn.
+	 * Files on disk are deliberately left alone; they are the expensive half
+	 * and nothing here re-downloads them.
+	 */
+	function removeManager(kind: ManagerKind) {
+		socket.emit(
+			kind === "koboldcpp"
+				? "systemSettings:updateKoboldCppManagerEnabled"
+				: "systemSettings:updateOllamaManagerEnabled",
+			{ enabled: false }
+		)
+		const ids = managedConnectionIds(kind, connectionsList)
+		for (const id of ids) socket.emit("connections:delete", { id })
+		// `handleConnectionsDelete` only lands the view when the row it
+		// answers for is the open one; the image row is not, so navigate here
+		// rather than relying on which ack arrives last.
+		connection = undefined
+		originalConnection = undefined
+		const id = selectedConnectionId
+		selectedConnectionId = null
+		backToIndex(id)
 	}
 	function handleAddModel(row: ListRow, model: string, name: string) {
 		if (row.id == null) return
@@ -781,9 +950,22 @@
 		// Creating lands straight on the new connection's view: a connection
 		// nobody has finished setting up is not done, and the index gives no
 		// hint what is missing. Its models are asked for at once (forced —
-		// there is no listing yet to be fresh).
+		// there is no listing yet to be fresh). ⚠ Not forced for a managed
+		// runtime: a KoboldCPP with no binary yet, or an Ollama nobody has
+		// started, fails that listing by construction, and the forced path's
+		// "Couldn't list models" toast would greet every first-run door. The
+		// managed view's status card is where that fact belongs.
+		const kind = endpointKind(msg.connection.type)
+		const managed = kind === "koboldcpp-managed" || kind === "ollama"
+		// The Set up chat flow creates its KoboldCPP itself and stays put:
+		// its Runtime step IS the setup, so landing on the connection view
+		// here would pull the person out of the flow they just entered.
+		if (view === "setup-chat") {
+			requestSync(msg.connection.id, false)
+			return
+		}
 		void openConnection(msg.connection).then(() =>
-			requestSync(msg.connection.id, true)
+			requestSync(msg.connection.id, !managed)
 		)
 	}
 	function handleConnectionsSetDefault(
@@ -828,6 +1010,47 @@
 	 * `selectedConnectionId` guard is the narrower of the two checks.
 	 */
 	useInterest<"connections:list">("connections:list", handleConnectionsList)
+	// The status card's newest fact (U6). Guarded by id: the reply is
+	// emitToUser, so a test run in another tab for another connection lands
+	// here too. A form's own inline Test feeds the same card.
+	let lastTest = $state<LastTest | null>(null)
+	let testing = $state(false)
+	function handleConnectionsTestForChrome(
+		msg: Sockets.Connections.Test.Response
+	) {
+		if (
+			msg.connectionId == null ||
+			msg.connectionId !== selectedConnectionId
+		)
+			return
+		testing = false
+		lastTest = { ok: msg.ok, error: msg.error ?? null, at: Date.now() }
+	}
+	useInterest<"connections:test">(
+		"connections:test",
+		handleConnectionsTestForChrome
+	)
+	function testAgain() {
+		if (!connection) return
+		testing = true
+		socket.emit("connections:test", { connection })
+	}
+	$effect(() => {
+		// A different connection is a different card.
+		void selectedConnectionId
+		lastTest = null
+		testing = false
+	})
+	let addByNameOpen = $state(false)
+	let addByNameModel = $state("")
+	let addByNameLabel = $state("")
+	function submitAddByName() {
+		if (!selectedRow || !addByNameModel.trim()) return
+		handleAddModel(selectedRow, addByNameModel, addByNameLabel)
+		addByNameModel = ""
+		addByNameLabel = ""
+		addByNameOpen = false
+	}
 	useInterest<"connections:list:error">(
 		"connections:list:error",
 		handleConnectionsListError
@@ -1007,23 +1230,111 @@
 		{syncingAll}
 		initialFilter={initialIndexFilter}
 		focusConnectionId={indexFocusId}
+		{selectedConnectionId}
 		onAddNew={handleNew}
+		onEnableManager={handleEnableManager}
 		onOpenConnection={openConnection}
 		onOpenModel={(row, model) => openModel(row.id, model.id, "index")}
+		onOpenCapability={openCapability}
+		onSetUpChat={openSetupChat}
+		onGetModel={openFinder}
+		onOpenDownloads={() => openDownloads("index")}
 		onRefresh={(row) => requestSync(row.id, true)}
-		onRefreshAll={() => requestSync(undefined, true)}
-		onManage={(_row, panel) => openManager(panel)}
 		onAddModel={handleAddModel}
-		onMakeDefault={(row, model, capability) =>
-			handlePairDefault(row.id, model, { kind: "one", capability })}
 	/>
 {/snippet}
 
 {#snippet detailPane()}
 	{#if view === "model" && selectedConnectionId != null && selectedModelId != null}
 		{@render modelPane(selectedConnectionId, selectedModelId)}
+	{:else if view === "capability" && selectedCapability}
+		<CapabilityView
+			capability={selectedCapability}
+			onBack={() => backToIndex(null)}
+			onOpenModel={(connectionId, modelId) =>
+				openModel(connectionId, modelId, "index")}
+			onGetModel={(capability) => openFinder({ capability })}
+			onSelectDefault={handlePairDefault}
+		/>
+	{:else if view === "finder"}
+		<ModelFinderView
+			capability={finderScope.capability}
+			connectionId={finderScope.connectionId}
+			onBack={() => backToIndex(null)}
+		/>
+	{:else if view === "downloads"}
+		<DownloadsView onBack={navigateBackFromDownloads} />
+	{:else if view === "setup-chat"}
+		<SetupChatFlow
+			connections={connectionsList}
+			onEnsureRuntime={() => {
+				enableManager("koboldcpp", socket, connectionsList)
+			}}
+			onSelectDefault={handlePairDefault}
+			onOpenConnection={(id) => {
+				const row = connectionsList.find((c) => c.id === id)
+				if (row) void openConnection(row)
+			}}
+			onBack={() => backToIndex(null)}
+			onOpenSessions={() =>
+				panelsCtx.openPanel({ key: "sessions", toggle: false })}
+		/>
+	{:else if openManagedKind}
+		{@render managedPane(openManagedKind)}
 	{:else}
 		{@render connectionPane()}
+	{/if}
+{/snippet}
+
+<!--
+	A runtime this pub runs, as its connection's view (ruling R2).
+
+	It replaces the form-only pane for the two rows that stand for an install,
+	and carries the manager whole — status card, tabs, setup screens. The
+	connection's own settings ride in as a snippet, so its forms stay bound to
+	the one draft this panel holds.
+-->
+{#snippet managedPane(kind: ManagerKind)}
+	<ManagedConnectionView
+		{kind}
+		connectionId={selectedConnectionId ?? 0}
+		title={connection?.name ??
+			selectedRow?.name ??
+			(kind === "koboldcpp" ? "KoboldCPP" : "Ollama")}
+		isAdmin={userCtx.user?.isAdmin ?? false}
+		capabilityDefaults={systemSettingsCtx.capabilityDefaults ?? {}}
+		managedConnectionIds={managedConnectionIds(kind, connectionsList)}
+		onBack={navigateBack}
+		onGetModels={(id) => openFinder({ connectionId: id })}
+		onOpenDownloads={() => openDownloads("connection")}
+		onRefreshModels={() => {
+			if (selectedConnectionId != null)
+				requestSync(selectedConnectionId, true)
+		}}
+		onRemove={() => removeManager(kind)}
+		onOpenConnection={(id) => {
+			const row = connectionsList.find((c) => c.id === id)
+			if (row) void openConnection(row)
+		}}
+		connectionSettings={managedConnectionSettings}
+	/>
+{/snippet}
+
+{#snippet managedConnectionSettings()}
+	{#if !connection}
+		<div class="flex items-center justify-center py-8">
+			<Icons.Loader2 size={20} class="text-surface-400 animate-spin" />
+		</div>
+	{:else}
+		{#key connection.id}
+			<section aria-labelledby="managed-connection-details">
+				<h3 id="managed-connection-details" class="sr-only">
+					Settings for {connection.name}
+				</h3>
+				{@render connectionSaveRow(false)}
+				{@render connectionFormBody()}
+			</section>
+		{/key}
 	{/if}
 {/snippet}
 
@@ -1065,30 +1376,277 @@
 	{/if}
 {/snippet}
 
+<!--
+	Save / Reset / Delete, and the live region that announces the draft.
+
+	A snippet since the 2026-09-17 fold (ruling R2): a managed runtime's view
+	renders the same row inside its Settings tab, minus Delete — removing a
+	manager is a different act with a different confirmation, and two buttons
+	that both destroy the row would be two answers to one question.
+-->
+{#snippet connectionSaveRow(showDelete: boolean)}
+	<div class="mb-3 flex gap-2" role="toolbar" aria-label="Connection actions">
+		<button
+			type="button"
+			class="btn btn-sm preset-filled-success-500 flex-1"
+			onclick={handleUpdate}
+			disabled={!unsavedChanges}
+			aria-label={unsavedChanges
+				? `Save changes to ${connection.name}`
+				: "No changes to save"}
+		>
+			<Icons.Save size={16} aria-hidden="true" />
+			Save
+		</button>
+		<button
+			type="button"
+			class="btn btn-sm preset-filled-surface-400-600"
+			onclick={handleReset}
+			disabled={!unsavedChanges}
+			title="Reset unsaved changes"
+			aria-label="Reset unsaved changes"
+		>
+			<Icons.RefreshCcw size={16} aria-hidden="true" />
+		</button>
+		{#if showDelete}
+			<button
+				type="button"
+				class="btn btn-sm preset-filled-error-500"
+				onclick={handleDelete}
+				title={`Delete ${connection.name}`}
+				aria-label={`Delete connection ${connection.name}`}
+			>
+				<Icons.Trash2 size={16} aria-hidden="true" />
+			</button>
+		{/if}
+	</div>
+	<div class="sr-only" aria-live="polite">
+		{unsavedChanges ? "You have unsaved changes" : "All changes saved"}
+	</div>
+{/snippet}
+
+<!--
+	The connection's OWN settings: its name, its service form, its notes, its
+	capabilities and its stop scripts.
+
+	A snippet since the 2026-09-17 fold (ruling R2). A managed runtime's view
+	renders these beneath the manager's own settings, so nothing a person could
+	set before the fold went missing after it — and the forms stay bound to the
+	one draft this panel holds, which a prop could not carry.
+-->
+{#snippet connectionFormBody()}
+	{@render connectionFormFields()}
+	{@render connectionFormExtras()}
+{/snippet}
+
+<!-- The settings proper: the name and the service's own form. -->
+{#snippet connectionFormFields()}
+	<div class="flex flex-col gap-1">
+		<label class="font-semibold" for="connection-name">
+			Connection name
+		</label>
+		<input
+			id="connection-name"
+			type="text"
+			bind:value={connection.name}
+			class="input"
+			aria-required="true"
+		/>
+	</div>
+	{#if connection.type === CONNECTION_TYPE.OLLAMA}
+		<OllamaForm bind:connection />
+	{:else if connection.type === CONNECTION_TYPE.OPENAI}
+		<OpenAIForm bind:connection />
+	{:else if connection.type === CONNECTION_TYPE.LM_STUDIO}
+		<LmStudioForm bind:connection />
+	{:else if connection.type === CONNECTION_TYPE.LLAMACPP}
+		<LlamaCppForm bind:connection />
+	{:else if connection.type === CONNECTION_TYPE.KOBOLDCPP}
+		<KoboldCppForm bind:connection />
+	{:else if connection.type === CONNECTION_TYPE.KOBOLDCPP_MANAGED}
+		<KoboldCppManagedForm bind:connection />
+	{:else if connection.type === CONNECTION_TYPE.ANTHROPIC}
+		<AnthropicForm bind:connection />
+	{:else if CONNECTION_TYPE.isImage(connection.type)}
+		<!-- One branch for every image backend: the form is
+		     generated from what the adapter declares. -->
+		<ImageConnectionForm bind:connection />
+	{:else if connection.modality === "embeddings"}
+		<EmbeddingConnectionForm bind:connection />
+	{:else if connection.modality === "ner"}
+		<NerConnectionForm bind:connection />
+	{/if}
+{/snippet}
+
+<!-- Below the settings: notes, capabilities, the lane panels, stop scripts.
+     The API connection view folds these under one disclosure (U6). -->
+{#snippet connectionFormExtras()}
+	<!-- A note is a margin note. -->
+	<div class="mt-4 flex flex-col gap-1">
+		<label class="font-semibold" for="connection-notes">Notes</label>
+		<p id="notes-help" class="text-muted text-xs">
+			For you, not for the app — "use this one for prose, the other for
+			extraction". Shown beside this connection wherever you pick one.
+		</p>
+		<textarea
+			id="connection-notes"
+			rows="3"
+			maxlength={NOTE_MAX_LENGTH}
+			bind:value={connection.notes}
+			onblur={() => (connection.notes = normalizeNote(connection.notes))}
+			class="textarea"
+			placeholder="Anything you want to remember about this connection."
+			aria-describedby="notes-help"
+		></textarea>
+		{#if (connection.notes?.length ?? 0) > NOTE_MAX_LENGTH - 200}
+			<p class="text-warning-500 text-xs">
+				{NOTE_MAX_LENGTH - (connection.notes?.length ?? 0)} characters left.
+			</p>
+		{/if}
+	</div>
+
+	{#if connection.id}
+		<ConnectionCapabilities connectionId={connection.id} />
+		{#if connection.modality === "embeddings"}
+			<!-- The indexing queue, as this connection's
+			     detail panel — shown as its own when the
+			     embeddings default targets it. -->
+			<EmbeddingQueuePanel
+				isStarred={systemSettingsCtx.capabilityDefaults?.[
+					"text->embedding"
+				]?.connectionId === connection.id}
+			/>
+		{/if}
+		{#if connection.modality === "ner"}
+			<NerLanePanel
+				isStarred={systemSettingsCtx.capabilityDefaults?.[
+					"text->entities"
+				]?.connectionId === connection.id}
+			/>
+		{/if}
+		<!-- Stop guards ride the connection (18 §4b). -->
+		<div class="mt-4 flex flex-col gap-1">
+			<span class="flex items-center gap-2 font-semibold">
+				<Icons.OctagonX size={14} aria-hidden="true" />
+				Stop scripts
+			</span>
+			<p class="text-muted text-xs">
+				Guards that end a streamed reply early — a leaked template
+				token, an echoed name. Every pipeline using this connection
+				inherits them, and the run's receipt names which one fired.
+			</p>
+			{#if !connScripts}
+				<p class="text-muted text-xs">Loading…</p>
+			{:else}
+				{#each connScripts.attached ?? [] as s (s.id)}
+					<div
+						class="border-surface-200-700 flex items-center gap-2 rounded-lg border px-2 py-1"
+					>
+						<span
+							class="min-w-0 flex-1 truncate text-sm {s.enabled
+								? ''
+								: 'opacity-50'}"
+						>
+							{s.name}
+						</span>
+						{#if !s.enabled}
+							<span
+								class="text-muted text-[10px]"
+								title="Disabled on the scripts page — attached, does nothing."
+							>
+								off
+							</span>
+						{/if}
+						<button
+							type="button"
+							class="btn-icon btn-icon-sm preset-tonal-surface shrink-0"
+							title="Detach from this connection (the script itself is kept)"
+							onclick={() =>
+								socket.emit("connections:detachScript", {
+									id: connection.id,
+									scriptId: s.id
+								})}
+						>
+							<Icons.X size={12} />
+						</button>
+					</div>
+				{/each}
+				{#if !(connScripts.attached ?? []).length}
+					<p class="text-muted text-xs italic">None attached.</p>
+				{/if}
+				{#if (connScripts.available ?? []).length}
+					<select
+						class="select"
+						value=""
+						onchange={(e) => {
+							const v = parseInt(e.currentTarget.value, 10)
+							if (!Number.isNaN(v))
+								socket.emit("connections:attachScript", {
+									id: connection.id,
+									scriptId: v
+								})
+							e.currentTarget.value = ""
+						}}
+					>
+						<option value="" disabled>Attach a stop script…</option>
+						{#each connScripts.available ?? [] as s (s.id)}
+							<option value={String(s.id)}>
+								{s.name}
+							</option>
+						{/each}
+					</select>
+				{:else}
+					<p class="text-muted text-xs">
+						Write stop scripts on the
+						<a class="underline" href="/admin/scripts">
+							scripts page
+						</a>
+						.
+					</p>
+				{/if}
+			{/if}
+		</div>
+	{/if}
+{/snippet}
+
 {#snippet connectionPane()}
+	<!--
+		ONE API connection's view (concept ruling, U6): the *whether* above the
+		*how*. A status card (does it answer), a models card (what it lists,
+		with Refresh and Add by name), then the form under a Settings heading,
+		the rest under one disclosure, Delete at the foot, and Save / Discard
+		only while there is something to save. Forms keep their internals.
+	-->
+	{@const managed =
+		endpointKind(connection?.type ?? selectedRow?.type) ===
+			"koboldcpp-managed" ||
+		endpointKind(connection?.type ?? selectedRow?.type) === "ollama"}
 	<div class="flex h-full min-h-0 flex-col">
-		<!-- ONE connection's own settings. Models are a summary line here
-		     and are managed from the index and the model view. -->
 		<div class="flex items-center gap-2 pb-2">
 			<button
 				type="button"
-				class="btn btn-sm preset-filled-surface-400-600 p-2"
+				class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-2"
 				onclick={navigateBack}
 				title="Back to all connections"
 				aria-label="Back to all connections"
 			>
 				<Icons.ChevronLeft size={16} />
 			</button>
-			<div class="min-w-0 flex-1">
-				<h2 class="truncate text-sm font-semibold">
+			<h2 class="flex min-w-0 flex-1 items-center gap-2">
+				<span class="min-w-0 truncate text-sm font-semibold">
 					{connection?.name ?? selectedRow?.name ?? "Connection"}
-				</h2>
-				<p class="text-muted truncate text-xs">
+				</span>
+				<!-- Title + service chip, always both (R5). -->
+				<span
+					class="shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-normal {managed
+						? 'preset-tonal-tertiary'
+						: 'border-surface-300-700 text-surface-600-400 border'}"
+				>
 					{serviceLabelOf(connection?.type ?? selectedRow?.type)}
-				</p>
-			</div>
+				</span>
+			</h2>
 		</div>
-		<div class="min-h-0 flex-1 overflow-y-auto">
+		<div class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pb-2">
 			{#if !connection}
 				<div class="flex items-center justify-center py-8">
 					<Icons.Loader2
@@ -1098,105 +1656,71 @@
 				</div>
 			{:else}
 				{#key connection.id}
-					<section aria-labelledby="connection-details">
-						<h3 id="connection-details" class="sr-only">
-							Settings for {connection.name}
-						</h3>
-						<div
-							class="mb-3 flex gap-2"
-							role="toolbar"
-							aria-label="Connection actions"
+					{#if selectedRow && !isLocalOnnxType(connection.type)}
+						{@const syncing =
+							syncingAll || syncingIds.has(connection.id)}
+						{@const line = statusLine({
+							lastTest,
+							testing,
+							syncing,
+							modelsSync: selectedRow.modelsSync,
+							modelCount: selectedRow.models.length,
+							missingCount: selectedMissingCount,
+							timeAgo
+						})}
+						<!-- The status card. -->
+						<section
+							class="panel-card flex flex-col gap-2"
+							aria-label="Status"
 						>
-							<button
-								type="button"
-								class="btn btn-sm preset-filled-success-500 flex-1"
-								onclick={handleUpdate}
-								disabled={!unsavedChanges}
-								aria-label={unsavedChanges
-									? `Save changes to ${connection.name}`
-									: "No changes to save"}
-							>
-								<Icons.Save size={16} aria-hidden="true" />
-								Save
-							</button>
-							<button
-								type="button"
-								class="btn btn-sm preset-filled-surface-400-600"
-								onclick={handleReset}
-								disabled={!unsavedChanges}
-								title="Reset unsaved changes"
-								aria-label="Reset unsaved changes"
-							>
-								<Icons.RefreshCcw
-									size={16}
+							<div class="flex min-w-0 items-center gap-2">
+								<span
+									class="size-2 shrink-0 rounded-full {CHROME_DOT[
+										line.dot
+									]}"
 									aria-hidden="true"
-								/>
-							</button>
-							<button
-								type="button"
-								class="btn btn-sm preset-filled-error-500"
-								onclick={handleDelete}
-								title={`Delete ${connection.name}`}
-								aria-label={`Delete connection ${connection.name}`}
-							>
-								<Icons.Trash2 size={16} aria-hidden="true" />
-							</button>
-						</div>
-						<div class="sr-only" aria-live="polite">
-							{unsavedChanges
-								? "You have unsaved changes"
-								: "All changes saved"}
-						</div>
+								></span>
+								<span class="shrink-0 text-sm font-medium">
+									{line.word}
+								</span>
+								<span
+									class="text-surface-600-400 min-w-0 flex-1 truncate text-xs"
+									title={line.sentence}
+								>
+									· {line.sentence}
+								</span>
+								<button
+									type="button"
+									class="btn btn-sm preset-tonal shrink-0"
+									disabled={testing}
+									onclick={testAgain}
+								>
+									{lastTest ? "Test again" : "Test"}
+								</button>
+							</div>
+						</section>
 
-						<!-- The models, as a summary: how many, whether the
-						     host still lists them all, when it was last asked.
-						     Browsed and edited from the index. -->
-						{#if selectedRow && !isLocalOnnxType(connection.type)}
-							{@const syncing =
-								syncingAll || syncingIds.has(connection.id)}
-							<div
-								class="preset-tonal-surface mb-3 flex items-center gap-2 rounded-lg px-3 py-2"
-							>
+						<!-- The models card: how many, whether the host still
+						     lists them all, and the two presses the index
+						     used to hold for this connection. -->
+						<section
+							class="panel-card flex flex-col gap-2"
+							aria-label="Models"
+						>
+							<div class="flex min-w-0 items-center gap-2">
 								<Icons.Boxes
 									size={16}
-									class="text-muted shrink-0"
+									class="text-surface-500 shrink-0"
 									aria-hidden="true"
 								/>
-								<div class="min-w-0 flex-1">
-									<p class="text-xs font-medium">
-										{selectedRow.models.length}
-										{selectedRow.models.length === 1
-											? "model"
-											: "models"}
-										{#if selectedMissingCount}
-											<span class="text-warning-500">
-												· {selectedMissingCount} no longer
-												listed
-											</span>
-										{/if}
-									</p>
-									<p
-										class="truncate text-[11px] {selectedRow
-											.modelsSync.error
-											? 'text-warning-500'
-											: 'text-muted'}"
-										title={selectedRow.modelsSync.error ??
-											undefined}
-									>
-										{#if syncing}
-											Checking the host…
-										{:else if selectedRow.modelsSync.error}
-											Couldn't list models — {selectedRow
-												.modelsSync.error}
-										{:else if selectedRow.modelsSync.at}
-											Checked {timeAgo(
-												selectedRow.modelsSync.at
-											)}
-										{:else}
-											Not checked yet
-										{/if}
-									</p>
-								</div>
+								<p
+									class="min-w-0 flex-1 truncate text-sm font-medium"
+								>
+									{modelsHeadline({
+										modelCount: selectedRow.models.length,
+										missingCount: selectedMissingCount
+									})}
+								</p>
 								<button
 									type="button"
 									class="btn-icon btn-icon-sm hover:preset-tonal-primary shrink-0"
@@ -1212,261 +1736,208 @@
 										aria-hidden="true"
 									/>
 								</button>
-								<button
-									type="button"
-									class="btn btn-sm preset-filled-surface-400-600 shrink-0"
-									onclick={navigateBack}
-									title="Browse this connection's models in the list"
-								>
-									Models
-									<Icons.ChevronRight
-										size={14}
-										aria-hidden="true"
-									/>
-								</button>
 							</div>
-						{/if}
-
-						<!-- A local ONNX endpoint has no host to reach and no
-						     key to paste: what there IS to know about it is
-						     which model is in charge and what is on this
-						     machine. That goes above the form, and the form —
-						     name, notes, the lane's TTL — stays exactly where
-						     every other endpoint keeps it. -->
-						{#if selectedRow && isLocalOnnxType(connection.type)}
-							<OnnxEndpointView
-								connection={selectedRow}
-								capabilityDefaults={systemSettingsCtx.capabilityDefaults ??
-									{}}
-								mode={viewMode.mode}
-								isAdmin={userCtx.user?.isAdmin ?? false}
-								onOpenModel={(model) =>
-									openModel(
-										connection.id,
-										model.id,
-										"connection"
-									)}
-								onMakeActive={(model) => {
-									const capability =
-										starCapabilityOf(selectedRow)
-									if (capability)
-										handlePairDefault(
-											connection.id,
-											model,
-											{
-												kind: "one",
-												capability
-											}
-										)
-								}}
-								onDownload={(model) =>
-									downloadOnnxModel(connection.id, model.id)}
-								onRetry={(model) =>
-									downloadOnnxModel(connection.id, model.id)}
-								onCancel={(model) =>
-									cancelOnnxDownload(connection.id, model.id)}
-							/>
-							<h3 class="mb-2 text-sm font-semibold">Settings</h3>
-						{/if}
-
-						<div class="flex flex-col gap-1">
-							<label class="font-semibold" for="connection-name">
-								Connection name
-							</label>
-							<input
-								id="connection-name"
-								type="text"
-								bind:value={connection.name}
-								class="input"
-								aria-required="true"
-							/>
-						</div>
-						{#if connection.type === CONNECTION_TYPE.OLLAMA}
-							<OllamaForm bind:connection />
-						{:else if connection.type === CONNECTION_TYPE.OPENAI}
-							<OpenAIForm bind:connection />
-						{:else if connection.type === CONNECTION_TYPE.LM_STUDIO}
-							<LmStudioForm bind:connection />
-						{:else if connection.type === CONNECTION_TYPE.LLAMACPP}
-							<LlamaCppForm bind:connection />
-						{:else if connection.type === CONNECTION_TYPE.KOBOLDCPP}
-							<KoboldCppForm bind:connection />
-						{:else if connection.type === CONNECTION_TYPE.KOBOLDCPP_MANAGED}
-							<KoboldCppManagedForm bind:connection />
-						{:else if connection.type === CONNECTION_TYPE.ANTHROPIC}
-							<AnthropicForm bind:connection />
-						{:else if CONNECTION_TYPE.isImage(connection.type)}
-							<!-- One branch for every image backend: the form is
-							     generated from what the adapter declares. -->
-							<ImageConnectionForm bind:connection />
-						{:else if connection.modality === "embeddings"}
-							<EmbeddingConnectionForm bind:connection />
-						{:else if connection.modality === "ner"}
-							<NerConnectionForm bind:connection />
-						{/if}
-
-						<!-- Below the settings: a note is a margin note. -->
-						<div class="mt-4 flex flex-col gap-1">
-							<label class="font-semibold" for="connection-notes">
-								Notes
-							</label>
-							<p id="notes-help" class="text-muted text-xs">
-								For you, not for the app — "use this one for
-								prose, the other for extraction". Shown beside
-								this connection wherever you pick one.
-							</p>
-							<textarea
-								id="connection-notes"
-								rows="3"
-								maxlength={NOTE_MAX_LENGTH}
-								bind:value={connection.notes}
-								onblur={() =>
-									(connection.notes = normalizeNote(
-										connection.notes
-									))}
-								class="textarea"
-								placeholder="Anything you want to remember about this connection."
-								aria-describedby="notes-help"
-							></textarea>
-							{#if (connection.notes?.length ?? 0) > NOTE_MAX_LENGTH - 200}
-								<p class="text-warning-500 text-xs">
-									{NOTE_MAX_LENGTH -
-										(connection.notes?.length ?? 0)} characters
-									left.
-								</p>
-							{/if}
-						</div>
-
-						{#if connection.id}
-							<ConnectionCapabilities
-								connectionId={connection.id}
-							/>
-							{#if connection.modality === "embeddings"}
-								<!-- The indexing queue, as this connection's
-								     detail panel — shown as its own when the
-								     embeddings default targets it. -->
-								<EmbeddingQueuePanel
-									isStarred={systemSettingsCtx
-										.capabilityDefaults?.["text->embedding"]
-										?.connectionId === connection.id}
-								/>
-							{/if}
-							{#if connection.modality === "ner"}
-								<NerLanePanel
-									isStarred={systemSettingsCtx
-										.capabilityDefaults?.["text->entities"]
-										?.connectionId === connection.id}
-								/>
-							{/if}
-							<!-- Stop guards ride the connection (18 §4b). -->
-							<div class="mt-4 flex flex-col gap-1">
-								<span
-									class="flex items-center gap-2 font-semibold"
-								>
-									<Icons.OctagonX
-										size={14}
-										aria-hidden="true"
-									/>
-									Stop scripts
-								</span>
-								<p class="text-muted text-xs">
-									Guards that end a streamed reply early — a
-									leaked template token, an echoed name. Every
-									pipeline using this connection inherits
-									them, and the run's receipt names which one
-									fired.
-								</p>
-								{#if !connScripts}
-									<p class="text-muted text-xs">Loading…</p>
-								{:else}
-									{#each connScripts.attached ?? [] as s (s.id)}
-										<div
-											class="border-surface-200-700 flex items-center gap-2 rounded-lg border px-2 py-1"
-										>
-											<span
-												class="min-w-0 flex-1 truncate text-sm {s.enabled
-													? ''
-													: 'opacity-50'}"
-											>
-												{s.name}
-											</span>
-											{#if !s.enabled}
-												<span
-													class="text-muted text-[10px]"
-													title="Disabled on the scripts page — attached, does nothing."
-												>
-													off
-												</span>
-											{/if}
-											<button
-												type="button"
-												class="btn-icon btn-icon-sm preset-tonal-surface shrink-0"
-												title="Detach from this connection (the script itself is kept)"
-												onclick={() =>
-													socket.emit(
-														"connections:detachScript",
-														{
-															id: connection.id,
-															scriptId: s.id
-														}
-													)}
-											>
-												<Icons.X size={12} />
-											</button>
-										</div>
-									{/each}
-									{#if !(connScripts.attached ?? []).length}
-										<p class="text-muted text-xs italic">
-											None attached.
-										</p>
-									{/if}
-									{#if (connScripts.available ?? []).length}
-										<select
-											class="select"
-											value=""
-											onchange={(e) => {
-												const v = parseInt(
-													e.currentTarget.value,
-													10
-												)
-												if (!Number.isNaN(v))
-													socket.emit(
-														"connections:attachScript",
-														{
-															id: connection.id,
-															scriptId: v
-														}
-													)
-												e.currentTarget.value = ""
-											}}
-										>
-											<option value="" disabled>
-												Attach a stop script…
-											</option>
-											{#each connScripts.available ?? [] as s (s.id)}
-												<option value={String(s.id)}>
-													{s.name}
-												</option>
-											{/each}
-										</select>
-									{:else}
-										<p class="text-muted text-xs">
-											Write stop scripts on the
-											<a
-												class="underline"
-												href="/admin/scripts"
-											>
-												scripts page
-											</a>
-											.
-										</p>
-									{/if}
+							<div class="flex flex-wrap gap-2">
+								{#if selectedRow.models.length}
+									<button
+										type="button"
+										class="btn btn-sm preset-tonal"
+										onclick={navigateBack}
+										title="Browse this connection's models"
+									>
+										Browse models
+										<Icons.ChevronRight
+											size={14}
+											aria-hidden="true"
+										/>
+									</button>
+								{/if}
+								{#if manualAddAllowed(connection.type)}
+									<button
+										type="button"
+										class="btn btn-sm hover:preset-tonal"
+										aria-expanded={addByNameOpen}
+										onclick={() =>
+											(addByNameOpen = !addByNameOpen)}
+									>
+										<Icons.Plus
+											size={14}
+											aria-hidden="true"
+										/>
+										Add by name
+									</button>
 								{/if}
 							</div>
-						{/if}
+							{#if addByNameOpen}
+								<!-- For a host that serves no model list: a
+								     compatible endpoint with no /models, a
+								     catalogue that lags a launch. -->
+								<form
+									class="border-surface-300-700 flex flex-col gap-2 border-t pt-2"
+									onsubmit={(e) => {
+										e.preventDefault()
+										submitAddByName()
+									}}
+								>
+									<label
+										class="text-surface-600-400 text-xs"
+										for="connection-add-by-name-model"
+									>
+										Model identifier, exactly as the host
+										expects it
+									</label>
+									<input
+										id="connection-add-by-name-model"
+										class="input"
+										type="text"
+										bind:value={addByNameModel}
+										placeholder="gpt-4o-mini"
+										required
+									/>
+									<label
+										class="text-surface-600-400 text-xs"
+										for="connection-add-by-name-label"
+									>
+										Shown as (optional)
+									</label>
+									<input
+										id="connection-add-by-name-label"
+										class="input"
+										type="text"
+										bind:value={addByNameLabel}
+									/>
+									<div class="flex justify-end gap-2">
+										<button
+											type="button"
+											class="btn btn-sm hover:preset-tonal"
+											onclick={() =>
+												(addByNameOpen = false)}
+										>
+											Cancel
+										</button>
+										<button
+											type="submit"
+											class="btn btn-sm preset-filled-primary-500"
+											disabled={!addByNameModel.trim()}
+										>
+											Add model
+										</button>
+									</div>
+								</form>
+							{/if}
+						</section>
+					{/if}
+
+					<!-- A local ONNX endpoint has no host to reach and no key
+					     to paste: what there IS to know about it is which
+					     model is in charge and what is on this machine. -->
+					{#if selectedRow && isLocalOnnxType(connection.type)}
+						<OnnxEndpointView
+							connection={selectedRow}
+							capabilityDefaults={systemSettingsCtx.capabilityDefaults ??
+								{}}
+							mode={viewMode.mode}
+							isAdmin={userCtx.user?.isAdmin ?? false}
+							onOpenModel={(model) =>
+								openModel(
+									connection.id,
+									model.id,
+									"connection"
+								)}
+							onMakeActive={(model) => {
+								const capability = starCapabilityOf(selectedRow)
+								if (capability)
+									handlePairDefault(connection.id, model, {
+										kind: "one",
+										capability
+									})
+							}}
+							onDownload={(model) =>
+								downloadOnnxModel(connection.id, model.id)}
+							onRetry={(model) =>
+								downloadOnnxModel(connection.id, model.id)}
+							onCancel={(model) =>
+								cancelOnnxDownload(connection.id, model.id)}
+						/>
+					{/if}
+
+					<section
+						class="flex flex-col"
+						aria-labelledby="connection-details"
+					>
+						<h3
+							id="connection-details"
+							class="mb-2 text-sm font-semibold"
+						>
+							Settings
+						</h3>
+						{@render connectionFormFields()}
 					</section>
+
+					<!-- Notes, capabilities, lane panels, stop scripts: one
+					     disclosure, open by default only when a note exists —
+					     a person who wrote one wants to see it. -->
+					<details
+						class="group border-surface-300-700 rounded-lg border"
+						open={!!connection.notes}
+					>
+						<summary
+							class="flex min-h-11 cursor-pointer list-none items-center gap-2 px-3 text-sm font-semibold"
+						>
+							<Icons.ChevronRight
+								size={14}
+								class="transition-transform group-open:rotate-90"
+								aria-hidden="true"
+							/>
+							Advanced and notes
+						</summary>
+						<div class="px-3 pb-3">
+							{@render connectionFormExtras()}
+						</div>
+					</details>
+
+					<div class="flex justify-start pt-1">
+						<button
+							type="button"
+							class="btn btn-sm hover:preset-tonal-error text-error-500"
+							onclick={handleDelete}
+							aria-label={`Delete connection ${connection.name}`}
+						>
+							<Icons.Trash2 size={14} aria-hidden="true" />
+							Delete connection
+						</button>
+					</div>
 				{/key}
 			{/if}
+		</div>
+		{#if connection && unsavedChanges}
+			<!-- Only while there is something to save. -->
+			<div
+				class="border-surface-300-700 bg-surface-50-950 flex shrink-0 gap-2 border-t pt-2"
+				role="toolbar"
+				aria-label="Unsaved changes"
+			>
+				<button
+					type="button"
+					class="btn btn-sm preset-filled-primary-500 flex-1"
+					onclick={handleUpdate}
+					aria-label={`Save changes to ${connection.name}`}
+				>
+					<Icons.Save size={16} aria-hidden="true" />
+					Save
+				</button>
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal"
+					onclick={handleReset}
+					aria-label="Discard unsaved changes"
+				>
+					Discard
+				</button>
+			</div>
+		{/if}
+		<div class="sr-only" aria-live="polite">
+			{unsavedChanges ? "You have unsaved changes" : "All changes saved"}
 		</div>
 	</div>
 {/snippet}

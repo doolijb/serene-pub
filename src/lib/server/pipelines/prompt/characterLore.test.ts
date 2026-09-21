@@ -119,16 +119,55 @@ describe("isCharacterLoreEntryVisible — narrator visibility (decision 3)", () 
 		expect(isCharacterLoreEntryVisible(entry, session, 42)).toBe(false)
 	})
 
-	test("an entry with no lorebookBindingId at all stays invisible to the Narrator too", () => {
+	/**
+	 * W3, ruled 2026-09-17. This read `false` for everyone, narrator included,
+	 * and the consequence was a disappearance rather than a rule: a
+	 * character-lore row nobody had bound yet never retrieved and never
+	 * listed, with nothing saying why. A private entry nobody was bound to is
+	 * the world's knowledge, not a secret — so it is the narrator's, on
+	 * exactly the terms a background/NPC binding already was.
+	 */
+	const unbound = () => {
 		const entry = characterLoreEntry({
 			lorebookId: 1,
 			lorebookBindingId: null,
 			content: "Truly unbound lore."
 		})
+		return {
+			entry,
+			session: buildSession({
+				lorebookId: 1,
+				lorebook: buildLorebook({ id: 1, characterLoreEntries: [entry] })
+			})
+		}
+	}
+
+	test("an entry with no lorebookBindingId is the Narrator's — and the listing's", () => {
+		const { entry, session } = unbound()
+		expect(isCharacterLoreEntryVisible(entry, session, null)).toBe(true)
+	})
+
+	test("an unbound entry is invisible to every specific speaker", () => {
+		const { entry, session } = unbound()
+		expect(isCharacterLoreEntryVisible(entry, session, 42)).toBe(false)
+		// The host's subject for a wired speaker naming nobody in the cast:
+		// a value no binding can carry, so "this voice is nobody" does not
+		// mean "this voice knows everything".
+		expect(isCharacterLoreEntryVisible(entry, session, -1)).toBe(false)
+	})
+
+	test("an unbound entry from ANOTHER lorebook is still nobody's", () => {
+		const { entry } = unbound()
 		const session = buildSession({
-			lorebookId: 1,
-			lorebook: buildLorebook({ id: 1, characterLoreEntries: [entry] })
+			lorebookId: 2,
+			lorebook: buildLorebook({ id: 2, characterLoreEntries: [] })
 		})
+		expect(isCharacterLoreEntryVisible(entry, session, null)).toBe(false)
+	})
+
+	test("an unbound entry in a session with no lorebook at all is nobody's", () => {
+		const { entry } = unbound()
+		const session = buildSession({ lorebookId: 1, lorebook: undefined })
 		expect(isCharacterLoreEntryVisible(entry, session, null)).toBe(false)
 	})
 })

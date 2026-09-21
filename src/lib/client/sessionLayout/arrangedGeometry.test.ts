@@ -6,15 +6,24 @@
  */
 import { describe, expect, it } from "vitest"
 import {
+	arrangedIds,
+	clampFrame,
+	clampPos,
+	dedupeArranged,
+	firstSlot,
+	fits,
 	frameCovers,
 	itemPinned,
 	loadArranged,
+	makeRoom,
+	MIN_CARD_ROWS,
 	reexpress,
 	seedPositions,
 	showZonePin,
 	unitPinned,
 	withGeometry,
-	withPins
+	withPins,
+	type Arranged
 } from "./arrangedGeometry"
 import type { GsItem, GsLayout, GsPos } from "./GridStackZone.svelte"
 
@@ -471,5 +480,377 @@ describe("showZonePin — the zone-wide pin only means something un-arranged", (
 
 	it("hides even for a frame with no items (still a reported arrangement)", () => {
 		expect(showZonePin(zone([]))).toBe(false)
+	})
+})
+
+/**
+ * The commit's invariant. A widget dragged between zones used to be reported by
+ * the DESTINATION only — the source zone's `dragstop` fires on the destination
+ * grid, so the source stayed a "restore" and kept the card — and the commit
+ * wrote the same widget into two zones' widget lists. The source-side report is
+ * fixed at the seam; this is the net that says so if it ever tears again.
+ */
+describe("dedupeArranged — a widget id lives in exactly one zone", () => {
+	const zone = (...items: GsPos[]): GsLayout => ({ cols: 7, rows: 12, items })
+
+	it("leaves a clean arrangement alone, object identity included", () => {
+		const a: Arranged = {
+			left: zone(pos("stats", 0, 0, 7, 3)),
+			right: zone(pos("portraits", 0, 0, 7, 3))
+		}
+		const out = dedupeArranged(a)
+		expect(out.duplicates).toEqual([])
+		expect(out.arranged).toBe(a)
+	})
+
+	it("keeps the zone the last drop named and drops the rest", () => {
+		const a: Arranged = {
+			left: zone(pos("stats", 0, 0, 7, 3), pos("portraits", 0, 5, 7, 3)),
+			right: zone(pos("portraits", 0, 0, 7, 3))
+		}
+		const out = dedupeArranged(a, { id: "portraits", zone: "left" })
+		expect(out.arranged.left?.items.map((i) => i.id)).toEqual([
+			"stats",
+			"portraits"
+		])
+		expect(out.arranged.right?.items).toEqual([])
+		expect(out.duplicates).toEqual([
+			{ id: "portraits", kept: "left", dropped: ["right"] }
+		])
+	})
+
+	it("honours a drop that named the OTHER zone", () => {
+		const a: Arranged = {
+			left: zone(pos("portraits", 0, 0, 7, 3)),
+			right: zone(pos("portraits", 0, 0, 7, 3))
+		}
+		const out = dedupeArranged(a, { id: "portraits", zone: "right" })
+		expect(out.arranged.left?.items).toEqual([])
+		expect(out.arranged.right?.items.map((i) => i.id)).toEqual([
+			"portraits"
+		])
+	})
+
+	it("falls back to left → middle → right with no drop to go on", () => {
+		const a: Arranged = {
+			middle: zone(pos("notes", 0, 0, 7, 3)),
+			right: zone(pos("notes", 0, 0, 7, 3))
+		}
+		const out = dedupeArranged(a, null)
+		expect(out.arranged.middle?.items.map((i) => i.id)).toEqual(["notes"])
+		expect(out.arranged.right?.items).toEqual([])
+		expect(out.duplicates[0].kept).toBe("middle")
+	})
+
+	it("ignores a drop hint naming a zone the widget is not in", () => {
+		const a: Arranged = {
+			left: zone(pos("notes", 0, 0, 7, 3)),
+			right: zone(pos("notes", 0, 0, 7, 3))
+		}
+		const out = dedupeArranged(a, { id: "notes", zone: "middle" })
+		expect(out.duplicates[0].kept).toBe("left")
+	})
+
+	it("resolves a widget that somehow reached all three zones", () => {
+		const a: Arranged = {
+			left: zone(pos("notes", 0, 0, 7, 3)),
+			middle: zone(pos("notes", 0, 0, 7, 3)),
+			right: zone(pos("notes", 0, 0, 7, 3))
+		}
+		const out = dedupeArranged(a, { id: "notes", zone: "right" })
+		expect(out.duplicates).toEqual([
+			{ id: "notes", kept: "right", dropped: ["left", "middle"] }
+		])
+		expect(out.arranged.left?.items).toEqual([])
+		expect(out.arranged.middle?.items).toEqual([])
+		expect(out.arranged.right?.items.map((i) => i.id)).toEqual(["notes"])
+	})
+
+	it("keeps each zone's cell grid while pruning its items", () => {
+		const a: Arranged = {
+			left: { cols: 5, rows: 9, items: [pos("notes", 0, 0, 5, 3)] },
+			right: { cols: 7, rows: 12, items: [pos("notes", 0, 0, 7, 3)] }
+		}
+		const out = dedupeArranged(a, { id: "notes", zone: "left" })
+		expect(out.arranged.left).toMatchObject({ cols: 5, rows: 9 })
+		expect(out.arranged.right).toMatchObject({ cols: 7, rows: 12 })
+	})
+})
+
+/**
+ * The reference a zone RE-EXPRESSES from when it is re-measured. A zone that
+ * was empty when the editor opened reports `{cols, rows, items: []}` for
+ * itself, and that report is what the next mount is handed as its `frame` —
+ * so a zone that has since gained a widget was taking an EMPTY frame as its
+ * reference. Re-expressing from it returns nothing, gridstack's own
+ * `column(n, "none")` clamp is left standing, and since that clamp only ever
+ * shrinks `w`, one trip through a narrow preview left the widget a sliver of
+ * its zone, live and saved. `frameCovers` is the question that separates the
+ * two cases, which is why GridStackZone now asks it before choosing.
+ */
+describe("re-measure reference — an empty frame is not one", () => {
+	const stats: GsItem[] = [{ id: "stats", title: "Stats", h: 3 }]
+
+	it("an empty frame does not account for the card on screen", () => {
+		expect(frameCovers(stats, { cols: 7, rows: 14, items: [] })).toBe(false)
+	})
+
+	it("re-expressing from it restores nothing", () => {
+		expect(reexpress({ cols: 7, rows: 14, items: [] }, 2, 14)).toEqual([])
+	})
+
+	it("re-expressing from the seeded positions survives narrow → wide", () => {
+		const seeded = seedPositions(stats, 7, 14)
+		expect(seeded).toEqual([{ id: "stats", x: 0, y: 0, w: 7, h: 3 }])
+		const ref: GsLayout = { cols: 7, rows: 14, items: seeded }
+		expect(reexpress(ref, 2, 14)[0]).toMatchObject({ w: 2 })
+		expect(reexpress(ref, 7, 14)[0]).toMatchObject({ w: 7 })
+	})
+})
+
+/**
+ * The live view spends a saved cell straight as `grid-column: x + 1 / span w`
+ * against `repeat(cols, 1fr)`. A column past `cols` does NOT overflow — CSS
+ * grid adds implicit tracks for it, and the explicit `1fr` tracks then resolve
+ * to 0px, so one bad cell flattens every other widget in the zone. Measured in
+ * the browser on 2026-09-17: `scene-portraits` saved at x = 7 in a 7-column
+ * frame gave `grid-column: 8 / span 7`, a computed template of seven 0px
+ * tracks followed by seven implicit 20.125px ones, and a 38px `stats`.
+ *
+ * `seedPositions` has always ended with this clamp, which is why the EDITOR
+ * drew the same arrangement correctly and the live view did not.
+ */
+describe("clampPos — a saved cell belongs to the frame that describes it", () => {
+	it("pulls a column past the frame back inside it", () => {
+		expect(clampPos(pos("portraits", 7, 0, 7, 3), 7, 12)).toMatchObject({
+			x: 0,
+			w: 7
+		})
+	})
+
+	it("narrows a card wider than the frame rather than moving it out", () => {
+		expect(clampPos(pos("map", 2, 0, 9, 3), 7, 12)).toMatchObject({
+			x: 0,
+			w: 7
+		})
+	})
+
+	it("clamps rows the same way", () => {
+		expect(clampPos(pos("map", 0, 11, 7, 6), 7, 12)).toMatchObject({
+			y: 6,
+			h: 6
+		})
+	})
+
+	it("never produces a zero or negative span", () => {
+		expect(clampPos(pos("map", 0, 0, 0, 0), 7, 12)).toMatchObject({
+			w: 1,
+			h: 1
+		})
+		expect(clampPos(pos("map", -3, -2, 7, 3), 7, 12)).toMatchObject({
+			x: 0,
+			y: 0
+		})
+	})
+
+	it("returns the SAME object when the cell already fits", () => {
+		const p = pos("map", 0, 0, 7, 3)
+		expect(clampPos(p, 7, 12)).toBe(p)
+		const frame: GsLayout = { cols: 7, rows: 12, items: [p] }
+		expect(clampFrame(frame)).toBe(frame)
+	})
+
+	it("keeps the anchor / group / pin riding on the item", () => {
+		const p: GsPos = {
+			...pos("map", 9, 0, 3, 3),
+			anchor: { top: true },
+			group: "g:a+b",
+			pinned: false
+		}
+		expect(clampPos(p, 7, 12)).toMatchObject({
+			x: 4,
+			anchor: { top: true },
+			group: "g:a+b",
+			pinned: false
+		})
+	})
+
+	it("loadArranged clamps what an older blob already stored", () => {
+		const out = loadArranged({
+			left: {
+				cols: 7,
+				rows: 12,
+				items: [pos("stats", 0, 0, 7, 3), pos("portraits", 7, 5, 7, 3)]
+			}
+		})
+		expect(out.left?.items.map((i) => [i.x, i.w])).toEqual([
+			[0, 7],
+			[0, 7]
+		])
+	})
+})
+
+/* ── making room for one more card ─────────────────────────────────────── */
+
+describe("firstSlot / fits / makeRoom", () => {
+	/** A frame at `cols`×`rows` holding these cells. */
+	const frame = (cols: number, rows: number, items: GsPos[]): GsLayout => ({
+		cols,
+		rows,
+		items
+	})
+
+	it("makes room for a tray card in the middle zone's normal state", () => {
+		// One GROW widget over the whole grid — what `zoneIsFull` was written
+		// for, and the frame a new card has nowhere to go in.
+		const full = frame(15, 16, [pos("messages", 0, 0, 15, 16)])
+		expect(fits(full, { w: 15, h: 4 })).toBe(false)
+		const next = makeRoom(full, { w: 15, h: 4 })
+		expect(next).not.toBe(full)
+		expect(next.items).toEqual([pos("messages", 0, 0, 15, 12)])
+		expect(fits(next, { w: 15, h: 4 })).toBe(true)
+	})
+
+	it("hands back the same frame when a slot already exists", () => {
+		const roomy = frame(7, 16, [pos("stats", 0, 0, 7, 6)])
+		expect(fits(roomy, { w: 7, h: 3 })).toBe(true)
+		expect(makeRoom(roomy, { w: 7, h: 3 })).toBe(roomy)
+	})
+
+	it("free cells are not a free slot", () => {
+		// A quarter of the frame free, one cell in each corner — `zoneIsFull`
+		// says there is room, and there is room for nothing.
+		const corners = frame(4, 4, [
+			pos("a", 1, 0, 2, 1),
+			pos("b", 0, 1, 4, 2),
+			pos("c", 1, 3, 2, 1)
+		])
+		expect(fits(corners, { w: 1, h: 1 })).toBe(true)
+		expect(fits(corners, { w: 2, h: 2 })).toBe(false)
+	})
+
+	it("returns the frame unchanged when every card is already at the floor", () => {
+		const minimal = frame(4, 6, [
+			pos("a", 0, 0, 4, MIN_CARD_ROWS),
+			pos("b", 0, 2, 4, MIN_CARD_ROWS),
+			pos("c", 0, 4, 4, MIN_CARD_ROWS)
+		])
+		expect(makeRoom(minimal, { w: 4, h: 3 })).toBe(minimal)
+	})
+
+	it("returns the frame unchanged when no sequence of shrinks frees a slot", () => {
+		// Shrinking either card to the floor leaves two one-row gaps, never
+		// the three contiguous rows asked for.
+		const tight = frame(4, 6, [pos("a", 0, 0, 4, 3), pos("b", 0, 3, 4, 3)])
+		expect(makeRoom(tight, { w: 4, h: 3 })).toBe(tight)
+	})
+
+	it("cascades to the next largest when the biggest card is at the floor", () => {
+		// `a` has the largest area but nothing left to give, so the rows come
+		// off the first of the three columns instead.
+		const full = frame(12, 7, [
+			pos("a", 0, 0, 12, MIN_CARD_ROWS),
+			pos("b", 0, 2, 4, 5),
+			pos("c", 4, 2, 4, 5),
+			pos("d", 8, 2, 4, 5)
+		])
+		const next = makeRoom(full, { w: 4, h: 3 })
+		expect(next.items.map((i) => [i.id, i.y, i.h])).toEqual([
+			["a", 0, 2],
+			["b", 2, 2],
+			["c", 2, 5],
+			["d", 2, 5]
+		])
+		expect(fits(next, { w: 4, h: 3 })).toBe(true)
+	})
+
+	it("cascades to the second largest when the first shrink is not enough", () => {
+		// Two full-height columns: freeing the bottom rows of one is useless
+		// while the other still reaches the floor, so both give rows up.
+		const full = frame(8, 8, [pos("a", 0, 0, 4, 8), pos("b", 4, 0, 4, 8)])
+		const next = makeRoom(full, { w: 8, h: 2 })
+		expect(next.items.map((i) => [i.id, i.h])).toEqual([
+			["a", 6],
+			["b", 6]
+		])
+		expect(fits(next, { w: 8, h: 2 })).toBe(true)
+	})
+
+	it("never shrinks a card past the floor, even for a tall ask", () => {
+		const full = frame(6, 8, [pos("a", 0, 0, 6, 8)])
+		const next = makeRoom(full, { w: 6, h: 6 })
+		expect(next.items[0].h).toBe(MIN_CARD_ROWS)
+		expect(fits(next, { w: 6, h: 6 })).toBe(true)
+	})
+
+	it("keeps every card's top edge where it was", () => {
+		const full = frame(7, 16, [
+			pos("stats", 0, 0, 7, 10),
+			pos("portraits", 0, 10, 7, 6)
+		])
+		const next = makeRoom(full, { w: 7, h: 3 })
+		expect(next.items.map((i) => i.y)).toEqual([0, 10])
+	})
+
+	it("names the top-left-most slot, and null when there is none", () => {
+		const roomy = frame(4, 6, [pos("a", 0, 0, 4, 2)])
+		expect(firstSlot(roomy, { w: 4, h: 3 })).toEqual({ x: 0, y: 2 })
+		expect(firstSlot(roomy, { w: 4, h: 5 })).toBeNull()
+	})
+
+	it("seats a mid-stack newcomer where the seeding rules never would", () => {
+		// The shape that makes `makeRoom` on its own a no-op: the rows it frees
+		// are UNDER the biggest card, mid-stack, while `seedPositions` puts a
+		// card with no saved cells at the foot of the x = 0 stack — which in a
+		// full zone is clamped straight back on top of `portraits`. Writing the
+		// slot onto the newcomer is the half that fixes it, and it also makes
+		// the frame account for every card on screen, so the re-seeded zone
+		// reads as a faithful restore.
+		const full = frame(7, 16, [
+			pos("stats", 0, 0, 7, 10),
+			pos("portraits", 0, 10, 7, 6)
+		])
+		const need = { w: 7, h: 3 }
+		const roomy = makeRoom(full, need)
+		const slot = firstSlot(roomy, need)
+		expect(slot).toEqual({ x: 0, y: 7 })
+		const seated: GsLayout = {
+			...roomy,
+			items: [...roomy.items, pos("map", slot!.x, slot!.y, need.w, need.h)]
+		}
+		for (const a of seated.items)
+			for (const b of seated.items)
+				if (a !== b) expect(overlaps(a, b)).toBe(false)
+		// And the seeder agrees, because the frame now names every card.
+		expect(
+			seedPositions(
+				seated.items.map((i) => ({ ...i, title: "" })),
+				7,
+				16,
+				seated
+			).map((i) => `${i.id}:y${i.y}h${i.h}`)
+		).toEqual(["stats:y0h7", "portraits:y10h6", "map:y7h3"])
+	})
+})
+
+describe("arrangedIds — what the editor counts as placed", () => {
+	it("gathers every zone's ids, and an absent zone contributes none", () => {
+		const a: Arranged = {
+			left: { cols: 4, rows: 8, items: [pos("stats", 0, 0, 4, 3)] },
+			middle: { cols: 9, rows: 8, items: [pos("messages", 0, 0, 9, 8)] }
+		}
+		expect([...arrangedIds(a)].sort()).toEqual(["messages", "stats"])
+		expect(arrangedIds({})).toEqual(new Set())
+	})
+
+	it("counts a card MID-MOVE, which is the whole point", () => {
+		// `map` has left the middle's frame for the right's. Committed
+		// membership has caught up with neither, so this is the only list that
+		// still knows the widget is placed.
+		const a: Arranged = {
+			middle: { cols: 9, rows: 8, items: [pos("messages", 0, 0, 9, 8)] },
+			right: { cols: 4, rows: 8, items: [pos("map", 0, 0, 4, 3)] }
+		}
+		expect(arrangedIds(a).has("map")).toBe(true)
 	})
 })

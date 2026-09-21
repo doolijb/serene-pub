@@ -93,8 +93,9 @@ function detectPlatform(name: string): BinaryVariant["platform"] {
 	const lower = name.toLowerCase()
 	if (lower.endsWith(".exe")) return "windows"
 	if (lower.includes("mac") || lower.includes("osx")) return "macos"
-	// Linux: starts with koboldcpp, no extension, not mac
-	if (/^koboldcpp(?:_[a-z0-9]+)*$/i.test(name)) return "linux"
+	// Linux: starts with koboldcpp, no extension, not mac. The release assets
+	// are hyphenated (`koboldcpp-linux-x64-nocuda`); older ones used `_`.
+	if (/^koboldcpp(?:[-_][a-z0-9]+)*$/i.test(name)) return "linux"
 	return "other"
 }
 

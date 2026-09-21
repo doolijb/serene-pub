@@ -179,6 +179,6 @@
 		<strong class="font-medium">Set as default…</strong>
 		. For embeddings and entities that is what
 		<strong class="font-medium">Make active</strong>
-		 does.
+		does.
 	</p>
 </div>

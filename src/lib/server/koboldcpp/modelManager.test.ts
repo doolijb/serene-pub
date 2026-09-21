@@ -67,6 +67,18 @@ async function freshImport() {
 	return await import("./modelManager")
 }
 
+/** Drive a load to completion under fake timers: the readiness polls sleep
+ * between ticks, so a bare `await` on the returned promise would hang. */
+async function settle<T>(promise: Promise<T>): Promise<T> {
+	let done = false
+	promise.then(
+		() => (done = true),
+		() => (done = true)
+	)
+	while (!done) await vi.advanceTimersByTimeAsync(500)
+	return promise
+}
+
 const lastConfig = () =>
 	JSON.parse(vi.mocked(writeFile).mock.calls.at(-1)![1] as string)
 const lastConfigFilename = () =>
@@ -99,7 +111,13 @@ describe("ensureModelLoaded", () => {
 		vi.unstubAllGlobals()
 	})
 
-	/** koboldcpp answers everything, with the text model already resident. */
+	/** koboldcpp answers everything, with the text model already resident.
+	 *
+	 * The readiness poll is scripted the way the real binary behaves on a
+	 * reload: the OUTGOING listener still answers with the old name for a
+	 * moment, then the port is down for the whole load, then the new process
+	 * answers. A wait that returns on the first affirmative tick is the bug
+	 * (see "does not accept the outgoing model" below). */
 	function textHappyPath(modelName: string | null = "some-model") {
 		fetchCurrentModelStatusMock.mockResolvedValue({
 			modelName,
@@ -110,10 +128,10 @@ describe("ensureModelLoaded", () => {
 			ok: true,
 			json: async () => ({ success: true })
 		})
-		fetchModelStatusForPollMock.mockResolvedValue({
-			modelName: "some-model",
-			refused: false
-		})
+		fetchModelStatusForPollMock
+			.mockResolvedValueOnce({ modelName: "some-model", refused: false })
+			.mockResolvedValueOnce({ modelName: null, refused: true })
+			.mockResolvedValue({ modelName: "some-model", refused: false })
 	}
 
 	/** koboldcpp answers everything; no image model resident until the reload. */
@@ -131,7 +149,7 @@ describe("ensureModelLoaded", () => {
 		const { ensureModelLoaded } = await freshImport()
 		textHappyPath()
 
-		await ensureModelLoaded(baseOpts())
+		await settle(ensureModelLoaded(baseOpts()))
 
 		expect(fetchMock).toHaveBeenCalledWith(
 			"http://localhost:5001/api/admin/reload_config",
@@ -144,11 +162,11 @@ describe("ensureModelLoaded", () => {
 		textHappyPath()
 
 		// First call establishes the residency record.
-		await ensureModelLoaded(baseOpts())
+		await settle(ensureModelLoaded(baseOpts()))
 		fetchMock.mockClear()
 
 		// Second call, identical request — should skip the reload entirely.
-		await ensureModelLoaded(baseOpts())
+		await settle(ensureModelLoaded(baseOpts()))
 		expect(fetchMock).not.toHaveBeenCalled()
 	})
 
@@ -168,12 +186,12 @@ describe("ensureModelLoaded", () => {
 			const { ensureModelLoaded } = await freshImport()
 			textHappyPath()
 
-			await ensureModelLoaded(baseOpts())
+			await settle(ensureModelLoaded(baseOpts()))
 			fetchMock.mockClear()
 
 			// Now it goes quiet — busy loading or generating.
 			fetchCurrentModelStatusMock.mockResolvedValue(undetermined)
-			await ensureModelLoaded(baseOpts())
+			await settle(ensureModelLoaded(baseOpts()))
 
 			expect(fetchMock).not.toHaveBeenCalled()
 		})
@@ -183,7 +201,7 @@ describe("ensureModelLoaded", () => {
 			textHappyPath()
 			fetchCurrentModelStatusMock.mockResolvedValue(undetermined)
 
-			await ensureModelLoaded(baseOpts())
+			await settle(ensureModelLoaded(baseOpts()))
 
 			expect(fetchMock).toHaveBeenCalledWith(
 				"http://localhost:5001/api/admin/reload_config",
@@ -195,12 +213,12 @@ describe("ensureModelLoaded", () => {
 			const { ensureModelLoaded } = await freshImport()
 			textHappyPath()
 
-			await ensureModelLoaded(baseOpts())
+			await settle(ensureModelLoaded(baseOpts()))
 			fetchMock.mockClear()
 
 			fetchCurrentModelStatusMock.mockResolvedValue(undetermined)
-			await ensureModelLoaded(
-				baseOpts(textRequest({ contextSize: 8192 }))
+			await settle(
+				ensureModelLoaded(baseOpts(textRequest({ contextSize: 8192 })))
 			)
 
 			expect(fetchMock).toHaveBeenCalled()
@@ -210,7 +228,7 @@ describe("ensureModelLoaded", () => {
 			const { ensureModelLoaded } = await freshImport()
 			textHappyPath()
 
-			await ensureModelLoaded(baseOpts())
+			await settle(ensureModelLoaded(baseOpts()))
 			fetchMock.mockClear()
 
 			// ECONNREFUSED means the process is genuinely gone — not ambiguous.
@@ -219,7 +237,7 @@ describe("ensureModelLoaded", () => {
 				refused: true,
 				determined: true
 			})
-			await ensureModelLoaded(baseOpts())
+			await settle(ensureModelLoaded(baseOpts()))
 
 			expect(fetchMock).toHaveBeenCalled()
 		})
@@ -232,11 +250,11 @@ describe("ensureModelLoaded", () => {
 			const { ensureModelLoaded } = await freshImport()
 			imageHappyPath()
 
-			await ensureModelLoaded(baseOpts(imageRequest()))
+			await settle(ensureModelLoaded(baseOpts(imageRequest())))
 			fetchMock.mockClear()
 
 			fetchImageModelStatusMock.mockResolvedValue(IMAGE_UNANSWERED)
-			await ensureModelLoaded(baseOpts(imageRequest()))
+			await settle(ensureModelLoaded(baseOpts(imageRequest())))
 
 			expect(fetchMock).not.toHaveBeenCalled()
 		})
@@ -245,7 +263,7 @@ describe("ensureModelLoaded", () => {
 			const { ensureModelLoaded } = await freshImport()
 			imageHappyPath()
 
-			await ensureModelLoaded(baseOpts(imageRequest()))
+			await settle(ensureModelLoaded(baseOpts(imageRequest())))
 			fetchMock.mockClear()
 			// Somebody unloaded it behind our back. koboldcpp answering "no"
 			// is an ANSWER, unlike silence, and it outranks our record.
@@ -253,7 +271,7 @@ describe("ensureModelLoaded", () => {
 				.mockResolvedValueOnce(IMAGE_OFF)
 				.mockResolvedValue(IMAGE_ON)
 
-			await ensureModelLoaded(baseOpts(imageRequest()))
+			await settle(ensureModelLoaded(baseOpts(imageRequest())))
 
 			expect(fetchMock).toHaveBeenCalled()
 		})
@@ -263,10 +281,10 @@ describe("ensureModelLoaded", () => {
 		const { ensureModelLoaded } = await freshImport()
 		textHappyPath()
 
-		await ensureModelLoaded(baseOpts())
+		await settle(ensureModelLoaded(baseOpts()))
 		fetchMock.mockClear()
 
-		await ensureModelLoaded(baseOpts(textRequest({ contextSize: 8192 })))
+		await settle(ensureModelLoaded(baseOpts(textRequest({ contextSize: 8192 }))))
 		expect(fetchMock).toHaveBeenCalled()
 	})
 
@@ -274,10 +292,10 @@ describe("ensureModelLoaded", () => {
 		const { ensureModelLoaded } = await freshImport()
 		textHappyPath()
 
-		await ensureModelLoaded(baseOpts())
+		await settle(ensureModelLoaded(baseOpts()))
 		fetchMock.mockClear()
 
-		await ensureModelLoaded(baseOpts(textRequest({ gpuLayers: 10 })))
+		await settle(ensureModelLoaded(baseOpts(textRequest({ gpuLayers: 10 }))))
 		expect(fetchMock).toHaveBeenCalled()
 	})
 
@@ -290,7 +308,7 @@ describe("ensureModelLoaded", () => {
 			const { ensureModelLoaded } = await freshImport()
 			textHappyPath()
 
-			await ensureModelLoaded(baseOpts())
+			await settle(ensureModelLoaded(baseOpts()))
 
 			expect(lastConfig()).toEqual({
 				model: [TEXT_PATH],
@@ -310,8 +328,8 @@ describe("ensureModelLoaded", () => {
 			const { ensureModelLoaded } = await freshImport()
 			imageHappyPath()
 
-			await ensureModelLoaded(
-				baseOpts(imageRequest({ threads: 7, quant: 1 }))
+			await settle(
+				ensureModelLoaded(baseOpts(imageRequest({ threads: 7, quant: 1 })))
 			)
 
 			expect(lastConfig()).toEqual({
@@ -332,7 +350,7 @@ describe("ensureModelLoaded", () => {
 			const { ensureModelLoaded } = await freshImport()
 			imageHappyPath()
 
-			await ensureModelLoaded(baseOpts(imageRequest()))
+			await settle(ensureModelLoaded(baseOpts(imageRequest())))
 
 			expect(lastConfig().sdmodel).toBe(IMAGE_PATH)
 		})
@@ -341,7 +359,7 @@ describe("ensureModelLoaded", () => {
 			const { ensureModelLoaded } = await freshImport()
 			imageHappyPath()
 
-			await ensureModelLoaded(baseOpts(imageRequest({ quant: 0 })))
+			await settle(ensureModelLoaded(baseOpts(imageRequest({ quant: 0 }))))
 
 			// 0 is koboldcpp's own default, so sending it says nothing extra.
 			expect("sdquant" in lastConfig()).toBe(false)
@@ -355,13 +373,13 @@ describe("ensureModelLoaded", () => {
 		test("names the config file after the KIND as well as the model", async () => {
 			const { ensureModelLoaded } = await freshImport()
 			textHappyPath()
-			await ensureModelLoaded(baseOpts())
+			await settle(ensureModelLoaded(baseOpts()))
 			expect(lastConfigFilename()).toContain(
 				"serene_text_some-model.kcpps"
 			)
 
 			imageHappyPath()
-			await ensureModelLoaded(baseOpts(imageRequest()))
+			await settle(ensureModelLoaded(baseOpts(imageRequest())))
 			expect(lastConfigFilename()).toContain(
 				"serene_image_sdxl_q4_0.kcpps"
 			)
@@ -420,12 +438,12 @@ describe("ensureModelLoaded", () => {
 		test("switching from a text model to an image model reloads exactly once", async () => {
 			const { ensureModelLoaded } = await freshImport()
 			textHappyPath()
-			await ensureModelLoaded(baseOpts())
+			await settle(ensureModelLoaded(baseOpts()))
 
 			fetchMock.mockClear()
 			vi.mocked(writeFile).mockClear()
 			imageHappyPath()
-			await ensureModelLoaded(baseOpts(imageRequest()))
+			await settle(ensureModelLoaded(baseOpts(imageRequest())))
 
 			const reloads = fetchMock.mock.calls.filter(([url]) =>
 				String(url).endsWith("/api/admin/reload_config")
@@ -438,13 +456,13 @@ describe("ensureModelLoaded", () => {
 		test("switching back to the text model reloads again rather than trusting the old record", async () => {
 			const { ensureModelLoaded } = await freshImport()
 			textHappyPath()
-			await ensureModelLoaded(baseOpts())
+			await settle(ensureModelLoaded(baseOpts()))
 			imageHappyPath()
-			await ensureModelLoaded(baseOpts(imageRequest()))
+			await settle(ensureModelLoaded(baseOpts(imageRequest())))
 
 			fetchMock.mockClear()
 			textHappyPath()
-			await ensureModelLoaded(baseOpts())
+			await settle(ensureModelLoaded(baseOpts()))
 
 			expect(fetchMock).toHaveBeenCalled()
 		})
@@ -459,7 +477,7 @@ describe("ensureModelLoaded", () => {
 			const { ensureModelLoaded } = await freshImport()
 			imageHappyPath()
 
-			await ensureModelLoaded(baseOpts(imageRequest()))
+			await settle(ensureModelLoaded(baseOpts(imageRequest())))
 
 			expect(fetchCurrentModelStatusMock).not.toHaveBeenCalled()
 			expect(fetchModelStatusForPollMock).not.toHaveBeenCalled()
@@ -576,10 +594,137 @@ describe("ensureModelLoaded", () => {
 
 		const promise = ensureModelLoaded(baseOpts())
 		promise.catch(() => {})
-		for (let i = 0; i < 5; i++) {
+		// Refusals alone no longer end the wait early — a load takes the
+		// listener down for far longer than a few ticks — so it is the 60s
+		// ceiling on the reload_config request itself that has to trip.
+		for (let i = 0; i < 32; i++) {
 			await vi.advanceTimersByTimeAsync(2000)
 		}
-		await expect(promise).rejects.toThrow(/crashed|not reachable/i)
+		await expect(promise).rejects.toThrow(/did not become ready|crashed|not reachable/i)
+	})
+
+	describe("waiting for a text model to become ready", () => {
+		function reloadAccepted() {
+			fetchMock.mockResolvedValue({
+				ok: true,
+				json: async () => ({ success: true })
+			})
+		}
+		const SAME = { modelName: "some-model", refused: false }
+		const DOWN = { modelName: null, refused: true }
+
+		// Measured against the real binary: after reload_config returns
+		// success, the OUTGOING listener keeps answering /api/v1/model with
+		// the same name for over a second, then the port is down for the whole
+		// load (6s warm, 23s for a cold 16 GB model). This is every dev-loop
+		// restart (koboldcpp adopted with the model still up) and every knob
+		// change on the same file.
+		test("does not accept the outgoing model when it was already reported resident before the reload", async () => {
+			const { ensureModelLoaded } = await freshImport()
+			fetchCurrentModelStatusMock.mockResolvedValue({
+				modelName: "some-model",
+				refused: false,
+				determined: true
+			})
+			reloadAccepted()
+			fetchModelStatusForPollMock.mockResolvedValue(SAME)
+
+			let settled = false
+			const promise = ensureModelLoaded(baseOpts())
+			promise.then(() => {
+				settled = true
+			})
+
+			await vi.advanceTimersByTimeAsync(6000)
+			expect(settled).toBe(false)
+
+			fetchModelStatusForPollMock.mockResolvedValue(DOWN)
+			await vi.advanceTimersByTimeAsync(1000)
+			fetchModelStatusForPollMock.mockResolvedValue(SAME)
+			await vi.advanceTimersByTimeAsync(1000)
+
+			await promise
+			expect(settled).toBe(true)
+		})
+
+		test("gives up waiting for a change once the same answer has come without interruption long enough", async () => {
+			const { ensureModelLoaded } = await freshImport()
+			fetchCurrentModelStatusMock.mockResolvedValue({
+				modelName: "some-model",
+				refused: false,
+				determined: true
+			})
+			reloadAccepted()
+			fetchModelStatusForPollMock.mockResolvedValue(SAME)
+
+			const promise = ensureModelLoaded(baseOpts())
+			await vi.advanceTimersByTimeAsync(21_000)
+
+			await expect(promise).resolves.toBeUndefined()
+		})
+
+		test("accepts the first affirmative answer when nothing was resident before the reload", async () => {
+			const { ensureModelLoaded } = await freshImport()
+			fetchCurrentModelStatusMock.mockResolvedValue({
+				modelName: null,
+				refused: false,
+				determined: true
+			})
+			reloadAccepted()
+			fetchModelStatusForPollMock.mockResolvedValue(SAME)
+
+			const promise = ensureModelLoaded(baseOpts())
+			await vi.advanceTimersByTimeAsync(0)
+
+			await expect(promise).resolves.toBeUndefined()
+		})
+
+		// Without a process handle (external, or adopted-external) the old
+		// wait gave up after three refused ticks — about six seconds — which
+		// is shorter than the listener is down on ANY real load.
+		test("without isAlive, tolerates the listener being down for the whole of a real load", async () => {
+			const { ensureModelLoaded } = await freshImport()
+			fetchCurrentModelStatusMock.mockResolvedValue({
+				modelName: null,
+				refused: false,
+				determined: true
+			})
+			reloadAccepted()
+			let pollCalls = 0
+			fetchModelStatusForPollMock.mockImplementation(async () => {
+				pollCalls++
+				// 15 refused ticks at 2s = 30s down, then up.
+				return pollCalls <= 15 ? DOWN : SAME
+			})
+
+			const promise = ensureModelLoaded(baseOpts())
+			promise.catch(() => {})
+			for (let i = 0; i < 16; i++) {
+				await vi.advanceTimersByTimeAsync(2000)
+			}
+
+			await expect(promise).resolves.toBeUndefined()
+			expect(pollCalls).toBe(16)
+		})
+
+		test("without isAlive, still gives up once refusals outlast the grace", async () => {
+			const { ensureModelLoaded } = await freshImport()
+			fetchCurrentModelStatusMock.mockResolvedValue({
+				modelName: null,
+				refused: false,
+				determined: true
+			})
+			reloadAccepted()
+			fetchModelStatusForPollMock.mockResolvedValue(DOWN)
+
+			const promise = ensureModelLoaded(baseOpts())
+			promise.catch(() => {})
+			for (let i = 0; i < 152; i++) {
+				await vi.advanceTimersByTimeAsync(2000)
+			}
+
+			await expect(promise).rejects.toThrow(/refused connections for 300s/)
+		})
 	})
 
 	test("does not retry a non-refusal reload_config failure (e.g. a real HTTP error)", async () => {

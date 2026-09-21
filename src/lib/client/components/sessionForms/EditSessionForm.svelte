@@ -918,7 +918,7 @@
 	 * two checkboxes that do not move together.
 	 */
 	function toggleSessionFunction(
-		f: { specSlug: string; key: string; function: string },
+		f: { specSlug: string; key: string },
 		enabled: boolean
 	) {
 		if (!session?.id) return
@@ -926,7 +926,6 @@
 		functionsBusy = identity
 		socket.emit("sessions:setFunction", {
 			sessionId: session.id,
-			function: f.function,
 			action: identity,
 			enabled
 		})

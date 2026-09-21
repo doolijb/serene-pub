@@ -11,6 +11,12 @@ import type { ListResponse } from "ollama"
 
 // for information about these interfaces
 declare global {
+	/**
+	 * The running build's version, injected by Vite's `define` (vite.config.ts)
+	 * rather than imported, so it is a literal in the bundle.
+	 */
+	const __APP_VERSION__: string
+
 	namespace App {
 		// interface Error {}
 		interface Locals {
@@ -106,19 +112,6 @@ declare global {
 		mobilePanel: string | null
 		/** The mobile "More" sheet — every rail item the bottom bar has no room for. */
 		isMobileMenuOpen: boolean
-		/**
-		 * Let the page content spend the space a closed sidebar is not using.
-		 *
-		 * ⏳ A leftover of the two-sidebar shell, where a closed sidebar still
-		 * held its quarter so the centre column would not move every time a
-		 * panel opened. The single-sidebar shell always gives the page whatever
-		 * the sidebar is not using, so nothing in the shell reads this any
-		 * more — but `SessionLayout` still does, to decide whether its side
-		 * zones get margins, so the flag and its localStorage key stay.
-		 *
-		 * Desktop only — the mobile layout is already one thing at a time.
-		 */
-		wideContent: boolean
 		/**
 		 * The rail's wide form: 208px, a label beside every icon and a name over
 		 * each group, against the 64px strip of icons alone. The rail's own
@@ -273,15 +266,35 @@ declare global {
 		tasks: Sockets.TaskQueue.QueuedTask[]
 	}
 
+	/** One face in the session header's cast stack. */
+	interface OpenSessionCastMember {
+		/** `character:<id>` or `persona:<id>` — the stack's key. */
+		key: string
+		/** The name the face is announced by. */
+		name: string
+		/** The card's portrait, when it has one; a letter disc stands in. */
+		avatarSrc: string | null
+		/** A character the user voices, which the disc tints in primary. */
+		isPersona: boolean
+		/** The character the rotation has queued up, marked with a dot. */
+		isNext: boolean
+	}
+
 	// Written by the open session route (src/routes/sessions/[id]/+page.svelte) so
 	// globally-rendered sidebars (e.g. LorebooksSidebar) can tell whether a
 	// session is currently open, whether it already has a lorebook attached, and
 	// whether the current user owns it (guests can't change it), without a
-	// dedicated fetch of their own.
+	// dedicated fetch of their own. The session header (Header.svelte) reads the
+	// same context: it renders under <main> as a sibling of the route, so this is
+	// how the session's identity reaches it.
 	interface OpenSessionCtx {
 		sessionId: number | null
 		/** What the session is called, for copy that names it. */
 		sessionName: string | null
+		/** Who is in the session, in the order the header shows them. */
+		cast: OpenSessionCastMember[]
+		/** The genre's display name, as the header prints it. */
+		genreName: string | null
 		lorebookId: number | null
 		isOwner: boolean
 	}

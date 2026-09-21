@@ -31,6 +31,7 @@ import {
 	allDefinitions,
 	allEvents,
 	canonicalHash,
+	i18nText,
 	sessionEvents
 } from "@serene-pub/sdk"
 import { and, asc, eq, ne } from "drizzle-orm"
@@ -306,10 +307,14 @@ export async function seedCoreSpecs(db: Db): Promise<SpecSeedReport[]> {
 			.limit(1)
 
 		const action = current ? "present" : "published"
+		// The row's name column is text: the catalogue's display text resolved
+		// to `en` through the SDK's one resolver (R-20); the slug is the
+		// fallback the type makes unreachable.
+		const name = i18nText(entry.name) ?? doc.id
 		if (action === "published")
 			await saveDocument(db, doc, {
 				publish: true,
-				name: entry.name,
+				name,
 				batch
 			})
 		else
@@ -318,11 +323,11 @@ export async function seedCoreSpecs(db: Db): Promise<SpecSeedReport[]> {
 			// the same rule the definition registry applies to i18n.
 			await db
 				.update(schema.pipelineSpecs)
-				.set({ name: entry.name })
+				.set({ name })
 				.where(
 					and(
 						eq(schema.pipelineSpecs.slug, doc.id),
-						ne(schema.pipelineSpecs.name, entry.name)
+						ne(schema.pipelineSpecs.name, name)
 					)
 				)
 

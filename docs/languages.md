@@ -97,6 +97,8 @@ i18n: { name: { en: "Scan Depth", es: "Profundidad de escaneo" } }
 
 The map is stored whole and is deliberately excluded from a type's content hash, so translating a label never counts as changing the type. When a language is not present in the map, English is used — which is why English is a required key.
 
+Every label an extension declares — a definition's name, a setting's label, an action's label, a preset's title, a widget's title, a status — may be written either way: a plain string is the same value as a map holding only `en`. Publishing checks each one: a map without an English entry, an English entry that is empty, or something that is neither a string nor a map is refused with a message naming the field and what to write instead. Slash command names, run report notes and the text a pipeline produces at run time (a form's question, a message) are not labels and are never translated.
+
 ## Troubleshooting
 
 **Everything is still in English after I changed my language.** Automatic translation is probably off. It is an admin setting under System Settings → Language, and it is off by default.

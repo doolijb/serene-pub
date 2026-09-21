@@ -38,7 +38,7 @@
  * migration, which is the case that was costing one every time.
  */
 
-import { eq, and } from "drizzle-orm"
+import { eq, and, isNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
 	listGenreActions,
@@ -47,14 +47,19 @@ import {
 } from "$lib/server/pipelines/entities/sessionGenres"
 import {
 	snapshotRegistry,
-	authoredSlots,
-	declarationMaterial,
-	DESCRIPTOR_DISPLAY_KEYS,
+	definitionContract,
+	definitionContractHash,
+	i18nText,
 	isEventId,
+	parseTemplateId,
+	templateSeedProblems,
+	type I18n,
 	type RegistryEntry,
 	type Descriptor,
-	type ScriptKindDecl
+	type ScriptKindDecl,
+	type TemplateSeed
 } from "@serene-pub/sdk"
+import { poolKeyFor } from "$lib/shared/pipelines/poolKey"
 
 export interface SyncResult {
 	inserted: string[]
@@ -69,64 +74,62 @@ export interface SyncResult {
 	 * different declaration. Only the second is worth a line in the boot log.
 	 */
 	republished: string[]
+	/**
+	 * Slugs this owner published before and does not publish now (plans/29
+	 * R-2): their rows are marked `status: 'removed'` with `removed_at`,
+	 * never deleted — a stored spec still pins them, and the boot reconcile
+	 * turns each such pin into a notice. Written only by a `complete` sync;
+	 * a partial one (a test re-declaring one entry) removes nothing.
+	 */
+	removed: string[]
+	/**
+	 * Why a `complete` sync withdrew nothing after all: the descriptor list it
+	 * was handed is empty, or holds fewer than half the rows this owner has
+	 * standing — a cleared registry mid-reload, a catalog that failed to load
+	 * — and culling every row on that evidence is the one thing the
+	 * reverse-diff must never do. Absent when the diff ran.
+	 */
+	reverseDiffSkipped?: string
+	/**
+	 * Rows an administrator marked `deprecated` whose slug the build does not
+	 * publish. Left as they are — `deprecated` is the administrator's word and
+	 * the reverse-diff never overwrites it — and named here so the boot log can
+	 * say so once.
+	 */
+	deprecatedUnpublished: string[]
 }
 
 /**
- * A stable hash of everything about a type that a spec can depend on.
+ * What is hashed, as an object — the definition's **contract** (plans/31 V6).
  *
- * Deliberately excludes i18n: renaming a node's display label is not a change
- * to its contract, and treating it as one would make every translation update
- * a version bump.
+ * The SDK composes it: `definitionContract` takes every field of
+ * `DESCRIPTOR_CONTRACT_KEYS` and nothing else, strips display text
+ * (`DESCRIPTOR_DISPLAY_KEYS`) inside the slots, points, shapes and entry
+ * shape, leaves the substrate's `settings` slot out by name (`authoredSlots`),
+ * and reads a boolean flag as `true` or absent. The same function digests a
+ * `Descriptor` when it is re-declared and a `RegistryEntry` here, so the two
+ * answers to *is this the same definition?* are one answer by construction —
+ * `registryHashes.test.ts` holds this file's hash to the SDK's for every
+ * shipped definition. The policy half (`RegistryEntry.policy`, `i18n`,
+ * `public`) never reaches the material; the sync refreshes it in place.
  *
- * ## Slot declarations count, their labels do not
- *
- * The row now stores the whole `SlotDecl` rather than a list of slot names, so
- * that a form can be generated from rows (see `RegistryEntry.slots`). That makes
- * a question the name list never raised: is changing a parameter's default, or
- * its range, or its enum options, a change to the type's contract?
- *
- * It is. A spec that did not override `topK` gets the declared default, so moving
- * that default changes what an untouched spec does — which is precisely the
- * silent behaviour change pinning exists to prevent. Ranges and enums are the
- * same argument one step removed: they decide which stored values are still
- * legal.
- *
- * The `i18n` inside a declaration is excluded for the same reason it is excluded
- * at the type level, and it has to be stripped *recursively* — a param label sits
- * two levels down, and hashing it would make translating "Top K" into German a
- * type version bump.
- *
- * ## ⚠ That last paragraph was a promise this file did not keep
- *
- * It stripped `i18n` and `description` and nothing else, while a parameter's
- * display text is not spelled `i18n` at all: `settings.ts` calls **`label`** the
- * canonical key for a field or a member band and `i18n` its deprecated alias. So
- * translating "Top K" into German *was* a type version bump — the exact edit the
- * comment above says is free. Under the freeze that was not a warning but a
- * stop; under content addressing it is a pointer move nobody asked for, which is
- * quieter and still wrong: a slug would resolve to a new declaration because
- * somebody translated a label.
- *
- * The SDK's own registries had already answered this. `refuseUnlessIdentical`
- * takes a `DisplayKeys` set, and the descriptor registry passes
- * `DESCRIPTOR_DISPLAY_KEYS` — `['label']` — so re-declaring a descriptor with a
- * renamed parameter is a no-op *there* while moving the pointer *here*. Two
- * answers to one question, from two functions, disagreeing on the most common
- * edit there is.
- *
- * So the strip is now the SDK's, called with the SDK's own list rather than a
- * copy of it. `declarationMaterial` differs from what stood here in one further
- * way, deliberately kept: a function value canonicalizes to its source text
- * instead of being dropped by `JSON.stringify`. No node definition reaches it — a
- * `SlotDecl`, an `EntryShape` and a `SettingsSchema` are data — but if one ever
- * carries a predicate, hashing it is the correct answer and silently ignoring it
- * is not.
- *
- * Widening a display list re-hashes every type that carries the word, which is
- * why this lands with migration 0113 and not on its own.
+ * Split out from the digest because the archive stores it: a
+ * `pipeline_definition_declarations` row keeps **exactly what was hashed**
+ * beside the hash, so re-digesting the stored material has to reproduce the
+ * stored string. Returning the material from the function that composes it
+ * for the digest is what makes that true by construction rather than by two
+ * lists agreeing.
  */
-const stripDisplay = (v: unknown): unknown =>
-	declarationMaterial(v, DESCRIPTOR_DISPLAY_KEYS)
+export function definitionContentMaterial(
+	entry: RegistryEntry
+): Record<string, unknown> {
+	return definitionContract(entry) as unknown as Record<string, unknown>
+}
+
+/** The content hash of a definition — the SDK's `definitionContractHash` over a row's entry. */
+export function definitionContentHash(entry: RegistryEntry): string {
+	return definitionContractHash(entry)
+}
 
 const sortDeep = (v: unknown): unknown => {
 	if (Array.isArray(v)) return v.map(sortDeep)
@@ -137,143 +140,6 @@ const sortDeep = (v: unknown): unknown => {
 				.map(([k, val]) => [k, sortDeep(val)])
 		)
 	return v
-}
-
-/**
- * What is hashed, as an object.
- *
- * Split out from the digest because the archive stores it: a
- * `pipeline_definition_declarations` row keeps **exactly what was hashed** beside the
- * hash, so re-digesting the stored material has to reproduce the stored string.
- * Returning the material from the same function that composes it for the digest
- * is what makes that true by construction rather than by two lists agreeing.
- */
-export function definitionContentMaterial(
-	entry: RegistryEntry
-): Record<string, unknown> {
-	return {
-		kind: entry.kind,
-		ports: entry.ports,
-		/**
-		 * The author's slots, and only those. The projection adds the
-		 * substrate's `settings` slot (R-9, 2026-09-16) to every optional or
-		 * gated definition's row so the panel reads it like any slot; it is
-		 * derived from `optional` and `effects`, both hashed below on their
-		 * own terms, so hashing it too would move every one of those pins for
-		 * a change nobody authored. Left out by name — the SDK reserves the
-		 * name, so nothing authored can hide behind it (`authoredSlots`).
-		 */
-		slots: stripDisplay(authoredSlots(entry.slots)),
-		effects: entry.effects,
-		causesEvent: entry.causesEvent,
-		public: entry.public,
-		/**
-		 * Hashed because flipping it is exactly the change the hash exists to
-		 * make visible: the ports do not move, every spec pinning the version
-		 * keeps compiling, and the run quietly stops failing (or starts failing)
-		 * when the node errors. That is a behaviour change wearing a compatible
-		 * signature, and a hash that ignored it would let the slug's pointer sit
-		 * still while the meaning moved.
-		 *
-		 * A type that leaves it unset is unaffected — `JSON.stringify` drops
-		 * undefined keys, so only a type that actually declares it hashes
-		 * differently.
-		 *
-		 * `toggleable`, `declaresRandomness` and `earlyExit` are arguably in the
-		 * same category and are *not* hashed today. Left alone rather than
-		 * widened in passing: each deserves its own ruling, and changing them
-		 * would re-hash types this branch has no reason to touch.
-		 */
-		optional: entry.optional,
-		/**
-		 * Hashed for the same reason `optional` is. Flipping a script type from
-		 * `transform` to `verdict` moves no port and keeps every attachment
-		 * compiling, while turning "each link rewrites the text" into "the
-		 * earliest answer wins" — a behaviour change wearing a compatible
-		 * signature — the change the hash exists to make visible.
-		 *
-		 * `undefined` on node definitions, and `JSON.stringify` drops undefined keys,
-		 * so no node definition's hash moves by this being here.
-		 */
-		semantics: entry.semantics,
-		/**
-		 * Hashed on the S3 argument, one construct over (18 §4e): a point
-		 * appearing or vanishing, or what it accepts (R-11), changes what an
-		 * untouched spec's configuration can reach — the panel offers a chain
-		 * option per point, and the broker refuses undeclared names and the
-		 * applier undeclared kinds. Keys and `accepts` are contract; the
-		 * point's `label`/`description` are display and stripped here — the
-		 * comment said so before 2026-09-16 and the code did not, so renaming
-		 * "Each draft" moved a pin. Undefined on types that declare none, so
-		 * nothing else re-hashes.
-		 */
-		scriptPoints: stripDisplay(entry.scriptPoints),
-		/**
-		 * The session-shape contract (19 §1), hashed for the reason the doc
-		 * states in the `optional` register: widening `characters.max` changes
-		 * what existing sessions legally contain while every pin keeps
-		 * compiling. Display inside it is stripped by the sort like
-		 * everywhere; undefined on every non-mode type, so nothing else
-		 * re-hashes.
-		 */
-		sessionShape: entry.sessionShape,
-		/**
-		 * The entry-row contract, hashed whole (Part 1).
-		 *
-		 * Field roles decide where a row competes for budget, how its siblings sort,
-		 * who may see it and where it renders — so moving one changes what an
-		 * untouched install does while every pin keeps resolving, which is the
-		 * shape of silent change this rule exists to stop. The consequence is
-		 * intended and stated in the SDK: **changing a field role forces `@N+1`.**
-		 *
-		 * Stripped like everything else, so a label inside it stays free to
-		 * change; `undefined` on every non-entry type, so nothing else
-		 * re-hashes.
-		 */
-		entryShape: stripDisplay(entry.entryShape),
-		/**
-		 * The declared schema of an entry's type-specific half.
-		 *
-		 * Hashed because the constraint projection makes it unavoidable: this
-		 * schema *becomes* a database CHECK, so a schema change is a constraint
-		 * change, and the version bump is what drops the old constraint and
-		 * adds the new one. Display text inside it is stripped, which is what
-		 * keeps copyediting a field's label off the version.
-		 *
-		 * The column has existed and been NULL since the table was created;
-		 * `undefined` for every type that declares nothing, so no existing hash
-		 * moves by this being here.
-		 */
-		configSchema: stripDisplay(entry.configSchema)
-	}
-}
-
-function hashMaterial(material: unknown): string {
-	// Stable key order, recursively. An earlier version passed a sorted key
-	// array as JSON.stringify's replacer, which filters keys at *every* level —
-	// so `ports` serialized as `{}` and every port change hashed identically.
-	// The conflict test is what caught it, which is the argument for testing the
-	// guard rather than trusting it.
-	const s = JSON.stringify(sortDeep(material))
-	let h1 = 0xdeadbeef
-	let h2 = 0x41c6ce57
-	for (let i = 0; i < s.length; i++) {
-		const c = s.charCodeAt(i)
-		h1 = Math.imul(h1 ^ c, 2654435761)
-		h2 = Math.imul(h2 ^ c, 1597334677)
-	}
-	h1 =
-		Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^
-		Math.imul(h2 ^ (h2 >>> 13), 3266489909)
-	h2 =
-		Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^
-		Math.imul(h1 ^ (h1 >>> 13), 3266489909)
-	return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16)
-}
-
-/** A stable hash of everything about a type that a spec can depend on. */
-export function definitionContentHash(entry: RegistryEntry): string {
-	return hashMaterial(definitionContentMaterial(entry))
 }
 
 /**
@@ -310,8 +176,41 @@ function projectedColumns(entry: RegistryEntry, release: string) {
 		configSchema: (entry.configSchema as any) ?? null,
 		causesEvent: entry.causesEvent ?? null,
 		isPublic: entry.public ?? false,
+		// The contract flags and declarations beside `optional` (plans/31
+		// V6): each is in the hash, and a row that could not carry one could
+		// not reproduce its own pointer (`rowToEntry`).
+		declaresRandomness: entry.declaresRandomness ?? false,
+		earlyExit: entry.earlyExit ?? false,
+		liveRow: entry.liveRow ?? false,
+		review: entry.review ? { fields: [...entry.review.fields] } : null,
+		media: (entry.media as any) ?? null,
+		connectionKind: entry.shape ?? null,
+		// The policy half, whole — outside the hash, refreshed in place.
+		policy: (entry.policy as any) ?? null,
+		// The declaration's own status, and only that half of the column:
+		// `provisional` is the policy's word (R-2), `live` is every bound
+		// one. `deprecated` is an administrator's word and is never written
+		// from here — `statusFor` keeps it; `removed` is the reverse-diff's.
+		status: entry.policy?.provisional ? "provisional" : "live",
+		removedAt: null,
 		release
 	}
+}
+
+/**
+ * The status a row takes from its declaration, keeping what a person set.
+ *
+ * `live` and `provisional` are read off the declaration and move with it;
+ * `removed` means the slug is published again and comes back. `deprecated` is
+ * the one value no declaration carries, so a row wearing it keeps it — the
+ * sync republishes the declaration under it without touching the word.
+ */
+function statusFor(
+	entry: RegistryEntry,
+	current: string
+): "live" | "provisional" | "deprecated" {
+	if (current === "deprecated") return "deprecated"
+	return entry.policy?.provisional ? "provisional" : "live"
 }
 
 /**
@@ -326,13 +225,7 @@ async function archiveDeclaration(
 	entry: RegistryEntry,
 	hash: string,
 	release: string,
-	source: "declared" | "adopted",
-	// The registry row's own kind, when it differs from `entry`'s — the
-	// rename retry in `adoptCurrent` builds `entry` under the OLD word so its
-	// hash reproduces `row.contentHash`, but the archive's `kind` column is
-	// read against the CURRENT vocabulary and must not carry that retry back
-	// out. Defaults to `entry.kind` for every other caller.
-	kind: RegistryEntry["kind"] = entry.kind
+	source: "declared" | "adopted"
 ): Promise<boolean> {
 	const [seen] = await db
 		.select({ id: schema.pipelineDefinitionDeclarations.id })
@@ -350,7 +243,7 @@ async function archiveDeclaration(
 	await db.insert(schema.pipelineDefinitionDeclarations).values({
 		definitionId: entry.id,
 		version: entry.version,
-		kind,
+		kind: entry.kind,
 		contentHash: hash,
 		material: definitionContentMaterial(entry) as Record<string, any>,
 		entry: entry as unknown as Record<string, any>,
@@ -372,37 +265,26 @@ async function archiveDeclaration(
  *
  * ⚠ **An adopted row keeps the hash the registry row carried; it is never
  * recomputed here.** That string is what anything pinning this declaration would
- * have named, and recomputing it under a build whose strip has since widened
- * would archive the declaration under a hash nothing ever used — which is the
- * one thing an archive must not do.
+ * have named, and recomputing it under a build whose material has since
+ * changed — the contract allowlist of plans/31 V6 is the largest such change —
+ * would archive the declaration under a hash nothing ever used, which is the
+ * one thing an archive must not do. The material archived beside a hash
+ * older than the build's is therefore the row as this build reads it, and it
+ * re-hashes to the row's hash only when the two builds agree on the material.
  */
 async function adoptCurrent(db: Db, row: any, release: string): Promise<void> {
 	if (!row.contentHash) return
-	let entry = rowToEntry(row)
-	// The one-shot rename (0134) rewrote `kind` on a registry row whose hash
-	// was taken over the OLD word (`input`, not `inlet`); `renamed_from` says
-	// so. Until this boot moves the pointer, adopting the row as it stands
-	// would archive material that does not re-hash to the hash beside it —
-	// the one thing an archive must not do. So the material is adopted under
-	// the kind it was hashed with, verified rather than assumed: only when
-	// the old kind reproduces the row's hash exactly.
-	if (row.renamedFrom && definitionContentHash(entry) !== row.contentHash) {
-		const was = /^[^:]+:([^/]+)\//.exec(row.renamedFrom)?.[1]
-		if (was) {
-			const candidate = { ...entry, kind: was as RegistryEntry["kind"] }
-			if (definitionContentHash(candidate) === row.contentHash)
-				entry = candidate
-		}
-	}
 	await archiveDeclaration(
 		db,
-		entry,
+		rowToEntry(row),
 		row.contentHash,
 		row.release ?? release,
-		"adopted",
-		row.kind
+		"adopted"
 	)
 }
+
+/** Whether this process has said the reverse-diff guard's line — once is enough. */
+let warnedReverseDiffSkip = false
 
 /**
  * Project descriptors into rows.
@@ -417,14 +299,27 @@ export async function syncDefinitionRegistry(
 	// the id, so everything below this line is unaware there are two kinds of
 	// declaration — which is the property that keeps publishing one rule.
 	descriptors: Array<Descriptor | ScriptKindDecl>,
-	opts: { release: string; ownerPluginId?: number } = { release: "dev" }
+	opts: {
+		release: string
+		ownerPluginId?: number
+		/**
+		 * `descriptors` is everything this owner publishes, so a row of this
+		 * owner whose slug is absent from it is marked `removed` (the
+		 * reverse-diff, plans/29 R-2). The boot passes it; a partial sync — a
+		 * test re-declaring one entry, an entry-type-only seed — leaves it
+		 * off and withdraws nothing.
+		 */
+		complete?: boolean
+	} = { release: "dev" }
 ): Promise<SyncResult> {
 	const entries = snapshotRegistry(descriptors, { release: opts.release })
 	const result: SyncResult = {
 		inserted: [],
 		updated: [],
 		unchanged: [],
-		republished: []
+		republished: [],
+		removed: [],
+		deprecatedUnpublished: []
 	}
 
 	for (const entry of entries) {
@@ -486,6 +381,7 @@ export async function syncDefinitionRegistry(
 				.update(schema.pipelineDefinitionRegistry)
 				.set({
 					...projectedColumns(entry, opts.release),
+					status: statusFor(entry, row.status),
 					contentHash: hash
 				})
 				.where(eq(schema.pipelineDefinitionRegistry.id, row.id))
@@ -533,18 +429,36 @@ export async function syncDefinitionRegistry(
 		const configSchemaChanged =
 			JSON.stringify(sortDeep(row.configSchema ?? null)) !==
 			JSON.stringify(sortDeep((entry.configSchema as any) ?? null))
+		// The policy half (plans/31 V6) is outside the hash on purpose — a
+		// flipped `provisional`, a moved timeout, a changed gate default must
+		// reach every install without a pointer move — so it is refreshed
+		// here, on the same footing as the display text.
+		const policyChanged =
+			JSON.stringify(sortDeep(row.policy ?? null)) !==
+			JSON.stringify(sortDeep((entry.policy as any) ?? null))
+		// The status derives from the policy's `provisional`, so it moves
+		// with the line above; a slug that was `removed` and is published
+		// again comes back through here too.
+		const status = statusFor(entry, row.status)
+		const statusChanged = row.status !== status
 		if (
 			configSchemaChanged ||
 			slotsChanged ||
 			optionalChanged ||
 			i18nChanged ||
 			pointsChanged ||
+			policyChanged ||
+			statusChanged ||
 			row.release !== opts.release
 		) {
 			await db
 				.update(schema.pipelineDefinitionRegistry)
 				.set({
 					release: opts.release,
+					...(statusChanged ? { status, removedAt: null } : {}),
+					...(policyChanged
+						? { policy: (entry.policy as any) ?? null }
+						: {}),
 					...(optionalChanged
 						? { optional: entry.optional ?? false }
 						: {}),
@@ -572,6 +486,77 @@ export async function syncDefinitionRegistry(
 			}
 		}
 		result.unchanged.push(pin)
+	}
+
+	if (opts.complete) {
+		/**
+		 * The reverse-diff (plans/29 R-2): a row of this owner whose slug the
+		 * current build does not publish is marked, never deleted.
+		 *
+		 * Marked, because a stored spec may still pin it — `pipeline_nodes`
+		 * names the slug, and deleting the row would turn a legible notice
+		 * ("this node's definition is gone") into an unknown-type error at
+		 * load. The archive keeps every declaration the slug ever resolved
+		 * to, so a receipt naming its hash still resolves. `removed_at` is
+		 * first-seen: a row already marked keeps its date. The same precedent
+		 * `syncPluginPresets` sets for a withdrawn preset.
+		 */
+		const owner = opts.ownerPluginId ?? null
+		const published = new Set(entries.map((e) => `${e.id}@${e.version}`))
+		const rows = await db
+			.select({
+				id: schema.pipelineDefinitionRegistry.id,
+				definitionId: schema.pipelineDefinitionRegistry.definitionId,
+				version: schema.pipelineDefinitionRegistry.version,
+				status: schema.pipelineDefinitionRegistry.status
+			})
+			.from(schema.pipelineDefinitionRegistry)
+			.where(
+				owner === null
+					? isNull(schema.pipelineDefinitionRegistry.ownerPluginId)
+					: eq(schema.pipelineDefinitionRegistry.ownerPluginId, owner)
+			)
+		/**
+		 * The guard (U6 review, finding 3). A cull is judged against what the
+		 * build declares, and "declares nothing" is never a build — it is a
+		 * registry read before the contracts loaded, a hot reload that
+		 * re-evaluated half a module. Withdrawing every row on that evidence
+		 * would strip an install of its whole vocabulary at once, so the
+		 * diff runs only when the declared set is at least half of what this
+		 * owner has standing (`removed` rows excepted: they are the diff's
+		 * own past answers). Said once per process and reported on the
+		 * result; the next boot, with the contracts loaded, withdraws what
+		 * this one left.
+		 */
+		const standing = rows.filter((r) => r.status !== "removed").length
+		if (entries.length === 0 || entries.length * 2 < standing) {
+			result.reverseDiffSkipped =
+				`the sync was handed ${entries.length} declaration(s) against ${standing} ` +
+				`standing row(s) for this owner — too few to be a build; the reverse-diff ` +
+				`withdrew nothing`
+			if (!warnedReverseDiffSkip) {
+				warnedReverseDiffSkip = true
+				console.warn(`[pipelines] ${result.reverseDiffSkipped}`)
+			}
+			return result
+		}
+		const now = new Date()
+		for (const row of rows) {
+			const pin = `${row.definitionId}@${row.version}`
+			if (published.has(pin) || row.status === "removed") continue
+			// The administrator's word survives the code's (U6 review,
+			// finding 6): a deprecated row whose slug is gone stays
+			// `deprecated`, and is named so the boot log can say so.
+			if (row.status === "deprecated") {
+				result.deprecatedUnpublished.push(pin)
+				continue
+			}
+			await db
+				.update(schema.pipelineDefinitionRegistry)
+				.set({ status: "removed", removedAt: now })
+				.where(eq(schema.pipelineDefinitionRegistry.id, row.id))
+			result.removed.push(pin)
+		}
 	}
 
 	return result
@@ -631,6 +616,19 @@ function rowToEntry(r: any): RegistryEntry {
 		// `JSON.stringify` keeps `false` and drops `undefined`, so the same row
 		// hashed differently depending on which direction it was travelling.
 		public: r.isPublic || undefined,
+		// The contract flags and declarations beside `optional` (plans/31
+		// V6), read back on the same terms: a flag is `true` or absent.
+		declaresRandomness: r.declaresRandomness || undefined,
+		earlyExit: r.earlyExit || undefined,
+		liveRow: r.liveRow || undefined,
+		review: r.review ?? undefined,
+		media: r.media ?? undefined,
+		shape: r.connectionKind ?? undefined,
+		// The policy half, whole. `provisional` lives inside it and the
+		// `status` column derives from it — the row's `status` is read by
+		// nothing here, because a person's `deprecated` is not a policy the
+		// declaration made.
+		policy: r.policy ?? undefined,
 		owner: r.ownerPluginId ? String(r.ownerPluginId) : undefined,
 		release: r.release ?? undefined
 	}
@@ -844,9 +842,13 @@ export async function syncPluginPresets(
 		}
 
 		const projected = {
-			name: typeof decl.label === "string" ? decl.label : decl.slug,
-			description:
-				typeof decl.description === "string" ? decl.description : null,
+			// The row's columns are text: the declaration's display text
+			// resolved to `en` through the SDK's one resolver (R-20), exactly
+			// as the catalogue's `seedOf` projects core's presets. The label is
+			// required at the package's `build()`, so the slug is a fallback the
+			// gate makes unreachable.
+			name: i18nText(decl.label as I18n | undefined) ?? decl.slug,
+			description: i18nText(decl.description as I18n | undefined) ?? null,
 			genreId: decl.genre as string,
 			bindings,
 			includedActions,
@@ -884,6 +886,266 @@ export async function syncPluginPresets(
 			.set({ withdrawnAt: new Date() })
 			.where(eq(schema.sessionPresets.id, row.id))
 		report.withdrawn.push(row.seedKey)
+	}
+
+	return report
+}
+
+/* ------------------------------------------------------------------ *
+ * Plugin templates (R19)
+ * ------------------------------------------------------------------ */
+
+/**
+ * What one pass over every enabled plugin's `templates` did.
+ *
+ * The same three lists a preset sync reports, for the same reason — each entry
+ * is something an administrator may want to look at — plus `refused`, which a
+ * preset sync has no equivalent of because a preset's identity is the only
+ * thing that can collide. A template row also has to fit a POOL: two packages
+ * may legitimately both ship a prompt called "Terse" for the same node, and the
+ * pool's unique name index is what says so.
+ */
+export interface PluginTemplateSyncReport {
+	projected: string[]
+	withdrawn: string[]
+	restored: string[]
+	/** `<template id>: <reason>` — declarations this instance would not write. */
+	refused: string[]
+}
+
+/** The three tables a declared template may land in, one per slot kind. */
+type PluginTemplateKind = "prompts" | "template" | "variables"
+
+/** The name segment of a template id, as `<slug>` spells it. */
+const TEMPLATE_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+
+/**
+ * Every template row a manifest declares, in **one** vocabulary (R5, D-6).
+ *
+ * Two fields say it. `templates` is the full {@link TemplateSeed} shape: an
+ * owner-namespaced template id, a kind, and a body that may be a prompt's
+ * fields or a template's source. `prompts` is D-1's narrower `PromptDecl` —
+ * `{ nodeType, slot, slug, label, fields }`, which is a prompts row and nothing
+ * else — and it is the field the packager writes from a `defineExtension`, so
+ * a package authored today says its prompts there.
+ *
+ * Translated rather than projected separately, because the projection below
+ * also **withdraws**: it marks every plugin-owned row it did not just see, so a
+ * second writer into `pipeline_prompts` would have its rows withdrawn on this
+ * sync's next pass. One list in, one table out, one withdrawal.
+ *
+ * The id a `PromptDecl` gets is `<plugin>:template/<slug>@1`. `@1` because a
+ * `PromptDecl` has no major to carry: the shape declares a slug and the pin is
+ * what a template id adds, so every prompt declared this way is the first major
+ * of its name and a package that needs a second one declares it in `templates`.
+ */
+export function declaredTemplateSeeds(
+	manifest: unknown,
+	pluginId: string
+): TemplateSeed[] {
+	const m = manifest && typeof manifest === "object" ? (manifest as any) : undefined
+	const out: TemplateSeed[] = Array.isArray(m?.templates) ? [...m.templates] : []
+	if (!Array.isArray(m?.prompts)) return out
+	for (const decl of m.prompts) {
+		if (!decl || typeof decl !== "object") continue
+		const slug = typeof decl.slug === "string" ? decl.slug : ""
+		// A slug outside the name grammar produces an id `templateSeedProblems`
+		// refuses anyway; minted here so the refusal names the id the author
+		// would have to fix rather than an id this function invented.
+		if (!slug || !TEMPLATE_NAME.test(slug)) continue
+		out.push({
+			id: `${pluginId}:template/${slug}@1`,
+			kind: "prompts",
+			nodeDefinitionId: decl.nodeType,
+			slot: decl.slot,
+			label: i18nText(decl.label as I18n) ?? slug,
+			body: decl.fields
+		} as TemplateSeed)
+	}
+	return out
+}
+
+/**
+ * Project every enabled plugin's `templates` declarations into rows (R19).
+ *
+ * ## The gap this closes
+ *
+ * An extension could ship `pipelines` and had no way to ship a template row one
+ * of them references. Its spec's shipped configuration would therefore start on
+ * whatever core's pool heuristics resolved — core's own prompt, written for
+ * core's own pipeline — or on nothing at all for a node core knows nothing
+ * about. The prose an author wrote their pipeline around had nowhere to live.
+ *
+ * ## Same shape as `syncPluginPresets`, one table over
+ *
+ * Projected from the manifest on enable and at boot; **immutable**, so it is
+ * selectable and copyable and never edited in place; and **withdrawn rather
+ * than deleted** when the plugin goes. A pipeline's stored configuration holds
+ * the row's integer id, so deleting the row would leave that configuration
+ * pointing at nothing the moment somebody switched an extension off — and
+ * switching an extension off is a reversible, everyday act. That is the same
+ * argument `session_presets` makes, one step removed: a preset is named by a
+ * session, a template by a configuration.
+ *
+ * It differs from a preset in one place, and deliberately: a projected template
+ * is **not** disabled on arrival. `enabled` on a preset is the instance owner's
+ * decision about what non-admins are offered; a template row is offered to an
+ * administrator in a picker beside every other row and is selected by nothing
+ * until one of them selects it. There is nothing to approve.
+ *
+ * ## Validated here, not trusted from the manifest
+ *
+ * `defineExtension` refuses a malformed declaration while the author is writing
+ * it, and that is advisory: install stores the manifest verbatim, so the rule
+ * has to be applied again where the row is written. `templateSeedProblems` is
+ * the one statement of it, exported by the SDK so the two answers cannot drift.
+ */
+export async function syncPluginTemplates(
+	db: Db
+): Promise<PluginTemplateSyncReport> {
+	const report: PluginTemplateSyncReport = {
+		projected: [],
+		withdrawn: [],
+		restored: [],
+		refused: []
+	}
+
+	const refuse = (id: string, why: string) => {
+		report.refused.push(`${id}: ${why}`)
+		console.warn(`[pipelines] plugin template ${id} was refused: ${why}`)
+	}
+
+	const plugins = await db.select().from(schema.plugins)
+	const declared = new Map<
+		string,
+		{ ownerId: number; kind: PluginTemplateKind; seed: TemplateSeed }
+	>()
+	for (const p of plugins as any[]) {
+		if (!p.enabled) continue
+		const templates = declaredTemplateSeeds(p.manifest, p.pluginId)
+		if (!templates.length) continue
+		for (const raw of templates) {
+			const seed = raw as TemplateSeed
+			if (!seed || typeof seed.id !== "string") continue
+			const problems = templateSeedProblems(seed, p.pluginId)
+			if (problems.length) {
+				refuse(seed.id, problems.join(" "))
+				continue
+			}
+			// Two packages under one id cannot both be right, and taking the
+			// second would make which one wins depend on install order.
+			const prior = declared.get(seed.id)
+			if (prior && prior.ownerId !== p.id) {
+				refuse(
+					seed.id,
+					`another installed package already declares it, and an id carries its owner`
+				)
+				continue
+			}
+			declared.set(seed.id, {
+				ownerId: p.id,
+				kind: seed.kind as PluginTemplateKind,
+				seed
+			})
+		}
+	}
+
+	/** The row fields one declaration projects to, per kind. */
+	const projectionOf = (
+		kind: PluginTemplateKind,
+		t: TemplateSeed,
+		ownerId: number
+	): Record<string, unknown> => {
+		const name = t.label ?? parseTemplateId(t.id)!.name
+		if (kind === "prompts")
+			return {
+				nodeDefinitionId: poolKeyFor(t.nodeDefinitionId!),
+				slot: t.slot!,
+				name,
+				fields: t.body as Record<string, string>,
+				// A shipped row belongs to no pipeline of this instance's —
+				// `created_for_spec_id` is grouping in the picker and would
+				// need a local spec id, which a manifest cannot carry.
+				createdForSpecId: null,
+				ownerPluginId: ownerId
+			}
+		if (kind === "template")
+			return {
+				nodeDefinitionId: poolKeyFor(t.nodeDefinitionId!),
+				engine: t.engine!,
+				name,
+				source: t.body as string,
+				createdForSpecId: null,
+				ownerPluginId: ownerId
+			}
+		return {
+			variableId: t.variableId!,
+			engine: t.engine!,
+			name,
+			source: t.body as string,
+			ownerPluginId: ownerId
+		}
+	}
+
+	const tableFor = (kind: PluginTemplateKind) =>
+		kind === "prompts"
+			? schema.pipelinePrompts
+			: kind === "template"
+				? schema.pipelineContextTemplates
+				: schema.pipelineVariableTemplates
+
+	for (const [id, { ownerId, kind, seed }] of declared) {
+		const table = tableFor(kind)
+		const [existing] = (await db
+			.select()
+			.from(table)
+			.where(eq(table.templateId, id))
+			.limit(1)) as any[]
+
+		// A row under this id that a plugin does not own is not this sync's to
+		// write. `template_id` is unique across the table, so this is the only
+		// way one package's row could quietly become another's.
+		if (existing && existing.ownerPluginId !== ownerId) {
+			refuse(id, `a row already holds that id and this package does not own it`)
+			continue
+		}
+
+		const values = projectionOf(kind, seed, ownerId)
+		try {
+			if (!existing) {
+				await db
+					.insert(table as any)
+					.values({ ...values, templateId: id, isImmutable: true })
+				report.projected.push(id)
+				continue
+			}
+			if (existing.withdrawnAt) report.restored.push(id)
+			await db
+				.update(table as any)
+				.set({ ...values, withdrawnAt: null, updatedAt: new Date() })
+				.where(eq(table.id, existing.id))
+		} catch (e) {
+			// Almost always the pool's unique name index: two packages shipping
+			// "Terse" for one node, or one package shipping it twice. Refused
+			// per declaration rather than thrown, because a sync that throws
+			// costs every OTHER package its templates for one package's clash.
+			refuse(id, e instanceof Error ? e.message : String(e))
+		}
+	}
+
+	// Withdrawal marks, it never deletes — see the header.
+	for (const kind of ["prompts", "template", "variables"] as const) {
+		const table = tableFor(kind)
+		const rows = (await db.select().from(table)) as any[]
+		for (const row of rows) {
+			if (row.ownerPluginId == null || row.withdrawnAt) continue
+			if (declared.has(row.templateId)) continue
+			await db
+				.update(table as any)
+				.set({ withdrawnAt: new Date() })
+				.where(eq(table.id, row.id))
+			report.withdrawn.push(row.templateId)
+		}
 	}
 
 	return report

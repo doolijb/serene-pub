@@ -52,6 +52,17 @@ function readChanges(raw: unknown): StateChange[] {
 }
 
 /**
+ * A `base` port's value as a state version, or null when nothing usable was
+ * wired: the port is optional, and a spec that wires none writes against
+ * whatever is current.
+ */
+function readBase(raw: unknown): number | null {
+	return typeof raw === "number" && Number.isInteger(raw) && raw >= 0
+		? raw
+		: null
+}
+
+/**
  * A written value, in the type its slot is declared with.
  *
  * This is the step that knows which slot it is, which is why the conversion
@@ -109,10 +120,14 @@ export function stateBindings(run: RenderRun = {}): Bindings {
 				input: NodeInput<typeof C.sessionState>,
 				ctx: CoreQueryCtx
 			) => {
-				const state = await ctx.read("session_state", {
+				const state = (await ctx.read("session_state", {
 					sessionId: input?.scope?.sessionId
-				})
-				return ok({ main: state, state })
+				})) as { version?: unknown }
+				// The state version (U5f), on its own port so a spec can hand
+				// it back as `base` — a port reference names one port.
+				const version =
+					typeof state?.version === "number" ? state.version : 0
+				return ok({ main: state, state, version })
 			},
 			{ ports: ["scope"] }
 		),
@@ -149,6 +164,9 @@ export function stateBindings(run: RenderRun = {}): Bindings {
 						"there is no session to resolve these names against — wire this node's scope port"
 					)
 				const named = Array.isArray(input?.changes) ? input.changes : []
+				// The version this turn read (U5f), passed through onto every
+				// resolved change so `set-state` can rebase each one.
+				const base = readBase(input?.base)
 				const { ownerFor, slotFor } = await import(
 					"$lib/server/pipelines/runtime/tools/stateTools"
 				)
@@ -221,7 +239,12 @@ export function stateBindings(run: RenderRun = {}): Bindings {
 					// which is the whole of why nothing invalid is proposed.
 					await validateValue(db, { sessionId, owner, slotId, value })
 					claimed.add(claim(owner, slotId))
-					changes.push({ owner, slotId, value })
+					changes.push({
+						owner,
+						slotId,
+						value,
+						...(base !== null ? { base } : {})
+					})
 				}
 
 				for (const raw of named) {
@@ -242,7 +265,12 @@ export function stateBindings(run: RenderRun = {}): Bindings {
 								Number.isFinite(asked) && asked !== 0
 									? Math.trunc(asked)
 									: 1
-							changes.push({ owner, entryId, delta })
+							changes.push({
+								owner,
+								entryId,
+								delta,
+								...(base !== null ? { base } : {})
+							})
 							continue
 						}
 						const slot =
@@ -323,7 +351,7 @@ export function stateBindings(run: RenderRun = {}): Bindings {
 				}
 				return ok({ main, changes, refused })
 			},
-			{ ports: ["changes", "scope", "plan"] }
+			{ ports: ["changes", "scope", "plan", "base"] }
 		),
 
 		"core:task/set-state@1": reads<typeof C.setState>(
@@ -346,25 +374,44 @@ export function stateBindings(run: RenderRun = {}): Bindings {
 
 				const mode =
 					input?.params?.mode === "apply" ? "apply" : "propose"
-				const {
-					applyChange,
-					newestMessageId,
-					proposeChange,
-					StateRefusal
-				} = await import("$lib/server/state/write")
+				/**
+				 * The state version the changes are deltas against (U5f): the
+				 * node's `base` for every change that does not carry its own.
+				 * In `apply` mode a change whose slot moved past it lands on
+				 * `refused` with the versions named — the rebase is the write's
+				 * (`applyChange`), and the next turn's `resolve-state-changes`
+				 * re-resolves; a run never re-enters an earlier node. In
+				 * `propose` mode the base is stamped on the proposal for the
+				 * accept to judge the same way.
+				 */
+				const nodeBase = readBase(input?.base)
+				const { applyChange, proposeChange, StateRefusal } =
+					await import("$lib/server/state/write")
 				const { db } = await import("$lib/server/db")
 
-				const messageId = await newestMessageId(db, sessionId)
+				// ⚠ **No `messageId`.** Under the turn lock (R9) a change
+				// anchors to the OWNER's own latest reply — that character's,
+				// or the session's newest message for the world — and stays
+				// open until they speak again. Naming the session's newest
+				// message here would file Verity's change against Marrow's
+				// reply and, worse, be refused as sealed the moment anybody
+				// else had spoken since her: every keeper write in a group
+				// session, and every write for a character who has not spoken
+				// yet. `anchorFor` resolves it per owner, which is the one
+				// place that decision is made.
 				const ctxWrite = {
 					sessionId,
-					updatedBy: `run:${run.runId ?? "unknown"}`,
-					messageId
+					updatedBy: `run:${run.runId ?? "unknown"}`
 				}
 
 				const applied: number[] = []
 				const proposed: number[] = []
 				const refused: string[] = []
-				for (const change of changes) {
+				for (const raw of changes) {
+					const change =
+						raw.base == null && nodeBase !== null
+							? { ...raw, base: nodeBase }
+							: raw
 					try {
 						if (mode === "apply")
 							applied.push(
@@ -388,9 +435,9 @@ export function stateBindings(run: RenderRun = {}): Bindings {
 					proposed,
 					...(refused.length ? { refused } : {})
 				}
-				return ok({ main, applied, proposed })
+				return ok({ main, applied, proposed, refused })
 			},
-			{ ports: ["changes", "scope"], params: ["mode"] }
+			{ ports: ["changes", "scope", "base"], params: ["mode"] }
 		)
 	}
 }

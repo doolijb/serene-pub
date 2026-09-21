@@ -1068,13 +1068,47 @@ describe("the item rule at the write (review C1)", () => {
 				)
 				.build()
 		)
-		// The SDK refuses it at publish…
+		// The SDK refuses it at publish — and so does the instance's publish,
+		// which runs `validate()` since the U5d review (W9)…
 		expect(validate(doc).map((f) => f.law)).toContain("R-15")
-		// …and a host that meets it anyway refuses at the write.
 		const { saveDocument } = await import(
 			"$lib/server/pipelines/boot/store"
 		)
-		await saveDocument(db, doc, { publish: true })
+		await expect(saveDocument(db, doc, { publish: true })).rejects.toThrow(
+			/does not validate — \[R-15\].*a built-in write/
+		)
+		// …and a host that meets it anyway — a row patched behind the door —
+		// refuses at the write. Published as a document that validates, then
+		// the stored outlet is rewritten to the built-in's.
+		const schema = await import("$lib/server/db/schema")
+		const { eq, and } = await import("drizzle-orm")
+		const patchable = compile(
+			spec("test.tidy:spec/sweep", { version: "1.0.0" })
+				.inlet("input", C.builtInRequest.v1())
+				.outlet("write", ($: any) =>
+					C.hideMessage.v1({ target: $.input.target })
+				)
+				.build()
+		)
+		// `hide-message` is a built-in too; the same refusal would meet it.
+		// So it is stored under a harmless outlet first — `attach-image`,
+		// whose `target` takes the same row ids and which no R-15 rule names…
+		patchable.nodes.find((n) => n.key === "write")!.definitionId =
+			"core:outlet/attach-image"
+		patchable.edges = patchable.edges.map((e) =>
+			e.to === "write" ? { ...e, toPort: "target" } : e
+		)
+		const saved = await saveDocument(db, patchable, { publish: true })
+		// …and rewritten in place to the delete, as a bypass would.
+		await db
+			.update(schema.pipelineNodes)
+			.set({ definitionId: "core:outlet/delete-message" })
+			.where(
+				and(
+					eq(schema.pipelineNodes.specVersionId, saved.specVersionId),
+					eq(schema.pipelineNodes.nodeKey, "write")
+				)
+			)
 		const { runSpec } = await import(
 			"$lib/server/pipelines/runtime/runTurn"
 		)

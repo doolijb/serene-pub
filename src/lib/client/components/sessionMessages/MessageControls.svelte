@@ -8,6 +8,7 @@
 	import {
 		coreVerbState,
 		verbKeyOf,
+		verdictOf,
 		type VerbContext
 	} from "$lib/client/components/sessionMessages/messageVerbState"
 	import { actionIdentity } from "$lib/shared/actions/identity"
@@ -15,7 +16,6 @@
 	interface Props {
 		msg: SelectSessionMessage
 		isLastMessage?: boolean
-		canRegenerateLastMessage?: boolean
 		editSessionMessage?: SelectSessionMessage
 		hasGeneratingMessage?: boolean
 		// Whether the current user owns the character/persona behind this
@@ -60,8 +60,6 @@
 			primary: Sockets.Sessions.Actions.Action[]
 			overflow: Sockets.Sessions.Actions.Action[]
 		}
-		/** A swipe can be taken on this message now. */
-		canSwipe?: boolean
 		onSwipeMessage?: (e: Event, msg: SelectSessionMessage) => void
 		onStartSummarization?: (msg: SelectSessionMessage) => void
 		/**
@@ -87,7 +85,6 @@
 	let {
 		msg,
 		isLastMessage = false,
-		canRegenerateLastMessage = false,
 		editSessionMessage,
 		hasGeneratingMessage = false,
 		canControl = true,
@@ -100,7 +97,6 @@
 		onContinueMessage,
 		continueRefusal = undefined,
 		messageActions = undefined,
-		canSwipe = false,
 		onSwipeMessage = undefined,
 		onStartSummarization,
 		onFireTrigger = undefined,
@@ -125,7 +121,6 @@
 		{ key: "branch", name: "Branch from here", icon: "git-branch", quick: false }
 	].map((a) => ({
 		...a,
-		function: a.key,
 		specSlug: "core",
 		slash: a.key,
 		audience: { see: ["participant"], act: ["item"] },
@@ -134,7 +129,8 @@
 		floor: true,
 		canAct: true,
 		itemGated: a.key !== "branch",
-		isNew: false
+		isNew: false,
+		enabled: true
 	}))
 
 	/** The whole list, primary first — the menu is the complete list. */
@@ -145,25 +141,23 @@
 	)
 
 	/** This message's state, for the verb table. */
-	const verbCtx = $derived<Omit<VerbContext, "canAct" | "itemGated">>({
+	const verbCtx = $derived<
+		Omit<VerbContext, "canAct" | "itemGated" | "action" | "enabled" | "reason" | "itemPredicates">
+	>({
 		msg,
 		isLastMessage,
-		canRegenerateLastMessage,
 		editing: !!editSessionMessage,
 		hasGeneratingMessage,
 		canControl,
-		continueRefusal,
-		canSwipe
+		continueRefusal
 	})
 	// `itemGated` rides with `canAct` (W6): a contributed action whose
 	// audience is `item` was answered `true` ahead of any message, and this
-	// message's ownership rule is what decides.
+	// message's ownership rule is what decides. The enabled-when verdict
+	// rides beside them (U5e): the list's `enabled`/`reason`, and the
+	// `item.*` predicates this row is judged against.
 	const stateOf = (a: Sockets.Sessions.Actions.Action) =>
-		coreVerbState(verbKeyOf(a), {
-			...verbCtx,
-			canAct: a.canAct,
-			itemGated: a.itemGated
-		})
+		coreVerbState(verbKeyOf(a), { ...verbCtx, ...verdictOf(a) })
 
 	/** The rows the menu draws: shown by the table, core's before contributed. */
 	const rows = $derived(

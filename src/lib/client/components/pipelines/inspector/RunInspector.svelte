@@ -205,6 +205,20 @@
 
 	const triggerSource = $derived((run?.receipt as any)?.triggerSource ?? null)
 	const runNotes = $derived(((run?.receipt as any)?.notes ?? []) as string[])
+	/**
+	 * Where this run stands in a tree of runs (01 §8; U5d): the run that
+	 * dispatched it — a form's answer is the child of the run that asked, the
+	 * action it fired the grandchild — and how deep. Absent for a root, which
+	 * is nearly every run.
+	 */
+	const lineage = $derived.by(() => {
+		const r = run?.receipt as
+			| { parentRunId?: string; rootRunId?: string; depth?: number }
+			| undefined
+		return r?.parentRunId
+			? { parent: r.parentRunId, root: r.rootRunId ?? r.parentRunId, depth: r.depth ?? 1 }
+			: null
+	})
 	/** Who portrayed whom this run — pinned at run start (R-21 (4)). */
 	const portrayals = $derived(run ? portrayalsLine(run) : [])
 </script>
@@ -285,6 +299,19 @@
 			</div>
 			{#if run.haltReason}
 				<p class="text-surface-600-400 text-xs">{run.haltReason}</p>
+			{/if}
+			{#if lineage}
+				<!-- A dispatched run names the run that dispatched it (U5d):
+				     the answer to a question names the run that asked. -->
+				<p
+					class="text-surface-600-400 flex flex-wrap items-center gap-x-2 text-xs"
+					data-run-lineage
+					title="This run was dispatched by another: a form put to a participant the AI portrays is answered as a child of the run that asked."
+				>
+					<span>{t("Dispatched by")}</span>
+					<span class="font-mono opacity-70">{lineage.parent}</span>
+					<span>· {t("depth")} {lineage.depth}</span>
+				</p>
 			{/if}
 			{#if portrayals.length}
 				<!-- Who portrayed whom, as the run pinned it before its first

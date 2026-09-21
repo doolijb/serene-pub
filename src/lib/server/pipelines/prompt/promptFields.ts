@@ -25,6 +25,8 @@ import { SessionCharacterVisibility } from "$lib/shared/constants/SessionCharact
 import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 import { joinWithAnd } from "$lib/shared/utils/joinWithAnd"
 import * as F from "$lib/server/pipelines/prompt/contextFields"
+import { resolveSeedLine } from "$lib/server/pipelines/prompt/seedLine"
+import type { ChannelVoice } from "$lib/server/messages/channels"
 import type { BuildContextInput } from "$lib/server/pipelines/prompt/templateContext"
 
 export interface SessionCharacterRow {
@@ -92,6 +94,18 @@ export interface ResolveInput {
 	/** Lore already selected by retrieval, and the session its bindings live on. */
 	characterLore?: readonly unknown[]
 	session?: unknown
+	/**
+	 * The voice of the channel this turn was **triggered on** (R-C,
+	 * 2026-09-17) — `narrator` puts the narrator's name on the seed line
+	 * whoever is seated, `character` and absence leave it where it was.
+	 *
+	 * Arrives on the cast read, because that is the one value both this node
+	 * and `core:task/process-messages@1` are wired to; the host resolves it
+	 * from the turn's channel and the genre's declarations. Absent for every
+	 * genre that shapes no channel, which is what keeps the resolved name
+	 * byte-identical for them.
+	 */
+	turnChannelVoice?: ChannelVoice
 }
 
 /** Card data for one character, at the visibility they are shown at. */
@@ -241,9 +255,17 @@ export function resolveContextInput(input: ResolveInput): ResolvedContextInput {
 		characterLore: input.characterLore as any,
 		session: input.session,
 		exampleDialogueIndex,
-		seedName: current
-			? resolveCharacterName(current as any)
-			: input.speakerName || input.narratorName || "Narrator"
+		// The name half of the seed decision (`prompt/seedLine.ts`). The
+		// other half — whether the row is written at all — is read off the
+		// same rule by `processMessages`, which is the node that writes it.
+		seedName: resolveSeedLine({
+			voice: input.turnChannelVoice,
+			characterName: current
+				? resolveCharacterName(current as any)
+				: null,
+			speakerName: input.speakerName,
+			narratorName: input.narratorName
+		}).name
 	}
 }
 

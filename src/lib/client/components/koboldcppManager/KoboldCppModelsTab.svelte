@@ -18,9 +18,10 @@
 	type KoboldCppModel = Sockets.KoboldCPP.ListModels.ModelFile
 
 	interface Props {
-		/** Owned by KoboldCppSidebar, not by this tab: switching to Image over
-		 * on Available and then opening Models has to land in the image world,
-		 * or the app looks like it lost your place. */
+		/** Bindable so a caller can hold the choice across a remount. It was
+		 * the manager sidebar's, to keep Available and Models in the same
+		 * world; the managed connection view leaves it to the default, since
+		 * the Available tab is retired (ruling R3) and nothing else reads it. */
 		modelKind?: Sockets.KoboldCPP.ModelKindFilter
 	}
 

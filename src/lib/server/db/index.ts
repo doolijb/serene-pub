@@ -17,6 +17,7 @@ import {
 } from "./lock.js"
 import type { DbLock, LockState } from "./lock.js"
 import { closeBootPass, openBootPass } from "./devBootPass"
+import { guardTransactions } from "./transactionGuard"
 import {
 	classifyDatabaseOpenFailure,
 	isDatabaseUnopenableError
@@ -323,6 +324,20 @@ if (overlappingBootPass) {
 	console.log(`[db] previous shutdown: ${previousShutdown}`)
 }
 
+/**
+ * The PGlite deadlock guard (see ./transactionGuard), on every handle this
+ * module constructs: an outer-handle query awaited inside `db.transaction`
+ * would otherwise hang the process silently. Thrown in dev and under test,
+ * where the stacks name the call; logged in production, where a refused
+ * query that would merely have queued is the worse outcome.
+ */
+function guarded<T extends { $client: Parameters<typeof guardTransactions>[0] }>(
+	handle: T
+): T {
+	guardTransactions(handle.$client, dev ? "throw" : "warn")
+	return handle
+}
+
 // During a build this points at a throwaway in-memory database rather than the
 // user's data directory. Keeps the exact same type (so nothing downstream
 // changes) while guaranteeing the build cannot open, lock or migrate real data.
@@ -333,9 +348,11 @@ if (overlappingBootPass) {
 // `acquireDatabaseLock()` above. `dbReady` rejects either way, so nothing ever
 // queries this handle — pointing it at memory is what keeps a refusal from
 // touching the data directory at all.
-export let db = drizzle(
-	building || overlappingBootPass ? "memory://" : dbConfig.dbPath,
-	{ schema }
+export let db = guarded(
+	drizzle(
+		building || overlappingBootPass ? "memory://" : dbConfig.dbPath,
+		{ schema }
+	)
 )
 export { schema }
 
@@ -662,7 +679,9 @@ async function runInitialisation(): Promise<void> {
 		// dropped (PLAN 25). Deferred-imported for the same db-cycle reason as
 		// `sync` above. Plugin widgets seed their own on install/update.
 		const { syncWidgetStyles } = await import("./widgetStyles")
-		const { CORE_WIDGETS } = await import("@serene-pub/core-catalog")
+		// The app's projection of the catalogue — titles resolved to text at
+		// the one boundary the app reads widget declarations through (R-20).
+		const { CORE_WIDGETS } = await import("$lib/shared/widgets/types")
 		// `withCorePresets` attaches the app's own message style packs to core's
 		// primary widget. They are app-side because every selector in them is a
 		// class the app's SessionMessage authors — markup the SDK has no view of
@@ -758,7 +777,7 @@ export async function reopenDatabase(): Promise<
 	const refreshed = readMetaFile(metaPath)
 	if (refreshed.ok) meta = refreshed.meta as unknown as MetaFile
 
-	db = drizzle(dbConfig.dbPath, { schema })
+	db = guarded(drizzle(dbConfig.dbPath, { schema }))
 	dbReady = initialiseDatabase()
 	void dbReady.catch(() => {})
 

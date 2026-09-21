@@ -129,13 +129,19 @@ export async function canActOnMessage(
 
 	if (message.isNarratorResponse) return access.isOwner
 
-	// A person's own line with no persona voicing it: the author's. A row
-	// whose author is gone (`user_id` nulled by the delete cascade) is
-	// nobody's, the way a persona's line is once the persona is deleted.
+	// A person's own line with no persona voicing it: the author's.
 	if (message.role === "user" && message.userId != null)
 		return message.userId === userId
 
-	return false
+	// An orphaned row — the character or persona that voiced it deleted
+	// globally (`character_id` / `persona_id` nulled by `onDelete: set null`),
+	// or a line whose author is gone (`user_id` nulled the same way). It has
+	// no owner left to act on it, so it is the session owner's, as narration
+	// is: the session is theirs, and a row nobody may ever delete is a row
+	// that renders as "Unknown" forever. A guest's own persona line stays the
+	// guest's for as long as the persona exists — this branch is only
+	// reached once nothing on the row names anyone.
+	return access.isOwner
 }
 
 /**

@@ -10,6 +10,7 @@ import {
 	normalizeNativeWorldInfoEntry
 } from "$lib/server/utils/lorebookImportMapper"
 import { insertLegacy } from "$lib/server/messages/store"
+import { broadcastSessionRow } from "$lib/server/sessions/rowPush"
 import type { Handler } from "$lib/shared/events"
 import * as fsPromises from "fs/promises"
 import * as path from "path"
@@ -989,6 +990,10 @@ export const importExecuteSillyTavern: Handler<
 						})
 					}
 
+					// One push for the whole imported history, after it: the
+					// new row has a line to quote from the moment it appears.
+					broadcastSessionRow(socket.io, newSession.id)
+
 					stats.sessions++
 				} catch (e) {
 					const msg = `Session "${sessionItem.name}": ${e instanceof Error ? e.message : e}`
@@ -1122,6 +1127,9 @@ export const importExecuteSillyTavern: Handler<
 							})
 						}
 					}
+
+					// As above: one push once the copied history is in.
+					broadcastSessionRow(socket.io, newSession.id)
 
 					stats.sessions++
 				} catch (e) {

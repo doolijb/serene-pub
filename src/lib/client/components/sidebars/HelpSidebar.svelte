@@ -53,7 +53,7 @@
 		docsPlayground,
 		documentTheme
 	} from "$lib/client/components/docs/docsPlayground"
-	import { resolveInViewLink } from "./helpLinks"
+	import { helpAnchorId, resolveInViewLink } from "./helpLinks"
 
 	/**
 	 * The dock/desk switch every list-with-detail view shares: one pane at
@@ -117,16 +117,51 @@
 			pane.scrollTop = 0
 			return
 		}
-		// Scoped to this article, never `document.getElementById`: the same
-		// page can be open on `/docs` behind this view, and the ids the
-		// compiler emits are the same ones there.
+		// Scoped to this article AND to the ids this view renamed
+		// (`scopeArticleAnchors`), never `document.getElementById`: the same
+		// page can be open on `/docs` behind this view, and it keeps the ids
+		// the compiler emitted.
 		const target = articleRef?.querySelector<HTMLElement>(
-			`[id="${CSS.escape(anchor)}"]`
+			`[id="${CSS.escape(helpAnchorId(anchor))}"]`
 		)
 		if (!target) return
 		pane.scrollTop +=
 			target.getBoundingClientRect().top -
 			pane.getBoundingClientRect().top
+	}
+
+	/**
+	 * Rename every id the compiled body carries, and rebase the links that point
+	 * at them, so this view's copy of a page cannot collide with `/docs`'s.
+	 *
+	 * A pass over the DOM once the body is rendered, never a rewrite of the HTML
+	 * string: the markup the compiler emits is the same markup `/docs`, Document
+	 * View and serenepub.com are served, and there is exactly one build of it.
+	 * What differs is that this view is the second reading of a page in one
+	 * document, so it is this view that renames — see `helpAnchorId` for why the
+	 * prefix is what it is.
+	 *
+	 * The hrefs move with the ids because they are the same fact written twice: a
+	 * `#x` left standing here would address `/docs`'s element, which is the defect
+	 * rather than a survival of it. Cross-page links (`/docs/other#x`) keep the
+	 * compiler's fragment — the anchor is spent against the NEXT body, which this
+	 * pass renames in its turn. `handleDocClick` reads whatever ends up in the
+	 * href and `helpAnchorId` takes either spelling.
+	 *
+	 * Idempotent, so a second run over a body already renamed is a no-op.
+	 */
+	function scopeArticleAnchors() {
+		const article = articleRef
+		if (!article) return
+		for (const el of article.querySelectorAll<HTMLElement>("[id]")) {
+			el.id = helpAnchorId(el.id)
+		}
+		for (const link of article.querySelectorAll<HTMLAnchorElement>(
+			'a[href^="#"]'
+		)) {
+			const anchor = (link.getAttribute("href") ?? "").slice(1)
+			if (anchor) link.setAttribute("href", `#${helpAnchorId(anchor)}`)
+		}
 	}
 
 	/** Show a page (or the index), then put the reader where the link pointed. */
@@ -144,6 +179,8 @@
 		html = loaded
 		loading = false
 		await tick()
+		// Before the anchor is spent: it is looked up by the renamed id.
+		scopeArticleAnchors()
 		scrollToAnchor(anchor)
 	}
 
@@ -279,7 +316,7 @@
 	<PanelSplit
 		mode={viewMode.mode}
 		hasDetail={slug !== null}
-		listWidth="360px"
+		listWidth="320px"
 		emptyMessage="Pick a page to read it."
 		list={indexPane}
 		detail={pagePane}
@@ -393,17 +430,20 @@
 				<!-- The compiler emits the article body only, already
 				     link-rewritten and anchored; `prose` styles the ordinary
 				     markdown and `docs.css` the dialect on top of it, which is
-				     what `.docs-article` switches on. No `max-w-none` here: in
-				     the dock the column is narrower than the measure anyway,
-				     and full page it is `prose` that keeps the 65ch line
-				     STYLE-GUIDE §3.4 asks for. -->
+				     what `.docs-article` switches on. In the dock the column is
+				     narrower than any measure, so `prose-sm` and prose's own
+				     cap cost nothing; given the page (from 40rem of column, a step before
+				     the outline appears at 48rem) it reads like `/docs`: regular size,
+				     no cap — the outline column is what bounds the line, and a
+                     65ch column beside a 360px list and a 14rem outline is the
+                     "too narrow" the owner reported (2026-09-17). -->
 				<!-- Playground blocks get their button here too, from the same
 				     action `/docs` uses — one upgrade, so the two readings of a
 				     page can never offer different controls. It re-scans on its
 				     own when this view navigates and swaps the body. -->
 				<article
 					bind:this={articleRef}
-					class="docs-article prose prose-sm dark:prose-invert"
+					class="docs-article prose prose-sm dark:prose-invert @min-[40rem]/docs:prose-base @min-[40rem]/docs:max-w-none"
 					use:docsPlayground={{ theme: documentTheme }}
 				>
 					{@html html}

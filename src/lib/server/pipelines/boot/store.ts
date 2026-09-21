@@ -29,9 +29,11 @@ import {
 	envoyConfigKeysOf,
 	envoyFindings,
 	envoysFindings,
+	i18nText,
 	importDocument,
 	sessionEvents,
 	slashCollisions,
+	validate,
 	type EnvoyDecl,
 	type SpecDocument
 } from "@serene-pub/sdk"
@@ -88,6 +90,7 @@ export async function saveDocument(
 	} = {}
 ): Promise<SavedSpec> {
 	const hash = canonicalHash(doc)
+	assertValidates(doc)
 
 	const saved = await db.transaction(async (tx: Db) => {
 		await assertEnvoysSound(tx, doc, opts.batch)
@@ -262,8 +265,11 @@ export async function saveDocument(
 					.values({
 						specVersionId: version.id,
 						slug: p.slug,
-						label: p.label,
-						description: p.description ?? null,
+						// Text columns: the document's display text resolved to
+						// `en` (R-20) — a bare string is itself; the label is
+						// required by `validate()`, so the slug is unreachable.
+						label: i18nText(p.label) ?? p.slug,
+						description: i18nText(p.description) ?? null,
 						ownerSlug: p.owner ?? null,
 						isDefault: p.default ?? false
 					})
@@ -295,6 +301,37 @@ export async function saveDocument(
 	// cached the rows as they stood before it.
 	if (opts.publish) invalidateDeclaredEnvoys()
 	return saved
+}
+
+/**
+ * **Who owns a spec** — the installed plugin's slug, or `undefined` for core's
+ * (D-6). The other half of the `source_plugin_id` column `saveDocument` writes.
+ *
+ * A join rather than a prefix test on the slug, and that is the whole point of
+ * the column: a namespace is a claim the document makes about itself, and
+ * ownership is what this instance recorded when it installed the package. The
+ * two cannot be swapped — a document naming itself `core:…` out of a plugin's
+ * folder reads as core's from its id and as the plugin's from this.
+ *
+ * Returns the **manifest slug** (`showcase.battleship`) rather than the row id,
+ * because that is the name everything downstream of a run speaks: the grant
+ * keys, the frame URLs, the plugin list. The row id is an install-local number
+ * and belongs only to the columns that store it.
+ */
+export async function specOwnerPluginId(
+	db: Db,
+	specSlug: string
+): Promise<string | undefined> {
+	const [row] = await db
+		.select({ pluginId: schema.plugins.pluginId })
+		.from(schema.pipelineSpecs)
+		.innerJoin(
+			schema.plugins,
+			eq(schema.plugins.id, schema.pipelineSpecs.sourcePluginId)
+		)
+		.where(eq(schema.pipelineSpecs.slug, specSlug))
+		.limit(1)
+	return row?.pluginId ?? undefined
 }
 
 /**
@@ -414,6 +451,43 @@ export async function assertInstallSlashNamesFree(db: Db): Promise<void> {
 			"the install's published specs collide on an action envoy: " +
 				envoys.join("; ")
 		)
+}
+
+/**
+ * The Fixed Ledger's static laws, at the publish (U5d review, W9): the
+ * SDK's `validate()` — one inlet first, one primary row, no branching, port
+ * shapes assignable, a built-in outlet only in its own spec, `answer-form`
+ * only under `form-addressed`, the action model's rules — with an `error`
+ * refusing the save and a `warning` let through. The builder and the
+ * conformance suite ran these for an author; nothing ran them for the
+ * document an instance actually stores until now, which is how thirteen
+ * shipped specs carried a shape finding for a release (the declarations
+ * were wrong — `session-history@1` said candidates and published rows — and
+ * no door said so). A document that reached here another way — an import,
+ * a hand-built JSON — gets the same answer as the builder's.
+ *
+ * ⚠ **A shipped spec that stops validating is a boot failure, by design.**
+ * The seed publishes the catalog through this door with no exemption: one
+ * core document carrying an error-severity finding refuses to save, and
+ * the instance does not come up with a hole where that pipeline was. That
+ * is the point — a validator with a back door for the catalog would have
+ * let W9's thirteen findings ship again. The guard that keeps it from ever
+ * being a surprise is the zero-error test over every shipped spec
+ * (`store.int.test.ts`, and the SDK's `formsReview.test.ts`): a change to a
+ * contract or to `validate()` fails there first, never at a user's boot.
+ */
+function assertValidates(doc: SpecDocument): void {
+	const errors = validate(doc).filter((f) => f.severity === "error")
+	if (!errors.length) return
+	throw new Error(
+		`'${doc.id}' cannot be saved: it does not validate — ` +
+			errors
+				.map(
+					(e) =>
+						`[${e.law}] ${e.nodeKey ? `${e.nodeKey}: ` : ""}${e.message} (${e.fix})`
+				)
+				.join("; ")
+	)
 }
 
 /**

@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest"
+import { HOOK_CTX_KINDS, hookCtxKeysFor } from "./hookCtx"
 import { SesWorkerSandbox } from "./SesWorkerSandbox"
 import { QuickJsSandbox } from "./QuickJsSandbox"
 
@@ -33,6 +34,9 @@ afterEach(async () => {
 
 const opts = (input: Record<string, unknown>, extra = {}) => ({
 	input,
+	// A task's ctx unless a test says otherwise — the kind decides what
+	// `ctx` carries (hookCtx.ts, R-3), and these tests need none of it.
+	kind: "task" as const,
 	timeoutMs: 500,
 	seedLabel: "seed-a",
 	nowMs: 1_700_000_000_000,
@@ -327,5 +331,77 @@ describe("cross-backend parity", () => {
 			new Promise((r) => setTimeout(() => r("stranded"), 3000))
 		])
 		expect(outcome).toBe("settled")
+	})
+})
+
+/**
+ * The hook ctx per kind (plans/29 R-3): what `ctx` carries is decided by the
+ * kind of hook, from one table both backends read (`hookCtx.ts`). Observed
+ * from INSIDE the sandbox — `Object.keys(ctx)` is what a hook can reach, not
+ * what a docblock says — and pinned against the table, so the table and the
+ * program cannot drift apart without this failing.
+ */
+describe("SesWorkerSandbox — the hook ctx per kind", () => {
+	for (const kind of HOOK_CTX_KINDS) {
+		it(`a ${kind} hook sees exactly ${hookCtxKeysFor(kind).join(", ")}`, async () => {
+			await withHook("keys", "(input, ctx) => Object.keys(ctx)")
+			const r = await rt.invoke(
+				{ pluginId: "p1", hookName: "keys" },
+				opts({}, { kind })
+			)
+			expect(r.ok).toBe(true)
+			if (r.ok) expect(r.value).toEqual(hookCtxKeysFor(kind))
+		})
+	}
+
+	it("a task hook calling ctx.fetch throws a TypeError — the member is absent, not a stub", async () => {
+		await withHook(
+			"reach",
+			"(input, ctx) => { try { ctx.fetch('https://example.com/'); return 'reached' } catch (e) { return { name: e.name, message: e.message } } }"
+		)
+		const r = await rt.invoke(
+			{ pluginId: "p1", hookName: "reach" },
+			opts({}, { kind: "task" })
+		)
+		expect(r.ok).toBe(true)
+		if (r.ok) expect((r.value as { name: string }).name).toBe("TypeError")
+	})
+
+	it("a task hook cannot reach past the ctx to the hosts' globals either", async () => {
+		// The ctx member is absent AND the host behind it is not endowed: a
+		// hook that names `__fetch` directly finds nothing to call.
+		await withHook(
+			"globals",
+			"() => ({ fetch: typeof __fetch, storage: typeof __storage })"
+		)
+		const r = await rt.invoke(
+			{ pluginId: "p1", hookName: "globals" },
+			opts({}, { kind: "task" })
+		)
+		expect(r.ok && r.value).toEqual({ fetch: "undefined", storage: "undefined" })
+		const o = await rt.invoke(
+			{ pluginId: "p1", hookName: "globals" },
+			opts({}, { kind: "oracle" })
+		)
+		expect(o.ok && o.value).toEqual({ fetch: "function", storage: "object" })
+	})
+
+	it("a chain-link hook has no storage either — parity with an in-app script", async () => {
+		await withHook("rows", "(input, ctx) => typeof ctx.storage")
+		const r = await rt.invoke(
+			{ pluginId: "p1", hookName: "rows" },
+			opts({}, { kind: "chain-link" })
+		)
+		expect(r.ok && r.value).toBe("undefined")
+	})
+
+	it("a call naming no kind is refused as a host bug, never as a hook failure", async () => {
+		await withHook("v", "() => 1")
+		await expect(
+			rt.invoke(
+				{ pluginId: "p1", hookName: "v" },
+				{ ...opts({}), kind: undefined as unknown as "task" }
+			)
+		).rejects.toThrow(/without a hook ctx kind/)
 	})
 })

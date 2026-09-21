@@ -13,9 +13,11 @@ import { asc, eq } from "drizzle-orm"
 import {
 	S,
 	capabilityLabel,
+	i18nText,
 	satisfies,
 	type CapabilityId,
-	type CapabilitySet
+	type CapabilitySet,
+	type I18n
 } from "@serene-pub/sdk"
 import { shapeOfModality } from "$lib/shared/constants/ConnectionTypes"
 import * as schema from "$lib/server/db/schema"
@@ -253,8 +255,8 @@ export async function choiceSets(db: Db, specId: number) {
 	for (const r of scriptTypeRegistry as any[]) {
 		const pinned = `${r.definitionId}@${r.version}`
 		const i18n = (r.i18n ?? {}) as Record<string, any>
-		const text = (v: unknown) =>
-			typeof v === "string" ? v : ((v as any)?.en ?? "")
+		// Display text in `en` through the SDK's one resolver (R-20).
+		const text = (v: unknown) => i18nText(v as I18n | undefined) ?? ""
 		scriptTypeMeta.set(pinned, {
 			name: text(i18n.name) || pinned,
 			blastRadius: text(i18n.blastRadius),

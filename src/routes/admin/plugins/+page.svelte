@@ -14,6 +14,7 @@
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { getAdminInterestContext } from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
+	import { i18nTextIn } from "$lib/shared/i18n/i18nText"
 
 	const userCtx: { user: SelectUser } = getContext("userCtx")
 	const socket = useTypedSocket()
@@ -245,11 +246,9 @@
 		return settingsByPlugin[pluginId]?.values?.[key]
 	}
 	const fieldLabel = (key: string, decl: any): string =>
-		typeof decl?.label === "string" ? decl.label : (decl?.label?.en ?? key)
+		i18nTextIn(decl?.label) ?? key
 	const fieldDescription = (decl: any): string | null =>
-		typeof decl?.description === "string"
-			? decl.description
-			: (decl?.description?.en ?? null)
+		i18nTextIn(decl?.description) ?? null
 	function setPerm(pluginId: string, key: string, granted: boolean) {
 		socket.emit("plugins:setPermission", { pluginId, key, granted })
 	}

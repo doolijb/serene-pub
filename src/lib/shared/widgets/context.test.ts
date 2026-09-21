@@ -1,5 +1,5 @@
 import { describe, expect, it, test } from "vitest"
-import { parseChannel } from "@serene-pub/sdk"
+import { FRAME_PROTOCOL, parseChannel, WIDGET_PROTOCOL } from "@serene-pub/sdk"
 import {
 	buildNativeContext,
 	createWidgetEventBus,
@@ -187,7 +187,11 @@ describe("buildNativeContext", () => {
 				on: () => () => {}
 			}
 		)
-		expect(ctx.protocol).toBe(1)
+		// ONE number with the frame lane (`FRAME_PROTOCOL`): native is frame
+		// minus the iframe, so a second clock here would be a second
+		// contract by accident.
+		expect(ctx.protocol).toBe(WIDGET_PROTOCOL)
+		expect(ctx.protocol).toBe(FRAME_PROTOCOL)
 		expect(ctx.widget.id).toBe("messages")
 		expect(ctx.session.v1.id).toBe(42)
 		ctx.action("delete", 1)
@@ -422,7 +426,6 @@ describe("eventInScope", () => {
 describe("actions.v1 and invoke", () => {
 	const roll: WidgetAction = {
 		key: "roll",
-		function: "acme-roll",
 		specSlug: "acme:spec/roll",
 		name: "Roll",
 		slash: "acme.roll",
@@ -438,7 +441,6 @@ describe("actions.v1 and invoke", () => {
 	const edit: WidgetAction = {
 		...roll,
 		key: "edit",
-		function: "edit",
 		specSlug: "core",
 		name: "Edit",
 		slash: "edit",
@@ -470,22 +472,41 @@ describe("actions.v1 and invoke", () => {
 		const data = projectWidgetData(base({ actions: venues }))
 		expect(data.actions.v1).toEqual(venues)
 		expect(data.actions.v1.widget!.overflow[0]).not.toBe(roll)
-		expect(findAction(data.actions.v1, "roll")?.function).toBe("acme-roll")
+		expect(findAction(data.actions.v1, "roll")?.specSlug).toBe("acme:spec/roll")
 		expect(findAction(data.actions.v1, "nope")).toBeUndefined()
 	})
 
-	it("invoke resolves a key to its function and routes it through action, identity in hand (W1)", () => {
+	it("invoke resolves a key to its declaration and routes it through action, identity in hand (W1)", () => {
 		const calls: unknown[][] = []
 		const ctx = buildNativeContext(
 			base({ actions: venues }),
 			{ id: "dice", instanceId: "dice", title: "Dice" },
 			verbs(calls)
 		)
+		// The section a widget reads, off the full envelope and not the bare
+		// projection: a host that threads venues in gets them on `ctx`.
+		expect(ctx.actions.v1).toEqual(venues)
 		ctx.invoke("roll")
 		ctx.invoke("acme:spec/roll#roll", { messageId: 7, payload: { text: "x" } })
 		expect(calls).toEqual([
-			["acme-roll", undefined, undefined, "acme:spec/roll#roll"],
-			["acme-roll", 7, { text: "x" }, "acme:spec/roll#roll"]
+			["roll", undefined, undefined, "acme:spec/roll#roll", undefined],
+			["roll", 7, { text: "x" }, "acme:spec/roll#roll", undefined]
+		])
+	})
+
+	it("invoke carries the block a form's press answers through to the fire (U5d)", () => {
+		const calls: unknown[][] = []
+		const ctx = buildNativeContext(
+			base({ actions: venues }),
+			{ id: "dice", instanceId: "dice", title: "Dice" },
+			verbs(calls)
+		)
+		ctx.invoke("roll", { messageId: 7, blockId: "blk-2" })
+		// Fifth argument, the same slot `action`'s `blockId` has occupied all
+		// along: a widget drawing a message's form presses it by identity like
+		// any other action instead of dropping back to the deprecated verb.
+		expect(calls).toEqual([
+			["roll", 7, undefined, "acme:spec/roll#roll", "blk-2"]
 		])
 	})
 
@@ -493,7 +514,6 @@ describe("actions.v1 and invoke", () => {
 		const cont: WidgetAction = {
 			...edit,
 			key: "continue",
-			function: "continue",
 			name: "Continue",
 			slash: "continue",
 			venue: "extra"
@@ -507,7 +527,9 @@ describe("actions.v1 and invoke", () => {
 			{ id: "dice", instanceId: "dice", title: "Dice" },
 			{
 				...verbs(calls),
-				coreVerbs: { continue: (args) => continued.push(args) }
+				actionDispatch: {
+					core: { continue: (args) => continued.push(args) }
+				}
 			}
 		)
 		ctx.invoke("continue", { messageId: 9 })
@@ -515,6 +537,56 @@ describe("actions.v1 and invoke", () => {
 		expect(continued).toEqual([{ messageId: 9 }, undefined])
 		// `sessions:triggerFunction` refuses `continue` by name; nothing
 		// reached `action`.
+		expect(calls).toEqual([])
+	})
+
+	it("a contributed action goes to the host's OWN fire, with the subject, the values and the block", () => {
+		// The one route: a widget's press is handed to the dispatch the page
+		// threaded down — whose `fire` is the page's own `fireTrigger`, which
+		// names the run and opens the narrator's modal — and NOT to a second
+		// fire derived from `action` here. A press inside a widget is the same
+		// press as the chip beside it or it is a lesser one.
+		const calls: unknown[][] = []
+		const fired: unknown[][] = []
+		const continued: unknown[] = []
+		const cont: WidgetAction = {
+			...edit,
+			key: "continue",
+			name: "Continue",
+			slash: "continue",
+			venue: "extra"
+		}
+		const ctx = buildNativeContext(
+			base({
+				actions: { ...venues, extra: { primary: [], overflow: [cont] } }
+			}),
+			{ id: "dice", instanceId: "dice", title: "Dice" },
+			{
+				...verbs(calls),
+				actionDispatch: {
+					core: { continue: (args) => continued.push(args) },
+					fire: (a, args) => fired.push([a, args])
+				}
+			}
+		)
+		ctx.invoke("roll", {
+			messageId: 7,
+			payload: { text: "x" },
+			blockId: "blk-2"
+		})
+		// The whole declaration, so the fire can name its identity (W1), and
+		// every field of `WidgetInvokeArgs` alongside it.
+		expect(fired).toEqual([
+			[
+				{ ...roll },
+				{ messageId: 7, payload: { text: "x" }, blockId: "blk-2" }
+			]
+		])
+		// A core verb still goes to the core half of the same bag.
+		ctx.invoke("core#continue", { messageId: 9 })
+		expect(continued).toEqual([{ messageId: 9 }])
+		expect(fired).toHaveLength(1)
+		// Neither half touched the generic `action` verb.
 		expect(calls).toEqual([])
 	})
 

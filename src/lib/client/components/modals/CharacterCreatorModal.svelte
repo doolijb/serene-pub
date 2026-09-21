@@ -36,6 +36,25 @@
 	/** What this creator calls what it is making — the preset decides. */
 	const noun = $derived(initial?.isPersona ? "Persona" : "Character")
 
+	/**
+	 * Unique per instance. Several creators are mounted at once — the
+	 * characters panel's, the home page's character and persona creators —
+	 * and a Skeleton dialog renders its content hidden while closed, so three
+	 * name fields shared one literal id and every `<label for>` and
+	 * `aria-describedby` resolved to whichever came first in the DOM
+	 * (2026-09-17). Same idiom as `MessageComposer` and `EntryFireTest`.
+	 */
+	const uid = $props.id()
+	const ids = {
+		name: `${uid}-name`,
+		nameError: `${uid}-name-error`,
+		nickname: `${uid}-nickname`,
+		description: `${uid}-description`,
+		descriptionError: `${uid}-description-error`,
+		personality: `${uid}-personality`,
+		firstMessage: `${uid}-first-message`
+	}
+
 	const socket = useTypedSocket()
 
 	// Character data interface
@@ -409,7 +428,7 @@
 									<div class="space-y-2">
 										<label
 											class="flex gap-1 font-semibold"
-											for="characterCreatorStepName"
+											for={ids.name}
 										>
 											Name*
 											<span
@@ -425,7 +444,7 @@
 											</span>
 										</label>
 										<input
-											id="characterCreatorStepName"
+											id={ids.name}
 											type="text"
 											bind:value={characterData.name}
 											class="input {validationErrors.name
@@ -437,7 +456,7 @@
 												? "true"
 												: "false"}
 											aria-describedby={validationErrors.name
-												? "name-error"
+												? ids.nameError
 												: undefined}
 											oninput={() =>
 												clearValidationError("name")}
@@ -445,7 +464,7 @@
 										{#if validationErrors.name}
 											<p
 												class="text-error-500 mt-1 text-sm"
-												id="name-error"
+												id={ids.nameError}
 												role="alert"
 											>
 												{validationErrors.name}
@@ -457,7 +476,7 @@
 									<div class="space-y-2">
 										<label
 											class="flex gap-1 font-semibold"
-											for="stepNickname"
+											for={ids.nickname}
 										>
 											Nickname (Optional)
 											<span
@@ -473,7 +492,7 @@
 											</span>
 										</label>
 										<input
-											id="stepNickname"
+											id={ids.nickname}
 											type="text"
 											bind:value={characterData.nickname}
 											class="input"
@@ -616,7 +635,7 @@
 								<div class="space-y-2">
 									<label
 										class="flex gap-1 font-semibold"
-										for="characterCreatorStepDescription"
+										for={ids.description}
 									>
 										Description*
 										<span
@@ -632,7 +651,7 @@
 										</span>
 									</label>
 									<textarea
-										id="characterCreatorStepDescription"
+										id={ids.description}
 										rows="8"
 										bind:value={characterData.description}
 										class="input {validationErrors.description
@@ -644,7 +663,7 @@
 											? "true"
 											: "false"}
 										aria-describedby={validationErrors.description
-											? "description-error"
+											? ids.descriptionError
 											: undefined}
 										oninput={() =>
 											clearValidationError("description")}
@@ -652,7 +671,7 @@
 									{#if validationErrors.description}
 										<p
 											class="text-error-500 mt-1 text-sm"
-											id="description-error"
+											id={ids.descriptionError}
 											role="alert"
 										>
 											{validationErrors.description}
@@ -712,7 +731,7 @@
 								<div class="space-y-2">
 									<label
 										class="flex gap-1 font-semibold"
-										for="stepPersonality"
+										for={ids.personality}
 									>
 										Personality (Optional)
 										<span
@@ -728,7 +747,7 @@
 										</span>
 									</label>
 									<textarea
-										id="stepPersonality"
+										id={ids.personality}
 										rows="6"
 										bind:value={characterData.personality}
 										class="input"
@@ -823,12 +842,12 @@
 								<div class="space-y-2">
 									<label
 										class="font-semibold"
-										for="stepFirstMessage"
+										for={ids.firstMessage}
 									>
 										First Message (Optional but Recommended)
 									</label>
 									<textarea
-										id="stepFirstMessage"
+										id={ids.firstMessage}
 										rows="6"
 										bind:value={characterData.firstMessage}
 										class="input"

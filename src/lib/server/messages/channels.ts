@@ -62,7 +62,7 @@
  * the store and patch `messages` after the fact.
  */
 
-import { eq, like, or, sql, type SQL } from "drizzle-orm"
+import { and, desc, eq, like, or, sql, type SQL } from "drizzle-orm"
 import type { PgColumn } from "drizzle-orm/pg-core"
 import * as schema from "$lib/server/db/schema"
 import { rawRows } from "$lib/server/db/rawRows"
@@ -280,6 +280,71 @@ export async function nextLane(
 }
 
 /**
+ * The **channel head** (plans/29 R-15 *Staleness and order*; 30 §U5f): the
+ * greatest `session_messages.id` on ONE channel of a session — the exact
+ * `channel` string, lane-scoped (`main:2` is not `main`), never the union —
+ * or null when nothing has been written there.
+ *
+ * The newest-row definition: the published-values `item.isNewest` is "this
+ * row IS the head". The forms' head is `stalenessHead` below — the same
+ * greatest-id read, minus the row's own answers — which the host's block
+ * write stamps as `head` and the fire door compares against. Deleted rows
+ * are gone and do not count; hidden rows still exist on the channel and do.
+ * Reads the legacy table because that column is authoritative for `channel`
+ * (see the mirror note at the top of this file).
+ */
+export async function channelHead(
+	db: Db,
+	sessionId: number,
+	channel: string
+): Promise<number | null> {
+	const [row] = await db
+		.select({ id: schema.sessionMessages.id })
+		.from(schema.sessionMessages)
+		.where(
+			and(
+				eq(schema.sessionMessages.sessionId, sessionId),
+				eq(schema.sessionMessages.channel, channel)
+			)
+		)
+		.orderBy(desc(schema.sessionMessages.id))
+		.limit(1)
+	return row?.id ?? null
+}
+
+/**
+ * The **staleness head** for the forms on row `rowId` (U5f): the greatest
+ * id on the row's channel among rows that are NOT answers to a form on that
+ * row — a row whose `metadata.answersForm.messageId` names `rowId` is the
+ * answer to one of its questions, and an answer does not move the
+ * conversation on from the row it answers. So three questions on one row
+ * can each be answered in turn, while any other line on the channel stales
+ * every open form on the row. `channelHead` stays the newest-row
+ * definition (`item.isNewest`); this is the one the block write stamps as
+ * `head` and the fire door compares against.
+ */
+export async function stalenessHead(
+	db: Db,
+	sessionId: number,
+	channel: string,
+	rowId: number
+): Promise<number | null> {
+	const [row] = await db
+		.select({ id: schema.sessionMessages.id })
+		.from(schema.sessionMessages)
+		.where(
+			and(
+				eq(schema.sessionMessages.sessionId, sessionId),
+				eq(schema.sessionMessages.channel, channel),
+				sql`coalesce(${schema.sessionMessages.metadata}->'answersForm'->>'messageId', '') <> ${String(rowId)}`
+			)
+		)
+		.orderBy(desc(schema.sessionMessages.id))
+		.limit(1)
+	return row?.id ?? null
+}
+
+/**
  * The channels a genre's shape declares, `main` first.
  *
  * `greeting.channel` counts: a genre that redirects its greetings to a lane
@@ -293,13 +358,120 @@ export async function nextLane(
 export function channelsOf(shape: SessionShape | undefined | null): string[] {
 	const out = [DEFAULT_CHANNEL]
 	const add = (candidate: unknown) => {
-		if (typeof candidate !== "string") return
-		const name = candidate.trim() ? parseChannel(candidate).slug : ""
+		// A declaration is a slug OR the long form `{ slug, role?, voice?,
+		// messageVerbs? }` (R-C, 2026-09-17). Both name one channel, and this
+		// function answers *which channels exist* — so both reduce to a slug
+		// here, and the long form's extra answers are `channelDeclsOf`'s.
+		const raw =
+			candidate && typeof candidate === "object"
+				? (candidate as { slug?: unknown }).slug
+				: candidate
+		if (typeof raw !== "string") return
+		const name = raw.trim() ? parseChannel(raw).slug : ""
 		if (name && !out.includes(name)) out.push(name)
 	}
 	for (const declared of shape?.channels ?? []) add(declared)
 	add(shape?.greeting?.channel)
 	return out
+}
+
+/**
+ * How this channel's messages enter a prompt (R-C). `conversation` — the
+ * default, and what every channel was before the long form existed — is turns
+ * with speakers; `folio` is one block of text in time order, no speaker
+ * names, placed before the conversation.
+ */
+export type ChannelRole = "conversation" | "folio"
+
+/**
+ * Whose name a turn triggered on this channel seeds under. Absent inherits the
+ * genre's `voice`; `none` writes no seed row at all.
+ */
+export type ChannelVoice = "character" | "narrator" | "none"
+
+/** One channel as this app reads it — the long form, defaults resolved. */
+export interface ChannelDecl {
+	slug: string
+	role: ChannelRole
+	voice?: ChannelVoice
+	messageVerbs?: Record<string, boolean>
+}
+
+const CHANNEL_ROLES: readonly string[] = ["conversation", "folio"]
+const CHANNEL_VOICES: readonly string[] = ["character", "narrator", "none"]
+
+/**
+ * The genre's channels as full declarations, `main` first — the app-side
+ * mirror of the SDK's `channelDecls` (R-C, 2026-09-17).
+ *
+ * ⚠ Resolved here rather than imported from `@serene-pub/sdk`, for the same
+ * reason `messages/writes.ts` resolves its policy locally: what arrives is a
+ * stored registry row's JSON, read as `unknown`, and a reader that imported a
+ * brand-new SDK symbol would tie core's compile to an SDK rebuild. The SDK
+ * refuses a malformed declaration *at the declaration*; this side degrades —
+ * an entry it cannot read is skipped, never guessed at.
+ *
+ * Per entry: `role` is always present; `voice` is the channel's, else the
+ * genre's; `messageVerbs` is the genre's with the channel's declared keys over
+ * the top. So what is read off an entry is the effective answer.
+ */
+export function channelDeclsOf(
+	shape: SessionShape | undefined | null
+): ChannelDecl[] {
+	const s = (shape ?? {}) as {
+		channels?: unknown
+		voice?: unknown
+		messageVerbs?: Record<string, boolean>
+	}
+	const genreVoice =
+		typeof s.voice === "string" && CHANNEL_VOICES.includes(s.voice)
+			? (s.voice as ChannelVoice)
+			: undefined
+	const genreVerbs = s.messageVerbs
+	const resolve = (raw: unknown): ChannelDecl | undefined => {
+		const decl = (
+			typeof raw === "string"
+				? { slug: raw }
+				: raw && typeof raw === "object" && !Array.isArray(raw)
+					? raw
+					: {}
+		) as Partial<ChannelDecl>
+		const slug =
+			typeof decl.slug === "string" && decl.slug.trim()
+				? parseChannel(decl.slug).slug
+				: ""
+		if (!slug) return undefined
+		const role =
+			typeof decl.role === "string" && CHANNEL_ROLES.includes(decl.role)
+				? decl.role
+				: "conversation"
+		const voice =
+			typeof decl.voice === "string" && CHANNEL_VOICES.includes(decl.voice)
+				? decl.voice
+				: genreVoice
+		const verbs =
+			decl.messageVerbs || genreVerbs
+				? { ...genreVerbs, ...decl.messageVerbs }
+				: undefined
+		return {
+			slug,
+			// `main` is the channel every session talks in; a declaration
+			// that made it a folio would leave nowhere to talk, and the
+			// SDK refuses one. Held here too, because this side reads stored
+			// JSON that may predate or sidestep that refusal.
+			role: slug === DEFAULT_CHANNEL ? "conversation" : role,
+			...(voice ? { voice } : {}),
+			...(verbs ? { messageVerbs: verbs } : {})
+		}
+	}
+	const declared = (Array.isArray(s.channels) ? s.channels : [])
+		.map(resolve)
+		.filter((d): d is ChannelDecl => d !== undefined)
+	const main = declared.find((d) => d.slug === DEFAULT_CHANNEL)
+	return [
+		main ?? resolve(DEFAULT_CHANNEL)!,
+		...declared.filter((d) => d !== main)
+	]
 }
 
 /**
@@ -328,6 +500,73 @@ export async function sessionChannels(
 		session.genreId ?? STANDARD_GENRE_ID
 	)
 	return channelsOf(genre?.shape)
+}
+
+/**
+ * How a channel shapes a prompt, for the channels whose genre says anything
+ * about it — or `null` when the genre says nothing.
+ *
+ * ⚠ **`null` is the whole point.** Every genre written before R-C, and every
+ * genre that lists only bare slugs, gets `null` here, and the readers then do
+ * *nothing at all* rather than something that happens to be equivalent. That
+ * is what makes "the assembled prompt is byte-identical when no channel
+ * declares a role" a structural fact instead of a hope.
+ *
+ * A channel is "shaping" when it reads as a `folio`, or when its voice is
+ * not the genre's — the two answers that change what the prompt looks like.
+ * A per-channel `messageVerbs` is not here: it changes what a person may do to
+ * a row, not how the row is assembled (see `messages/verbs.ts`).
+ */
+export function channelShapingOf(
+	shape: SessionShape | undefined | null
+): Map<string, { role: ChannelRole; voice?: ChannelVoice }> | null {
+	const raw = (shape as { voice?: unknown } | undefined)?.voice
+	// Read through the same validity filter `channelDeclsOf` applies, so a
+	// genre with an unreadable `voice` is not mistaken for one that shapes.
+	const genreVoice =
+		typeof raw === "string" && CHANNEL_VOICES.includes(raw)
+			? (raw as ChannelVoice)
+			: undefined
+	const decls = channelDeclsOf(shape)
+	const shapes = decls.some(
+		(d) => d.role === "folio" || (d.voice ?? genreVoice) !== genreVoice
+	)
+	if (!shapes) return null
+	return new Map(
+		decls.map((d) => [
+			d.slug,
+			{ role: d.role, ...(d.voice ? { voice: d.voice } : {}) }
+		])
+	)
+}
+
+/**
+ * This session's channel declarations, defaults resolved — `sessionChannels`
+ * with the long form's answers kept (R-C).
+ *
+ * `[main]` for every session whose genre declares none, and for a session
+ * whose genre this build no longer knows: an unknown genre is one whose
+ * vocabulary cannot be stated, and inventing a folio channel for it would
+ * reshape a prompt nobody asked to reshape.
+ */
+export async function sessionChannelDecls(
+	db: Db,
+	sessionId: number
+): Promise<ChannelDecl[]> {
+	const [session] = await db
+		.select({ genreId: schema.sessions.genreId })
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, sessionId))
+		.limit(1)
+	if (!session) return channelDeclsOf(undefined)
+	const { getSessionGenre, STANDARD_GENRE_ID } = await import(
+		"$lib/server/pipelines/entities/sessionGenres"
+	)
+	const genre = await getSessionGenre(
+		db,
+		session.genreId ?? STANDARD_GENRE_ID
+	)
+	return channelDeclsOf(genre?.shape)
 }
 
 /**
@@ -366,4 +605,30 @@ export async function channelRefusal(
 		`because a genre declares it; the lanes under a declared channel ` +
 		`('${DEFAULT_CHANNEL}:2') do not need declaring.`
 	)
+}
+
+/**
+ * This session's per-channel prompt shaping, or `null` when its genre declares
+ * none — `channelShapingOf` over the session's genre. Read once per run by the
+ * host rather than per query: it is a fact about the genre, and the genre does
+ * not change under a run.
+ */
+export async function sessionChannelShaping(
+	db: Db,
+	sessionId: number
+): Promise<Map<string, { role: ChannelRole; voice?: ChannelVoice }> | null> {
+	const [session] = await db
+		.select({ genreId: schema.sessions.genreId })
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, sessionId))
+		.limit(1)
+	if (!session) return null
+	const { getSessionGenre, STANDARD_GENRE_ID } = await import(
+		"$lib/server/pipelines/entities/sessionGenres"
+	)
+	const genre = await getSessionGenre(
+		db,
+		session.genreId ?? STANDARD_GENRE_ID
+	)
+	return channelShapingOf(genre?.shape)
 }

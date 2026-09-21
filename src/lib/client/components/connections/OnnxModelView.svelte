@@ -569,9 +569,7 @@
 							? "On disk"
 							: "Partly fetched"}{sizeLabel
 							? ` · ${sizeLabel}`
-							: ""}{catalog?.dtype
-							? ` · ${catalog.dtype}`
-							: ""}
+							: ""}{catalog?.dtype ? ` · ${catalog.dtype}` : ""}
 					</span>
 					<button
 						type="button"

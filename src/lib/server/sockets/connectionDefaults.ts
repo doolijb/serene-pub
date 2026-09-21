@@ -34,7 +34,7 @@
 
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { asc } from "drizzle-orm"
+import { asc, notInArray } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import { buildSystemSettingsGet } from "./systemSettings"
 import { S, type CapabilityId } from "@serene-pub/sdk"
@@ -78,10 +78,13 @@ function requireAdmin(
  * Every registry row is read, not just `kind: 'node'`: a script or an input
  * type declaring a connection slot demands that capability every bit as much,
  * and filtering by kind here would be a rule this file invents and nothing
- * else enforces. `status` is likewise not filtered — a deprecated type still
+ * else enforces. A `deprecated` row is read too — a deprecated type still
  * has live configs pointed at it, and a capability disappearing from this
  * screen while a pipeline still requires it is exactly the silent gap the
- * aggregation exists to close.
+ * aggregation exists to close. The two statuses left out are the two no
+ * pipeline can run (plans/29 R-2): `provisional` — declared, not bound — and
+ * `removed` — unpublished by this build. A default for a capability only such a
+ * node demands is a default for nothing, on a screen that would then list it.
  */
 async function combosFor(database: typeof db) {
 	const rows = (await database
@@ -90,7 +93,13 @@ async function combosFor(database: typeof db) {
 			version: schema.pipelineDefinitionRegistry.version,
 			slots: schema.pipelineDefinitionRegistry.slots
 		})
-		.from(schema.pipelineDefinitionRegistry)) as RegistryDefinitionRow[]
+		.from(schema.pipelineDefinitionRegistry)
+		.where(
+			notInArray(schema.pipelineDefinitionRegistry.status, [
+				"provisional",
+				"removed"
+			])
+		)) as RegistryDefinitionRow[]
 	return aggregateCombos(rows)
 }
 

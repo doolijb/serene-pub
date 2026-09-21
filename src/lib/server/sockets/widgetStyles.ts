@@ -121,30 +121,45 @@ function usableBy(userId: number): SQL | undefined {
 /**
  * The widget ids a style may be attached to.
  *
- * `CORE_WIDGETS` is core's announcement; a plugin's widgets announce themselves
- * into this same table when their install runs the reconciler, so the system
- * rows already present are the rest of the answer. Anything in neither is a
- * typo or a stale client, and a row attached to it would be permanently
- * unreachable — no widget would ever ask for it.
+ * Three sources, because a widget has three possible declarers. `CORE_WIDGETS`
+ * is core's announcement. A genre's widgets reach this table as system rows
+ * when their package's install seeds the presets they ship, so the system rows
+ * already present are the second part. And an enabled plugin's own widgets are
+ * read from its stored manifest under the id the session view seats them by
+ * (`<pluginId>:<panelId>`) — they ship no presets, so nothing would ever have
+ * put them in this table on their own.
+ *
+ * Anything in none of the three is a typo or a stale client, and a row attached
+ * to it would be permanently unreachable — no widget would ever ask for it.
  */
 async function announcedWidgetIds(): Promise<Set<string>> {
 	const { CORE_WIDGETS } = await import("@serene-pub/core-catalog")
+	const { enabledPluginWidgetIds } = await import(
+		"$lib/server/plugins/frameHost"
+	)
 	const ids = new Set(CORE_WIDGETS.map((w) => w.id))
 	const seeded = await db
 		.selectDistinct({ widgetSlug: schema.widgetStyles.widgetSlug })
 		.from(schema.widgetStyles)
 		.where(eq(schema.widgetStyles.source, "system"))
 	for (const r of seeded) ids.add(r.widgetSlug)
+	for (const id of await enabledPluginWidgetIds(db)) ids.add(id)
 	return ids
 }
 
 /**
  * A user row's slug: `user:<userId>:<widget>:<random>`.
  *
- * Four segments where a system slug (`systemStyleSlug`) has two, and widget ids
- * and preset slugs are colon-free kebab tokens — so a user row can never be
+ * Four segments where a system slug (`systemStyleSlug`, `<widget>:<preset>`)
+ * has two, and it begins with the literal `user:` — so a user row can never be
  * minted onto a system row's reference target, which is what would let a reseed
  * and a person fight over the same `slug` unique index.
+ *
+ * ⚠ The argument does NOT rest on a widget id being colon-free: a plugin's
+ * carries one of its own (`<pluginId>:<panelId>`). It rests on segment count.
+ * For a system slug to collide, its widget id would have to BE
+ * `user:<userId>:<widget>` — three segments or more — and a widget id carries
+ * at most one colon.
  */
 function userStyleSlug(userId: number, widgetSlug: string): string {
 	const random = crypto.randomUUID().replace(/-/g, "").slice(0, 12)

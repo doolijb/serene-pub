@@ -32,32 +32,8 @@
 	let systemSettingsCtx: SystemSettingsCtx = $state(
 		getContext("systemSettingsCtx")
 	)
-	let ollamaSettingsCtx: OllamaSettingsCtx = $state(
-		getContext("ollamaSettingsCtx")
-	)
-	let koboldCppSettingsCtx: KoboldCppSettingsCtx = $state(
-		getContext("koboldCppSettingsCtx")
-	)
 	let userCtx: UserCtx = $state(getContext("userCtx"))
 	let panelsCtx: PanelsCtx = $state(getContext("panelsCtx"))
-
-	// URL validation schema
-	const urlSchema = z
-		.string()
-		.url()
-		.refine((url) => {
-			try {
-				const parsed = new URL(url)
-				return parsed.port !== "" || parsed.hostname === "localhost"
-			} catch {
-				return false
-			}
-		}, "URL must include a port (e.g., http://localhost:11434)")
-
-	// State for koboldcpp manager
-	let koboldCppBaseUrlField = $state("")
-	let koboldCppBaseUrlError = $state("")
-	let isSavingKoboldCppBaseUrl = $state(false)
 
 	// State for enable accounts confirmation modal
 	let showEnableAccountsModal = $state(false)
@@ -68,8 +44,8 @@
 	let isSettingPassphrase = $state(false)
 
 	// State for the CharaVault integration — a single instance-wide
-	// credential, admin-configured (not per-user), same shared-config
-	// pattern as Connections/Ollama Manager/KoboldCPP Manager above.
+	// credential, admin-configured (not per-user), the same shared-config
+	// pattern the Connections settings use.
 	let charaVaultConnected = $state(false)
 	let charaVaultConnectedEmail = $state<string | null>(null)
 	let charaVaultEmailField = $state("")
@@ -77,106 +53,20 @@
 	let isConnectingCharaVault = $state(false)
 	let isDisconnectingCharaVault = $state(false)
 
-	// Initialize base URL field when settings are available
-	$effect(() => {
-		if (koboldCppSettingsCtx.settings?.koboldCppManagerBaseUrl) {
-			koboldCppBaseUrlField =
-				koboldCppSettingsCtx.settings.koboldCppManagerBaseUrl
-		}
-	})
-
 	// ── Unsaved changes ────────────────────────────────────────────
-	// koboldCppBaseUrlField re-syncs from context above whenever a save
-	// succeeds, so it self-resolves back to false without an explicit
-	// post-save reset. The CharaVault fields are write-only credentials
-	// (no "original" value to diff against) that already reset to "" on a
-	// successful connect (see the charaVault:connect success handler
-	// below) — so "non-empty" is what "dirty" means for those two.
+	// The endpoint field re-syncs from context whenever a save succeeds, so it
+	// self-resolves back to false without an explicit post-save reset. The
+	// CharaVault fields are write-only credentials (no "original" value to
+	// diff against) that already reset to "" on a successful connect (see the
+	// charaVault:connect success handler below) — so "non-empty" is what
+	// "dirty" means for those two.
 	$effect(() => {
 		hasUnsavedChanges =
-			koboldCppBaseUrlField.trim() !==
-				(koboldCppSettingsCtx.settings?.koboldCppManagerBaseUrl ??
-					"") ||
-			// Re-syncs from context on save, same as the KoboldCPP URL above,
-			// so it self-resolves back to false without a post-save reset.
 			autoTranslateEndpointField.trim() !==
 				(systemSettingsCtx.settings?.autoTranslateEndpoint ?? "") ||
 			charaVaultEmailField.trim() !== "" ||
 			charaVaultTokenField.trim() !== ""
 	})
-
-	// See the matching check in KoboldCppSettingsTab.svelte — this URL and the
-	// Manager's own "Port" setting are supposed to stay in sync (this is what
-	// everything actually talks to; the managed subprocess always listens on
-	// the Port), but this field can be edited here independently of that one.
-	let koboldCppPortMismatch = $derived.by(() => {
-		if (koboldCppSettingsCtx.settings?.koboldCppManagedMode !== "managed")
-			return false
-		const managedPort = koboldCppSettingsCtx.settings?.koboldCppManagedPort
-		const baseUrl = koboldCppSettingsCtx.settings?.koboldCppManagerBaseUrl
-		if (!managedPort || !baseUrl) return false
-		try {
-			const urlPort = Number(new URL(baseUrl).port) || 80
-			return urlPort !== managedPort
-		} catch {
-			return false
-		}
-	})
-
-	async function onKoboldCppManagerEnabledClick(event: { checked: boolean }) {
-		if (!userCtx.user?.isAdmin) {
-			toaster.error({
-				title: "Access denied",
-				description: "Admin privileges required"
-			})
-			return
-		}
-		socket?.emit("systemSettings:updateKoboldCppManagerEnabled", {
-			enabled: event.checked
-		})
-	}
-
-	async function handleSaveKoboldCppBaseUrl() {
-		if (!userCtx.user?.isAdmin) {
-			toaster.error({
-				title: "Access denied",
-				description: "Admin privileges required"
-			})
-			return
-		}
-
-		const trimmedUrl = koboldCppBaseUrlField.trim()
-		const result = urlSchema.safeParse(trimmedUrl)
-		if (!result.success) {
-			koboldCppBaseUrlError =
-				result.error.errors[0]?.message || "Invalid URL format"
-			return
-		}
-
-		koboldCppBaseUrlError = ""
-		isSavingKoboldCppBaseUrl = true
-
-		try {
-			socket?.emit("koboldcpp:setBaseUrl", { baseUrl: trimmedUrl })
-		} catch (error) {
-			koboldCppBaseUrlError = "Failed to save URL"
-			isSavingKoboldCppBaseUrl = false
-		}
-	}
-
-	async function onOllamaManagerEnabledClick(event: { checked: boolean }) {
-		if (!userCtx.user?.isAdmin) {
-			toaster.error({
-				title: "Access denied",
-				description: "Admin privileges required"
-			})
-			return
-		}
-
-		socket?.emit("systemSettings:updateOllamaManagerEnabled", {
-			enabled: event.checked
-		})
-	}
 
 	function handleScriptsEnabledClick(event: { checked: boolean }) {
 		if (!userCtx.user?.isAdmin) {
@@ -423,40 +313,6 @@
 	$effect(() => {
 		if (!socket) return
 
-		const handleKoboldCppManagerEnabled = (message: any) => {
-			if (message.success) {
-				toaster.success({
-					title: `KoboldCPP Manager ${message.enabled ? "enabled" : "disabled"} successfully`
-				})
-			} else {
-				toaster.error({
-					title: "Failed to update KoboldCPP Manager setting"
-				})
-			}
-		}
-
-		const handleKoboldCppSetBaseUrl = (message: any) => {
-			isSavingKoboldCppBaseUrl = false
-			if (message.success) {
-				toaster.success({ title: "KoboldCPP URL updated successfully" })
-			} else {
-				koboldCppBaseUrlError = "Failed to update URL"
-				toaster.error({ title: "Failed to update KoboldCPP URL" })
-			}
-		}
-
-		const handleOllamaManagerEnabled = (message: any) => {
-			if (message.success) {
-				toaster.success({
-					title: `Ollama Manager ${message.enabled ? "enabled" : "disabled"} successfully`
-				})
-			} else {
-				toaster.error({
-					title: "Failed to update Ollama Manager setting"
-				})
-			}
-		}
-
 		const handleAccountsEnabled = (message: any) => {
 			if (message.success) {
 				toaster.success({
@@ -565,18 +421,6 @@
 			}
 		}
 
-		// The KoboldCPP URL save's own reply. BARE like the rest — the family
-		// has no interest scope — and standing, because the field can be saved
-		// again without this tab remounting. `koboldcpp:` is RESTRICTED
-		// interest, so the registry itself refuses the key for a known
-		// non-admin and holds it while the user is still unknown.
-		const koboldCppReleases = [
-			declareInterest<"koboldcpp:setBaseUrl">(
-				"koboldcpp:setBaseUrl",
-				handleKoboldCppSetBaseUrl
-			)
-		]
-
 		// The three instance-setting write replies and the two passphrase
 		// ones, on the interest registry. All BARE — none is in
 		// `SCOPED_EVENTS`; each is about this instance or this account, with
@@ -588,14 +432,6 @@
 		// Neither `systemSettings:` nor `users:` is a restricted prefix, so the
 		// admin boundary here is the one the server's own handlers hold.
 		const settingReleases = [
-			declareInterest<"systemSettings:updateKoboldCppManagerEnabled">(
-				"systemSettings:updateKoboldCppManagerEnabled",
-				handleKoboldCppManagerEnabled
-			),
-			declareInterest<"systemSettings:updateOllamaManagerEnabled">(
-				"systemSettings:updateOllamaManagerEnabled",
-				handleOllamaManagerEnabled
-			),
 			declareInterest<"systemSettings:updateAccountsEnabled">(
 				"systemSettings:updateAccountsEnabled",
 				handleAccountsEnabled
@@ -649,7 +485,6 @@
 		// Cleanup function to release this tab's interest
 		return () => {
 			hasUnsavedChanges = false
-			for (const release of koboldCppReleases) release()
 			for (const release of settingReleases) release()
 			for (const release of cardSourceReleases) release()
 		}
@@ -660,130 +495,18 @@
 	<div class="flex flex-col gap-6">
 		{#if systemSettingsCtx.settings?.isAndroidWrapper}
 			<div class="card preset-filled-surface-100-900 space-y-4 p-4">
-				<h3 class="text-lg font-semibold">Local Model Managers</h3>
+				<h3 class="text-lg font-semibold">Local model runtimes</h3>
 				<p class="text-muted-foreground text-sm">
-					Ollama Manager and KoboldCPP Manager aren't available in the
-					Android app — they depend on locally-run binaries this build
-					can't bundle. Connect to a remote Ollama or KoboldCPP
-					instance from the Connections panel instead. Local
-					embeddings aren't available either, for the same reason, but
-					an external embeddings API works fine — set it up from the
-					Embeddings panel.
+					Serene Pub can't run Ollama or KoboldCPP for you in the
+					Android app — both depend on locally-run binaries this build
+					can't bundle. Connect to a remote Ollama or KoboldCPP from
+					the Connections panel instead. Local embeddings aren't
+					available either, for the same reason, but an external
+					embeddings API works fine — set that up from Connections
+					too.
 				</p>
 			</div>
 		{:else}
-			<!-- Ollama Manager Settings -->
-			<div class="card preset-filled-surface-100-900 space-y-4 p-4">
-				<h3 class="text-lg font-semibold">Ollama Manager</h3>
-
-				<div class="flex items-center gap-2">
-					<Switch
-						name="ollama-manager"
-						checked={ollamaSettingsCtx.settings
-							?.ollamaManagerEnabled}
-						onCheckedChange={onOllamaManagerEnabledClick}
-					>
-						<Switch.Control
-							class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
-						>
-							<Switch.Thumb />
-						</Switch.Control>
-						<Switch.HiddenInput />
-						<Switch.Label class="font-semibold">
-							Enable Ollama Manager
-						</Switch.Label>
-					</Switch>
-					<!-- Base URL is only configured from the Ollama Manager
-					     panel (Connections), not here — this settings tab
-					     used to duplicate that field with a save action that
-					     had no server handler wired up. -->
-				</div>
-			</div>
-
-			<!-- KoboldCPP Manager Settings -->
-			<div class="card preset-filled-surface-100-900 space-y-4 p-4">
-				<h3 class="text-lg font-semibold">KoboldCPP Manager</h3>
-
-				<div class="flex items-center gap-2">
-					<Switch
-						name="koboldcpp-manager"
-						checked={koboldCppSettingsCtx.settings
-							?.koboldCppManagerEnabled}
-						onCheckedChange={onKoboldCppManagerEnabledClick}
-					>
-						<Switch.Control
-							class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
-						>
-							<Switch.Thumb />
-						</Switch.Control>
-						<Switch.HiddenInput />
-						<Switch.Label class="font-semibold">
-							Enable KoboldCPP Manager
-						</Switch.Label>
-					</Switch>
-				</div>
-
-				{#if koboldCppSettingsCtx.settings?.koboldCppManagerEnabled}
-					<div class="ml-6 space-y-3">
-						<div>
-							<label
-								class="text-foreground mb-1 block text-sm font-medium"
-								for="koboldCppBaseUrl"
-							>
-								KoboldCPP Server URL
-							</label>
-							<input
-								id="koboldCppBaseUrl"
-								type="text"
-								bind:value={koboldCppBaseUrlField}
-								placeholder="http://localhost:5001"
-								class="input w-full {koboldCppBaseUrlError
-									? 'border-error-500'
-									: ''}"
-							/>
-							{#if koboldCppBaseUrlError}
-								<p class="text-error-500 mt-1 text-sm">
-									{koboldCppBaseUrlError}
-								</p>
-							{/if}
-							{#if koboldCppPortMismatch}
-								<div
-									class="border-warning-500 bg-warning-500/10 mt-2 flex items-start gap-2 rounded-lg border p-3"
-								>
-									<Icons.AlertTriangle
-										size={16}
-										class="text-warning-700-300 mt-0.5 shrink-0"
-									/>
-									<p class="text-warning-700-300 text-sm">
-										This doesn't match the managed
-										subprocess's Port ({koboldCppSettingsCtx
-											.settings?.koboldCppManagedPort}) in
-										the KoboldCPP Manager panel's Settings
-										tab. Everything talks to this URL, not
-										that port — update one to match the
-										other.
-									</p>
-								</div>
-							{/if}
-						</div>
-
-						<button
-							class="btn preset-filled-primary-500"
-							onclick={handleSaveKoboldCppBaseUrl}
-							disabled={isSavingKoboldCppBaseUrl}
-						>
-							{#if isSavingKoboldCppBaseUrl}
-								<Icons.Loader2 class="h-4 w-4 animate-spin" />
-								Saving...
-							{:else}
-								<Icons.Save class="h-4 w-4" />
-								Save URL
-							{/if}
-						</button>
-					</div>
-				{/if}
-			</div>
-
 			<!-- Embeddings -->
 			<div class="card preset-filled-surface-100-900 space-y-4 p-4">
 				<h3 class="text-lg font-semibold">Embeddings</h3>

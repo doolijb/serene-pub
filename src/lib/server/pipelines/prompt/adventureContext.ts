@@ -92,7 +92,9 @@ function present(
 	const bags =
 		facet === "world"
 			? [bag(state?.world)]
-			: Object.values(bag(state?.cast)).map(bag)
+			: Object.entries(bag(state?.cast))
+					.filter(([key]) => key !== "byId")
+					.map(([, values]) => bag(values))
 	const pool = declared.length ? declared : [...attributeSlots()]
 	const forFacet = [...pool]
 		.sort((a, b) => a.id.localeCompare(b.id))
@@ -171,6 +173,10 @@ export function stateSummary(
 
 	const castDecls = present(state, "cast")
 	for (const [key, values] of Object.entries(bag(state?.cast))) {
+		// `byId` is the cast's other INDEX, not a cast member (R17). It sits
+		// inside `cast` so a template has one place to look; a prompt walking
+		// the keys has to step over it or it reads as somebody called "byId".
+		if (key === "byId") continue
 		const owned = bag(values)
 		const written = castDecls
 			.map((d) => [slotKey(d.id), text(valueOf(owned, d))] as const)

@@ -787,7 +787,7 @@ export async function namespaceView(
 			const genreId = await genreOfSpec(db, at.slug)
 			if (!genreId) return []
 			return (await listGenreTriggers(db, genreId)).map((t) => ({
-				function: t.function,
+				key: t.key,
 				name: t.name,
 				specSlug: t.specSlug,
 				origin: t.origin

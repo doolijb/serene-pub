@@ -98,6 +98,19 @@ export const SCOPED_EVENTS: ReadonlyMap<string, InterestScopeExtractor> =
 		// lists); a session page may declare its own scope.
 		["sessions:runStatus", (payload) => payload?.sessionId],
 
+		// `{ sessionId, messageCount, lastMessage, updatedAt }` — the session's
+		// list row moved. The sessions sidebar and the home page both declare
+		// it BARE (every session they list); a session page may declare its
+		// own scope.
+		["sessions:rowChanged", (payload) => payload?.sessionId],
+
+		// `{ sessionId, channel, venues }` — the session's action list (U5e):
+		// the reply to `sessions:actions` and the push every finished run
+		// makes (`pushSessionActions`). A session page declares its own
+		// scope, so a tab on another session is neither sent this one's list
+		// nor has one built for it.
+		["sessions:actions", (payload) => payload?.sessionId],
+
 		// The run's progress card, pushed from three places — the reply path
 		// (`server/utils/runReply.ts`: one `runStarted`, then a
 		// `progress` per stage) and the triggered-function path
@@ -417,6 +430,10 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"sessions:promptTokenCount",
 	"sessions:reassignRemovedParticipant",
 	"sessions:removeGuest",
+	// The list-row push — consumers: client/components/sidebars/
+	// SessionsSidebar.svelte and routes/+page.svelte, both on the patch store
+	// (client/sessions/sessionRowPatches.svelte.ts).
+	"sessions:rowChanged",
 	// The run status push (R-19, 2026-09-16) — consumer:
 	// client/components/sidebars/SessionsSidebar.svelte, on the registry.
 	"sessions:runStatus",
@@ -740,6 +757,7 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"plugins:active",
 	"plugins:getSettings",
 	"plugins:install",
+	"plugins:installLocal",
 	"plugins:kill",
 	"plugins:list",
 	"plugins:logs",
@@ -864,8 +882,9 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	// wizard's pair registration). Restricted prefix: both handlers admin-only.
 	"connectionDefaults:list",
 	"connectionDefaults:set",
-	// `koboldcpp:` — client/components/koboldcppManager/**, sidebars/KoboldCppSidebar,
-	// settingsTabs/SystemSettingsTab + routes/document-view/settings/system
+	// `koboldcpp:` — client/components/koboldcppManager/**,
+	// connections/ManagedConnectionView (the managed connection's view since
+	// the 2026-09-17 fold), routes/document-view/settings/system
 	// (`setBaseUrl`), routes/document-view/koboldcpp, routes/+page.svelte.
 	// The three pushes (`downloadProgress`, `binaryDownloadProgress`,
 	// `subprocessStatus`) leave through per-user closures that call the gated
@@ -907,8 +926,9 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"koboldcpp:subprocessStatus",
 	"koboldcpp:unloadModel",
 	"koboldcpp:version",
-	// `ollama:` — client/components/ollamaManager/**, sidebars/OllamaSidebar,
-	// routes/document-view/ollama, routes/+page.svelte. `ollama:pullProgress`
+	// `ollama:` — client/components/ollamaManager/**,
+	// connections/ManagedConnectionView (the managed connection's view since
+	// the 2026-09-17 fold), routes/document-view/ollama, routes/+page.svelte. `ollama:pullProgress`
 	// is the per-chunk push from inside `ollama:pullModel` (was the bare
 	// `ollamaPullProgress`).
 	"ollama:cancelPull",

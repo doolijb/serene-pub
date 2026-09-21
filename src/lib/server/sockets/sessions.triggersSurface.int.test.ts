@@ -8,6 +8,7 @@
  * function nothing serves refuses with the reason rather than running
  * nothing quietly.
  */
+import { NARRATE_ACTION, NARRATE_CHARACTER_ACTION } from "$lib/shared/actions/identity"
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
@@ -79,7 +80,7 @@ describe("sessions:triggers", () => {
 		// participant, not about which specs happen to be published.
 		expect(res.triggers).toContainEqual(
 			expect.objectContaining({
-				function: "narrate",
+				key: "narrate",
 				venue: "composer",
 				name: "Narrate",
 				specSlug: "core:spec/narrate"
@@ -88,12 +89,12 @@ describe("sessions:triggers", () => {
 
 		/**
 		 * The narrator split's other half (ruling 2026-09-07). Its own
-		 * function key, because `resolveFunctionSpec` keys on exactly this
-		 * string and two specs answering `narrate` would be a coin toss.
+		 * identity, because `resolveSubjectSpec` keys on exactly that and
+		 * two specs answering one subject would be a coin toss.
 		 */
 		expect(res.triggers).toContainEqual(
 			expect.objectContaining({
-				function: "narrate-character",
+				key: "narrate-character",
 				venue: "composer",
 				specSlug: "core:spec/narrate-character"
 			})
@@ -122,35 +123,30 @@ describe("sessions:triggerFunction", () => {
 			.values({ userId: user.id, isGroup: false })
 			.returning()
 
-		// ⚠ Three, not two. `narrate-character` needs the same bespoke
-		// lifecycle `narrate` does — a modal whose first step is *who speaks*,
+		// The two narrator actions, by identity (plans/31 V2). Both need the
+		// same bespoke lifecycle — a modal whose first step is *who speaks*,
 		// and the streaming message row that answer creates — so this route
-		// running it would produce a turn spoken by nobody in particular,
+		// running either would produce a turn spoken by nobody in particular,
 		// silently. It refuses by name instead.
-		//
-		// ⚠ **Four, since `continue` became a function key** (ruling
-		// 2026-09-08, D-2). It is a message verb rather than a trigger button —
-		// nothing contributes it, so it never appears in `sessions:triggers`
-		// above — but `resolveFunctionSpec` now answers it, so a genre may bind
-		// it to a spec of its own. This route cannot serve that: a continue is
-		// the text already on one row, and this route can neither flip that row
-		// to generating nor supply the prefill. `sessionMessages:continue` is
-		// its lifecycle, and the refusal here is what says so out loud rather
-		// than leaving it to the "nothing serves it" fallback that only held
-		// while nothing did.
-		for (const fn of [
-			"respond",
-			"narrate",
-			"narrate-character",
-			"continue"
-		]) {
+		for (const action of [NARRATE_ACTION, NARRATE_CHARACTER_ACTION]) {
 			const res = await sessionsTriggerFunctionHandler.handler(
 				fakeSocket(user.id),
-				{ sessionId: session.id, function: fn },
+				{ sessionId: session.id, action },
 				noopEmit
 			)
 			expect(res.error).toContain("its own trigger event")
 		}
+		// A core verb is a message verb with its own handler — `continue`
+		// (ruling 2026-09-08, D-2) is the text already on one row, and this
+		// route can neither flip that row to generating nor supply the
+		// prefill. `sessionMessages:continue` is its lifecycle. The primary
+		// turn is an event, not an action, and no identity names it.
+		const verb = await sessionsTriggerFunctionHandler.handler(
+			fakeSocket(user.id),
+			{ sessionId: session.id, action: "core#continue" },
+			noopEmit
+		)
+		expect(verb.error).toContain("its own handler")
 	})
 
 	test("narrate-character routes to its own spec", async () => {
@@ -161,22 +157,22 @@ describe("sessions:triggerFunction", () => {
 		 * `runReply` resolves the same way for a turn that carries a
 		 * speaker.
 		 */
-		const { resolveFunctionSpec, STANDARD_GENRE_ID } = await import(
+		const { resolveSubjectSpec, STANDARD_GENRE_ID } = await import(
 			"$lib/server/pipelines/entities/sessionGenres"
 		)
 		expect(
-			await resolveFunctionSpec(
+			await resolveSubjectSpec(
 				testDb as any,
 				STANDARD_GENRE_ID,
-				"narrate-character"
+				NARRATE_CHARACTER_ACTION
 			)
 		).toBe("core:spec/narrate-character")
 		// And the world narrator still answers its own, unmoved by the split.
 		expect(
-			await resolveFunctionSpec(
+			await resolveSubjectSpec(
 				testDb as any,
 				STANDARD_GENRE_ID,
-				"narrate"
+				NARRATE_ACTION
 			)
 		).toBe("core:spec/narrate")
 	})
@@ -193,12 +189,10 @@ describe("sessions:triggerFunction", () => {
 
 		const res = await sessionsTriggerFunctionHandler.handler(
 			fakeSocket(user.id),
-			{ sessionId: session.id, function: "summon-dragon" },
+			{ sessionId: session.id, key: "summon-dragon" },
 			noopEmit
 		)
-		expect(res.error).toBe(
-			"Nothing serves 'summon-dragon' for this session's mode."
-		)
+		expect(res.error).toBe("No action 'summon-dragon' is offered to this session.")
 	})
 
 	test("owner-only, like the narrator trigger", async () => {
@@ -214,7 +208,7 @@ describe("sessions:triggerFunction", () => {
 
 		const res = await sessionsTriggerFunctionHandler.handler(
 			fakeSocket(stranger.id),
-			{ sessionId: session.id, function: "summon-dragon" },
+			{ sessionId: session.id, key: "summon-dragon" },
 			noopEmit
 		)
 		expect(res.error).toBe("Session not found.")
@@ -250,11 +244,11 @@ describe("a session's action set gates both the surface and the fire", () => {
 			{ sessionId: session.id },
 			noopEmit
 		)
-		expect(before.triggers.map((t) => t.function)).toContain("narrate")
+		expect(before.triggers.map((t) => t.key)).toContain("narrate")
 
 		const set = await sessionsSetFunctionHandler.handler(
 			fakeSocket(user.id),
-			{ sessionId: session.id, function: "narrate", enabled: false },
+			{ sessionId: session.id, action: NARRATE_ACTION, enabled: false },
 			noopEmit
 		)
 		expect(set.error).toBeUndefined()
@@ -264,20 +258,20 @@ describe("a session's action set gates both the surface and the fire", () => {
 			{ sessionId: session.id },
 			noopEmit
 		)
-		expect(after.triggers.map((t) => t.function)).not.toContain("narrate")
+		expect(after.triggers.map((t) => t.key)).not.toContain("narrate")
 
 		// `narrate` has its own lifecycle event, so the generic route refuses
 		// it for that reason first — the gate is asserted on the surface here,
-		// and on a generic function in the entity suite.
+		// and on a generic action in the entity suite.
 		const fired = await sessionsTriggerFunctionHandler.handler(
 			fakeSocket(user.id),
-			{ sessionId: session.id, function: "narrate" },
+			{ sessionId: session.id, action: NARRATE_ACTION },
 			noopEmit
 		)
 		expect(fired.error).toBeTruthy()
 	})
 
-	test("a function nobody contributes still says so, not 'turned off'", async () => {
+	test("an action nobody contributes still says so, not 'turned off'", async () => {
 		const { sessionsTriggerFunctionHandler } = await import("./sessions")
 		const schema = await import("$lib/server/db/schema")
 
@@ -289,10 +283,10 @@ describe("a session's action set gates both the surface and the fire", () => {
 
 		const res = await sessionsTriggerFunctionHandler.handler(
 			fakeSocket(user.id),
-			{ sessionId: session.id, function: "summon-dragon" },
+			{ sessionId: session.id, key: "summon-dragon" },
 			noopEmit
 		)
-		expect(res.error).toContain("Nothing serves")
+		expect(res.error).toContain("No action 'summon-dragon' is offered")
 	})
 
 	test("a non-admin is told an administrator can add what the preset left out", async () => {
@@ -329,14 +323,14 @@ describe("a session's action set gates both the surface and the fire", () => {
 
 		const denied = await sessionsSetFunctionHandler.handler(
 			fakeSocket(user.id, false),
-			{ sessionId: session.id, function: "narrate", enabled: true },
+			{ sessionId: session.id, action: NARRATE_ACTION, enabled: true },
 			noopEmit
 		)
 		expect(denied.error).toMatch(/administrator/i)
 
 		const allowed = await sessionsSetFunctionHandler.handler(
 			fakeSocket(user.id, true),
-			{ sessionId: session.id, function: "narrate", enabled: true },
+			{ sessionId: session.id, action: NARRATE_ACTION, enabled: true },
 			noopEmit
 		)
 		expect(allowed.error).toBeUndefined()

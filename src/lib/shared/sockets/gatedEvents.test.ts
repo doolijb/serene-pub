@@ -209,6 +209,35 @@ describe("scopeOfPayload", () => {
 		expect(isGatedEvent("sessions:runStatus")).toBe(true)
 	})
 
+	test("reads `sessionId` off a list-row push, a cleared quote included", () => {
+		// `broadcastToSessionUsers(io, id, "sessions:rowChanged", thunk)` —
+		// the thunk builds `{ sessionId, messageCount, lastMessage, updatedAt }`.
+		expect(
+			scopeOfPayload("sessions:rowChanged", {
+				sessionId: 7,
+				messageCount: 3,
+				lastMessage: {
+					excerpt: "The candles have not been lit since Tuesday.",
+					speakerName: "Brother Alder",
+					isUser: false,
+					createdAt: "2026-09-16T12:00:00.000Z"
+				},
+				updatedAt: "2026-09-16"
+			})
+		).toBe("7")
+		// Deleting the last visible line pushes a null quote, and the scope is
+		// still read off the same field.
+		expect(
+			scopeOfPayload("sessions:rowChanged", {
+				sessionId: 7,
+				messageCount: 0,
+				lastMessage: null,
+				updatedAt: "2026-09-16"
+			})
+		).toBe("7")
+		expect(isGatedEvent("sessions:rowChanged")).toBe(true)
+	})
+
 	test("reads sessions:get's scope off the session, which is where it is", () => {
 		// The successful reply carries the id on the session and nowhere else —
 		// the trap this table exists to keep out of a client's key.

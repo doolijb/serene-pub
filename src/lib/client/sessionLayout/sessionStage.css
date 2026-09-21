@@ -1,0 +1,509 @@
+/**
+ * The stage's STRUCTURE (session layout v2, plan §3.1/§3.2).
+ *
+ * Everything here is structural: boxes, grids, the four states a side takes,
+ * and the two looks that are a component decision rather than a variable
+ * (`chrome` and `glass`). Nothing here decides a size or a colour of its own —
+ * it consumes the theme's tokens and the variables `resolve` emits at each
+ * scope (`--sp-cell`, `--sp-gap`, `--sp-pad`, `--sp-rail-width`, and every
+ * pass-through `--sp-look-*`).
+ *
+ * ## Why a plain global sheet
+ *
+ * Same reason `messageLayouts.css` is one: imported as a plain sheet it lands
+ * OUTSIDE Tailwind's cascade layers, so it wins over the utility classes a
+ * `Panel` wears without a single `!important`. A Svelte `<style>` block would
+ * also have to `:global()` every rule that reaches into a widget's own markup,
+ * which is most of them.
+ *
+ * ## The scopes
+ *
+ * Root variables sit on `.stage`, zone variables on each `.stage-zone`, unit
+ * variables on each `.stage-cell` — and `grid-template-*` / `grid-area` are
+ * inline, because they are the ANSWER `resolve` computed rather than a rule.
+ * A widget's own style sheet stays scoped to `[data-widget-instance]` and
+ * cannot reach any of them.
+ *
+ * ## The no-reload law
+ *
+ * Every state below is a class or an attribute on a CONTAINER. A unit is
+ * mounted once, in one place, and a side becoming a rail or a sheet moves no
+ * subtree: it changes what the box around it is doing. `display: none` is how
+ * something goes away here, never an unmount — an unmount reloads every iframe
+ * under it and drops every native widget's state.
+ */
+
+/* ── the root ─────────────────────────────────────────────────────────── */
+
+.stage {
+	position: relative;
+	display: flex;
+	flex-direction: row;
+	gap: var(--sp-gap, 12px);
+	/* `flex` for the column its host is (the same rule `.layout-body` keeps);
+	   the two sizes for anywhere else it is mounted. */
+	flex: 1 1 0;
+	inline-size: 100%;
+	block-size: 100%;
+	min-inline-size: 0;
+	min-block-size: 0;
+	/* Clips a flyout or a sheet sliding in past the session's edge. */
+	overflow: hidden;
+	background-repeat: no-repeat;
+}
+
+/* A translucent, blurred surface. Only ever worth it over a backdrop, which is
+   why it is a look somebody turns on rather than the default. */
+.stage[data-glass],
+.stage-zone[data-glass],
+.stage-cell[data-glass] {
+	background-color: color-mix(in oklab, var(--color-surface-50) 62%, transparent);
+	backdrop-filter: blur(14px) saturate(115%);
+}
+[data-mode="dark"] .stage[data-glass],
+[data-mode="dark"] .stage-zone[data-glass],
+[data-mode="dark"] .stage-cell[data-glass] {
+	background-color: color-mix(in oklab, var(--color-surface-950) 58%, transparent);
+}
+
+/* ── zones ────────────────────────────────────────────────────────────── */
+
+.stage-zone {
+	display: grid;
+	gap: var(--sp-gap, 12px);
+	padding: var(--sp-pad, 12px);
+	min-inline-size: 0;
+	min-block-size: 0;
+	block-size: 100%;
+	overflow: hidden;
+	background-repeat: no-repeat;
+}
+
+/* The middle is the primary zone and takes what the sides leave. */
+.stage-zone[data-zone="middle"] {
+	flex: 1 1 0;
+}
+
+/* Declared, with nothing in it. It costs no box and no tab stop. */
+.stage-zone[data-state="hidden"] {
+	display: none;
+}
+
+/* A side's whole zone is a strip of icons, so the grid holds no space — but it
+   is NOT `display: none`, because a unit opened from the rail is a cell of this
+   grid wearing the flyout box, and a hidden parent hides it too. `contents`
+   takes the box away and leaves the cells: the closed ones are `display: none`
+   and the open one is positioned against `.stage`. Zone variables still
+   cascade through it — custom properties inherit, box or no box. */
+.stage-zone[data-state="rail"] {
+	display: contents;
+}
+
+/* ── the sides ────────────────────────────────────────────────────────── */
+
+/* The wrapper holds the rail and the zone. `row-reverse` on the left puts the
+   rail at the OUTER edge from the same DOM order the right side uses — one
+   markup, both sides, and no reordering to move a mounted iframe. */
+.stage-side {
+	position: static;
+	display: flex;
+	flex-direction: row;
+	gap: 0.25rem;
+	min-inline-size: 0;
+	min-block-size: 0;
+}
+.stage-side[data-side="left"] {
+	flex-direction: row-reverse;
+}
+.stage-side[data-state="docked"] > .stage-zone {
+	flex: 1 1 0;
+}
+.stage-side[data-state="rail"] {
+	flex: 0 0 auto;
+}
+/* Stowed (below roomy, and the sheet is closed): no box, no tab stop, no a11y
+   tree — still mounted. This is the state that used to be an unmount. */
+.stage-side[data-state="sheet"],
+.stage-side[data-state="hidden"] {
+	display: none;
+}
+
+/* ── the icon rail ────────────────────────────────────────────────────── */
+
+.stage-rail {
+	flex: none;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 0.25rem;
+	inline-size: var(--sp-rail-width, 36px);
+	padding-block: 0.375rem;
+}
+.stage-rail-btn {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	inline-size: 1.75rem;
+	block-size: 1.75rem;
+	border-radius: 0.5rem;
+	color: var(--color-surface-600);
+}
+[data-mode="dark"] .stage-rail-btn {
+	color: var(--color-surface-400);
+}
+.stage-rail-btn:hover,
+.stage-rail-btn[aria-pressed="true"] {
+	background: color-mix(in oklab, var(--color-primary-500) 15%, transparent);
+	color: var(--color-primary-600);
+}
+/* A finger needs 44px wherever one can land; the box stays 28px on a mouse. */
+@media (pointer: coarse) {
+	.stage-rail-btn {
+		inline-size: 2.75rem;
+		block-size: 2.75rem;
+	}
+}
+
+/* ── cells ────────────────────────────────────────────────────────────── */
+
+.stage-cell {
+	/* The containing block for this unit's overlays. `WidgetHost`'s wrapper is
+	   `display: contents` and has no box, so an inset-0 overlay inside a widget
+	   would otherwise anchor to whatever positioned ancestor is above — which
+	   put the conversation's controls across the whole column. */
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	min-inline-size: 0;
+	min-block-size: 0;
+	overflow: hidden;
+	background-repeat: no-repeat;
+}
+/* The restatement `WidgetHost` relies on: a cell sizes its widget with a CHILD
+   rule, selectors match the DOM tree rather than the layout tree, and the host's
+   wrapper has no box for that rule to land on. It restates these two one level
+   further down; this is the rule it is restating. */
+.stage-cell > * {
+	flex: 1;
+	min-block-size: 0;
+}
+
+/* Fold `hide` at this size, or a unit in a zone that is not drawn. */
+.stage-cell[data-hidden] {
+	display: none;
+}
+/* In the zone's rail rather than in the grid — until it is opened. */
+.stage-cell[data-rail]:not([data-open]) {
+	display: none;
+}
+/* A zone clips its own tracks — but not a cell that has left them. The open
+   cell is positioned against `.stage`, and an ancestor with `overflow: hidden`
+   clips an absolutely positioned descendant all the same. `.stage` keeps its
+   own clip, which is what stops the flyout sliding past the session's edge. */
+.stage-zone:has(> .stage-cell[data-open]) {
+	overflow: visible;
+}
+
+/* Opened from the rail: over the session at the side's own edge. The same box
+   the pop-over has always been, because it is the same gesture. */
+.stage-cell[data-open] {
+	position: absolute;
+	inset-block: 0;
+	inset-inline-end: 0;
+	z-index: 30;
+	inline-size: min(22rem, 86%);
+	padding: 0.4rem;
+	border-radius: 0.6rem 0 0 0.6rem;
+	background: var(--color-surface-50);
+	border-inline-start: 1px solid
+		color-mix(in oklab, var(--color-surface-300) 60%, transparent);
+	box-shadow: -10px 0 28px rgba(0, 0, 0, 0.22);
+	animation: stage-fly-in-right 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.stage-cell[data-open][data-from="left"] {
+	inset-inline-end: auto;
+	inset-inline-start: 0;
+	border-radius: 0 0.6rem 0.6rem 0;
+	border-inline-start: none;
+	border-inline-end: 1px solid
+		color-mix(in oklab, var(--color-surface-300) 60%, transparent);
+	box-shadow: 10px 0 28px rgba(0, 0, 0, 0.22);
+	animation-name: stage-fly-in-left;
+}
+[data-mode="dark"] .stage-cell[data-open] {
+	background: var(--color-surface-950);
+	border-color: color-mix(in oklab, var(--color-surface-700) 60%, transparent);
+}
+
+/* ── the `chrome` look ────────────────────────────────────────────────── */
+
+/* `bare` moves card painting into the widget's own style, which is what makes
+   the tabletop and messenger experiences reachable at all. The host's card is
+   a `Panel` section wearing utility classes; this sheet is unlayered, so it
+   wins over them without `!important`. A pack with no bare variant looks
+   unfinished under this, by design: the look says who paints. */
+.stage-cell[data-chrome="bare"] [data-panel-id] {
+	background: transparent;
+	border-color: transparent;
+	box-shadow: none;
+}
+
+/* ── tab groups ───────────────────────────────────────────────────────── */
+
+/* Several widgets sharing one unit's cells. Every member stays MOUNTED and the
+   inactive ones are `display: none`, so switching a tab costs no state and
+   reloads no frame. */
+.stage-tabs {
+	display: flex;
+	flex-direction: column;
+	block-size: 100%;
+	min-block-size: 0;
+	min-inline-size: 0;
+}
+.stage-tabs-bar {
+	flex: none;
+	display: flex;
+	gap: 0.15rem;
+	overflow-x: auto;
+	scrollbar-width: none;
+	padding: 0.15rem 0.15rem 0;
+}
+.stage-tab {
+	flex: none;
+	font-size: 0.72rem;
+	font-weight: 600;
+	padding: 0.2rem 0.55rem;
+	border-radius: 0.4rem 0.4rem 0 0;
+	color: var(--color-surface-600-400);
+	white-space: nowrap;
+}
+.stage-tab[aria-selected="true"] {
+	background: var(--color-surface-100-900);
+	color: inherit;
+}
+.stage-tabs-body {
+	flex: 1;
+	min-block-size: 0;
+	min-inline-size: 0;
+	display: flex;
+	background: var(--color-surface-100-900);
+	border-radius: 0 0.45rem 0.45rem 0.45rem;
+	overflow: hidden;
+}
+.stage-cell[data-chrome="bare"] .stage-tabs-body {
+	background: transparent;
+}
+.stage-tabpane {
+	/* And again for a grouped widget, so a member's overlay anchors to its own
+	   pane rather than to the whole group. */
+	position: relative;
+	flex: 1;
+	min-block-size: 0;
+	min-inline-size: 0;
+	display: flex;
+	flex-direction: column;
+}
+.stage-tabpane[data-hidden] {
+	display: none;
+}
+.stage-tabpane > * {
+	flex: 1;
+	min-block-size: 0;
+}
+
+/* ── an unknown widget, or an unknown unit kind ───────────────────────── */
+
+/* Labelled rather than absent, by design: uninstalling a plugin or mistyping a
+   key strands nothing, and the person can see what the layout is asking for. */
+.stage-missing {
+	display: flex;
+	flex: 1;
+	align-items: center;
+	justify-content: center;
+	padding: 0.75rem;
+	border-radius: 0.75rem;
+	border: 1px dashed color-mix(in oklab, var(--color-surface-400) 60%, transparent);
+	color: var(--color-surface-600-400);
+	font-size: 0.8rem;
+	text-align: center;
+}
+
+/* ── the sheet (below roomy) ──────────────────────────────────────────── */
+
+/* The open side's OWN mount wearing the sheet, not a second render of it —
+   a wrapper element around the mount would be an appendChild, and that reloads
+   every iframe under it. */
+.stage-side[data-state="sheet"][data-open] {
+	display: flex;
+	flex-direction: column;
+	gap: 0.35rem;
+	position: absolute;
+	inset-block: 0;
+	inset-inline-end: 0;
+	z-index: 30;
+	inline-size: min(85vw, 26rem);
+	max-inline-size: 100%;
+	padding: 0.5rem;
+	background: var(--color-surface-50);
+	box-shadow: -10px 0 28px rgba(0, 0, 0, 0.22);
+	animation: stage-fly-in-sheet-right 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.stage-side[data-state="sheet"][data-open][data-side="left"] {
+	inset-inline-end: auto;
+	inset-inline-start: 0;
+	box-shadow: 10px 0 28px rgba(0, 0, 0, 0.22);
+	animation-name: stage-fly-in-sheet-left;
+}
+[data-mode="dark"] .stage-side[data-state="sheet"][data-open] {
+	background: var(--color-surface-950);
+}
+/* In the sheet the side's panels are a LIST — each at its content height,
+   capped at what the sheet has — rather than a column of them competing for it.
+   A flex column, so the cells' explicit grid areas go quiet. */
+.stage-side[data-state="sheet"][data-open] > .stage-zone {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	gap: var(--sp-gap, 12px);
+	padding: 0;
+	overflow-y: auto;
+}
+.stage-side[data-state="sheet"][data-open] > .stage-zone > .stage-cell {
+	flex: 0 0 auto;
+	max-block-size: 100%;
+}
+/* No rail in a sheet: the sheet IS the side, opened from the header's control. */
+.stage-side[data-state="sheet"][data-open] > .stage-rail {
+	display: none;
+}
+
+.stage-sheet-head {
+	flex: none;
+	display: flex;
+	align-items: center;
+	gap: 0.35rem;
+	min-block-size: 2.75rem;
+}
+.stage-sheet-title {
+	flex: 1;
+	min-inline-size: 0;
+	font-size: 0.85rem;
+	font-weight: 650;
+}
+.stage-sheet-btn {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	inline-size: 2.75rem;
+	block-size: 2.75rem;
+	border-radius: 0.5rem;
+	color: var(--color-surface-600-400);
+}
+.stage-sheet-btn:hover {
+	background: color-mix(in oklab, var(--color-primary-500) 15%, transparent);
+}
+
+/* ── the scrim and the panels menu ────────────────────────────────────── */
+
+.stage-scrim {
+	position: absolute;
+	inset: 0;
+	z-index: 25;
+	background: rgba(0, 0, 0, 0.32);
+}
+
+/* The sheet the header's one panels button opens: a LIST of the session's side
+   units, which is what scales — another widget is another line here, where it
+   used to have to be another button in the header. */
+.stage-menu {
+	position: absolute;
+	inset-block-start: 0;
+	inset-inline: 0;
+	z-index: 30;
+	max-block-size: 70%;
+	display: flex;
+	flex-direction: column;
+	padding: 0.4rem 0.5rem 0.6rem;
+	border-radius: 0 0 0.8rem 0.8rem;
+	background: var(--color-surface-50);
+	box-shadow: 0 14px 34px rgba(0, 0, 0, 0.28);
+	animation: stage-fly-in-menu 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+[data-mode="dark"] .stage-menu {
+	background: var(--color-surface-950);
+}
+.stage-menu-list {
+	flex: 1;
+	min-block-size: 0;
+	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	gap: 0.15rem;
+}
+.stage-menu-item {
+	inline-size: 100%;
+	min-block-size: 2.75rem;
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	padding-inline: 0.5rem;
+	border-radius: 0.5rem;
+	text-align: start;
+	color: inherit;
+}
+.stage-menu-item:hover,
+.stage-menu-item:focus-visible {
+	background: color-mix(in oklab, var(--color-primary-500) 12%, transparent);
+}
+.stage-menu-title {
+	flex: 1;
+	min-inline-size: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 0.85rem;
+}
+.stage-menu-side {
+	flex: none;
+	font-size: 0.7rem;
+	color: var(--color-surface-600-400);
+}
+
+/* ── motion ───────────────────────────────────────────────────────────── */
+
+@keyframes stage-fly-in-right {
+	from {
+		transform: translateX(24px);
+		opacity: 0;
+	}
+}
+@keyframes stage-fly-in-left {
+	from {
+		transform: translateX(-24px);
+		opacity: 0;
+	}
+}
+@keyframes stage-fly-in-sheet-right {
+	from {
+		transform: translateX(100%);
+	}
+}
+@keyframes stage-fly-in-sheet-left {
+	from {
+		transform: translateX(-100%);
+	}
+}
+@keyframes stage-fly-in-menu {
+	from {
+		transform: translateY(-8px);
+		opacity: 0;
+	}
+}
+/* Anything longer than 150ms answers a preference (STYLE-GUIDE §8). */
+@media (prefers-reduced-motion: reduce) {
+	.stage-cell[data-open],
+	.stage-side[data-state="sheet"][data-open],
+	.stage-menu {
+		animation: none;
+	}
+}

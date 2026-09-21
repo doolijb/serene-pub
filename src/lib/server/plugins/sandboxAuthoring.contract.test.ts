@@ -101,7 +101,7 @@ describe("bundler", () => {
 			await rt.load("p", bundle, "h")
 			const r = await rt.invoke(
 				{ pluginId: "p", hookName: "g" },
-				{ input: { name: "Ada" }, timeoutMs: 2000, seedLabel: "s", nowMs: 1 }
+				{ kind: "task", input: { name: "Ada" }, timeoutMs: 2000, seedLabel: "s", nowMs: 1 }
 			)
 			expect(r.ok && r.value).toBe("hi Ada")
 		}

@@ -121,13 +121,12 @@ describe("getNextCharacterTurn", () => {
 		expect(getNextCharacterTurn(session)).toBeNull()
 	})
 
-	test("a character who has never replied is immediately due, even mid-conversation (not stuck behind the healthy-window check)", () => {
-		// castSize = 2 personas + 2 characters = 4. Window = last 4 messages.
-		// Character 20 never speaks anywhere in history. The old behavior
-		// required every cast member to already appear in the window before
-		// anyone could be picked, which made this permanently null — a
-		// character added to an in-progress session could never get a first
-		// turn. Character 20 must win regardless of character 10's recency.
+	test("a character who has never replied is immediately due, even mid-conversation", () => {
+		// castSize = 2 personas + 2 characters = 4, lookback = last 3.
+		// Character 20 never speaks anywhere in history, so it is due ahead
+		// of the lookback — a character added to an in-progress session gets
+		// a first turn at once. Character 20 must win regardless of character
+		// 10's recency.
 		const messages = [
 			assistantMsg(10),
 			userMsg(1),
@@ -142,22 +141,25 @@ describe("getNextCharacterTurn", () => {
 		expect(getNextCharacterTurn(session)).toBe(20)
 	})
 
-	test("healthy window precondition: a due character is only selected once every persona and character has appeared within the last castSize messages", () => {
-		// Same cast as above, but now every cast member (persona 1, persona 2,
-		// character 10, character 20) appears somewhere in the last 4 messages.
+	test("no window precondition: a character absent from the last castSize - 1 messages is due even when another cast member is missing from the last castSize messages entirely", () => {
+		// Same cast as above. Persona 2 has not spoken anywhere in the last 4
+		// messages (persona 1 sent twice in a row). The lookback alone decides:
+		// last 3 = [assistant(20), user(1), user(1)]. Character 10 is absent
+		// from lookback -> due. Character 20 is present -> not due. A rule
+		// that first required every cast member in the last 4 would answer
+		// null here, and keep answering null, since nobody could speak to
+		// mend the window.
 		const messages = [
 			assistantMsg(10),
 			assistantMsg(20),
 			userMsg(1),
-			userMsg(2)
+			userMsg(1)
 		]
 		const session = buildSession({
 			messages,
 			characterIds: [10, 20],
 			personaIds: [1, 2]
 		})
-		// lookback = last 3: [assistant(20), user(1), user(2)]. Character 10 is
-		// absent from lookback -> due. Character 20 is present -> not due.
 		expect(getNextCharacterTurn(session)).toBe(10)
 	})
 
@@ -211,8 +213,6 @@ describe("getNextCharacterTurn", () => {
 			characterIds: [10, 20, 30],
 			personaIds: [1]
 		})
-		// Healthy window (last 4, i.e. the whole array): all of persona 1,
-		// character 10, 20, and 30 appear -> healthy.
 		// Lookback (last 3): assistant(10), assistant(20), user(1) -> characters
 		// 10 and 20 both replied recently (not due); character 30 - positioned
 		// *first* in the array, checked *first* in the loop - is absent from
@@ -221,27 +221,106 @@ describe("getNextCharacterTurn", () => {
 		expect(getNextCharacterTurn(session)).toBe(30)
 	})
 
-	// Note on the "most overdue wins" tie-break described in getNextCharacterTurn's
-	// docstring: exhaustive brute-force search (2-4 cast members, message
-	// histories up to length 8, every combination of user/assistant turns) found
-	// no input for which more than one active character is simultaneously "due"
-	// while the healthy-window precondition holds. This is a structural
-	// invariant of the implementation: `recentWindow` (last castSize messages)
-	// and `lookback` (last castSize - 1 messages) are both suffixes of the same
-	// `messages` array, so they differ by at most exactly one message (the
-	// window's oldest entry). Since a due character's only qualifying
-	// window-membership message must be that single differing slot, at most one
-	// active character can satisfy "present in window, absent from lookback" at
-	// once. The dueLastReplyIndex comparison loop is therefore defensive/
-	// future-proofing code under the current one-message-per-turn model; the
-	// test above instead verifies its selection is correct and
-	// position-independent for the one due candidate that *can* legitimately
-	// arise.
+	// Rows written outside the rotation — a character's form-answer lines
+	// (written by `adventure-answer` with a characterId), two persona sends
+	// in a row, two manual "Trigger Character" presses on one character — can
+	// push more than one character out of the lookback at once. Then the
+	// "most overdue wins" tie-break in computeDueCharacter's docstring is what
+	// decides, and the rotation heals one reply at a time: the furthest-back
+	// character goes, then the next, then it is the persona's turn. The three
+	// tests below walk each shape through to the persona's turn.
+
+	test("form-answer lines outside the rotation: the furthest-back character is due, then the other, then the persona", () => {
+		// Cast of 2 (Elara = 10, Tom = 20) + 1 persona (Rook = 1): castSize 3,
+		// lookback = last 2. Elara's two form-answer lines land as her rows,
+		// then the persona sends twice. Tom's last reply (index 1) is further
+		// back than Elara's (index 3), so Tom is due first.
+		const messages = [
+			assistantMsg(10), // Elara
+			assistantMsg(20), // Tom
+			assistantMsg(10), // Elara's form answer
+			assistantMsg(10), // Elara's form answer
+			userMsg(1),
+			userMsg(1)
+		]
+		const cast = { characterIds: [10, 20], personaIds: [1] }
+		expect(getNextCharacterTurn(buildSession({ messages, ...cast }))).toBe(
+			20
+		)
+
+		// Tom replies. Lookback = [user(1), assistant(20)]: Elara is absent
+		// and due.
+		messages.push(assistantMsg(20))
+		expect(getNextCharacterTurn(buildSession({ messages, ...cast }))).toBe(
+			10
+		)
+
+		// Elara replies. Lookback = [assistant(20), assistant(10)]: everyone
+		// has spoken within the window, so nobody is due — the persona's turn.
+		messages.push(assistantMsg(10))
+		expect(
+			getNextCharacterTurn(buildSession({ messages, ...cast }))
+		).toBeNull()
+	})
+
+	test("two consecutive persona sends: the furthest-back character is due, then the other, then the persona", () => {
+		// castSize 3, lookback = last 2. After [Elara, Tom, persona, persona]
+		// the lookback is two persona rows: both characters are absent, and
+		// Elara (index 0) is further back than Tom (index 1).
+		const messages = [
+			assistantMsg(10),
+			assistantMsg(20),
+			userMsg(1),
+			userMsg(1)
+		]
+		const cast = { characterIds: [10, 20], personaIds: [1] }
+		expect(getNextCharacterTurn(buildSession({ messages, ...cast }))).toBe(
+			10
+		)
+
+		messages.push(assistantMsg(10))
+		expect(getNextCharacterTurn(buildSession({ messages, ...cast }))).toBe(
+			20
+		)
+
+		messages.push(assistantMsg(20))
+		expect(
+			getNextCharacterTurn(buildSession({ messages, ...cast }))
+		).toBeNull()
+	})
+
+	test("double manual trigger on one character: the other character is due, then nobody, until the persona speaks", () => {
+		// castSize 3, lookback = last 2. Tom is triggered twice by hand after
+		// the persona's send. Lookback = [Tom, Tom]: Elara is absent and due.
+		const messages = [
+			assistantMsg(10),
+			userMsg(1),
+			assistantMsg(20),
+			assistantMsg(20)
+		]
+		const cast = { characterIds: [10, 20], personaIds: [1] }
+		expect(getNextCharacterTurn(buildSession({ messages, ...cast }))).toBe(
+			10
+		)
+
+		// Elara replies. Lookback = [Tom, Elara]: nobody is due — the
+		// persona's turn.
+		messages.push(assistantMsg(10))
+		expect(
+			getNextCharacterTurn(buildSession({ messages, ...cast }))
+		).toBeNull()
+
+		// The persona sends. Lookback = [Elara, persona]: Tom is due.
+		messages.push(userMsg(1))
+		expect(getNextCharacterTurn(buildSession({ messages, ...cast }))).toBe(
+			20
+		)
+	})
 
 	test("Narrator response messages are excluded from the rotation window entirely", () => {
 		// 1 persona, 1 character. A narrator-response message (isNarratorResponse,
 		// characterId: null) sits between the character's reply and now - it
-		// must not occupy a slot in the healthy-window/lookback checks.
+		// must not occupy a slot in the lookback.
 		const messages = [assistantMsg(1), narratorResponseMsg(), userMsg(1)]
 		const session = buildSession({
 			messages,
@@ -377,7 +456,7 @@ describe("getNextCharacterTurn - User-Split strategy", () => {
 		).toBe(30)
 	})
 
-	test("a quiet other user's interleaved messages don't block or skew this user's own healthy-window/due calculation", () => {
+	test("a quiet other user's interleaved messages don't block or skew this user's own due calculation", () => {
 		// user1: persona 1, characters 10 (pos 0) and 20 (pos 1) - castSize 3.
 		// user2: persona 2, character 30 (pos 2) - castSize 2.
 		const characters = [
@@ -399,10 +478,9 @@ describe("getNextCharacterTurn - User-Split strategy", () => {
 		]
 		// user1's last activity is index 3, user2's is index 5 - user1 is more
 		// overdue and becomes the due group. Scoped to only user1's own
-		// messages ([0]=C1, [2]=P1, [3]=C2), the rotation is healthy (everyone
-		// in {persona 1, char 10, char 20} appears in that 3-message window),
-		// and character 10's last reply is further back (scoped index 0) than
-		// character 20's (scoped index 2) - so 10 is due, not 20. If user2's
+		// messages ([0]=C1, [2]=P1, [3]=C2), the lookback (last 2) is
+		// [P1, C2]: character 10 is absent and due, character 20 is present
+		// and not. If user2's
 		// interleaved messages weren't filtered out of the scoped history, this
 		// would compute a different (wrong) answer.
 		const session = buildUserSplitSession({

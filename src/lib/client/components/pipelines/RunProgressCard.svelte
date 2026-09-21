@@ -41,19 +41,15 @@
 	 * The run that just ended, so its receipt is still one click away.
 	 *
 	 * The store drops a run on its terminal event — there is nothing left to
-	 * show about it — and that event is the only moment this card can learn
-	 * the run is over. Caught here, before `apply` forgets it. One run, the
-	 * most recent: the card is about what is happening now, and a list of
-	 * every turn's receipt is what the runs panel is for.
+	 * show about it — and keeps what it knew as the session's `lastFinished`,
+	 * which is read from THERE rather than caught here: the session page
+	 * applies the same frames, and a card that read the store at its own
+	 * turn found the run already gone and titled the receipt "Working"
+	 * (2026-09-17). One run, the most recent: the card is about what is
+	 * happening now, and a list of every turn's receipt is what the runs
+	 * panel is for.
 	 */
-	let lastFinished = $state<{
-		runId: string
-		title: string
-		outcome: NonNullable<RunProgress["outcome"]>
-		haltNodeKey?: string
-		/** The reason, when the outcome carries one — never shown on `cancelled`. */
-		reason?: string
-	} | null>(null)
+	const lastFinished = $derived(runProgress.lastFinished(sessionId))
 
 	/**
 	 * The caption beside the title, which the `capitalize` class above
@@ -63,28 +59,11 @@
 	 * was reading `done` as success; every terminal frame now carries its
 	 * own `outcome`, projected by `./runOutcome`, pinned there).
 	 */
-	const outcomeCaption = (f: NonNullable<typeof lastFinished>) =>
-		statusText(outcomeStatusText(f.outcome, f.haltNodeKey))
+	const outcomeCaption = (f: RunProgress) =>
+		statusText(outcomeStatusText(outcomeOf(f), f.haltNodeKey))
 
-	const onRunStarted = (event: RunProgress) => {
-		if (event.sessionId === sessionId) lastFinished = null
-		runProgress.apply(event)
-	}
-
-	const onProgress = (event: RunProgress) => {
-		if (event.done || event.error) {
-			const known = runProgress.get(event.runId)
-			if ((event.sessionId ?? known?.sessionId) === sessionId)
-				lastFinished = {
-					runId: event.runId,
-					title: title(known ?? event),
-					outcome: outcomeOf(event),
-					haltNodeKey: event.haltNodeKey,
-					reason: event.error
-				}
-		}
-		runProgress.apply(event)
-	}
+	const onRunStarted = (event: RunProgress) => runProgress.started(event)
+	const onProgress = (event: RunProgress) => runProgress.apply(event)
 
 	/**
 	 * Both pushes carry `sessionId`, so both are declared as SCOPED interest
@@ -137,15 +116,16 @@
 </script>
 
 {#if lastFinished && !runs.length}
+	{@const ended = lastFinished}
 	<!-- The receipt, while the answer to "what did that just do" is still the
 	     question being asked. -->
 	<div
 		class="border-surface-500/25 bg-surface-100-900 mb-2 rounded-lg border p-2 shadow-sm"
 	>
 		<div class="flex items-center gap-2">
-			{#if outcomeIcon(lastFinished.outcome) === "check"}
+			{#if outcomeIcon(outcomeOf(ended)) === "check"}
 				<Icons.Check size={14} class="text-success-500 shrink-0" />
-			{:else if outcomeIcon(lastFinished.outcome) === "ban"}
+			{:else if outcomeIcon(outcomeOf(ended)) === "ban"}
 				<Icons.Ban size={14} class="text-muted-foreground shrink-0" />
 			{:else}
 				<!-- `err` and `halt` alike — neither produced a reply, and a
@@ -153,15 +133,15 @@
 				<Icons.TriangleAlert size={14} class="text-error-500 shrink-0" />
 			{/if}
 			<span class="min-w-0 flex-1 truncate text-sm capitalize">
-				{lastFinished.title}
+				{title(ended)}
 				<span class="text-muted-foreground text-xs lowercase">
-					{outcomeCaption(lastFinished)}
+					{outcomeCaption(ended)}
 				</span>
 			</span>
 			<button
 				type="button"
 				class="btn btn-sm preset-tonal-surface shrink-0"
-				onclick={() => runInspector.open(lastFinished!.runId)}
+				onclick={() => runInspector.open(ended.runId)}
 				title="See what this run did, stage by stage"
 			>
 				<Icons.Receipt size={14} /> Inspect
@@ -169,17 +149,19 @@
 			<button
 				type="button"
 				class="btn btn-sm preset-tonal-surface shrink-0"
-				onclick={() => (lastFinished = null)}
+				onclick={() => runProgress.dismissFinished(sessionId)}
 				aria-label="Dismiss"
 			>
 				<Icons.X size={14} />
 			</button>
 		</div>
-		{#if lastFinished.reason}
-			<!-- Already redacted server-side (`redactConnections`, applied at
-			     every `emitToUser`) — shown as it arrived. -->
+		{#if ended.error}
+			<!-- The reason, when the outcome carries one — never on `cancelled`,
+			     whose frame carries none. Already redacted server-side
+			     (`redactConnections`, applied at every `emitToUser`) — shown as
+			     it arrived. -->
 			<p class="text-muted-foreground mt-1 pl-6 text-xs">
-				{lastFinished.reason}
+				{ended.error}
 			</p>
 		{/if}
 	</div>

@@ -46,21 +46,32 @@
  * needed for `sourceKind`.
  */
 
-/** The three declared types. Bare ids — the version is a separate column. */
+/** The declared types. Bare ids — the version is a separate column. */
 export const WORLD_LORE_TYPE_ID = "core:entry/world-lore"
 export const CHARACTER_LORE_TYPE_ID = "core:entry/character-lore"
 export const HISTORY_TYPE_ID = "core:entry/history"
+/**
+ * A place the story can be in, and can be walked out of (L3, 2026-09-17).
+ *
+ * World lore's shape — agnostic, about the world, private from nobody, in the
+ * `worldLore` band. What earns it a type is that a *place* is a thing other
+ * places are next to: its exits are **link rows**
+ * (`core:outlet/link-lore-entries@1`), never a field, so "which rows are the
+ * map" is a question a reader can finally ask.
+ */
+export const LOCATION_TYPE_ID = "core:entry/location"
 
 /**
  * In the order the tabs read, which is also the order a mixed read returns —
- * world, then character, then history. Nothing downstream is documented to
- * depend on it, which is exactly why it is written down rather than rebuilt
- * per caller.
+ * world, then character, then history, then locations. Nothing downstream is
+ * documented to depend on it, which is exactly why it is written down rather
+ * than rebuilt per caller.
  */
 export const ENTRY_TYPE_IDS = [
 	WORLD_LORE_TYPE_ID,
 	CHARACTER_LORE_TYPE_ID,
-	HISTORY_TYPE_ID
+	HISTORY_TYPE_ID,
+	LOCATION_TYPE_ID
 ] as const
 
 export type EntryTypeId = (typeof ENTRY_TYPE_IDS)[number]
@@ -112,6 +123,18 @@ export interface EntryFieldsByType {
 		day: number | null
 		isCompleted: boolean
 		graphed: boolean
+	}
+	/**
+	 * World lore's field half exactly, because a location IS world lore's shape
+	 * — the type exists for the edges, not for a column. ⚠ No `exits`: the
+	 * settings language has no reference type, so an `exits` field could only
+	 * hold names, with no foreign key and no cascade when the room it names is
+	 * deleted. That is the parseable `Exits:` line this type replaced, one
+	 * column over.
+	 */
+	[LOCATION_TYPE_ID]: {
+		category: string | null
+		priority: number
 	}
 }
 
@@ -269,6 +292,9 @@ export const entriesOfType = <T extends EntryTypeId>(
 ): LorebookEntry<T>[] =>
 	entries.filter((e): e is LorebookEntry<T> => e.typeId === typeId)
 
+/** The three names a lorebook file has ever carried. */
+export type EntryExportKey = "world" | "character" | "history"
+
 /**
  * What a type is called in an exported file.
  *
@@ -277,15 +303,23 @@ export const entriesOfType = <T extends EntryTypeId>(
  * has ever exported carries in `extensions.serenepub.entryType`, and a file is
  * read by installs whose type registry is not this one. The mapping lives here
  * so both directions read the same table.
+ *
+ * **Partial, and that is the declaration doing its job** (L3, 2026-09-17). A
+ * type outside the three names simply has none: no marker is honest, where a
+ * marker no importer reads is a file that round-trips into the wrong shape.
+ * `core:entry/location` is the first such type — exported, it is written as
+ * world lore (`DEFAULT_EXPORT_KEY`), which is the correct degrade and what
+ * every install that has never heard the word reads it back as. The marker
+ * waits for an importer that knows it.
  */
-export const ENTRY_EXPORT_KEY = {
+export const ENTRY_EXPORT_KEY: Partial<Record<EntryTypeId, EntryExportKey>> = {
 	[WORLD_LORE_TYPE_ID]: "world",
 	[CHARACTER_LORE_TYPE_ID]: "character",
 	[HISTORY_TYPE_ID]: "history"
-} as const satisfies Record<EntryTypeId, string>
+}
 
-export type EntryExportKey =
-	(typeof ENTRY_EXPORT_KEY)[keyof typeof ENTRY_EXPORT_KEY]
+/** What a type with no marker of its own is written as: the agnostic shape. */
+export const DEFAULT_EXPORT_KEY: EntryExportKey = "world"
 
 const TYPE_ID_BY_EXPORT_KEY = Object.fromEntries(
 	Object.entries(ENTRY_EXPORT_KEY).map(([typeId, key]) => [key, typeId])
@@ -307,5 +341,6 @@ export const entryTypeIdOfExportKey = (key: unknown): EntryTypeId =>
 export const ENTRY_TYPE_LABEL = {
 	[WORLD_LORE_TYPE_ID]: "World Lore",
 	[CHARACTER_LORE_TYPE_ID]: "Character Lore",
-	[HISTORY_TYPE_ID]: "History"
+	[HISTORY_TYPE_ID]: "History",
+	[LOCATION_TYPE_ID]: "Places"
 } as const satisfies Record<EntryTypeId, string>

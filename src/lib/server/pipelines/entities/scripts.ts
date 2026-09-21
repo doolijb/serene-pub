@@ -26,7 +26,7 @@
 
 import { and, asc, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { parseScriptKindId } from "@serene-pub/sdk"
+import { i18nText, parseScriptKindId, type I18n } from "@serene-pub/sdk"
 
 /** The script named nothing here. */
 export class ScriptNotFoundError extends Error {}
@@ -96,8 +96,8 @@ export interface ScriptsView {
 	scripts: ScriptRecord[]
 }
 
-const en = (v: unknown): string =>
-	typeof v === "string" ? v : ((v as any)?.en ?? "")
+/** Display text in `en` through the SDK's one resolver (R-20); blank for a value publish never let in. */
+const en = (v: unknown): string => i18nText(v as I18n | undefined) ?? ""
 
 /** Registry rows for script types, live ones only, in registration order. */
 async function scriptTypeRows(db: Db): Promise<any[]> {

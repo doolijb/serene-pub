@@ -36,7 +36,8 @@
  * admin API cannot be reached, rather than with an empty list.
  *
  * There is deliberately no per-type policy in here about which endpoints may
- * gain rows. The managed KoboldCPP process lists the ggufs in its directory;
+ * gain rows. The managed KoboldCPP type lists the ggufs in the Manager's
+ * models directory (never koboldcpp's --admindir, which is the binary's);
  * Ollama lists what it has pulled; the local ONNX backends list their
  * catalogue plus the registry. Those are all "what this endpoint can serve",
  * and an endpoint that serves it should have a row for it. What differs per

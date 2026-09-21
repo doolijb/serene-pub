@@ -424,3 +424,87 @@ describe("the gate", () => {
 		).rejects.toThrow(/Session not found/)
 	})
 })
+
+describe("R-15 · staleness and order over the wire (U5f)", () => {
+	test("an accept whose slot moved comes back superseded, with the slot named, and the row listed collapsed", async () => {
+		declareSlots()
+		const w = await world()
+		const { applyChange, proposeChange } = await import(
+			"$lib/server/state/write"
+		)
+		const { stateDecide, stateProposals } = await import("./state")
+		const socket = fakeSocket(w.user.id)
+		const db = testDb as unknown as Db
+		const verity = { kind: "session_cast" as const, id: w.verity.id }
+
+		const id = await proposeChange(
+			db,
+			{ sessionId: w.session.id, updatedBy: "run:abc" },
+			{ owner: verity, slotId: HP, value: 6 }
+		)
+		// The person edits the same bar before deciding: the slot moved.
+		await applyChange(
+			db,
+			{ sessionId: w.session.id, updatedBy: "user" },
+			{ owner: verity, slotId: HP, value: 12 }
+		)
+
+		const decided = await stateDecide.handler(
+			socket,
+			{ proposalId: id, accept: true },
+			() => {}
+		)
+		expect(decided.status).toBe("superseded")
+		expect(decided.movedSlots).toEqual(["hp"])
+		// Nothing applied: the edit stands, and the state carries its version.
+		expect(decided.state.cast[castKey(w.verity.name)]?.hp).toBe(12)
+		expect(decided.state.version).toBe(1)
+		// The row is still listed — collapsed, for the widget to say why.
+		const row = decided.proposals.find((p) => p.id === id)
+		expect(row?.status).toBe("superseded")
+		expect(row?.baseVersion).toBe(0)
+		const listed = await stateProposals.handler(
+			socket,
+			{ sessionId: w.session.id },
+			() => {}
+		)
+		expect(listed.proposals.find((p) => p.id === id)?.status).toBe(
+			"superseded"
+		)
+	}, 60_000)
+
+	test("an accept whose slot is untouched since the base is the rebase — applied as before", async () => {
+		declareSlots()
+		const w = await world()
+		const { applyChange, proposeChange } = await import(
+			"$lib/server/state/write"
+		)
+		const { stateDecide } = await import("./state")
+		const socket = fakeSocket(w.user.id)
+		const db = testDb as unknown as Db
+		const verity = { kind: "session_cast" as const, id: w.verity.id }
+		const marrow = { kind: "session_cast" as const, id: w.marrow.id }
+
+		const id = await proposeChange(
+			db,
+			{ sessionId: w.session.id, updatedBy: "run:abc" },
+			{ owner: verity, slotId: HP, value: 6 }
+		)
+		// A different slot moves.
+		await applyChange(
+			db,
+			{ sessionId: w.session.id, updatedBy: "user" },
+			{ owner: marrow, slotId: HP, value: 4 }
+		)
+		const decided = await stateDecide.handler(
+			socket,
+			{ proposalId: id, accept: true },
+			() => {}
+		)
+		expect(decided.status).toBe("accepted")
+		expect(decided.movedSlots).toBeUndefined()
+		expect(decided.state.cast[castKey(w.verity.name)]?.hp).toBe(6)
+		expect(decided.state.version).toBe(2)
+		expect(decided.proposals.find((p) => p.id === id)).toBeUndefined()
+	}, 60_000)
+})

@@ -24,8 +24,12 @@ import { insertLegacy, listMessages } from "$lib/server/messages/store"
 import {
 	ALL_CHANNELS,
 	DEFAULT_CHANNEL,
+	channelHead,
+	stalenessHead,
 	channelPrefixWhere,
 	channelRefusal,
+	channelDeclsOf,
+	channelShapingOf,
 	channelsOf,
 	formatChannel,
 	isSameChannel,
@@ -179,6 +183,97 @@ describe("resolving a channel", () => {
 				greeting: { channel: "phone" }
 			} as any)
 		).toEqual(["main", "phone"])
+	})
+
+	it("reads a long-form declaration as the one channel it names (R-C)", () => {
+		expect(
+			channelsOf({
+				channels: [
+					"phone",
+					{ slug: "manuscript", role: "folio", voice: "none" }
+				]
+			} as any)
+		).toEqual(["main", "phone", "manuscript"])
+		// A declaration that names a lane has declared the channel; the lane
+		// was never anyone's to pick.
+		expect(
+			channelsOf({ channels: [{ slug: "phone:3" }] } as any)
+		).toEqual(["main", "phone"])
+		// An entry this build cannot read is skipped, not guessed at.
+		expect(
+			channelsOf({ channels: [{ role: "folio" }, 42, null] } as any)
+		).toEqual(["main"])
+	})
+
+	it("resolves each channel's role, voice and verbs, main first (R-C)", () => {
+		expect(channelDeclsOf(undefined)).toEqual([
+			{ slug: "main", role: "conversation" }
+		])
+		// A bare string is a conversation with the genre's voice and verbs.
+		expect(
+			channelDeclsOf({
+				voice: "narrator",
+				messageVerbs: { swipe: false },
+				channels: ["phone"]
+			} as any)
+		).toEqual([
+			{
+				slug: "main",
+				role: "conversation",
+				voice: "narrator",
+				messageVerbs: { swipe: false }
+			},
+			{
+				slug: "phone",
+				role: "conversation",
+				voice: "narrator",
+				messageVerbs: { swipe: false }
+			}
+		])
+		// Declared keys win; the rest keep the genre's answer.
+		const [, manuscript] = channelDeclsOf({
+			voice: "character",
+			messageVerbs: { swipe: false },
+			channels: [
+				{
+					slug: "manuscript",
+					role: "folio",
+					voice: "none",
+					messageVerbs: { delete: false }
+				}
+			]
+		} as any)
+		expect(manuscript).toEqual({
+			slug: "manuscript",
+			role: "folio",
+			voice: "none",
+			messageVerbs: { swipe: false, delete: false }
+		})
+	})
+
+	it("holds main to a conversation even if a stored declaration says otherwise", () => {
+		// The SDK refuses it at the declaration; this side reads stored JSON
+		// that may predate or sidestep that refusal, and `main` is the one
+		// channel every session talks in.
+		const [main] = channelDeclsOf({
+			channels: [{ slug: "main", role: "folio" }]
+		} as any)
+		expect(main!.role).toBe("conversation")
+	})
+
+	it("shapes nothing for a genre that declares only bare slugs", () => {
+		// `null` is what keeps a pre-R-C prompt byte-identical: the host puts
+		// no role or voice on a row when this answers null.
+		expect(channelShapingOf(undefined)).toBeNull()
+		expect(channelShapingOf({ channels: ["phone", "map"] } as any)).toBeNull()
+		expect(
+			channelShapingOf({ voice: "narrator", channels: ["phone"] } as any)
+		).toBeNull()
+		const shaping = channelShapingOf({
+			channels: [{ slug: "manuscript", role: "folio" }]
+		} as any)
+		expect(shaping?.get("manuscript")).toEqual({ role: "folio" })
+		expect(shaping?.get("main")).toEqual({ role: "conversation" })
 	})
 
 	it("reads a session's lanes off its genre", async () => {
@@ -541,6 +636,54 @@ describe("lanes under a channel", () => {
 			lanes.slice().sort(),
 			"an allocator was handed a lane another had already claimed, so one conversation was opened inside another"
 		).toEqual([1, 2, 3])
+	}, 60_000)
+})
+
+describe("the channel head (R-15 · staleness and order, U5f)", () => {
+	it("is the newest row on exactly that lane; hidden rows count, deleted rows do not", async () => {
+		const [session] = await db
+			.insert(schema.sessions)
+			.values({ userId, isGroup: false })
+			.returning()
+		const { deleteLegacy, updateLegacy } = await import("$lib/server/messages/store")
+		const line = async (channel: string, content: string) =>
+			insertLegacy(db, { sessionId: session.id, userId, role: "user", channel, content })
+
+		expect(await channelHead(db, session.id, "main")).toBeNull()
+		const a = await line("main", "a")
+		const b = await line("main", "b")
+		const c = await line("main:2", "c")
+		const d = await line("phone", "d")
+		// Lane-scoped: `main` is lane 1 alone, never the union of its lanes.
+		expect(await channelHead(db, session.id, "main")).toBe(b.id)
+		expect(await channelHead(db, session.id, "main:2")).toBe(c.id)
+		expect(await channelHead(db, session.id, "phone")).toBe(d.id)
+		expect(await channelHead(db, session.id, "radio")).toBeNull()
+		// Hidden still exists on the channel.
+		await updateLegacy(db, b.id, { isHidden: true })
+		expect(await channelHead(db, session.id, "main")).toBe(b.id)
+		// Deleted is gone.
+		await deleteLegacy(db, b.id)
+		expect(await channelHead(db, session.id, "main")).toBe(a.id)
+
+		// The staleness head for a row's forms leaves out the row's own
+		// answers — rows stamped `metadata.answersForm` naming it — and
+		// nothing else: another row's answer, or a plain line, moves it.
+		const e = await line("main", "e")
+		const answer = await insertLegacy(db, {
+			sessionId: session.id,
+			userId,
+			role: "user",
+			channel: "main",
+			content: "yes",
+			metadata: { answersForm: { messageId: e.id, blockId: "q1" } }
+		})
+		expect(await channelHead(db, session.id, "main")).toBe(answer.id)
+		expect(await stalenessHead(db, session.id, "main", e.id)).toBe(e.id)
+		expect(await stalenessHead(db, session.id, "main", a.id)).toBe(answer.id)
+		const f = await line("main", "f")
+		expect(await stalenessHead(db, session.id, "main", e.id)).toBe(f.id)
+		expect(await stalenessHead(db, session.id, "radio", e.id)).toBeNull()
 	}, 60_000)
 })
 

@@ -25,10 +25,17 @@
  * *answer*. A caller passing no language gets English, which is exactly what
  * every existing call site already got.
  */
+import { i18nText, type I18n } from "@serene-pub/sdk"
 import { DEFAULT_LANGUAGE } from "./languages"
 
 /**
  * The display text of an `I18n` in `language`, or undefined.
+ *
+ * The SDK's `i18nText` is the one resolver (R-20, U5i): a bare string is
+ * itself, a map answers the requested locale — a blank one counts as absent —
+ * else `en`, and a value that is not `I18n` at all answers undefined, because
+ * publish enforcement keeps one from ever reaching a reader. This wrapper adds
+ * only the app's default language.
  *
  * `unknown` rather than the SDK's `I18n` on purpose: half the call sites read
  * it back off a `json` column typed `Record<string, any> | null`, and a
@@ -39,13 +46,5 @@ export function i18nTextIn(
 	value: unknown,
 	language: string = DEFAULT_LANGUAGE
 ): string | undefined {
-	if (typeof value === "string") return value
-	if (value && typeof value === "object") {
-		const map = value as Record<string, unknown>
-		const wanted = map[language]
-		if (typeof wanted === "string" && wanted.length > 0) return wanted
-		const en = map[DEFAULT_LANGUAGE]
-		if (typeof en === "string") return en
-	}
-	return undefined
+	return i18nText(value as I18n | undefined, language)
 }

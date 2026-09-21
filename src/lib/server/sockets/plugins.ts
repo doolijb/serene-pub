@@ -225,6 +225,29 @@ async function syncDeclarations(): Promise<void> {
 	} catch (e) {
 		console.warn("[plugins] session-preset sync failed:", e)
 	}
+	try {
+		// …and the template rows a package ships beside its pipelines (R19):
+		// the prompt an author wrote their pipeline around had nowhere to live
+		// until this. Disabling marks them withdrawn rather than deleting,
+		// since a configuration names the row. See `syncPluginTemplates`.
+		const { syncPluginTemplates } = await import(
+			"$lib/server/pipelines/boot/registrySync"
+		)
+		await syncPluginTemplates(db)
+	} catch (e) {
+		console.warn("[plugins] template sync failed:", e)
+	}
+	try {
+		// …and the layouts a package ships for a genre (session layout v2
+		// §4.1). Disabling marks them withdrawn rather than deleting, since a
+		// session names its layout preset. See `syncPluginLayouts`.
+		const { syncPluginLayouts } = await import(
+			"$lib/server/db/pluginLayouts"
+		)
+		await syncPluginLayouts(db)
+	} catch (e) {
+		console.warn("[plugins] session-layout sync failed:", e)
+	}
 }
 
 /** The storage-quota picture for the admin override control (undefined = plugin declares no storage). */
@@ -293,7 +316,7 @@ export const pluginsInstall: Handler<
 		}
 		// `backends` is a compiled fact: run the bundle on both sandboxes and
 		// take the set it actually loads on, ignoring any author claim.
-		const conf = await checkConformance(params.bundleSource)
+		const conf = await checkConformance(params.bundleSource, params.manifest)
 		if (conf.backends.length === 0) {
 			const msg =
 				"Plugin failed conformance on every backend: " +
@@ -392,12 +415,95 @@ export const pluginsUninstall: Handler<
 	handler: async (socket, params, emitToUser) => {
 		requireAdmin(socket, emitToUser)
 		if (pluginsEnabled()) getManager().unregister(params.pluginId)
+		// What an install PROJECTED comes out first, while the plugin row that
+		// owns it still exists (D-6): the specs by `source_plugin_id` and the
+		// configs by seed key, with everything under a spec following by FK
+		// cascade. Prompts, presets and layouts are deliberately not here —
+		// they are marked withdrawn by their own syncs below, because a session
+		// names its preset and a configuration names a prompt row.
+		const { cullPluginProjection } = await import(
+			"$lib/server/plugins/install"
+		)
+		await cullPluginProjection(db, params.pluginId)
 		await removePlugin(db, params.pluginId)
 		await db
 			.delete(schema.pluginFiles)
 			.where(eq(schema.pluginFiles.pluginId, params.pluginId))
 		if (pluginsEnabled()) await syncDeclarations()
 		return { plugins: await emitList(emitToUser) }
+	}
+}
+
+/**
+ * **Install a plugin from a folder on this machine** (D-6) — the dev install.
+ *
+ * `plugins:install` takes a bundle and a manifest over the wire, which is the
+ * shape a *distributed* package arrives in and a shape nothing yet produces.
+ * This one takes a path: the package `serene-pub build` just wrote, read
+ * straight off disk, so an author can go from `npm run package` to a genre in
+ * the picker without a registry in between.
+ *
+ * Three refusals, in order:
+ *
+ *  - **admin only**, like every handler in this file;
+ *  - **`pluginsEnabled()`**, unlike every handler in this file. The others are
+ *    management — an admin preparing plugins for an instance that has not
+ *    switched the subsystem on yet — and they change rows nothing reads. This
+ *    one projects a genre into the picker and specs into the run path, which
+ *    are read by the session surface whether the sandbox is on or not. A dev
+ *    install is a development act, so it asks for the development flag;
+ *  - **a local path, never a URL.** Anything this fetched would be code
+ *    installed from wherever the string pointed, judged by nobody.
+ *
+ * It does not enable the plugin. `upsertPlugin`'s SHA pin leaves a fresh
+ * install disabled and the permission review leaves every grant refused until
+ * an administrator looks, and neither of those is a dev install's to skip.
+ */
+export const pluginsInstallLocal: Handler<
+	Sockets.Plugins.InstallLocal.Params,
+	Sockets.Plugins.InstallLocal.Response
+> = {
+	event: "plugins:installLocal",
+	handler: async (socket, params, emitToUser) => {
+		requireAdmin(socket, emitToUser)
+		if (!pluginsEnabled()) {
+			const msg =
+				"The plugin subsystem is off. A dev install projects a genre and its " +
+				"pipelines into rows the session surface reads, so it asks for " +
+				"SP_PLUGINS_ENABLED rather than landing them on an instance that has " +
+				"the subsystem switched off."
+			emitToUser("error", { error: msg })
+			throw new Error(msg)
+		}
+		const dir = typeof params.dir === "string" ? params.dir.trim() : ""
+		if (!dir || /^[a-z][a-z0-9+.-]*:\/\//i.test(dir)) {
+			const msg =
+				"A dev install reads a folder on this machine. Give it a path to the " +
+				"package — not a URL: code fetched from a string nobody reviewed is " +
+				"code nobody judged."
+			emitToUser("error", { error: msg })
+			throw new Error(msg)
+		}
+
+		const { installPluginPackage } = await import(
+			"$lib/server/plugins/install"
+		)
+		const report = await installPluginPackage(db, dir)
+		for (const line of [...report.warnings, ...report.refused])
+			console.warn(`[plugins] installLocal '${report.pluginId}': ${line}`)
+		// The manifest's own declarations — presets, prompts, engines, event
+		// subscriptions, layouts — are reconciled from the plugin rows, so they
+		// land the moment the row exists (and again on enable).
+		await syncDeclarations()
+		return {
+			pluginId: report.pluginId,
+			specs: report.specs,
+			configs: report.configs,
+			genres: report.genresDeclared,
+			files: report.files.stored,
+			warnings: [...report.warnings, ...report.refused],
+			plugins: await emitList(emitToUser)
+		}
 	}
 }
 
@@ -781,6 +887,7 @@ export function registerPluginHandlers(
 	register(socket, pluginsReviewPermissions, emitToUser)
 	register(socket, pluginsSetStorageQuota, emitToUser)
 	register(socket, pluginsInstall, emitToUser)
+	register(socket, pluginsInstallLocal, emitToUser)
 	register(socket, pluginsSetEnabled, emitToUser)
 	register(socket, pluginsSetBackend, emitToUser)
 	register(socket, pluginsSetSequential, emitToUser)

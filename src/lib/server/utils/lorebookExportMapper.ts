@@ -27,6 +27,7 @@ import {
 	SELECTIVE_LOGIC_BY_ST_CODE
 } from "$lib/server/pipelines/ranking/signals"
 import {
+	DEFAULT_EXPORT_KEY,
 	ENTRY_EXPORT_KEY,
 	ENTRY_TYPE_IDS,
 	WORLD_LORE_TYPE_ID,
@@ -368,9 +369,12 @@ export function mapEntry(
 		extensions: {
 			...foreign,
 			serenepub: {
+				// A type with no marker of its own is written as world lore — the
+				// agnostic shape, and what an install that has never heard of it
+				// reads back (L3, 2026-09-17).
 				entryType:
 					ENTRY_EXPORT_KEY[entry.typeId as EntryTypeId] ??
-					ENTRY_EXPORT_KEY[WORLD_LORE_TYPE_ID],
+					DEFAULT_EXPORT_KEY,
 				...(refs.localId !== undefined
 					? { localId: refs.localId }
 					: {}),

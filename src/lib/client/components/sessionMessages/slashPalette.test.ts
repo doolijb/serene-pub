@@ -6,6 +6,8 @@
  * "Slash commands".
  */
 import { describe, expect, it } from "vitest"
+import { CORE_ACTIONS, CORE_VERB_REASONS, partitionEnabledWhen } from "@serene-pub/sdk"
+import { itemValuesOf } from "$lib/shared/actions/itemValues"
 import {
 	dedupePaletteActions,
 	exactPaletteMatch,
@@ -18,10 +20,10 @@ import {
 
 const action = (over: Partial<PaletteAction>): PaletteAction => ({
 	key: "narrate",
-	function: "narrate",
 	specSlug: "core:spec/narrate",
 	name: "Narrate",
 	slash: "narrate",
+	audience: { act: ["owner"] },
 	canAct: true,
 	isNew: false,
 	venue: "composer",
@@ -32,21 +34,18 @@ const ACTIONS: PaletteAction[] = [
 	action({}),
 	action({
 		key: "narrate-character",
-		function: "narrate-character",
 		specSlug: "core:spec/narrate-character",
 		name: "Side character",
 		slash: "narrate-character"
 	}),
 	action({
 		key: "generate-image",
-		function: "generate-image",
 		specSlug: "core:spec/generate-image",
 		name: "Image",
 		slash: "generate-image"
 	}),
 	action({
 		key: "roll",
-		function: "roll",
 		specSlug: "acme:spec/roll",
 		name: "Roll the dice",
 		slash: "acme.roll",
@@ -54,7 +53,6 @@ const ACTIONS: PaletteAction[] = [
 	}),
 	action({
 		key: "continue",
-		function: "continue",
 		specSlug: "core",
 		name: "Continue",
 		slash: "continue",
@@ -127,20 +125,14 @@ describe("Enter on an exact name", () => {
 })
 
 /**
- * W-D (U5c review, second pass): a slash name two specs offer for one
- * function is ONE row that stands for the name, marked `shared`, and the
- * page fires it legacy-shaped — naming no declaration — so the server's
- * binding layer selects the spec. Firing the first declaration's identity
- * ran that spec and skipped every binding.
+ * One row per slash name (plans/31 V2: one slash name means one action, so
+ * two declarations under one name never reach a session — the dedupe folds
+ * one declaration's several venues, and holds core's verb to its name).
  */
-describe("a shared slash name", () => {
-	const twoSpecs = [
-		...ACTIONS,
-		action({ specSlug: "core:spec/narrate-b", name: "Narrate (b)" })
-	]
-
-	it("is one row, marked shared, in the first declaration's place; a lone name is unmarked", () => {
-		const rows = dedupePaletteActions(twoSpecs)
+describe("one row per slash name", () => {
+	it("one declaration listed under two venues is one row, in its first place", () => {
+		const twice = [...ACTIONS, action({ venue: "extra" })]
+		const rows = dedupePaletteActions(twice)
 		expect(rows.map((a) => a.slash)).toEqual([
 			"narrate",
 			"narrate-character",
@@ -148,26 +140,13 @@ describe("a shared slash name", () => {
 			"acme.roll",
 			"continue"
 		])
-		expect(rows[0]).toMatchObject({ specSlug: "core:spec/narrate", shared: true })
-		expect(rows.slice(1).every((a) => a.shared === undefined)).toBe(true)
+		expect(rows[0]).toMatchObject({ specSlug: "core:spec/narrate", venue: "composer" })
+		expect(exactPaletteMatch(twice, "/narrate")).toMatchObject({ specSlug: "core:spec/narrate" })
 	})
 
-	it("reaches the page through filtering and the exact match alike", () => {
-		expect(filterPaletteActions(twoSpecs, "narr")[0]?.shared).toBe(true)
-		expect(exactPaletteMatch(twoSpecs, "/narrate")?.shared).toBe(true)
-		// The lone name stays a declaration.
-		expect(exactPaletteMatch(twoSpecs, "/acme.roll")?.shared).toBeUndefined()
-	})
-
-	it("one declaration listed under two venues is one action, not a shared name", () => {
-		const twice = [...ACTIONS, action({ venue: "extra" })]
-		expect(dedupePaletteActions(twice)[0]?.shared).toBeUndefined()
-	})
-
-	it("a core verb holds its name (S1): the verb's row, never shared, whichever side it was listed on", () => {
+	it("a core verb holds its name (S1): the verb's row, whichever side of it a stale alternative was listed", () => {
 		const alternative = action({
 			key: "continue",
-			function: "continue",
 			specSlug: "core:spec/keep-going",
 			name: "Keep going",
 			slash: "continue"
@@ -178,26 +157,146 @@ describe("a shared slash name", () => {
 		]) {
 			const row = dedupePaletteActions(list).find((a) => a.slash === "continue")
 			expect(row).toMatchObject({ specSlug: "core", key: "continue" })
-			expect(row?.shared).toBeUndefined()
 		}
 	})
 })
 
 describe("a row's state", () => {
+	/** The audience half every row carries off the list: the name and who may act. */
+	const roll = { name: "Roll", audience: { act: ["owner"] } }
+	/** The audience's sentence — `core:verdict/audience`'s own, quoted (01 §13). */
+	const notYours = "'Roll' is not yours to use here — its audience is owner."
+
 	it("is greyed by the audience first, then while a reply streams — like the chips and the More menu (S5)", () => {
-		expect(paletteRowState({ canAct: true }, { generating: false })).toEqual({ disabled: false })
-		expect(paletteRowState({ canAct: false }, { generating: false })).toEqual({
+		expect(paletteRowState({ ...roll, canAct: true }, { generating: false })).toEqual({ disabled: false })
+		expect(paletteRowState({ ...roll, canAct: false }, { generating: false })).toEqual({
 			disabled: true,
-			reason: "not yours to use here"
+			reason: notYours
 		})
-		expect(paletteRowState({ canAct: true }, { generating: true })).toEqual({
+		expect(paletteRowState({ ...roll, canAct: true }, { generating: true })).toEqual({
 			disabled: true,
 			reason: "wait for the reply to finish"
 		})
 		// The audience's sentence wins: a greyed chip does not change its
 		// reason because something else is busy.
-		expect(paletteRowState({ canAct: false }, { generating: true }).reason).toBe(
-			"not yours to use here"
+		expect(paletteRowState({ ...roll, canAct: false }, { generating: true }).reason).toBe(notYours)
+	})
+
+	it("reads the declared enabled-when verdict between the two, with its reason (U5e)", () => {
+		const grey = { ...roll, canAct: true, enabled: false, reason: "Set a location first" }
+		expect(paletteRowState(grey, { generating: false })).toEqual({
+			disabled: true,
+			reason: "Set a location first"
+		})
+		// The audience's word still first; the declared reason over the busy rule.
+		expect(paletteRowState({ ...grey, canAct: false }, { generating: false }).reason).toBe(notYours)
+		expect(paletteRowState(grey, { generating: true }).reason).toBe("Set a location first")
+		// An older server sends no verdict: enabled.
+		expect(paletteRowState({ ...roll, canAct: true, enabled: undefined }, { generating: false })).toEqual({
+			disabled: false
+		})
+		// A verdict with no sentence still greys — the row says nothing rather than lying.
+		expect(paletteRowState({ ...roll, canAct: true, enabled: false }, { generating: false })).toEqual({
+			disabled: true
+		})
+	})
+
+	it("judges an extra row's item.* predicates against the newest row, and a session with no row fails them with the newest reason (U5e live walk)", () => {
+		const retry = CORE_ACTIONS.find((a) => a.key === "retry")!
+		const itemPredicates = partitionEnabledWhen(retry.enabledWhen!, "item").under
+		// Regenerate / `/retry`: core's `retry` at the extra venue, acting on the newest row.
+		const row = { name: "Regenerate", audience: { act: ["item"] }, canAct: true, enabled: true, itemPredicates, venue: "extra" }
+		// No row at all: `/retry` is grey exactly as the Regenerate chip is.
+		expect(paletteRowState(row, { generating: false, newest: null })).toEqual({
+			disabled: true,
+			reason: CORE_VERB_REASONS.notNewest.en
+		})
+		// A newest reply the road can redo: open.
+		const reply = itemValuesOf({ id: 9, role: "assistant" }, { isNewest: true, mine: true })
+		expect(paletteRowState(row, { generating: false, newest: reply })).toEqual({ disabled: false })
+		// …a hidden one, or a greeting: grey with that predicate's reason.
+		expect(
+			paletteRowState(row, {
+				generating: false,
+				newest: itemValuesOf({ id: 9, isHidden: true }, { isNewest: true, mine: true })
+			}).reason
+		).toBe(CORE_VERB_REASONS.hidden.en)
+		expect(
+			paletteRowState(row, {
+				generating: false,
+				newest: itemValuesOf({ id: 9, metadata: { isGreeting: true } }, { isNewest: true, mine: true })
+			}).reason
+		).toBe(CORE_VERB_REASONS.greeting.en)
+		// A surface offering no row leaves them unjudged; a row with none is untouched.
+		expect(paletteRowState(row, { generating: false })).toEqual({ disabled: false })
+		expect(paletteRowState({ ...roll, canAct: true, enabled: true }, { generating: false, newest: null })).toEqual({
+			disabled: false
+		})
+		// The audience and the list's own verdict still come first; the busy rule after.
+		expect(paletteRowState({ ...row, canAct: false }, { generating: false, newest: null }).reason).toBe(
+			"'Regenerate' is not yours to use here — its audience is item."
+		)
+		expect(paletteRowState(row, { generating: true, newest: reply }).reason).toBe(
+			"wait for the reply to finish"
+		)
+	})
+
+	it("a composer row's press names no row, so its item.* predicates are judged against none — as the door judges them (W4)", () => {
+		const onlyMine = [{ on: "item.mine", truthy: true, reason: { en: "only on your own line" } }]
+		const newest = itemValuesOf({ id: 9, role: "assistant" }, { isNewest: true, mine: true })
+		// A message action listed in the composer too: grey there whatever the newest row says.
+		expect(
+			paletteRowState(
+				{ ...roll, canAct: true, enabled: true, itemPredicates: onlyMine, venue: "composer" },
+				{ generating: false, newest }
+			)
+		).toEqual({ disabled: true, reason: "only on your own line" })
+		// A row with no venue named reads as the composer's.
+		expect(
+			paletteRowState({ ...roll, canAct: true, enabled: true, itemPredicates: onlyMine }, { generating: false, newest })
+				.disabled
+		).toBe(true)
+		// The same predicates at the extra venue act on the newest row.
+		expect(
+			paletteRowState(
+				{ ...roll, canAct: true, enabled: true, itemPredicates: onlyMine, venue: "extra" },
+				{ generating: false, newest }
+			)
+		).toEqual({ disabled: false })
+	})
+
+	it("the turn controls' chips read the same verdict: Regenerate is grey while generating, hidden, or with nothing to redo (pass 3)", () => {
+		// What the page's `extraChip` hands over: the listed `retry` at the
+		// extra venue, the reason resolved, the newest row beside it.
+		const retry = CORE_ACTIONS.find((a) => a.key === "retry")!
+		const listed = (enabled: boolean, reason?: string) => ({
+			...roll,
+			canAct: true,
+			enabled,
+			venue: "extra",
+			...(reason ? { reason } : {}),
+			itemPredicates: partitionEnabledWhen(retry.enabledWhen!, "item").under
+		})
+		const newest = itemValuesOf({ id: 3, role: "assistant" }, { isNewest: true, mine: true })
+		// The start push: the server said no.
+		expect(
+			paletteRowState(listed(false, CORE_VERB_REASONS.generating.en), { generating: false, newest })
+		).toEqual({ disabled: true, reason: CORE_VERB_REASONS.generating.en })
+		// The end push, a reply to redo: open.
+		expect(paletteRowState(listed(true), { generating: false, newest })).toEqual({ disabled: false })
+		// …a hidden newest row, or none: grey with the row's reason.
+		expect(
+			paletteRowState(listed(true), {
+				generating: false,
+				newest: itemValuesOf({ id: 3, isHidden: true }, { isNewest: true, mine: true })
+			}).reason
+		).toBe(CORE_VERB_REASONS.hidden.en)
+		expect(paletteRowState(listed(true), { generating: false, newest: null }).reason).toBe(
+			CORE_VERB_REASONS.notNewest.en
+		)
+		// The client's own busy flag still holds between pushes.
+		expect(paletteRowState(listed(true), { generating: true, newest }).reason).toBe(
+			CORE_VERB_REASONS.generating.en
 		)
 	})
 })

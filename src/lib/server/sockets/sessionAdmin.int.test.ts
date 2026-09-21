@@ -228,19 +228,29 @@ describe("sessions:create with a preset", () => {
 		const { sessionsCreateHandler } = await import("./sessions")
 		const sock = fakeSocket(owner.id, false)
 
+		// A refusal is answered, never thrown: the sentence rides the ack
+		// and the handler's own error push, so the start screen can show it
+		// (the catch-all replaces a thrown message with a constant).
+		const pushes: Array<{ event: string; data: any }> = []
+		const emit = (event: string, data: unknown) => pushes.push({ event, data })
+
 		const disabled = await makePreset({ enabled: false })
-		await expect(
-			sessionsCreateHandler.handler(
-				sock,
-				{
-					session: { name: "x", presetId: disabled.id } as any,
-					characterIds: [],
-					personaIds: [],
-					characterPositions: {}
-				},
-				noopEmit
-			)
-		).rejects.toThrow(/preset is not available/)
+		const refusedPreset = await sessionsCreateHandler.handler(
+			sock,
+			{
+				session: { name: "x", presetId: disabled.id } as any,
+				characterIds: [],
+				personaIds: [],
+				characterPositions: {}
+			},
+			emit
+		)
+		expect(refusedPreset.error).toMatch(/preset is not available/)
+		expect(refusedPreset.session).toBeUndefined()
+		expect(pushes.pop()).toMatchObject({
+			event: "sessions:create:error",
+			data: { error: expect.stringMatching(/preset is not available/) }
+		})
 
 		const hiddenTypeSlug = "core:genre/hidden-type"
 		const hiddenType = await makePreset({ genreId: hiddenTypeSlug })
@@ -248,18 +258,21 @@ describe("sessions:create with a preset", () => {
 			.insert(schema.sessionGenreSettings)
 			.values({ genreId: hiddenTypeSlug, enabled: false })
 			.onConflictDoNothing()
-		await expect(
-			sessionsCreateHandler.handler(
-				sock,
-				{
-					session: { name: "x", presetId: hiddenType.id } as any,
-					characterIds: [],
-					personaIds: [],
-					characterPositions: {}
-				},
-				noopEmit
-			)
-		).rejects.toThrow(/type is not available/)
+		const refusedType = await sessionsCreateHandler.handler(
+			sock,
+			{
+				session: { name: "x", presetId: hiddenType.id } as any,
+				characterIds: [],
+				personaIds: [],
+				characterPositions: {}
+			},
+			emit
+		)
+		expect(refusedType.error).toMatch(/type is not available/)
+		expect(pushes.pop()).toMatchObject({
+			event: "sessions:create:error",
+			data: { error: expect.stringMatching(/type is not available/) }
+		})
 
 		// A live preset of the standard type: the server derives genreId from
 		// the preset's genreId and records the presetId on the row.
@@ -279,7 +292,7 @@ describe("sessions:create with a preset", () => {
 			},
 			noopEmit
 		)
-		expect(res.session.genreId).toBe("core:genre/chat")
+		expect(res.session!.genreId).toBe("core:genre/chat")
 		expect((res.session as any).presetId).toBe(live.id)
 	}, 60_000)
 
@@ -298,17 +311,23 @@ describe("sessions:create with a preset", () => {
 			withdrawnAt: new Date()
 		})
 		expect(withdrawn.enabled).toBe(true)
-		await expect(
-			sessionsCreateHandler.handler(
-				sock,
-				{
-					session: { name: "x", presetId: withdrawn.id } as any,
-					characterIds: [],
-					personaIds: [],
-					characterPositions: {}
-				},
-				noopEmit
-			)
-		).rejects.toThrow(/preset is not available/)
+		const pushes: Array<{ event: string; data: any }> = []
+		const res = await sessionsCreateHandler.handler(
+			sock,
+			{
+				session: { name: "x", presetId: withdrawn.id } as any,
+				characterIds: [],
+				personaIds: [],
+				characterPositions: {}
+			},
+			(event: string, data: unknown) => pushes.push({ event, data })
+		)
+		expect(res.error).toMatch(/preset is not available/)
+		expect(pushes).toEqual([
+			{
+				event: "sessions:create:error",
+				data: { error: expect.stringMatching(/preset is not available/) }
+			}
+		])
 	}, 60_000)
 })

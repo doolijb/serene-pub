@@ -17,23 +17,17 @@
  * marked `shared` — i.e. it runs in other people's browsers — so a beacon is
  * refused whichever document it would fire from.
  */
+import type { HostFrameMessage } from "@serene-pub/sdk"
 import {
 	sanitizeWidgetCss,
 	varsToStyle
 } from "$lib/client/stores/widgetStyles.svelte"
 
 /**
- * Frame protocol v1: the host's skin push. See `PluginFrame.svelte`.
- *
- * A type alias rather than an interface so it keeps an implicit index
- * signature — `PluginFrame.post()` takes the protocol's common
- * `Record<string, unknown>`, and an interface is not assignable to one.
+ * The host's skin push, named off the protocol's own union rather than
+ * restated here — see `framePlacement.ts` for the same reasoning.
  */
-export type FrameStyleMessage = {
-	t: "style"
-	css: string
-	vars: Record<string, string>
-}
+export type FrameStyleMessage = Extract<HostFrameMessage, { t: "style" }>
 
 /**
  * A skin's `vars`, filtered EXACTLY as the native path filters them, as the

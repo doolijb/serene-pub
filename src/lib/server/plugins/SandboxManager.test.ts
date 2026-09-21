@@ -32,7 +32,7 @@ const desc = (over: Partial<PluginDescriptor> = {}): PluginDescriptor => ({
 })
 
 const call = (m: SandboxManager, over = {}) =>
-	m.callHook("p", "v", { n: 7 }, { timeoutMs: 500, ...over })
+	m.callHook("p", "v", { n: 7 }, { kind: "task", timeoutMs: 500, ...over })
 
 describe("storageSegment (jail-root invariant)", () => {
 	it("collapses traversal ids to one inert segment", () => {
@@ -117,7 +117,7 @@ describe("SandboxManager", () => {
 			"p",
 			"v",
 			{ n: 1 },
-			{ timeoutMs: 500, lifecycle: true }
+			{ kind: "lifecycle", timeoutMs: 500, lifecycle: true }
 		)
 		expect(r.ok).toBe(true)
 		expect(recs[0].mode).toBe("lifecycle")
@@ -148,7 +148,7 @@ describe("SandboxManager", () => {
 				"p",
 				"boot",
 				{ moment: "startup" },
-				{ timeoutMs: 5_000, lifecycle: true }
+				{ kind: "lifecycle", timeoutMs: 5_000, lifecycle: true }
 			)
 			expect(r.ok).toBe(true)
 			if (!r.ok) continue
@@ -190,11 +190,34 @@ describe("SandboxManager", () => {
 		expect(recs[0].mode).toBe("sequential")
 	})
 
+	it("a call naming no hook ctx kind throws — a host bug, never a typed hook failure", async () => {
+		// The kind decides what the hook's `ctx` carries (hookCtx.ts, R-3).
+		// Thrown before the gate and the queue, so the dispatcher that forgot
+		// its kind hears it on the first call rather than as a `load` outcome
+		// in the invocation log.
+		const recs: InvocationRecord[] = []
+		mgr = new SandboxManager({ onInvocation: (r) => recs.push(r) })
+		mgr.register(desc())
+		mgr.markReady()
+		await expect(
+			mgr.callHook("p", "v", { n: 7 }, {
+				timeoutMs: 500
+			} as unknown as Parameters<SandboxManager["callHook"]>[3])
+		).rejects.toThrow(/without a hook ctx kind/)
+		await expect(
+			mgr.callHook("p", "v", { n: 7 }, {
+				kind: "widget",
+				timeoutMs: 500
+			} as unknown as Parameters<SandboxManager["callHook"]>[3])
+		).rejects.toThrow(/without a hook ctx kind/)
+		expect(recs).toEqual([])
+	})
+
 	it("an unregistered plugin yields a missing outcome and a record", async () => {
 		const recs: InvocationRecord[] = []
 		mgr = new SandboxManager({ onInvocation: (r) => recs.push(r) })
 		mgr.markReady()
-		const r = await mgr.callHook("ghost", "v", {}, { timeoutMs: 500 })
+		const r = await mgr.callHook("ghost", "v", {}, { kind: "task", timeoutMs: 500 })
 		expect(r.ok).toBe(false)
 		if (!r.ok) expect(r.outcome).toBe("missing")
 		expect(recs[0].outcome).toBe("missing")
@@ -249,7 +272,7 @@ describe("register refreshes what the sandbox holds", () => {
 	}
 
 	const gen = async (m: SandboxManager) => {
-		const r = await m.callHook("p", "v", { n: 7 }, { timeoutMs: 2000 })
+		const r = await m.callHook("p", "v", { n: 7 }, { kind: "task", timeoutMs: 2000 })
 		return r.ok ? (r.value as { gen: number }).gen : -1
 	}
 
@@ -331,7 +354,7 @@ describe("register refreshes what the sandbox holds", () => {
 		mgr.register(
 			desc({ bundleSource: genB, bundleHash: "h1", backend: "quickjs" })
 		)
-		const q = await mgr.callHook("p", "v", { n: 7 }, { timeoutMs: 2000 })
+		const q = await mgr.callHook("p", "v", { n: 7 }, { kind: "task", timeoutMs: 2000 })
 		expect(q.ok && q.backend).toBe("quickjs")
 		expect(q.ok && (q.value as { gen: number }).gen).toBe(2)
 		// Back to SES. The hash never moves, so `load` is a no-op on any copy
@@ -340,7 +363,7 @@ describe("register refreshes what the sandbox holds", () => {
 		mgr.register(
 			desc({ bundleSource: genC, bundleHash: "h1", backend: "ses" })
 		)
-		const s2 = await mgr.callHook("p", "v", { n: 7 }, { timeoutMs: 2000 })
+		const s2 = await mgr.callHook("p", "v", { n: 7 }, { kind: "task", timeoutMs: 2000 })
 		expect(s2.ok && s2.backend).toBe("ses")
 		expect(s2.ok && (s2.value as { gen: number }).gen).toBe(3)
 	}, 20_000)
@@ -358,11 +381,11 @@ describe("register refreshes what the sandbox holds", () => {
 			})
 		)
 		mgr.markReady()
-		const first = mgr.callHook("p", "v", { n: 7 }, { timeoutMs: 20_000 })
+		const first = mgr.callHook("p", "v", { n: 7 }, { kind: "task", timeoutMs: 20_000 })
 		expect(await untilExecuting(mgr)).toBe(true)
 		// Queued behind `first`, so it captured the pre-change descriptor. It
 		// must not execute — nor re-install — the grants revoked while it waited.
-		const queued = mgr.callHook("p", "v", { n: 7 }, { timeoutMs: 20_000 })
+		const queued = mgr.callHook("p", "v", { n: 7 }, { kind: "task", timeoutMs: 20_000 })
 		mgr.register(
 			desc({
 				bundleSource: genB,
@@ -382,7 +405,7 @@ describe("register refreshes what the sandbox holds", () => {
 				"q",
 				"v",
 				{ n: 7 },
-				{ timeoutMs: 2000 }
+				{ kind: "task", timeoutMs: 2000 }
 			)
 			return r.ok ? (r.value as { gen: number }).gen : -1
 		}
@@ -412,7 +435,7 @@ describe("register refreshes what the sandbox holds", () => {
 			})
 		)
 		mgr.markReady()
-		const inFlight = mgr.callHook("p", "v", { n: 7 }, { timeoutMs: 20_000 })
+		const inFlight = mgr.callHook("p", "v", { n: 7 }, { kind: "task", timeoutMs: 20_000 })
 		// past the load phase, so the drop below lands on a *running* call
 		expect(await untilExecuting(mgr)).toBe(true)
 		mgr.register(
@@ -487,7 +510,7 @@ describe("register refreshes what the sandbox holds", () => {
 			})
 		)
 		mgr.markReady()
-		const inFlight = mgr.callHook("p", "v", { n: 7 }, { timeoutMs: 20_000 })
+		const inFlight = mgr.callHook("p", "v", { n: 7 }, { kind: "task", timeoutMs: 20_000 })
 		expect(await untilExecuting(mgr)).toBe(true)
 		mgr.register(
 			desc({
@@ -516,7 +539,7 @@ describe("register refreshes what the sandbox holds", () => {
 			})
 		)
 		mgr.markReady()
-		const doomed = mgr.callHook("p", "v", { n: 7 }, { timeoutMs: 300 })
+		const doomed = mgr.callHook("p", "v", { n: 7 }, { kind: "task", timeoutMs: 300 })
 		expect(await untilExecuting(mgr)).toBe(true)
 		mgr.register(
 			desc({
@@ -545,7 +568,7 @@ describe("register refreshes what the sandbox holds", () => {
 		// the load finishes — so there is nothing loaded for `register` to drop.
 		// Whatever becomes of this call, the *next* one must not go on running
 		// the old bundle behind a `has()` that never re-fires.
-		const raced = mgr.callHook("p", "v", { n: 7 }, { timeoutMs: 5000 })
+		const raced = mgr.callHook("p", "v", { n: 7 }, { kind: "task", timeoutMs: 5000 })
 		mgr.register(
 			desc({
 				bundleSource: genB,
@@ -589,7 +612,7 @@ describe("admin kill resolves the sandbox the call is on", () => {
 			})
 		)
 		mgr.markReady()
-		const running = mgr.callHook("p", "v", {}, { timeoutMs: 60_000 })
+		const running = mgr.callHook("p", "v", {}, { kind: "task", timeoutMs: 60_000 })
 		expect(await untilRunning(mgr)).toBe(true)
 		const [call] = mgr.activeInvocations()
 		mgr.setBackend("p", "ses") // deferred — p is busy, so the call stays on quickjs
@@ -605,7 +628,7 @@ describe("admin kill resolves the sandbox the call is on", () => {
 				storageQuotaBytes: 1024
 			})
 		)
-		const r = await mgr.callHook("p", "v", {}, { timeoutMs: 5000 })
+		const r = await mgr.callHook("p", "v", {}, { kind: "task", timeoutMs: 5000 })
 		expect(r.ok && (r.value as { gen: number }).gen).toBe(2)
 	}, 60_000)
 
@@ -621,9 +644,9 @@ describe("admin kill resolves the sandbox the call is on", () => {
 		)
 		mgr.register(desc({ id: "q", bundleSource: gen2 }))
 		mgr.markReady()
-		await mgr.callHook("q", "v", {}, { timeoutMs: 5000 })
+		await mgr.callHook("q", "v", {}, { kind: "task", timeoutMs: 5000 })
 		expect(mgr.isWarm("q")).toBe(true)
-		const doomed = mgr.callHook("p", "v", {}, { timeoutMs: 12_000 })
+		const doomed = mgr.callHook("p", "v", {}, { kind: "task", timeoutMs: 12_000 })
 		expect(await untilRunning(mgr)).toBe(true)
 		const [call] = mgr.activeInvocations()
 		mgr.setBackend("p", "quickjs") // deferred — the call is still on SES
@@ -645,7 +668,7 @@ describe("admin kill resolves the sandbox the call is on", () => {
 			desc({ bundleSource: gen2, bundleHash: "h1", backend: "ses" })
 		)
 		mgr.markReady()
-		await mgr.callHook("p", "v", {}, { timeoutMs: 8000 })
+		await mgr.callHook("p", "v", {}, { kind: "task", timeoutMs: 8000 })
 		// A leaked worker thread has no public surface, so this reads the map
 		// directly rather than inventing API for one invariant.
 		const workers = () =>
@@ -654,7 +677,7 @@ describe("admin kill resolves the sandbox the call is on", () => {
 		mgr.register(
 			desc({ bundleSource: gen2, bundleHash: "h2", backend: "quickjs" })
 		)
-		await mgr.callHook("p", "v", {}, { timeoutMs: 8000 })
+		await mgr.callHook("p", "v", {}, { kind: "task", timeoutMs: 8000 })
 		expect(workers().has("p")).toBe(false)
 	}, 60_000)
 })
@@ -695,10 +718,10 @@ describe("a call is stopped on its own, not by squashing its plugin", () => {
 		mgr = new SandboxManager()
 		mgr.register(desc({ bundleSource: park, bundleHash: "h1" }))
 		mgr.markReady()
-		const a = mgr.callHook("p", "park", { id: "a" }, { timeoutMs: 30_000 })
+		const a = mgr.callHook("p", "park", { id: "a" }, { kind: "task", timeoutMs: 30_000 })
 		let bSettled = false
 		const b = mgr
-			.callHook("p", "park", { id: "b" }, { timeoutMs: 30_000 })
+			.callHook("p", "park", { id: "b" }, { kind: "task", timeoutMs: 30_000 })
 			.then((r) => {
 				bSettled = true
 				return r
@@ -726,14 +749,14 @@ describe("a call is stopped on its own, not by squashing its plugin", () => {
 		mgr.markReady()
 		let keptSettled = false
 		const kept = mgr
-			.callHook("keeper", "park", { id: "k" }, { timeoutMs: 60_000 })
+			.callHook("keeper", "park", { id: "k" }, { kind: "task", timeoutMs: 60_000 })
 			.then((r) => {
 				keptSettled = true
 				return r
 			})
 		expect(await untilRunning(mgr, 1)).toBe(true)
 		await sleep(100) // parked, so the hog below cannot starve its load
-		const doomed = mgr.callHook("hog", "spin", {}, { timeoutMs: 60_000 })
+		const doomed = mgr.callHook("hog", "spin", {}, { kind: "task", timeoutMs: 60_000 })
 		expect(await untilRunning(mgr, 2)).toBe(true)
 		const target = mgr
 			.activeInvocations()
@@ -759,7 +782,7 @@ describe("a call is stopped on its own, not by squashing its plugin", () => {
 		mgr = new SandboxManager({ onInvocation: (r) => recs.push(r) })
 		mgr.register(desc({ bundleSource: park, bundleHash: "h1" }))
 		mgr.markReady()
-		const doomed = mgr.callHook("p", "spin", {}, { timeoutMs: 60_000 })
+		const doomed = mgr.callHook("p", "spin", {}, { kind: "task", timeoutMs: 60_000 })
 		expect(await untilRunning(mgr, 1)).toBe(true)
 		const [call] = byCallId(mgr)
 		expect(await mgr.killCall(call.callId)).toBe(true)
@@ -799,7 +822,7 @@ describe("unload drops the copy and keeps the registration", () => {
 	}
 
 	const gen = async (m: SandboxManager) => {
-		const r = await m.callHook("p", "v", { n: 7 }, { timeoutMs: 8000 })
+		const r = await m.callHook("p", "v", { n: 7 }, { kind: "task", timeoutMs: 8000 })
 		return r.ok ? (r.value as { gen: number }).gen : -1
 	}
 
@@ -822,7 +845,7 @@ describe("unload drops the copy and keeps the registration", () => {
 		mgr = new SandboxManager()
 		mgr.register(desc({ bundleSource: slow, bundleHash: "h1" }))
 		mgr.markReady()
-		const inFlight = mgr.callHook("p", "v", { n: 7 }, { timeoutMs: 20_000 })
+		const inFlight = mgr.callHook("p", "v", { n: 7 }, { kind: "task", timeoutMs: 20_000 })
 		expect(await untilExecuting(mgr)).toBe(true)
 		mgr.unload("p")
 		// Deferred: the running call keeps the copy it started on.
@@ -837,7 +860,7 @@ describe("unload drops the copy and keeps the registration", () => {
 		mgr = new SandboxManager()
 		mgr.register(desc({ bundleSource: slow, bundleHash: "h1" }))
 		mgr.markReady()
-		const inFlight = mgr.callHook("p", "v", { n: 7 }, { timeoutMs: 20_000 })
+		const inFlight = mgr.callHook("p", "v", { n: 7 }, { kind: "task", timeoutMs: 20_000 })
 		expect(await untilExecuting(mgr)).toBe(true)
 		// A registration change *and* an unload land while it runs. Were the
 		// swap to win, the drain would re-warm the copy the admin just asked
@@ -922,7 +945,7 @@ describe("stopping a run stops the hooks it started", () => {
 			"p",
 			"winds",
 			{ id: "a" },
-			{ timeoutMs: 60_000, runId: "r1" }
+			{ kind: "task", timeoutMs: 60_000, runId: "r1" }
 		)
 		expect(await untilRunning(mgr, 1)).toBe(true)
 		// The live record carries the run, which is the only reason a stop can
@@ -949,7 +972,7 @@ describe("stopping a run stops the hooks it started", () => {
 			"p",
 			"deaf",
 			{},
-			{ timeoutMs: 60_000, runId: "r1" }
+			{ kind: "task", timeoutMs: 60_000, runId: "r1" }
 		)
 		expect(await untilRunning(mgr, 1)).toBe(true)
 
@@ -977,7 +1000,7 @@ describe("stopping a run stops the hooks it started", () => {
 		// Five deaf hooks: nothing here can shorten the wait by cooperating, so
 		// the elapsed time is the budget arithmetic and nothing else.
 		const doomed = [1, 2, 3, 4, 5].map(() =>
-			mgr.callHook("p", "deaf", {}, { timeoutMs: 60_000, runId: "r1" })
+			mgr.callHook("p", "deaf", {}, { kind: "task", timeoutMs: 60_000, runId: "r1" })
 		)
 		expect(await untilRunning(mgr, 5)).toBe(true)
 
@@ -1002,7 +1025,7 @@ describe("stopping a run stops the hooks it started", () => {
 				"p",
 				"winds",
 				{ id: "b" },
-				{ timeoutMs: 60_000, runId: "r2" }
+				{ kind: "task", timeoutMs: 60_000, runId: "r2" }
 			)
 			.then((r) => {
 				otherSettled = true
@@ -1012,7 +1035,7 @@ describe("stopping a run stops the hooks it started", () => {
 			"p",
 			"winds",
 			{ id: "a" },
-			{ timeoutMs: 60_000, runId: "r1" }
+			{ kind: "task", timeoutMs: 60_000, runId: "r1" }
 		)
 		expect(await untilRunning(mgr, 2)).toBe(true)
 
@@ -1073,13 +1096,13 @@ describe("a starved call is stopped on its own, not by breaking the worker", () 
 
 		// Parked, so it is yielding the worker — which is what lets the hog's
 		// bundle be stored before it takes the thread.
-		const starved = mgr.callHook("starved", "park", {}, { timeoutMs: 500 })
+		const starved = mgr.callHook("starved", "park", {}, { kind: "task", timeoutMs: 500 })
 		expect(await untilRunning(mgr, 1)).toBe(true)
 		await new Promise((r) => setTimeout(r, 100))
 		// A deadline far beyond the starved call's + the sandbox's 1000ms
 		// margin: the whole point is that the thread is still held when the
 		// worker-wide backstop would have fired.
-		const hog = mgr.callHook("hog", "spin", {}, { timeoutMs: 4_000 })
+		const hog = mgr.callHook("hog", "spin", {}, { kind: "task", timeoutMs: 4_000 })
 		expect(await untilRunning(mgr, 2)).toBe(true)
 
 		const rs = await starved

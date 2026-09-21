@@ -74,6 +74,8 @@ vi.mock("$lib/server/pipelines/runtime/runTurn", async (importOriginal) => {
 /** A spec nothing in core contributes, so the fire routes to it unambiguously. */
 const PROBE_SLUG = "test:spec/cancel-probe"
 const PROBE_FUNCTION = "cancel-probe"
+/** The probe by identity — what a press and a session row name (plans/31 V2). */
+const PROBE_ACTION = `${PROBE_SLUG}#${PROBE_FUNCTION}`
 const GENRE = "core:genre/chat"
 
 beforeAll(async () => {
@@ -152,7 +154,7 @@ async function makeSession(username: string) {
 	await testDb.insert(schema.sessionFunctions).values({
 		sessionId: session.id,
 		genreId: GENRE,
-		functionKey: PROBE_FUNCTION,
+		functionKey: PROBE_ACTION,
 		enabled: true
 	})
 	return { user, session }
@@ -164,7 +166,7 @@ async function fire(userId: number, sessionId: number, runId: string) {
 	const pushed: any[] = []
 	const returned = await sessionsTriggerFunctionHandler.handler(
 		fakeSocket(userId),
-		{ sessionId, function: PROBE_FUNCTION, runId },
+		{ sessionId, action: PROBE_ACTION, runId },
 		(event: string, data: any) => {
 			if (event === "sessions:triggerFunction") pushed.push(data)
 		}

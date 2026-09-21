@@ -9,8 +9,8 @@
  * SessionLayout. Those are two different subtrees under <main> — Header is a
  * sibling of the routed page, not a descendant of it — so nothing the session
  * page could `setContext` would ever reach the header. A module-level singleton
- * is the bridge, exactly as navHover.svelte.ts already bridges the same two
- * components for the "Layout" pull-tab.
+ * is the bridge, exactly as layoutEditor.svelte.ts already bridges the same
+ * two components for the header's "Layout" button.
  *
  * SessionLayout is the ONLY writer of `narrow` / `left` / `right`: it owns the
  * one matchMedia for the 1024 threshold (its `isDesktop`), so there is no second

@@ -34,6 +34,7 @@ import {
 } from "./storageHost"
 import type { PluginRowPort } from "./rowStore"
 import type { HookRunResult, PluginSandbox, SandboxKind } from "./types"
+import { hookCtxGrants, type HookCtxKind } from "./hookCtx"
 
 /** What the manager needs to know about an installed, enabled plugin. Persisted
  * elsewhere; the manager holds the projection it dispatches against. */
@@ -69,6 +70,12 @@ export interface PluginDescriptor {
 }
 
 export interface CallOptions {
+	/**
+	 * The hook ctx kind (`hookCtx.ts`, plans/29 R-3) — what the hook's `ctx`
+	 * carries. Each of the six dispatchers names its own; `callHook` throws
+	 * on a call without one rather than defaulting.
+	 */
+	kind: HookCtxKind
 	timeoutMs: number
 	/** Deterministic RNG seed; defaults to a stable per-call label. */
 	seedLabel?: string
@@ -395,6 +402,10 @@ export class SandboxManager {
 		input: Record<string, unknown>,
 		opts: CallOptions
 	): Promise<HookRunResult> {
+		// A programming error, not a hook failure: thrown here, before the
+		// gate and the queue, so the dispatcher that forgot its kind hears it
+		// on the first call rather than as a `load` outcome in the log.
+		hookCtxGrants(opts.kind)
 		const desc = this.descriptors.get(pluginId)
 		const queuedAt = Date.now()
 		if (!desc)
@@ -847,6 +858,7 @@ export class SandboxManager {
 			const invoked = sandbox.invoke(
 				{ pluginId: desc.id, hookName },
 				{
+					kind: opts.kind,
 					// `settings` is a reserved input key (12 §6), injected from
 					// the descriptor resolved *now* — same staleness rule as
 					// the grants above. Only when the manifest declares a

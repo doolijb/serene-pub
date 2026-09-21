@@ -5,14 +5,13 @@
  * pattern), so "what icon, what caption" is assertable against a wire frame
  * without a socket or a DOM.
  *
- * ## What this replaced
+ * ## Why the frame carries `outcome`
  *
- * `RunProgressCard` used to read a terminal frame as two flags —  `cancelled`
- * and `error` — and anything that was neither drew a check mark, INCLUDING a
- * `receipt.outcome` of `err` or `halt` whose frame never got round to setting
- * `error` (`runReply.ts`'s `finally`, before this fix): "Progress card says
- * 'Respond finished ✓' on an errored run". Every terminal frame now carries
- * its own `outcome` (`runReply.ts`, `sockets/sessions.ts`'s
+ * Two flags — `cancelled` and `error` — cannot describe a terminal frame:
+ * anything that is neither would draw a check mark, INCLUDING a
+ * `receipt.outcome` of `err` or `halt` whose frame never set `error`
+ * ("Progress card says 'Respond finished ✓' on an errored run"). So every
+ * terminal frame carries its own `outcome` (`runReply.ts`, `sockets/sessions.ts`'s
  * `sessions:triggerFunction` — the only two callers of `pipelines:progress`);
  * `outcomeOf` keeps the two-flag reading only as the fallback for a future
  * caller of this same event that has not been taught to say which yet. Image

@@ -134,8 +134,10 @@ const HOOK = `module.exports = { hooks: {
 	}
 } }`
 
+// An outlet's ctx: granted `storage`, not `fetch` (hookCtx.ts, R-3).
 const opts = (input: Record<string, unknown>) => ({
 	input,
+	kind: "outlet" as const,
 	timeoutMs: 5000,
 	seedLabel: "s",
 	nowMs: Date.parse("2026-02-03T04:05:06.000Z")

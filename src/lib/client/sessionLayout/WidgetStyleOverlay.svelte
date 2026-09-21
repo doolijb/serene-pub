@@ -394,7 +394,7 @@
 					bind:value={draft.css}
 					oninput={schedulePreview}
 					spellcheck="false"
-					rows="6"
+					rows="18"
 					placeholder={mount === "frame"
 						? "body { background: #101018; }"
 						: ".message-bubble { border-radius: 1.25rem; }"}
@@ -510,7 +510,7 @@
 	<Portal>
 		<Popover.Positioner class="z-[1200]!">
 			<Popover.Content
-				class="card bg-surface-100-900 w-[min(92vw,26rem)] p-3 shadow-xl"
+				class="card bg-surface-100-900 w-[min(92vw,44rem)] p-3 shadow-xl"
 				aria-label="{mode === 'new' ? 'New' : 'Edit'} style for {label}"
 			>
 				<!-- Both popovers keep a Content in the DOM (zag only hides the
@@ -702,11 +702,9 @@
 		align-items: center;
 		gap: 0.25rem;
 		margin-block-start: 0.15rem;
-		font-size: 0.62rem;
-		font-weight: 700;
-		letter-spacing: 0.06em;
-		text-transform: uppercase;
-		opacity: 0.62;
+		font-size: 12px;
+		font-weight: 400;
+		opacity: 0.72;
 	}
 	.ws-card {
 		display: flex;
@@ -729,8 +727,8 @@
 		display: flex;
 		align-items: center;
 		gap: 0.3rem;
-		font-size: 0.7rem;
-		font-weight: 650;
+		font-size: 14px;
+		font-weight: 500;
 		color: var(--color-surface-700);
 	}
 	:global([data-mode="dark"]) .ws-card-head {
@@ -764,10 +762,10 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 0.25rem;
-		padding: 0.24rem 0.5rem;
+		padding: 0.3rem 0.6rem;
 		border-radius: 0.45rem;
-		font-size: 0.7rem;
-		font-weight: 600;
+		font-size: 13px;
+		font-weight: 500;
 		background: color-mix(
 			in oklab,
 			var(--color-surface-200) 80%,
@@ -815,8 +813,8 @@
 		display: flex;
 		align-items: center;
 		gap: 0.35rem;
-		font-size: 0.72rem;
-		font-weight: 650;
+		font-size: 14px;
+		font-weight: 500;
 		color: var(--color-surface-700);
 	}
 	:global([data-mode="dark"]) .ws-editor-head {
@@ -831,19 +829,19 @@
 		gap: 0.2rem;
 	}
 	.ws-field-label {
-		font-size: 0.66rem;
-		font-weight: 650;
+		font-size: 12px;
+		font-weight: 400;
 		color: var(--color-surface-600);
 	}
 	:global([data-mode="dark"]) .ws-field-label {
 		color: var(--color-surface-300);
 	}
 	.ws-input {
-		padding: 0.24rem 0.45rem;
+		padding: 0.3rem 0.5rem;
 		border-radius: 0.42rem;
 		border: 1px solid
 			color-mix(in oklab, var(--color-surface-500) 35%, transparent);
-		font-size: 0.72rem;
+		font-size: 14px;
 		background: color-mix(
 			in oklab,
 			var(--color-surface-50) 80%,
@@ -859,19 +857,26 @@
 		);
 		color: var(--color-surface-100);
 	}
+	/* A stylesheet is written here, not glanced at: 18 lines to start from,
+	   `resize` to take more, and a mono face at the same 13px the rest of the
+	   editor's secondary text uses. `lh` rather than `rows`, so the floor
+	   follows the line height rather than the browser's idea of a row. */
 	.ws-css {
 		inline-size: 100%;
 		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-		font-size: 0.7rem;
+		font-size: 13px;
+		line-height: 1.5;
+		min-block-size: 18lh;
 		resize: vertical;
 	}
 	.ws-hint {
-		font-size: 0.66rem;
+		font-size: 12px;
 		line-height: 1.45;
 		color: var(--color-surface-500);
 	}
 	.ws-hint code {
-		font-size: 0.64rem;
+		font-size: 12px;
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 	}
 	.ws-vars {
 		display: flex;
@@ -899,10 +904,10 @@
 		);
 	}
 	.ws-seg-btn {
-		padding: 0.18rem 0.5rem;
+		padding: 0.22rem 0.55rem;
 		border-radius: 0.38rem;
-		font-size: 0.68rem;
-		font-weight: 600;
+		font-size: 13px;
+		font-weight: 500;
 		color: var(--color-surface-600);
 	}
 	:global([data-mode="dark"]) .ws-seg-btn {
@@ -920,7 +925,7 @@
 	.ws-form-error {
 		padding: 0.3rem 0.5rem;
 		border-radius: 0.45rem;
-		font-size: 0.7rem;
+		font-size: 13px;
 		background: color-mix(
 			in oklab,
 			var(--color-error-500) 15%,

@@ -48,6 +48,7 @@ import {
 } from "./storageHost"
 import { FETCH_HOST_SOURCE } from "./fetchHost"
 import { CRYPTO_HOST_SOURCE } from "./cryptoHost"
+import { hookCtxGrants } from "./hookCtx"
 import type {
 	HookRef,
 	HookRunResult,
@@ -98,7 +99,10 @@ const bundles = new Map()
 // it is doing but may not start new outbound work.
 const jobs = new Map()
 
-function buildProgram(source, hookName, inputJson, seedLabel, nowMs) {
+// grants: what the host derived from the hook's kind (hookCtx.ts, R-3). A
+// ctx member the kind is not granted is absent, not a stub that refuses, so
+// Object.keys(ctx) says exactly what the hook may reach.
+function buildProgram(source, hookName, inputJson, seedLabel, nowMs, grants) {
 	return (
 		'(async function () {\n' +
 		'"use strict";\n' +
@@ -128,16 +132,16 @@ function buildProgram(source, hookName, inputJson, seedLabel, nowMs) {
 		// Every argument survives: the SDK declares log(level, message, detail?),
 		// and the formatter is the prelude's — spliced just below, shared by both
 		// backends so a hook cannot tell them apart by what its logs look like.
-		'  log: function () { __logs.push(__fmtLog(arguments)); },\n' +
-		'  storage: __storage,\n' +
-		'  fetch: function (url, opts) { return __fetch(url, opts ? JSON.stringify(opts) : undefined); }\n' +
-		'};\n' +
+		'  log: function () { __logs.push(__fmtLog(arguments)); }' +
+		(grants.storage ? ',\n  storage: __storage' : '') +
+		(grants.fetch ? ',\n  fetch: function (url, opts) { return __fetch(url, opts ? JSON.stringify(opts) : undefined); }' : '') +
+		'\n};\n' +
 		__PRELUDE + '\n' +
 		// The SDK's ExtensionStorage shape, put on after the prelude because
 		// that is where the one adapter lives (see prelude.ts): promises for
 		// the members the SDK declares as promises, Uint8Array for file bytes,
 		// and the older six passed through synchronously.
-		'ctx.storage = __wrapStorage(ctx.storage);\n' +
+		(grants.storage ? 'ctx.storage = __wrapStorage(ctx.storage);\n' : '') +
 		// The abort capability, wired *before* the bundle is evaluated: the
 		// first registration wins, so a hook cannot displace its own abort. The
 		// controller is the prelude's — an AbortSignal cannot cross a worker
@@ -214,16 +218,25 @@ parentPort.on("message", async (msg) => {
 			// seed the transaction's row projection, and its diff comes back
 			// with the result for the host to commit. Nothing in here holds a
 			// database handle, and nothing in here needs one.
-			const tx = bundle.config && bundle.config.storageDir ? makeStorageHost(bundle.config, job.rows, job.nowMs) : null
+			// Only for a kind granted storage (R-3): a task's call opens no
+			// transaction and commits no rows.
+			const tx = job.grants.storage && bundle.config && bundle.config.storageDir ? makeStorageHost(bundle.config, job.rows, job.nowMs) : null
 			// A fresh Compartment per call: no ambient authority, only frozen
-			// intrinsics; every call starts from the same clean world.
-			const compartment = new Compartment({ __storage: harden(tx ? tx.api : __DENIED_STORAGE), __fetch: harden(fetchHostFor(bundle.config, function () { return state.aborted })), __crypto: harden(makeCryptoHost()), __registerAbort: harden(function (fn) { if (typeof fn === "function" && !state.fire) state.fire = fn }) })
+			// intrinsics; every call starts from the same clean world. The two
+			// permission-gated hosts are endowed only for a kind granted them —
+			// absent from the ctx AND from the globals, so a hook cannot reach
+			// past the ctx to a name the program never mentions (R-3).
+			const endowments = { __crypto: harden(makeCryptoHost()), __registerAbort: harden(function (fn) { if (typeof fn === "function" && !state.fire) state.fire = fn }) }
+			if (job.grants.storage) endowments.__storage = harden(tx ? tx.api : __DENIED_STORAGE)
+			if (job.grants.fetch) endowments.__fetch = harden(fetchHostFor(bundle.config, function () { return state.aborted }))
+			const compartment = new Compartment(endowments)
 			const program = buildProgram(
 				bundle.source,
 				job.hookName,
 				job.inputJson,
 				job.seedLabel,
-				job.nowMs
+				job.nowMs,
+				job.grants
 			)
 			try {
 				const json = await compartment.evaluate(program)
@@ -383,7 +396,12 @@ export class SesWorkerSandbox implements PluginSandbox {
 			inputJson: JSON.stringify(opts.input),
 			seedLabel: opts.seedLabel,
 			nowMs: opts.nowMs,
-			rows: opts.rows
+			rows: opts.rows,
+			// Derived here, on the host, from the kind the caller named — the
+			// worker never sees the kind, only what it grants (R-3). Throws on
+			// a call that names none: a host bug, surfaced loudly, never a
+			// typed hook failure.
+			grants: hookCtxGrants(opts.kind)
 		}
 
 		const outcome = await new Promise<EvalOutcome | Stopped>((resolve) => {

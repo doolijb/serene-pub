@@ -1,10 +1,13 @@
 /**
  * The two rebinding seams (19 §3, §5).
  *
- * What is pinned, function side: the binding selects **among the eligible**
- * only — a session-scope row beats the companion default, an ineligible bind
- * refuses at write in a sentence, a bind whose spec stops serving falls
- * through at read, and clearing is reset-is-delete.
+ * What is pinned, binding side (plans/31 V2 — one identity): a binding is
+ * about a **subject**. An action's identity is served by its declarer and
+ * nobody else — a foreign narrator is its own action, never an alternative
+ * to core's — so the row selects **among the eligible** only on an event
+ * subject: a session-scope row on the primary turn beats the companion
+ * default, an ineligible bind refuses at write in a sentence, a bind whose
+ * spec stops serving falls through at read, and clearing is reset-is-delete.
  *
  * Node side, end to end: swapping a session's next-speaker strategy changes the
  * type the run executes — with no explicit pick, the rebound round-robin
@@ -106,6 +109,9 @@ let characterId: number
 const STANDARD = "core:genre/chat"
 const CORE_NARRATE = "core:spec/narrate"
 const STAGE_NARRATE = "chariot.stage:spec/dramatic-narrate"
+const CORE_RESPOND = "core:spec/respond"
+/** A second member of the primary-turn bucket, seeded below: the same lock, and a message write. */
+const STAGE_RESPOND = "chariot.stage:spec/dramatic-respond"
 
 beforeAll(async () => {
 	db = await createTestDb()
@@ -198,82 +204,154 @@ beforeAll(async () => {
 		.update(schema.pipelineSpecs)
 		.set({ activeVersionId: version.id })
 		.where(eq(schema.pipelineSpecs.id, spec.id))
+
+	// A second answer to the primary turn (plans/31 V2): a foreign spec whose
+	// active published version carries the same inlet lock as core's respond
+	// — (chat, message-respond) — and writes a session message (19 §0). That
+	// is the whole of bucket membership; the nodes need not run.
+	const [respondSpec] = await db
+		.insert(schema.pipelineSpecs)
+		.values({ slug: STAGE_RESPOND, name: "Dramatic Respond" } as any)
+		.returning()
+	const [respondVersion] = await db
+		.insert(schema.pipelineSpecVersions)
+		.values({
+			specId: respondSpec.id,
+			semver: "1.0.0",
+			status: "published",
+			canonicalHash: "test-dramatic-respond",
+			inputGenre: STANDARD,
+			inputEvent: "core:event/message-respond@1"
+		} as any)
+		.returning()
+	await db.insert(schema.pipelineNodes).values([
+		{
+			specVersionId: respondVersion.id,
+			nodeKey: "input",
+			kind: "inlet",
+			definitionId: "core:inlet/user-message",
+			definitionVersion: 1,
+			position: 0
+		},
+		{
+			specVersionId: respondVersion.id,
+			nodeKey: "save",
+			kind: "outlet",
+			definitionId: "core:outlet/create-message",
+			definitionVersion: 1,
+			position: 1
+		}
+	] as any)
+	await db
+		.update(schema.pipelineSpecs)
+		.set({ activeVersionId: respondVersion.id })
+		.where(eq(schema.pipelineSpecs.id, respondSpec.id))
 }, 60_000)
 
-describe("function bindings (19 §3)", () => {
-	it("the binding selects among the eligible — session scope beats the companion default", async () => {
-		const { resolveFunctionSpec } = await import(
+describe("bindings (19 §3; plans/31 V2)", () => {
+	it("an action identity is served by its declarer alone — a foreign narrator is a second action, not an alternative", async () => {
+		const { resolveSubjectSpec } = await import(
 			"$lib/server/pipelines/entities/sessionGenres"
 		)
-		const { bindFunction, functionCandidates } = await import(
+		const { bindSubject, subjectCandidates } = await import(
 			"$lib/server/pipelines/entities/bindings"
 		)
 
-		// Both serve; the companion (core) wins by default.
-		expect(await functionCandidates(db, STANDARD, "narrate")).toEqual(
-			expect.arrayContaining([CORE_NARRATE, STAGE_NARRATE])
-		)
-		expect(
-			await resolveFunctionSpec(db, STANDARD, "narrate", {
-				sessionId
-			})
-		).toBe(CORE_NARRATE)
+		// Two actions, two subjects: each names its own declarer.
+		expect(await subjectCandidates(db, STANDARD, `${CORE_NARRATE}#narrate`)).toEqual([CORE_NARRATE])
+		expect(await subjectCandidates(db, STANDARD, `${STAGE_NARRATE}#narrate`)).toEqual([STAGE_NARRATE])
+		expect(await resolveSubjectSpec(db, STANDARD, `${CORE_NARRATE}#narrate`, { sessionId })).toBe(CORE_NARRATE)
+		expect(await resolveSubjectSpec(db, STANDARD, `${STAGE_NARRATE}#narrate`, { sessionId })).toBe(STAGE_NARRATE)
 
-		// This session picks the foreign contributor.
-		const bound = await bindFunction(db, {
+		// Binding core's narrator to the stage's spec is refused: the stage
+		// spec does not serve that identity — it serves its own.
+		const refused = await bindSubject(db, {
 			scope: { kind: "session", id: sessionId },
 			genreId: STANDARD,
-			functionKey: "narrate",
+			subject: `${CORE_NARRATE}#narrate`,
 			specSlug: STAGE_NARRATE,
 			userId
 		})
+		expect(refused.error).toContain(`does not serve '${CORE_NARRATE}#narrate'`)
+
+		// Something that is neither an identity nor an event id is refused by name.
+		const bare = await bindSubject(db, {
+			scope: { kind: "session", id: sessionId },
+			genreId: STANDARD,
+			subject: "narrate",
+			specSlug: STAGE_NARRATE,
+			userId
+		})
+		expect(bare.error).toMatch(/'narrate' is not something a binding is about/)
+	})
+
+	it("the binding selects among the eligible on an event subject — session scope beats the companion default", async () => {
+		const { resolveSubjectSpec } = await import(
+			"$lib/server/pipelines/entities/sessionGenres"
+		)
+		const { bindSubject, subjectCandidates } = await import(
+			"$lib/server/pipelines/entities/bindings"
+		)
+		const { sessionEvents } = await import("@serene-pub/sdk")
+		const RESPOND = sessionEvents.messageRespond
+
+		// The bucket: core's respond spec, and the second one seeded below.
+		const candidates = await subjectCandidates(db, STANDARD, RESPOND)
+		expect(candidates).toEqual(expect.arrayContaining([CORE_RESPOND, STAGE_RESPOND]))
+		expect(await resolveSubjectSpec(db, STANDARD, RESPOND, { sessionId })).toBe(CORE_RESPOND)
+
+		// This session picks the foreign one for its turns.
+		const bound = await bindSubject(db, {
+			scope: { kind: "session", id: sessionId },
+			genreId: STANDARD,
+			subject: RESPOND,
+			specSlug: STAGE_RESPOND,
+			userId
+		})
 		expect(bound.error).toBeUndefined()
-		expect(
-			await resolveFunctionSpec(db, STANDARD, "narrate", {
-				sessionId
-			})
-		).toBe(STAGE_NARRATE)
+		expect(await resolveSubjectSpec(db, STANDARD, RESPOND, { sessionId })).toBe(STAGE_RESPOND)
+		// …and the event road reads the same row (R-6, the event half).
+		const { resolveSessionEventSpec } = await import(
+			"$lib/server/pipelines/runtime/sessionEvents"
+		)
+		expect(await resolveSessionEventSpec(db, STANDARD, RESPOND, { sessionId })).toBe(STAGE_RESPOND)
 		// Another session still gets the default — the binding is scoped.
-		expect(
-			await resolveFunctionSpec(db, STANDARD, "narrate", {
-				sessionId: sessionId + 999
-			})
-		).toBe(CORE_NARRATE)
+		expect(await resolveSubjectSpec(db, STANDARD, RESPOND, { sessionId: sessionId + 999 })).toBe(
+			CORE_RESPOND
+		)
 	})
 
 	it("an ineligible bind refuses at write; a bind gone stale falls through at read", async () => {
-		const { resolveFunctionSpec } = await import(
+		const { resolveSubjectSpec } = await import(
 			"$lib/server/pipelines/entities/sessionGenres"
 		)
-		const { bindFunction } = await import(
+		const { bindSubject } = await import(
 			"$lib/server/pipelines/entities/bindings"
 		)
+		const { sessionEvents } = await import("@serene-pub/sdk")
+		const RESPOND = sessionEvents.messageRespond
 
-		// The respond spec does not serve narrate.
-		const refused = await bindFunction(db, {
+		// The narrate spec does not answer the primary turn.
+		const refused = await bindSubject(db, {
 			scope: { kind: "session", id: sessionId },
 			genreId: STANDARD,
-			functionKey: "narrate",
-			specSlug: "core:spec/respond",
+			subject: RESPOND,
+			specSlug: CORE_NARRATE,
 			userId
 		})
-		expect(refused.error).toContain("does not serve 'narrate'")
+		expect(refused.error).toContain(`does not serve '${RESPOND}'`)
 
 		// Retire the bound contributor: the session-scope row still exists, but
 		// eligibility is re-checked at read, so resolution falls through.
 		const [spec] = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, STAGE_NARRATE))
+			.where(eq(schema.pipelineSpecs.slug, STAGE_RESPOND))
 		await db
 			.update(schema.pipelineSpecs)
 			.set({ activeVersionId: null })
 			.where(eq(schema.pipelineSpecs.id, spec.id))
-		expect(
-			await resolveFunctionSpec(db, STANDARD, "narrate", {
-				sessionId
-			})
-		).toBe(CORE_NARRATE)
+		expect(await resolveSubjectSpec(db, STANDARD, RESPOND, { sessionId })).toBe(CORE_RESPOND)
 
 		// Restore, then clear: reset-is-delete, back to the default.
 		const [version] = await db
@@ -284,19 +362,15 @@ describe("function bindings (19 §3)", () => {
 			.update(schema.pipelineSpecs)
 			.set({ activeVersionId: version.id })
 			.where(eq(schema.pipelineSpecs.id, spec.id))
-		const cleared = await bindFunction(db, {
+		const cleared = await bindSubject(db, {
 			scope: { kind: "session", id: sessionId },
 			genreId: STANDARD,
-			functionKey: "narrate",
+			subject: RESPOND,
 			specSlug: null,
 			userId
 		})
 		expect(cleared.error).toBeUndefined()
-		expect(
-			await resolveFunctionSpec(db, STANDARD, "narrate", {
-				sessionId
-			})
-		).toBe(CORE_NARRATE)
+		expect(await resolveSubjectSpec(db, STANDARD, RESPOND, { sessionId })).toBe(CORE_RESPOND)
 	})
 })
 

@@ -14,6 +14,10 @@ import {
 	updateWidget,
 	widgetItemStyle,
 	widgetsInZone,
+	withGridMembership,
+	withGridWidget,
+	withoutGridRequired,
+	withoutGridWidget,
 	zoneGridStyle,
 	type WidgetConfig
 } from "./widgetGrid"
@@ -422,6 +426,23 @@ describe("placementOf — a widget's cell geometry", () => {
 		})
 		expect([p.pinned, p.collapsed, p.drawered]).toEqual([true, true, true])
 	})
+
+	it("reports the measured box in pixels, or not at all", () => {
+		// The pixels are the geometry that survives the move off cells — a
+		// track's extent is whatever the browser resolved — so a widget
+		// fitting itself to its box reads these rather than `box.cols`.
+		const box = { x: 0, y: 0, w: 1, h: 1 }
+		expect(
+			placementOf({ zone, box, widthPx: 320, heightPx: 480 }).box.px
+		).toEqual({ width: 320, height: 480 })
+		// A zone that measures one axis reports neither: half a box is not a
+		// size a widget can fit itself to, and a 0 standing in for "not
+		// measured" is the trap `tier` already has to work around.
+		expect(placementOf({ zone, box, widthPx: 320 }).box.px).toBeUndefined()
+		expect(
+			placementOf({ zone, box, widthPx: 320, heightPx: 0 }).box.px
+		).toBeUndefined()
+	})
 })
 
 describe("stackPlacements — the MVP zone stack", () => {
@@ -537,5 +558,169 @@ describe("preset → the right column opens docked", () => {
 			"expanded",
 			"expanded"
 		])
+	})
+})
+
+/* ── the middle's membership (the half no zone template holds) ─────────── */
+
+describe("withGridWidget / withoutGridWidget", () => {
+	it("appends a newcomer after what the zone already holds", () => {
+		const next = withGridWidget(defaultChatLayout(), "stats", "middle")
+		expect(widgetsInZone(next, "middle").map((w) => w.id)).toEqual([
+			"messages",
+			"stats"
+		])
+		const added = next.widgets.find((w) => w.id === "stats")!
+		expect(added).toMatchObject({
+			zone: "middle",
+			order: 1,
+			size: { w: "grow", h: "fixed" },
+			anchor: { top: true, left: true, right: true }
+		})
+	})
+
+	it("never claims `required` — that is the default layout's guarantee", () => {
+		const next = withGridWidget(defaultChatLayout(), "stats", "middle")
+		expect(next.widgets.find((w) => w.id === "stats")!.required).toBe(
+			undefined
+		)
+	})
+
+	it("moves rather than doubles a widget already in the grid", () => {
+		const once = withGridWidget(defaultChatLayout(), "stats", "middle")
+		const twice = withGridWidget(once, "stats", "left")
+		expect(twice.widgets.filter((w) => w.id === "stats")).toHaveLength(1)
+		expect(twice.widgets.find((w) => w.id === "stats")!.zone).toBe("left")
+	})
+
+	it("takes a widget back out, and hands back the same layout when it was never in", () => {
+		const with_ = withGridWidget(defaultChatLayout(), "stats", "middle")
+		expect(
+			withoutGridWidget(with_, "stats").widgets.map((w) => w.id)
+		).toEqual(["messages"])
+		expect(withoutGridWidget(with_, "inventory")).toBe(with_)
+	})
+
+	it("keeps a required widget: the conversation moves, it never leaves", () => {
+		const base = defaultChatLayout()
+		expect(withoutGridWidget(base, "messages")).toBe(base)
+	})
+})
+
+describe("withGridMembership — the middle, reconciled against its frame", () => {
+	/** Ids as a zone's frame reports them, in row order. */
+	const framed = (...ids: string[]) => ids
+	/** The grid a session that put a widget in the middle is carrying. */
+	const withMap = () => withGridWidget(defaultChatLayout(), "map", "middle")
+
+	it("an absent frame is no opinion — the grid is handed straight back", () => {
+		// The zone never reported: it is a faithful restore, or Move was never
+		// opened. Read as authoritative it would strip Messages out.
+		const grid = withMap()
+		expect(withGridMembership(grid, "middle", null)).toBe(grid)
+		expect(withGridMembership(grid, "middle", undefined)).toBe(grid)
+	})
+
+	it("hands the grid back by reference when the membership already matches", () => {
+		const grid = withMap()
+		expect(
+			withGridMembership(grid, "middle", framed("messages", "map"))
+		).toBe(grid)
+	})
+
+	it("a card dragged OUT of the middle leaves the grid", () => {
+		// `map` reported itself in the right zone's frame, so the middle's no
+		// longer names it — the one fact that says it moved.
+		const grid = withMap()
+		const next = withGridMembership(grid, "middle", framed("messages"))
+		expect(widgetsInZone(next, "middle").map((w) => w.id)).toEqual([
+			"messages"
+		])
+	})
+
+	it("a card dragged INTO the middle joins the grid", () => {
+		const grid = defaultChatLayout()
+		const next = withGridMembership(
+			grid,
+			"middle",
+			framed("messages", "stats")
+		)
+		expect(widgetsInZone(next, "middle").map((w) => w.id)).toEqual([
+			"messages",
+			"stats"
+		])
+		expect(next.widgets.find((w) => w.id === "stats")).toMatchObject({
+			zone: "middle",
+			size: { w: "grow", h: "fixed" }
+		})
+	})
+
+	it("keeps a required widget the frame does not name", () => {
+		// Messages is draggable (it is only not REMOVABLE), so a frame can come
+		// back without it. The conversation is not a thing a frame may drop.
+		const next = withGridMembership(withMap(), "middle", framed("map"))
+		expect(widgetsInZone(next, "middle").map((w) => w.id)).toEqual([
+			"messages",
+			"map"
+		])
+	})
+
+	it("adds and removes in one pass", () => {
+		const next = withGridMembership(
+			withMap(),
+			"middle",
+			framed("messages", "stats")
+		)
+		expect(widgetsInZone(next, "middle").map((w) => w.id)).toEqual([
+			"messages",
+			"stats"
+		])
+	})
+
+	it("an empty frame is not an absent one: it empties what it may", () => {
+		const next = withGridMembership(withMap(), "middle", [])
+		expect(widgetsInZone(next, "middle").map((w) => w.id)).toEqual([
+			"messages"
+		])
+	})
+})
+
+describe("withoutGridRequired — a side list may not seat the conversation", () => {
+	it("refuses a required id and keeps the rest, in order", () => {
+		// The shape a blob written before the drop refused this could carry:
+		// the right zone's frame naming `messages`.
+		const out = withoutGridRequired(defaultChatLayout(), [
+			"stats",
+			"messages",
+			"inventory"
+		])
+		expect(out.ids).toEqual(["stats", "inventory"])
+		expect(out.refused).toEqual(["messages"])
+	})
+
+	it("refuses every required id the grid holds, not just the conversation", () => {
+		const grid = updateWidget(
+			withGridWidget(defaultChatLayout(), "map", "middle"),
+			"map",
+			{ required: true }
+		)
+		expect(withoutGridRequired(grid, ["map", "stats"])).toEqual({
+			ids: ["stats"],
+			refused: ["map"]
+		})
+	})
+
+	it("leaves an ordinary middle widget alone — it may move to a side", () => {
+		const grid = withGridWidget(defaultChatLayout(), "map", "middle")
+		expect(withoutGridRequired(grid, ["map"])).toEqual({
+			ids: ["map"],
+			refused: []
+		})
+	})
+
+	it("refuses nothing when nothing required is named", () => {
+		expect(
+			withoutGridRequired(defaultChatLayout(), ["stats", "inventory"])
+		).toEqual({ ids: ["stats", "inventory"], refused: [] })
 	})
 })

@@ -14,6 +14,10 @@ import { withSessionTriggerLock } from "$lib/server/utils/sessionTriggerLock"
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
 import { DEFAULT_CHANNEL, channelWhere } from "$lib/server/messages/channels"
 import { activityError, activityStore } from "$lib/server/utils/activityStore"
+import {
+	loreWriteRefusal,
+	sceneWriteRefusal
+} from "$lib/server/messages/writes"
 
 export const sessionsSummarizeHandler: Handler<
 	Sockets.Sessions.Summarize.Params,
@@ -53,6 +57,25 @@ export const sessionsSummarizeHandler: Handler<
 
 		if (!session) {
 			throw new Error("Session not found or access denied.")
+		}
+
+		/**
+		 * Declared writes (R-B): a summary IS a lore entry, so a genre whose
+		 * lorebook is a reference does not produce one — and the scene
+		 * summary opens a scene besides, which is its own declaration.
+		 *
+		 * Before the activity is registered, so a refused request leaves no
+		 * card behind, and thrown rather than emitted as a
+		 * `sessions:summarize:error`: like the topic-length guard above this
+		 * is a refusal of the *request*, not the failure of a run that
+		 * started. The modal's affordance is gated on the same policy
+		 * (`sessions:view.writes`); this is the law behind it.
+		 */
+		const noLore = await loreWriteRefusal(db, sessionId)
+		if (noLore) throw new Error(noLore)
+		if (loreType === "scene") {
+			const noScenes = await sceneWriteRefusal(db, sessionId)
+			if (noScenes) throw new Error(noScenes)
 		}
 
 		// Guard: session must have a lorebook attached

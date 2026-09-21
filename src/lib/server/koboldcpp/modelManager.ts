@@ -96,10 +96,10 @@ export const DEFAULT_MANAGED_CONFIG = {
 // the shared instance resets the one timer that actually governs it. It is also
 // exactly why a second connection TYPE does not get a second timer: an image
 // connection points at the same process, so it shares the same timer.
-const ttlTimers: Record<string, ReturnType<typeof setTimeout>> = {}
+// Held on `globalThis` with the rest of this module's mutable state — see
+// `shared` below.
 
-// Simple lock so concurrent requests don't double-load
-let loadingPromise: Promise<void> | null = null
+// Simple lock so concurrent requests don't double-load — same home.
 
 // What's actually resident right now, as far as this process knows.
 //
@@ -116,7 +116,30 @@ export interface LoadedSignature {
 	// fields added here in the future that the summary fields don't surface.
 	rawConfigJson: string
 }
-let loadedSignature: LoadedSignature | null = null
+
+/**
+ * This module's mutable state, on `globalThis` for the same reason
+ * `subprocessManager.ts` keeps its own there: a Vite SSR re-evaluation (any
+ * edit under `$lib/server/db`, or to `./kcppHttp`/`./pollUntilReady`) would
+ * otherwise start a NEW evaluation with no record of what the still-running
+ * koboldcpp has loaded, and the next generation re-issues a same-file reload
+ * the process did not need — while the OLD evaluation's TTL timer stays armed
+ * against a record nobody can reset any more. Production evaluates once.
+ */
+interface ModelManagerState {
+	ttlTimers: Record<string, ReturnType<typeof setTimeout>>
+	loadingPromise: Promise<void> | null
+	loadedSignature: LoadedSignature | null
+}
+const globalScope = globalThis as unknown as {
+	__SERENE_PUB_KCPP_MODELS__?: ModelManagerState
+}
+const shared: ModelManagerState = (globalScope.__SERENE_PUB_KCPP_MODELS__ ??= {
+	ttlTimers: {},
+	loadingPromise: null,
+	loadedSignature: null
+})
+const ttlTimers = shared.ttlTimers
 
 /**
  * What this process last loaded via ensureModelLoaded(), if anything — the
@@ -126,7 +149,7 @@ let loadedSignature: LoadedSignature | null = null
  * running with a model loaded.
  */
 export function getLoadedSignature(): LoadedSignature | null {
-	return loadedSignature
+	return shared.loadedSignature
 }
 
 /**
@@ -225,24 +248,79 @@ function residencyMatches(current: Residency, plan: Residency): boolean {
  * ensureModelLoaded. */
 type Verdict = "confirmed" | "contradicted" | "unknown"
 
+/**
+ * How long an unbroken run of connection refusals is tolerated on a load we
+ * cannot gate on process liveness (an external or adopted-external instance).
+ *
+ * koboldcpp takes its listener DOWN for the whole of a load — measured against
+ * the real binary at 6s for a warm same-file reload and 23s for a cold 16 GB
+ * text model, and a slow disk or CPU-only box stretches that into minutes. The
+ * generic three-strikes default (~6s) therefore failed every external-mode
+ * load of any real model with "appears to have crashed" while it was loading
+ * fine. A dead external process is still caught, just by time rather than by
+ * a tick count; the fixed hard ceiling below remains the outer bound.
+ */
+const EXTERNAL_REFUSAL_GRACE_MS = 5 * 60_000
+
+/**
+ * How long a continuously-affirmative `/api/v1/model` is allowed to mean
+ * nothing before we accept it anyway — the text twin of
+ * {@link IMAGE_RELOAD_SETTLE_MS}, consulted only when the expected model was
+ * ALREADY reported resident before the reload (see waitForModelReady).
+ */
+const TEXT_RELOAD_SETTLE_MS = 20_000
+
+/**
+ * Wait for the text model to finish loading.
+ *
+ * The trap is a same-file reload: this process restarted while koboldcpp kept
+ * running with the model (adopted through the pid file), or a load knob
+ * changed (context, GPU layers). koboldcpp really does tear down and reload —
+ * but its OUTGOING listener keeps answering `/api/v1/model` with the very same
+ * name for over a second after `reload_config` has returned `success`. A wait
+ * that simply looked for the expected name returned on its first tick, the
+ * load was reported complete, and the generation that followed was sent
+ * straight into the 6–25s window where nothing was listening at all.
+ *
+ * So when `alreadyReportedResident`, the wait is for something that CHANGED
+ * first — the listener going down, or a different answer — exactly as the
+ * image wait does. The poll runs faster in that phase so a small model's
+ * brief gap isn't missed between two ticks; if it is missed anyway, the settle
+ * backstop accepts the uninterrupted answer rather than hanging.
+ */
 async function waitForModelReady(
 	baseUrl: string,
 	expectedFile: string,
+	alreadyReportedResident: boolean,
 	signal?: AbortSignal,
 	isAlive?: () => boolean
 ): Promise<void> {
 	const expected = normalizeModelName(expectedFile)
+	const startedAt = Date.now()
+	let sawSomethingChange = !alreadyReportedResident
 	await pollUntilReady(
 		async () => {
 			const { modelName, refused } =
 				await fetchModelStatusForPoll(baseUrl)
 			const current = modelName ? normalizeModelName(modelName) : null
-			if (current && current === expected) return "ready"
-			return refused ? "refused" : "not-ready"
+			if (current !== expected) {
+				sawSomethingChange = true
+				return refused ? "refused" : "not-ready"
+			}
+			if (sawSomethingChange) return "ready"
+			if (Date.now() - startedAt >= TEXT_RELOAD_SETTLE_MS) {
+				console.log(
+					`[KoboldCPP] model "${expectedFile}": koboldcpp has answered with it without interruption since the reload, so the load window was missed rather than still running — treating it as loaded`
+				)
+				return "ready"
+			}
+			return "not-ready"
 		},
 		{
 			signal,
 			isAlive,
+			intervalMs: alreadyReportedResident ? 500 : 2000,
+			refusedGraceMs: EXTERNAL_REFUSAL_GRACE_MS,
 			// With a real liveness check (managed mode, we hold the process
 			// handle), there's no need to guess how long a huge model can
 			// take on slow hardware — wait as long as it's actually alive.
@@ -316,6 +394,7 @@ async function waitForImageModelReady(
 		{
 			signal,
 			isAlive,
+			refusedGraceMs: EXTERNAL_REFUSAL_GRACE_MS,
 			hardTimeoutMs: isAlive ? 30 * 60_000 : 600_000,
 			label: `image model "${expectedFile}"`,
 			onTick: (elapsed) =>
@@ -422,10 +501,10 @@ export async function ensureModelLoaded(opts: {
 	// A previous caller's load may still be in flight. Wait for it, but don't
 	// hang forever if that caller was cancelled and its own fetch is still
 	// winding down — race our own cancellation against it too.
-	if (loadingPromise) {
+	if (shared.loadingPromise) {
 		if (signal) {
 			await Promise.race([
-				loadingPromise.catch(() => {}),
+				shared.loadingPromise.catch(() => {}),
 				new Promise<void>((_, reject) => {
 					if (signal.aborted) reject(signal.reason)
 					else
@@ -438,11 +517,11 @@ export async function ensureModelLoaded(opts: {
 			])
 			signal.throwIfAborted()
 		} else {
-			await loadingPromise.catch(() => {})
+			await shared.loadingPromise.catch(() => {})
 		}
 	}
 
-	const current = loadedSignature?.resident ?? {}
+	const current = shared.loadedSignature?.resident ?? {}
 	const plan = planResidency(request, current)
 
 	// Ask koboldcpp only about the kinds the plan actually names. An image-only
@@ -483,6 +562,16 @@ export async function ensureModelLoaded(opts: {
 	}
 
 	const recordMatches = residencyMatches(current, plan)
+	// Whether koboldcpp itself said the requested text model was resident
+	// before we asked for a reload — the outgoing listener will keep saying
+	// so for a moment after the reload has begun, which is why the wait
+	// below must first see that answer change before believing it.
+	const textAlreadyReportedResident =
+		!!plan.text &&
+		!!textStatus?.determined &&
+		!!textStatus.modelName &&
+		normalizeModelName(textStatus.modelName) ===
+			normalizeModelName(plan.text.file)
 
 	// Skipping the reload hinges on our own record either way. The case where
 	// koboldcpp could not be asked is the load-bearing one: while a big model is
@@ -522,7 +611,7 @@ export async function ensureModelLoaded(opts: {
 		connectionId
 	)
 
-	loadingPromise = (async () => {
+	shared.loadingPromise = (async () => {
 		await fsPromises.writeFile(
 			path.join(adminDir, configFilename),
 			configJson
@@ -569,6 +658,7 @@ export async function ensureModelLoaded(opts: {
 			{
 				signal,
 				isAlive,
+				refusedGraceMs: EXTERNAL_REFUSAL_GRACE_MS,
 				hardTimeoutMs: isAlive ? 30 * 60_000 : 60_000,
 				label: "reload_config request"
 			}
@@ -581,7 +671,13 @@ export async function ensureModelLoaded(opts: {
 
 		// One wait per kind the plan names — both, when a future policy co-loads.
 		if (plan.text) {
-			await waitForModelReady(baseUrl, plan.text.file, signal, isAlive)
+			await waitForModelReady(
+				baseUrl,
+				plan.text.file,
+				textAlreadyReportedResident,
+				signal,
+				isAlive
+			)
 		}
 		if (plan.image) {
 			await waitForImageModelReady(
@@ -595,12 +691,12 @@ export async function ensureModelLoaded(opts: {
 	})()
 
 	try {
-		await loadingPromise
+		await shared.loadingPromise
 	} finally {
-		loadingPromise = null
+		shared.loadingPromise = null
 	}
 
-	loadedSignature = { resident: plan, rawConfigJson: configJson }
+	shared.loadedSignature = { resident: plan, rawConfigJson: configJson }
 	resetTtl(baseUrl, adminPassword, ttlSecs)
 }
 
@@ -623,7 +719,7 @@ export async function unloadModel(
 		if (!resp.ok) return false
 		const data = await resp.json().catch(() => ({}))
 		if (data.success) {
-			loadedSignature = null
+			shared.loadedSignature = null
 		}
 		return !!data.success
 	} catch {
