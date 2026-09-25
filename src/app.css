@@ -56,6 +56,11 @@
    cascade layer order as the themes above them; a component-scoped <style>
    could not reach {@html} content anyway. */
 @import "./lib/client/styles/docs.css";
+/* Core's base skin over the sp elements' parts (STYLE-GUIDE §6.10). */
+@import "./lib/client/styles/hostElements.css";
+/* The conversation widgets' structure, which a remote build cannot carry in
+   component <style> blocks (C0b). */
+@import "./lib/client/styles/conversation.css";
 
 :root {
 	/* The prose face for story text in a session; STYLE-GUIDE §3.1. */
@@ -63,6 +68,26 @@
 }
 
 @custom-variant dark (&:where([data-mode="dark"], [data-mode="dark"] *));
+
+/*
+ * The rail's ground — one step off the sidebar in whichever direction the mode
+ * runs, so the rail reads as the shell's edge rather than as a panel.
+ *
+ * It used to be a single `color-mix` against `surface-950` and dark under every
+ * mode, which STYLE-GUIDE §1.1 named as the theme system's one exception. Ruled
+ * 2026-09-23: the rail follows the mode like everything else, so this is a pair.
+ * Darkened under dark, lightened under light — the same gesture, mirrored.
+ *
+ * A custom property rather than two Tailwind classes because the value is also
+ * read inline for the focus ring's `box-shadow` (Layout's `RAIL_BG`), and a
+ * class cannot be interpolated into a shadow.
+ */
+:root {
+	--sp-rail-bg: color-mix(in oklch, var(--color-surface-50), black 6%);
+}
+:root[data-mode="dark"] {
+	--sp-rail-bg: color-mix(in oklch, var(--color-surface-950), black 20%);
+}
 
 .funnel-display {
 	font-family: "Funnel Display", sans-serif;
@@ -276,7 +301,7 @@
    normal / generating / editing / summarization.
 
    Icon sizing lives here rather than at the call site because Skeleton's `btn`
-   utility contains `& > :where(svg) { width: var(--btn-size); height: ... }`,
+   utility contains `& > :where(svg, sp-icon) { width: var(--btn-size); height: ... }`,
    which beats the width/height *attributes* Lucide emits — so the `size={N}`
    prop on an icon inside a `.btn` is inert (everything rendered at 14px under
    `btn-sm` regardless of what the prop said).
@@ -313,7 +338,7 @@
 	block-size: var(--msg-ctrl-size);
 	padding: 0;
 
-	& > :where(svg) {
+	& > :where(svg, sp-icon) {
 		inline-size: var(--msg-ctrl-icon);
 		block-size: var(--msg-ctrl-icon);
 	}
@@ -332,7 +357,7 @@
 	block-size: var(--msg-ctrl-size);
 	padding: 0;
 
-	& > :where(svg) {
+	& > :where(svg, sp-icon) {
 		inline-size: var(--msg-ctrl-icon);
 		block-size: var(--msg-ctrl-icon);
 	}
@@ -489,7 +514,7 @@
 }
 
 [data-composer-skin="minimal"] .composer-persona-name,
-[data-composer-skin="minimal"] .composer-persona-chip > :where(svg) {
+[data-composer-skin="minimal"] .composer-persona-chip > :where(svg, sp-icon) {
 	display: none;
 }
 
@@ -507,7 +532,7 @@
 		@apply outline-primary-500 outline-2 outline-offset-2;
 	}
 
-	& > :where(svg) {
+	& > :where(svg, sp-icon) {
 		@apply size-4;
 	}
 }
@@ -538,7 +563,7 @@
 	@apply inline-flex h-8 items-center justify-center gap-1.5 rounded-full px-3 text-[13px] leading-[1.45] font-medium;
 	@apply max-lg:h-11 max-lg:px-4 pointer-coarse:h-11 pointer-coarse:px-4;
 
-	& > :where(svg) {
+	& > :where(svg, sp-icon) {
 		@apply size-4;
 	}
 }
@@ -569,7 +594,7 @@
 		@apply outline-primary-500 outline-2 outline-offset-2;
 	}
 
-	& > :where(svg) {
+	& > :where(svg, sp-icon) {
 		@apply transition-transform duration-150;
 	}
 }
@@ -587,7 +612,7 @@
 	@apply pointer-coarse:h-11 pointer-coarse:px-4;
 }
 
-.composer-chips :where(button) > :where(svg) {
+.composer-chips :where(button) > :where(svg, sp-icon) {
 	@apply size-4;
 }
 

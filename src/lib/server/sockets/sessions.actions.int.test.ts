@@ -203,13 +203,12 @@ async function publishActionSpec(
 	const doc: SpecDocument = compile(
 		spec(id, {
 			version: opts.version ?? "1.0.0",
-			taxonomy: { role: "action", genre: genre.id },
+			taxonomy: { role: "action"},
 			contributes: {
 				actions: declared.map((a) => {
 					const key = opts.key ?? String(a.key)
 					return {
 						key,
-						genre: genre.id,
 						venue: { kind: "composer" },
 						label: { en: key },
 						...a
@@ -267,7 +266,7 @@ async function publishFixtureGenre(
 	const doc: SpecDocument = compile(
 		spec(`${id.replace(":genre/", ":spec/")}-create`, {
 			version: "1.0.0",
-			taxonomy: { role: "create", genre: id },
+			taxonomy: { role: "create"},
 			genre: {
 				name: decl.name,
 				family: decl.family,
@@ -341,6 +340,8 @@ function recordingIo(
 
 /** The specs that ran for a session, newest last. */
 async function runsOf(sessionId: number): Promise<string[]> {
+	// Event work runs after the writer, on the session's queue (PLAN §8 (27)).
+	await (await import("$lib/server/pipelines/runtime/sessionEvents")).settleSessionEvents()
 	const schema = await import("$lib/server/db/schema")
 	const runs = await testDb
 		.select({ specSlug: schema.pipelineRuns.specSlug })
@@ -794,8 +795,10 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 		)
 		expect(viaPlugin.error ?? "").not.toMatch(/not yours|Session not found/)
 		const after = await runsOf(session.id)
-		expect(after.length).toBe(before + 1)
-		expect(after.at(-1)).toBe("acme:spec/sum")
+		// The action's run, and the recompute its write causes — which runs
+		// on the session's queue, so it may save either side (PLAN §8 (27)).
+		expect(after.length).toBe(before + 2)
+		expect(after.filter((slug) => !slug.endsWith("-turn-order")).at(-1)).toBe("acme:spec/sum")
 
 		// Firing core's is refused — the plugin's audience is the plugin's.
 		const viaCore = await sessionsTriggerFunctionHandler.handler(
@@ -819,7 +822,7 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 				"'sum' names 2 actions here — core:spec/test-sum#sum, acme:spec/sum#sum. Say which."
 			)
 		}
-		expect((await runsOf(session.id)).length).toBe(before + 1)
+		expect((await runsOf(session.id)).length).toBe(before + 2)
 
 		// Switching core's off by identity leaves the plugin's on: the
 		// owner's named fire of core's is "turned off", the guest's of the
@@ -1492,10 +1495,11 @@ describe("sessions:triggerFunction announces its run (R-19)", () => {
 		expect(res.error ?? "").not.toMatch(/not yours to use|Session not found/)
 		expect(await runsOf(session.id)).toContain("core:spec/test-announce-action")
 
-		// One run, one relay, built with the caller's own `io` — never
+		// Both runs the fire makes — the recompute that opens the turn and
+		// the action's own — were relayed with the caller's `io`, never
 		// `undefined`, which is what silently dropped every status this
 		// route ever set.
-		expect(statusRelayHooks.ioSeen).toEqual([socket.io])
+		expect(statusRelayHooks.ioSeen).toEqual([socket.io, socket.io])
 	}, 60_000)
 })
 

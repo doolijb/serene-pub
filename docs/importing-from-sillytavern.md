@@ -55,9 +55,11 @@ Clicking it triggers a second, smaller upload pass: only now does the browser up
 
 Once uploaded, the server executes the import: inserting characters, personas, lorebooks, and finally chats and group chats with their message history in that order, linking characters and personas to each chat where they can be resolved by name. This phase times out after 5 minutes if the server doesn't respond.
 
+A character's **expression sprites** come along with it. SillyTavern keeps them in a folder named after the character file, labelled by file name (`joy.png`, `joy-2.png`), and each sprite-folder override is a subfolder; Serene Pub imports the top-level images into the character's default [sprite set](./characters.md#sprites) and each subfolder as a set of the same name. A `backgrounds` subfolder is not a sprite set and is skipped.
+
 ## After Import Completes
 
-A completion screen replaces the wizard with an **Import Complete** message summarizing what was created, e.g. "Imported 3 characters, 1 persona, 5 chats, 2 lorebooks." If any individual items failed, the count and a list of specific error messages (one per failed item) are shown below the summary, while everything else still imports successfully.
+A completion screen replaces the wizard with an **Import Complete** message summarizing what was created, e.g. "Imported 3 characters, 42 sprites, 1 persona, 5 chats, 2 lorebooks." If any individual items failed, the count and a list of specific error messages (one per failed item) are shown below the summary, while everything else still imports successfully.
 
 From here you have two options:
 

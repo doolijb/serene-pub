@@ -67,38 +67,16 @@
 	 */
 	import { onDestroy } from "svelte"
 	import * as Icons from "@lucide/svelte"
-	import {
-		type FrameHostMessage,
-		type HostFrameMessage,
-		type MessageV1,
-		type SessionV1
-	} from "@serene-pub/sdk"
-	import {
-		eventInScope,
-		scopeMessages,
-		WidgetMessageFeed,
-		type PlacementInput,
-		type SurfaceMessage,
-		findAction,
-		makeInvoke,
-		projectActions,
-		type ActionsV1,
-		type WidgetEvent,
-		type WidgetEventSource
+	import type { SessionV1 } from "@serene-pub/sdk"
+	import type {
+		PlacementInput,
+		ActionsV1,
+		WidgetEventSource
 	} from "$lib/shared/widgets/context"
 	import type { ActionDispatch } from "$lib/shared/widgets/invokeAction"
-	import { buildEventMessage, buildLayoutMessage } from "./framePlacement"
-	import { buildStyleMessage } from "./frameStyle"
-	import { frameInvokeVerdict } from "./frameActivation"
-	import {
-		buildPageMessage,
-		buildStateMessage,
-		frameStateKey,
-		initMessage,
-		pageOf,
-		savedFrameState,
-		type FrameRow
-	} from "./framePort"
+	import { frameInvokeVerdict, hasRecentActivation } from "./frameActivation"
+	import { frameStateKey, initMessage } from "./framePort"
+	import { createWidgetWire, type WireInputs } from "./widgetWire.svelte"
 
 	interface Props {
 		src: string
@@ -167,6 +145,8 @@
 		 * falls back to `onAction`, the thinner fire.
 		 */
 		actionDispatch?: ActionDispatch
+		/** Nested in a component (`sp-frame`): raise the document's invoke unresolved (`WireInputs.onInvoke`). */
+		onInvoke?: WireInputs["onInvoke"]
 		/** Panel surfaces (21): idle the frame off-screen without unmounting. */
 		suspended?: boolean
 		/**
@@ -204,6 +184,7 @@
 		placement,
 		actions,
 		actionDispatch,
+		onInvoke,
 		source,
 		suspended = false,
 		surfaceId,
@@ -212,8 +193,11 @@
 	}: Props = $props()
 
 	let frame = $state<HTMLIFrameElement | null>(null)
-	let port: MessagePort | null = null
-	let ready = $state(false)
+	/** Whose document this is — the plugin id its `/plugin-ui/<id>/…` address names. */
+	const frameOwner = $derived.by(() => {
+		const m = /^\/plugin-ui\/([^/]+)\//.exec(src)
+		return m ? decodeURIComponent(m[1]) : "unknown"
+	})
 
 	/**
 	 * What a `fatal` error said, once one has been reported — the flag the
@@ -265,341 +249,59 @@
 		if (frame && document.activeElement !== frame) left()
 	}
 
+	/**
+	 * The protocol itself — sections, paging, saved state, events, the invoke
+	 * walk — is the shared relay (`widgetWire.svelte.ts`), the one a remote
+	 * component speaks too. What is this frame's own is the gate: a person is
+	 * behind an invoke when focus is in THIS iframe (`frameActivation.ts`).
+	 */
+	const wire = createWidgetWire({
+		inputs: () => ({
+			session,
+			messages,
+			channels,
+			props,
+			settings,
+			skin,
+			placement,
+			actions,
+			source,
+			suspended,
+			stateKey,
+			widgetId: surfaceId ?? src,
+			owner: frameOwner,
+			actionDispatch,
+			onInvoke,
+			onAction
+		}),
+		label: () => `PluginFrame "${title}" (${src})`,
+		gate: (action) =>
+			frameInvokeVerdict(action, { lastInteractionAt }, Date.now(), {
+				userActivationActive: navigator.userActivation?.isActive,
+				frameIsActiveElement: !!frame && document.activeElement === frame
+			}),
+		personBehind: () =>
+			hasRecentActivation({ lastInteractionAt }, Date.now(), {
+				userActivationActive: navigator.userActivation?.isActive,
+				frameIsActiveElement: !!frame && document.activeElement === frame
+			}),
+		onFatal: (message) => (fatal = message)
+	})
+
 	function handleLoad() {
 		// A fresh channel per document load — a reloaded frame must never
 		// receive a stale port. A fresh boot, too: the previous document's
-		// fatal complaint is not this one's, and `ready` is re-announced.
-		ready = false
+		// fatal complaint is not this one's.
 		fatal = null
-		port?.close()
 		const channel = new MessageChannel()
-		port = channel.port1
-		port.onmessage = (e) => {
-			// `FrameHostMessage` names what a WELL-BEHAVED frame sends; what
-			// arrives is whatever the sandboxed document chose to post, so
-			// this stays untyped and every field is tested at runtime before
-			// it is used. The union is the contract, not a guarantee about
-			// this value.
-			const m = e.data
-			if (!m || typeof m !== "object") return
-			if (m.t === "ready") {
-				ready = true
-				// Saved state BEFORE the first push: a remount is exactly when
-				// a frame has forgotten, and it should be able to restore its
-				// open tab or scroll offset before it has any rows to put in
-				// it. Nothing is posted when there is none — `state` means
-				// "here is what you saved", never "you saved nothing".
-				const held = savedFrameState.get(stateKey)
-				if (held) post(buildStateMessage(held))
-				push()
-			} else if (m.t === "error") {
-				// A frame that failed to boot has to be able to say so, or a
-				// broken surface is indistinguishable from a slow one. Logged
-				// against the plugin, and a `fatal` one — the frame saying it
-				// has given up, not merely complained — also replaces the blank
-				// with a sentence in the chrome below. The sentence is the
-				// host's; what the frame says goes to the console, because a
-				// sandboxed document must not be able to write the app's own UI.
-				const message = String(m.message ?? "frame reported an error")
-				console.warn(
-					`PluginFrame "${title}" (${src}): ${m.fatal === true ? "FATAL — " : ""}${message}`,
-					m.detail
-				)
-				if (m.fatal === true) fatal = message
-			} else if (m.t === "request" && typeof m.requestId === "string") {
-				// A request is not a grant: the host answers out of what it
-				// already chose to push, or declines with a warning. Declined
-				// silently down the port — there is no "no" in the union — but
-				// never silently in the console, or an author cannot tell a
-				// refusal from a host that dropped the message.
-				if (m.what !== "messages") {
-					console.warn(
-						`PluginFrame "${title}": declined request — '${String(m.what)}' is not something this host answers`
-					)
-					return
-				}
-				const page = pageOf(
-					{
-						messages: (messages ?? []) as FrameRow[],
-						channels
-					},
-					{
-						channel:
-							typeof m.channel === "string" ? m.channel : undefined,
-						cursor:
-							typeof m.cursor === "string" ? m.cursor : undefined,
-						limit:
-							typeof m.limit === "number" ? m.limit : undefined
-					}
-				)
-				if (page.refused) {
-					console.warn(
-						`PluginFrame "${title}": declined request — ${page.refused}`
-					)
-					return
-				}
-				post(buildPageMessage(m.requestId, page))
-			} else if (m.t === "save-state") {
-				// Not storage. Held for this (session, surface) and returned on
-				// the next mount; over the cap it is dropped with a warning
-				// rather than quietly becoming a database a surface relies on.
-				const outcome = savedFrameState.set(stateKey, m.state)
-				if (!outcome.kept)
-					console.warn(
-						`PluginFrame "${title}": dropped save-state — ${outcome.reason}`
-					)
-			} else if (m.t === "action" && typeof m.fn === "string") {
-				onAction?.(
-					m.fn,
-					typeof m.messageId === "number" ? m.messageId : undefined,
-					m.payload && typeof m.payload === "object"
-						? m.payload
-						: undefined
-				)
-			} else if (m.t === "invoke" && typeof m.key === "string") {
-				// The frame lane's `invoke`: the same walk the native verb
-				// makes, over the same projection this frame was posted —
-				// core's verbs to the host's handlers, the rest through
-				// `onAction` with the identity. A key nothing lists, or a
-				// core verb this host has no handler for, is dropped with a
-				// warning — a frame is not lied to, and it is not trusted to
-				// name a function either.
-				try {
-					// A state-changing core verb needs a person behind it
-					// (S-C): refused with a warning unless a person is
-					// currently in the frame — a mitigation, not the
-					// authority; the server re-judges every write against the
-					// viewer's own permissions. A verb that spends tokens
-					// (`retry`, `continue`) is put to the person first, on the
-					// parent's own dialog, which a frame cannot forge.
-					// Resolved here the way `makeInvoke` resolves it, so the
-					// gate reads the same declaration the dispatch will.
-					const resolved = findAction(projectActions(actions), m.key)
-					if (resolved) {
-						const verdict = frameInvokeVerdict(
-							resolved,
-							{ lastInteractionAt },
-							Date.now(),
-							{
-								userActivationActive:
-									navigator.userActivation?.isActive,
-								frameIsActiveElement:
-									!!frame && document.activeElement === frame
-							}
-						)
-						if (!verdict.allowed) {
-							console.warn(`PluginFrame "${title}": ${verdict.reason}`)
-							return
-						}
-						if (verdict.confirm && !window.confirm(verdict.confirm)) {
-							console.warn(
-								`PluginFrame "${title}": '${m.key}' declined by the person`
-							)
-							return
-						}
-					}
-					makeInvoke(
-						() => projectActions(actions),
-						(fn, messageId, payload, action, blockId) =>
-							onAction?.(fn, messageId, payload, action, blockId),
-						title,
-						actionDispatch
-					)(m.key, {
-						messageId:
-							typeof m.messageId === "number" ? m.messageId : undefined,
-						payload:
-							m.payload && typeof m.payload === "object"
-								? m.payload
-								: undefined,
-						// The form this press answers (U5d), carried across the
-						// port exactly as the native lane carries it — so a
-						// frame drawing a message's form is held to the block's
-						// addressee rather than read as an unaddressed press.
-						blockId:
-							typeof m.blockId === "string" ? m.blockId : undefined
-					})
-				} catch (e) {
-					console.warn(`PluginFrame: ${(e as Error).message}`)
-				}
-			}
-		}
-		// `initMessage`, which carries `FRAME_PROTOCOL` and never a literal: the
-		// number a frame reads to know which members of the union it may use
-		// has exactly one home, and it is the same package the frame's author
-		// compiled against.
-		frame?.contentWindow?.postMessage(initMessage(surface), "*", [
-			channel.port2
-		])
+		wire.attach(channel.port1)
+		// `initMessage`, which carries `FRAME_PROTOCOL` and never a literal.
+		// The post targets `"*"` by necessity — an opaque origin matches no
+		// targetOrigin — safe because the port rides the message.
+		frame?.contentWindow?.postMessage(initMessage(surface), "*", [channel.port2])
 	}
 
-	/**
-	 * Post one frame message, surviving uncloneable payloads: callers should
-	 * hand plain data, but a stray proxy/function must degrade to a warning,
-	 * never an unhandled DataCloneError that kills the rest of the push.
-	 *
-	 * Typed as the SDK's union, so a message this host invents — or a member
-	 * it spells wrong — fails to compile rather than reaching a frame that
-	 * cannot recognise it.
-	 */
-	function post(msg: HostFrameMessage) {
-		try {
-			port?.postMessage(msg)
-		} catch (e) {
-			console.warn(
-				`PluginFrame: dropped uncloneable "${msg.t}" payload`,
-				e
-			)
-		}
-	}
-
-	function push() {
-		if (!port || !ready) return
-		if (session !== undefined) post({ t: "session", session })
-		// The rows as the page holds them. Narrowed at this one seam rather
-		// than at every call site: what a host has in hand is a wire row, and
-		// `MessageV1` is what the contract promises a frame once it crosses.
-		const held = (messages ?? []) as MessageV1[]
-		if (channels && channels.length) {
-			// Panel scoping: only this panel's lanes, one post each. The frame
-			// never sees the whole log.
-			for (const ch of channels)
-				post({
-					t: "channel",
-					channel: ch,
-					messages: held.filter((m) => (m?.channel ?? "main") === ch)
-				})
-		} else if (messages !== undefined) {
-			post({ t: "messages", messages: held })
-		}
-		if (props !== undefined) post({ t: "props", props })
-		if (settings !== undefined) post({ t: "settings", settings })
-		// The venues ride `push()` like the rest: a reloaded frame replays
-		// `ready` and gets its actions again without the host being asked.
-		if (actions !== undefined)
-			post({ t: "actions", actions: projectActions(actions) })
-		// Sanitised at the boundary rather than by the caller: this is the one
-		// place a skin crosses into a frame, so it is the one place that has to
-		// be right. An EMPTY skin is still posted — taking a style off has to
-		// reach the frame too, and a host that simply stopped posting would
-		// leave the last one applied for ever.
-		if (skin !== undefined) post(buildStyleMessage(skin))
-		// Placement rides in `push()` for the same reload-safe reason `style`
-		// does: a frame that reloads replays `ready`, and everything it needs to
-		// draw itself has to arrive again without the host being asked.
-		if (placement !== undefined) post(buildLayoutMessage(placement))
-		// The look the app is wearing, as data. A frame is its own document and
-		// can see nothing of the top one, so the two attributes the app steers
-		// its own stylesheet with are the whole of what it needs to match.
-		if (theme) post({ t: "theme", theme: theme.theme, mode: theme.mode })
-	}
-
-	// Re-feed on data change — the frame renders what the host chose to post,
-	// which is the whole privacy story: it can only ever scrape this.
-	$effect(() => {
-		void session
-		void messages
-		void channels
-		void props
-		void settings
-		void skin
-		void placement
-		void actions
-		void theme
-		push()
-	})
-
-	/* ── the host's theme ──────────────────────────────────────────────────
-	 * Read off `<html>` rather than out of the settings context, on the same
-	 * reasoning `WidgetHost` reads `data-mode` there: the attributes are what
-	 * is true of the DOM whatever wrote them, including the root layout taking
-	 * one away for Document View. The mirror is a single `$state`, so the push
-	 * above re-runs whenever either attribute moves.
-	 *
-	 * Values, never tokens: the frame's CSP grants it its OWN files, so a
-	 * stylesheet resolving `data-theme` is one the package ships. What crosses
-	 * is the id and light-or-dark, which is what a frame needs to pick a side. */
-	let theme = $state<{ theme: string; mode: "light" | "dark" } | null>(null)
-	$effect(() => {
-		const read = () => {
-			const el = document.documentElement
-			theme = {
-				theme: el.getAttribute("data-theme") ?? "",
-				mode: el.getAttribute("data-mode") === "dark" ? "dark" : "light"
-			}
-		}
-		read()
-		const mo = new MutationObserver(read)
-		mo.observe(document.documentElement, {
-			attributes: true,
-			attributeFilter: ["data-theme", "data-mode"]
-		})
-		return () => mo.disconnect()
-	})
-
-	/* ── events (PLAN 25) ──────────────────────────────────────────────────
-	 * The frame's half of the `on` verb. `WidgetHost` owns a bus per native
-	 * widget and feeds it from the widget's scoped message list, its placement,
-	 * and the session source; this does the same three from the same helpers,
-	 * and posts each result as `{ t: "event" }`.
-	 *
-	 * It is a second DELIVERY, not a second implementation — the scoping
-	 * (`scopeMessages`/`eventInScope`), the diff (`WidgetMessageFeed`) and the
-	 * projection (`buildLayoutMessage`) are the shared ones, which is what keeps
-	 * "a frame is a native widget minus the iframe" true rather than aspirational.
-	 * It lives here rather than in `Panel` because a frame is not always a panel,
-	 * and every frame surface that receives messages should hear about them. */
-	function emit(e: WidgetEvent) {
-		post(buildEventMessage(e))
-	}
-
-	// `message:created`, scoped exactly as the `channel` posts above are, so a
-	// frame is never told about a message it was not also sent. The feed seeds
-	// silently, so a frame mounted onto a loaded session hears about arrivals
-	// from then on and not about its own backlog.
-	const feed = new WidgetMessageFeed()
-	$effect(() => {
-		const list = (messages ?? []) as SurfaceMessage[]
-		const scoped = scopeMessages(list, channels ?? [])
-		for (const e of feed.take(scoped)) emit(e)
-	})
-
-	// `layout:changed` — the notification beside the `{ t: "layout" }` state
-	// push, so a frame can react to a move without diffing the pushes itself.
-	// The FIRST placement is what it mounted with, not a change.
-	let lastLayout: string | null = null
-	$effect(() => {
-		if (placement === undefined) return
-		const msg = buildLayoutMessage(placement)
-		const key = JSON.stringify(msg.layout)
-		if (key === lastLayout) return
-		const first = lastLayout === null
-		lastLayout = key
-		if (!first) emit({ kind: "layout:changed", layout: msg.layout })
-	})
-
-	// The session-level fan-out, narrowed to this frame's declared channels.
-	$effect(() => {
-		const src = source
-		if (!src) return
-		const declared = [...(channels ?? [])]
-		return src.subscribe((e) => {
-			if (eventInScope(e, declared)) emit(e)
-		})
-	})
-
-	// Suspend/resume: idle an off-screen frame without unmounting it. Tracked
-	// so we only post on transitions, and only once the frame is ready.
-	let lastSuspended = false
-	$effect(() => {
-		const s = suspended
-		if (!port || !ready) return
-		if (s !== lastSuspended) {
-			lastSuspended = s
-			post({ t: s ? "suspend" : "resume" })
-		}
-	})
-
-	onDestroy(() => port?.close())
+	onDestroy(() => wire.detach())
 </script>
 
 <svelte:window onblur={handleWindowBlur} onfocus={handleWindowFocus} />

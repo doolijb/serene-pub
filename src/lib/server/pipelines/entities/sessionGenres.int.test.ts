@@ -26,7 +26,6 @@ import {
 	setSessionFunction,
 	setPresetActions,
 	listGenreTriggers,
-	listSpeakerStrategies,
 	genreFieldsFor,
 	sessionGenreAvailable,
 	resolveSubjectSpec,
@@ -277,77 +276,9 @@ describe("the fields round-trip (19 §1, U-C2)", () => {
 	})
 })
 
-describe("the swap list (19 §5, U-C4)", () => {
-	it("lists core's four strategies, by shape rather than by list", async () => {
-		const strategies = await listSpeakerStrategies(db)
-		expect(strategies.map((s) => s.definitionId)).toEqual(
-			expect.arrayContaining([
-				"core:task/turn-round-robin@1",
-				"core:task/turn-random@1",
-				"core:task/turn-manual@1",
-				"core:task/turn-none@1"
-			])
-		)
-		// Non-strategy tasks are not in the dropdown.
-		expect(
-			strategies.some((s) => s.definitionId.startsWith("core:task/assemble"))
-		).toBe(false)
-	})
-
-	it("an extension-shaped strategy appears by being registered — no registration step", async () => {
-		await db.insert(schema.pipelineDefinitionRegistry).values({
-			definitionId: "chariot.council:task/turn-seniority",
-			version: 1,
-			kind: "task",
-			ports: {
-				in: {},
-				out: { main: "core:shape/speaker-selection@1" }
-			},
-			slots: {},
-			i18n: { name: { en: "By seniority" } }
-		} as any)
-		const strategies = await listSpeakerStrategies(db)
-		expect(
-			strategies.find(
-				(s) => s.definitionId === "chariot.council:task/turn-seniority@1"
-			)?.name
-		).toBe("By seniority")
-	})
-})
-
-describe("the Turn order control is offered only where there is a speaker node to swap", () => {
-	it("a Chat session has one; an Adventure or Lair session — narrator-driven, no `speaker` task — has none, so the list handler offers no strategies", async () => {
-		const { sessionHasSpeakerNode } = await import("./bindings")
-		const [user] = await db
-			.insert(schema.users)
-			.values({ username: "speaker-node", isAdmin: false })
-			.returning()
-		const make = async (genreId: string) => {
-			const [session] = await db
-				.insert(schema.sessions)
-				.values({ userId: user.id, isGroup: true, genreId } as any)
-				.returning()
-			return session.id
-		}
-		expect(await sessionHasSpeakerNode(db, await make("core:genre/chat"))).toBe(true)
-		expect(await sessionHasSpeakerNode(db, await make("core:genre/adventure"))).toBe(false)
-		const lair = await make("core:genre/lair")
-		expect(await sessionHasSpeakerNode(db, lair)).toBe(false)
-
-		// Through the handler: an empty list, so the card never renders and
-		// Apply can never be pressed to hear "has no next-speaker node".
-		const { sessionsSpeakerStrategiesHandler } = await import(
-			"$lib/server/sockets/sessions"
-		)
-		const res = await sessionsSpeakerStrategiesHandler.handler(
-			{ user: { id: user.id }, io: { to: () => ({ emit() {} }) } } as any,
-			{ sessionId: lair },
-			() => {}
-		)
-		expect(res.strategies).toEqual([])
-		expect(res.selected).toBeNull()
-	})
-})
+// "The Turn order list" block retired 2026-09-23 with `listTurnStrategies`
+// (R28): the offered list is the turn-order spec's own `expose.swaps` plus
+// enabled contributions, pinned in entities/bindings.int.test.ts.
 
 describe("the trigger set (19 §4, U-C5)", () => {
 	it("the narrate button is a row: contributed by the narrate spec, for the standard mode", async () => {

@@ -241,6 +241,26 @@ const MAX_ANCHOR_DEPTH = 32
  * `entryId` is absent on a create: a row that does not exist yet cannot be its
  * own ancestor, so only the first two refusals can fire.
  */
+/**
+ * The branch an entry is being written on must be a line of ITS book.
+ *
+ * ⚠ Without this a crafted id files a new entry onto another book's line,
+ * where deleting that line would cascade it away. `null` is main and needs no
+ * check: main is the absence of a branch, not a row anyone can name.
+ */
+async function assertEntryBranch(
+	branchId: number | null | undefined,
+	lorebookId: number
+) {
+	if (branchId == null) return
+	const branch = await db.query.lorebookBranches.findFirst({
+		where: (b, { and: a, eq: e }) =>
+			a(e(b.id, branchId), e(b.lorebookId, lorebookId)),
+		columns: { id: true }
+	})
+	if (!branch) throw new Error("That branch is not a line of this lorebook.")
+}
+
 async function assertAnchorEntry(
 	anchorEntryId: number | null | undefined,
 	lorebookId: number,
@@ -461,6 +481,7 @@ export const createEntryHandler: Handler<
 
 		await assertAnchorInBook(data.lorebookBindingId, data.lorebookId)
 		await assertAnchorEntry(data.anchorEntryId, data.lorebookId)
+		await assertEntryBranch((data as any).branchId, data.lorebookId)
 
 		// Advisory lock scoped to lorebookId — without it, two concurrent
 		// creates read the same free position and the second one raises a
@@ -612,6 +633,188 @@ export const updateEntryHandler: Handler<
 		)
 
 		return { entry }
+	}
+}
+
+/**
+ * An entry's two marks — **Off** (`enabled`) and **Pin** (`constant`) — and
+ * nothing else (L1, R58). For the book's owner or an admin. Never touches
+ * the vectors: a mark changes whether retrieval may use the entry, not what
+ * it says, so it forces no re-embed (the whole-entry `entries:update` does,
+ * on every save). Book-level: dated marks per branch wait for the
+ * amendments work.
+ */
+export const entrySetMarksHandler: Handler<
+	Sockets.Entries.SetMarks.Params,
+	Sockets.Entries.SetMarks.Response
+> = {
+	event: "entries:setMarks",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const [found] = await db
+			.select({
+				entry: schema.lorebookEntries,
+				lorebookUserId: schema.lorebooks.userId
+			})
+			.from(schema.lorebookEntries)
+			.innerJoin(
+				schema.lorebooks,
+				eq(schema.lorebooks.id, schema.lorebookEntries.lorebookId)
+			)
+			.where(eq(schema.lorebookEntries.id, params.entryId))
+			.limit(1)
+		if (!found || (found.lorebookUserId !== userId && !socket.user?.isAdmin)) {
+			const res = { entryId: params.entryId, error: "Entry not found or access denied." }
+			if (emitToUser) emitToUser("entries:setMarks:error", res)
+			return res
+		}
+		const patch: Record<string, boolean> = {}
+		if (typeof params.off === "boolean") patch.enabled = !params.off
+		if (typeof params.pinned === "boolean") patch.constant = params.pinned
+		if (!Object.keys(patch).length) {
+			const res = { entryId: params.entryId, error: "Say which mark: off, pinned or both." }
+			if (emitToUser) emitToUser("entries:setMarks:error", res)
+			return res
+		}
+		const [updated] = await db
+			.update(schema.lorebookEntries)
+			.set(patch)
+			.where(eq(schema.lorebookEntries.id, params.entryId))
+			.returning()
+		const entry = toEntryRow(updated)
+		// The row everybody already listens for, so an open list updates.
+		if (emitToUser) emitToUser("entries:update", { entry })
+		const res = {
+			entryId: params.entryId,
+			off: updated.enabled === false,
+			pinned: updated.constant === true
+		}
+		if (emitToUser) emitToUser("entries:setMarks", res)
+		return res
+	}
+}
+
+/**
+ * The entry-management widget's one read (L1, R58): the session's book's
+ * entries with what this session's rankings made of each, off the rollup
+ * (`ranking_subject_stats`) — searched by title and keys, sorted, filtered,
+ * paged, in one query. Archived entries are out, as they are out of
+ * retrieval. For the book's owner and admins; anyone else is told whose it
+ * is (`ownerOnly`) and shown nothing.
+ */
+export const entrySessionEntriesHandler: Handler<
+	Sockets.Entries.SessionEntries.Params,
+	Sockets.Entries.SessionEntries.Response
+> = {
+	event: "entries:sessionEntries",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const answer = (part: Sockets.Entries.SessionEntries.Response) => {
+			const res = params.request ? { ...part, request: params.request } : part
+			if (emitToUser) emitToUser("entries:sessionEntries", res)
+			return res
+		}
+		const base = { sessionId: params.sessionId, rows: [], total: 0 }
+		const access = await checkSessionAccess(params.sessionId, userId)
+		if (!access.hasAccess && !socket.user?.isAdmin)
+			return answer({ ...base, error: "Session not found." })
+		const [session] = await db
+			.select({ lorebookId: schema.sessions.lorebookId })
+			.from(schema.sessions)
+			.where(eq(schema.sessions.id, params.sessionId))
+			.limit(1)
+		if (!session?.lorebookId) return answer({ ...base, lorebookId: null })
+		const [book] = await db
+			.select({ userId: schema.lorebooks.userId, name: schema.lorebooks.name })
+			.from(schema.lorebooks)
+			.where(eq(schema.lorebooks.id, session.lorebookId))
+			.limit(1)
+		if (!book) return answer({ ...base, lorebookId: null })
+		if (book.userId !== userId && !socket.user?.isAdmin)
+			return answer({ ...base, lorebookId: session.lorebookId, ownerOnly: true })
+
+		const limit = Math.min(Math.max(params.limit ?? 50, 1), 200)
+		let offset = Math.max(params.offset ?? 0, 0)
+		// A search is a substring, never a pattern: `%` and `_` are literal.
+		const q = (params.query ?? "").trim().replace(/[\\%_]/g, (c) => `\\${c}`)
+		const e = schema.lorebookEntries
+		const st = schema.rankingSubjectStats
+		const stats = and(
+			eq(st.sessionId, params.sessionId),
+			eq(st.subjectKind, "lore-entry"),
+			sql`${st.subjectId} = ${e.id}::text`
+		)
+		const wheres = [eq(e.lorebookId, session.lorebookId), eq(e.archived, false)]
+		if (q)
+			wheres.push(
+				sql`(coalesce(${e.title}, '') ILIKE ${"%" + q + "%"} OR array_to_string(${e.keys}, ' ') ILIKE ${"%" + q + "%"})`
+			)
+		if (params.filter === "fired") wheres.push(eq(st.lastIncluded, true))
+		if (params.filter === "pinned") wheres.push(eq(e.constant, true))
+		if (params.filter === "off") wheres.push(eq(e.enabled, false))
+		const order =
+			params.sort === "lastRead"
+				? [sql`${st.lastJudgedAt} DESC NULLS LAST`, asc(e.id)]
+				: params.sort === "timesRead"
+					? [sql`coalesce(${st.timesIncluded}, 0) DESC`, asc(e.id)]
+					: params.sort === "rank"
+						? [sql`${st.lastRank} ASC NULLS LAST`, asc(e.id)]
+						: [sql`lower(coalesce(${e.title}, '')) ASC`, asc(e.id)]
+		const page = (at: number) => db
+			.select({
+				id: e.id,
+				typeId: e.typeId,
+				title: e.title,
+				keys: e.keys,
+				enabled: e.enabled,
+				constant: e.constant,
+				timesJudged: st.timesJudged,
+				timesIncluded: st.timesIncluded,
+				lastJudgedAt: st.lastJudgedAt,
+				lastIncluded: st.lastIncluded,
+				lastReason: st.lastReason,
+				lastRank: st.lastRank,
+				total: sql<number>`count(*) OVER ()`.mapWith(Number)
+			})
+			.from(e)
+			.leftJoin(st, stats)
+			.where(and(...wheres))
+			.orderBy(...order)
+			.limit(limit)
+			.offset(at)
+		let rows = await page(offset)
+		// A page past the end (the last row on the last page just left the
+		// filter) is the last real page, never "no entries".
+		if (!rows.length && offset > 0) {
+			const [{ n }] = await db
+				.select({ n: sql<number>`count(*)::int` })
+				.from(e)
+				.leftJoin(st, stats)
+				.where(and(...wheres))
+			offset = n ? Math.floor((n - 1) / limit) * limit : 0
+			if (n) rows = await page(offset)
+		}
+		return answer({
+			sessionId: params.sessionId,
+			lorebookId: session.lorebookId,
+			bookName: book.name,
+			offset,
+			total: rows[0]?.total ?? 0,
+			rows: rows.map((r) => ({
+				id: r.id,
+				typeId: r.typeId,
+				title: r.title ?? "",
+				keys: r.keys ?? [],
+				off: r.enabled === false,
+				pinned: r.constant === true,
+				timesJudged: r.timesJudged ?? 0,
+				timesIncluded: r.timesIncluded ?? 0,
+				lastJudgedAt: r.lastJudgedAt ? new Date(r.lastJudgedAt).toISOString() : null,
+				lastIncluded: r.lastIncluded ?? null,
+				lastReason: r.lastReason ?? null,
+				lastRank: r.lastRank ?? null
+			}))
+		})
 	}
 }
 
@@ -1129,7 +1332,33 @@ export const testEntryRetrievalHandler: Handler<
 		const mine = explanation.rows.filter(
 			(r) => r.source === band && r.id === row.id
 		)
+		// The store's own projection of this preview (L1): never stored, and
+		// the same rows a real turn would have recorded. An inclusion by any
+		// ranking wins, as above.
+		const { projectReceiptRankings } = await import(
+			"$lib/server/pipelines/runtime/rankingStore"
+		)
+		let decision: Sockets.Entries.TestRetrieval.Response["decision"]
+		for (const ranking of projectReceiptRankings(receipt)) {
+			const d = ranking.rows.find(
+				(r) => r.subjectKind === "lore-entry" && r.subjectId === String(row.id)
+			)
+			if (!d || (decision?.included && !d.included)) continue
+			const matched = (
+				d.detail as { matched?: Array<{ key: string; fuzzy?: boolean }> } | null
+			)?.matched?.filter((m) => !m.fuzzy)
+			decision = {
+				included: d.included,
+				reason: d.reason,
+				rank: d.rank ?? null,
+				// Rank's own denominator: the lore entries this ranking read in.
+				of: ranking.rows.filter((r) => r.subjectKind === "lore-entry" && r.included).length,
+				tokens: d.tokens ?? null,
+				matched: Array.isArray(matched) ? matched.map((m) => m.key) : []
+			}
+		}
 		return answer({
+			...(decision ? { decision } : {}),
 			// Two gather branches can both decide the same candidate. "Did it
 			// fire" is answered by whether *any* of them let it in, so an
 			// inclusion wins over a rejection of the same row.
@@ -1163,6 +1392,20 @@ const CAST_KIND = "cast"
  */
 const PLACE_KIND = "places"
 
+/**
+ * "Shared, or on this line" — the one condition every branch-aware read uses.
+ *
+ * ⚠ Main is `IS NULL` alone, not "no condition". A fork's own rows are rows
+ * main does not have, so an unfiltered read is not main's reading; it is both
+ * lines at once. (The mirror of `rowsOnLine` in
+ * `$lib/shared/lorebooks/amendments.ts`, and the two must agree.)
+ */
+function onLineSql(column: AnyPgColumn, branchId: number | null | undefined) {
+	return branchId == null
+		? isNull(column)
+		: or(isNull(column), eq(column, branchId))!
+}
+
 export const entryCountsHandler: Handler<
 	Sockets.Entries.Counts.Params,
 	Sockets.Entries.Counts.Response
@@ -1188,14 +1431,24 @@ export const entryCountsHandler: Handler<
 				total: sql<number>`count(*)::int`
 			})
 			.from(schema.lorebookEntries)
-			.where(eq(schema.lorebookEntries.lorebookId, params.lorebookId))
+			.where(
+				and(
+					eq(schema.lorebookEntries.lorebookId, params.lorebookId),
+					onLineSql(schema.lorebookEntries.branchId, params.branchId)
+				)
+			)
 			.groupBy(schema.lorebookEntries.typeId)
 		for (const row of byType) counts[row.typeId] = Number(row.total)
 
 		const [scenes] = await db
 			.select({ total: sql<number>`count(*)::int` })
 			.from(schema.scenes)
-			.where(eq(schema.scenes.lorebookId, params.lorebookId))
+			.where(
+				and(
+					eq(schema.scenes.lorebookId, params.lorebookId),
+					onLineSql(schema.scenes.branchId, params.branchId)
+				)
+			)
 		counts[SCENE_KIND] = Number(scenes?.total ?? 0)
 
 		const [cast] = await db
@@ -1251,81 +1504,6 @@ export const entryCountsHandler: Handler<
 	}
 }
 
-/**
- * How far back to look for a run that actually ranked something.
- *
- * A conversation's runs are not all turns — a summarize, a compile and a title
- * each write a receipt with no retrieval in it — so taking the newest row
- * would blank every marker in the list the moment somebody compiled a scene.
- * Bounded rather than unbounded: this answers "what happened lately", and a
- * scan to the beginning of a long conversation would be a different question.
- */
-const RECENT_RUN_WINDOW = 5
-
-/**
- * The tie type that filled the ceiling, where one plainly did.
- *
- * ⚠ **Only on a list of one type, and only when the cap bit.** The receipt
- * keeps the ties that were SENT and not the ones that were cut, so on a mixed
- * list naming a type would be a guess at which of them lost the room. When the
- * cap bit and everything through it carries one type, there is nothing to
- * guess: that type is what filled the ceiling.
- */
-function cappedTypeOf(
-	node: any,
-	figures: { sent: number; considered: number; cap?: number }
-): string | undefined {
-	const { sent, considered, cap } = figures
-	if (cap === undefined || cap <= 0) return undefined
-	if (sent !== cap || considered <= sent) return undefined
-	const kept: any[] = Array.isArray(node?.output?.main)
-		? node.output.main
-		: []
-	const types = new Set<string>()
-	for (const candidate of kept) {
-		const type = candidate?.payload?.entry?.type
-		if (typeof type === "string" && type) types.add(type)
-	}
-	return types.size === 1 ? [...types][0] : undefined
-}
-
-/**
- * What the run did with the narrative graph, for the graph lens's ceiling line.
- *
- * ⚠ **Read off the relationship mechanism's own diagnostics, never counted from
- * the prompt.** `core:query/relationship-search@1` is the only node that walks
- * the graph AND records what it walked: its two siblings publish keyed sections
- * with no figures at all, and a count taken from the rendered sections would
- * have a numerator and no denominator. A run without it reports nothing here,
- * which is what keeps the line absent rather than wrong.
- *
- * `relationships` is that mechanism's own sentence and nothing else writes one,
- * so it is what identifies the node in a receipt's trail.
- */
-function relationshipsFromReceipt(
-	receipt: any
-): Sockets.Entries.RecentDecisions.Response["relationships"] {
-	const nodes: any[] = Array.isArray(receipt?.nodes) ? receipt.nodes : []
-	for (const node of nodes) {
-		const d = node?.output?.diagnostics
-		if (!d || typeof d.relationships !== "string") continue
-		if (typeof d.matched !== "number" || typeof d.considered !== "number")
-			continue
-		const figures = {
-			sent: d.matched as number,
-			considered: d.considered as number,
-			cap: typeof d.maxEntries === "number" ? d.maxEntries : undefined
-		}
-		const cappedType = cappedTypeOf(node, figures)
-		return {
-			sent: figures.sent,
-			considered: figures.considered,
-			...(figures.cap !== undefined ? { cap: figures.cap } : {}),
-			...(cappedType ? { cappedType } : {})
-		}
-	}
-	return undefined
-}
 
 export const entryRecentDecisionsHandler: Handler<
 	Sockets.Entries.RecentDecisions.Params,
@@ -1341,12 +1519,25 @@ export const entryRecentDecisionsHandler: Handler<
 		 * by this file's ownership rule; the conversation is theirs by the
 		 * shared owner-OR-guest one.
 		 */
-		const book = await findOwnedBook(params.lorebookId, userId)
+		// The book's owner — decisions on guests' turns in their sessions
+		// included — and admins (R58). A guest gets nothing.
+		const book =
+			(await findOwnedBook(params.lorebookId, userId)) ??
+			(socket.user?.isAdmin
+				? await db.query.lorebooks.findFirst({
+						where: (l, { eq }) => eq(l.id, params.lorebookId),
+						columns: { id: true, name: true, userId: true }
+					})
+				: undefined)
 		if (!book) throw new Error("Lorebook not found.")
 
-		const access = await checkSessionAccess(params.sessionId, userId)
-		if (!access.hasAccess)
-			throw new Error("Session not found or access denied.")
+		// An admin reads without being in the session (R58); the session must
+		// still read THIS book, which the check below enforces for everyone.
+		if (!socket.user?.isAdmin) {
+			const access = await checkSessionAccess(params.sessionId, userId)
+			if (!access.hasAccess)
+				throw new Error("Session not found or access denied.")
+		}
 
 		const answer = (
 			part: Omit<
@@ -1374,78 +1565,123 @@ export const entryRecentDecisionsHandler: Handler<
 		if (!session || session.lorebookId !== params.lorebookId)
 			return answer({ decisions: {} })
 
-		const rows = await db
-			.select({ id: schema.lorebookEntries.id })
-			.from(schema.lorebookEntries)
-			.where(eq(schema.lorebookEntries.lorebookId, params.lorebookId))
-		const inBook = new Set(rows.map((r) => r.id))
-
-		const runs = await db
-			.select({
-				runId: schema.pipelineRuns.runId,
-				receipt: schema.pipelineRuns.receipt
-			})
-			.from(schema.pipelineRuns)
+		/**
+		 * The newest run in this session that ranked anything, read from the
+		 * ranking store (R58, R64) — never a receipt. A run that ranked once
+		 * per voice holds several rankings; all of them are that turn's.
+		 */
+		// …and judged LORE: a plugin ranker's turn, or a run with no lore in
+		// reach, has nothing to say about this book's entries.
+		const [latest] = await db
+			.select({ runId: schema.rankings.runId })
+			.from(schema.rankings)
 			.where(
 				and(
-					eq(schema.pipelineRuns.sessionId, params.sessionId),
-					// A preview left no message, so the run a reader means by
-					// "the last one" is the last one that sent something.
-					eq(schema.pipelineRuns.isPreview, false)
+					eq(schema.rankings.sessionId, params.sessionId),
+					sql`exists (select 1 from ${schema.rankingDecisions} where ${schema.rankingDecisions.rankingId} = ${schema.rankings.id} and ${schema.rankingDecisions.subjectKind} = 'lore-entry')`
 				)
 			)
-			.orderBy(desc(schema.pipelineRuns.id))
-			.limit(RECENT_RUN_WINDOW)
-
-		const { explainRetrieval } = await import("./pipelines")
-		const entryBands = new Set(ENTRY_TYPE_IDS.map(bandOfType))
-
-		for (const run of runs) {
-			const explanation = explainRetrieval(
-				(run.receipt ?? {}) as any,
-				// No entry facts: this reports what was decided, never what
-				// the rows say now, so the projection's titles and drift
-				// checks are work nothing here reads.
-				new Map(),
-				{
-					entriesRead: false,
-					// The default cap trims the tail of a long list for a
-					// panel that renders all of it; a marker is wanted for
-					// every row, so a cap here would blank the list's bottom.
-					limit: Number.MAX_SAFE_INTEGER
-				}
-			)
-			if (!explanation.ranked) continue
-
-			const decisions: Record<number, "fired" | "considered"> = {}
-			for (const row of explanation.rows) {
-				if (typeof row.id !== "number") continue
-				// Both, and neither is redundant: a band says the candidate
-				// was an entry rather than a message, and the book's own ids
-				// say it was one of *these* entries — message ids and entry
-				// ids are separate spaces that freely collide.
-				if (!entryBands.has(row.source)) continue
-				if (!inBook.has(row.id)) continue
-				// `skipped` is not a weak `considered`: no mechanism offered
-				// the entry to the ranker, so the row carries no mark at all.
-				if (row.outcome === "included") decisions[row.id] = "fired"
-				else if (
-					row.outcome === "excluded" &&
-					decisions[row.id] !== "fired"
-				)
-					decisions[row.id] = "considered"
-			}
-			// The same run's figures, so the ceiling line and the markers are
-			// two readings of one turn rather than two turns.
-			const relationships = relationshipsFromReceipt(run.receipt)
-			return answer({
-				runId: run.runId,
-				decisions,
-				...(relationships ? { relationships } : {})
+			.orderBy(desc(schema.rankings.id))
+			.limit(1)
+		if (!latest) return answer({ decisions: {} })
+		const turn = await db
+			.select({
+				id: schema.rankings.id,
+				detail: schema.rankings.detail,
+				budgetTotal: schema.rankings.budgetTotal
 			})
+			.from(schema.rankings)
+			.where(eq(schema.rankings.runId, latest.runId))
+		const [run] = await db
+			.select({ runId: schema.pipelineRuns.runId })
+			.from(schema.pipelineRuns)
+			.where(eq(schema.pipelineRuns.id, latest.runId))
+			.limit(1)
+		const rows = await db
+			.select({
+				rankingId: schema.rankingDecisions.rankingId,
+				subjectId: schema.rankingDecisions.subjectId,
+				included: schema.rankingDecisions.included,
+				rank: schema.rankingDecisions.rank,
+				tokens: schema.rankingDecisions.tokens,
+				detail: schema.rankingDecisions.detail
+			})
+			.from(schema.rankingDecisions)
+			.innerJoin(
+				schema.lorebookEntries,
+				sql`${schema.lorebookEntries.id}::text = ${schema.rankingDecisions.subjectId}`
+			)
+			.where(
+				and(
+					inArray(
+						schema.rankingDecisions.rankingId,
+						turn.map((t) => t.id)
+					),
+					eq(schema.rankingDecisions.subjectKind, "lore-entry"),
+					// Entry ids are a separate space from message ids; the book
+					// is what says these subjects are THIS book's entries.
+					eq(schema.lorebookEntries.lorebookId, params.lorebookId)
+				)
+			)
+		const decisions: Record<number, "fired" | "considered"> = {}
+		// The Read-in line's figures for the owner (R58), off the same rows:
+		// rank among the entries that ranking read in, what it cost, the key
+		// that matched, and the budget the ranking was given.
+		// "of" is rank's own denominator: every lore entry the ranking READ IN,
+		// whichever book it came from — the rank was counted among all of them.
+		const readIn = new Map<number, number>(
+			(
+				await db
+					.select({
+						rankingId: schema.rankingDecisions.rankingId,
+						n: sql<number>`count(*)::int`
+					})
+					.from(schema.rankingDecisions)
+					.where(
+						and(
+							inArray(
+								schema.rankingDecisions.rankingId,
+								turn.map((t) => t.id)
+							),
+							eq(schema.rankingDecisions.subjectKind, "lore-entry"),
+							eq(schema.rankingDecisions.included, true)
+						)
+					)
+					.groupBy(schema.rankingDecisions.rankingId)
+			).map((r) => [r.rankingId, r.n])
+		)
+		const budgetOf = new Map(
+			turn.map((t) => [t.id, (t as { budgetTotal?: number | null }).budgetTotal ?? null])
+		)
+		const facts: NonNullable<Sockets.Entries.RecentDecisions.Response["facts"]> = {}
+		for (const r of rows) {
+			const id = Number(r.subjectId)
+			const fired = decisions[id] === "fired"
+			if (r.included) decisions[id] = "fired"
+			else if (!fired) decisions[id] = "considered"
+			// An inclusion's figures win over another ranking's rejection.
+			if (fired && !r.included) continue
+			// Only an exact hit is named: a fuzzy one never "matched" its key.
+			const matched = (
+				r.detail as { matched?: Array<{ key: string; fuzzy?: boolean }> } | null
+			)?.matched?.filter((m) => !m.fuzzy)
+			facts[id] = {
+				...(r.rank != null ? { rank: r.rank } : {}),
+				...(r.rank != null ? { of: readIn.get(r.rankingId) ?? 0 } : {}),
+				...(r.tokens != null ? { tokens: r.tokens } : {}),
+				...(Array.isArray(matched) && matched[0]?.key ? { matched: matched[0].key } : {}),
+				...(budgetOf.get(r.rankingId) != null ? { budget: budgetOf.get(r.rankingId)! } : {})
+			}
 		}
-
-		return answer({ decisions: {} })
+		const relationships = turn
+			.map((t) => (t.detail as { relationships?: Sockets.Entries.RecentDecisions.Response["relationships"] } | null)?.relationships)
+			.find((r) => !!r)
+		return answer({
+			...(run ? { runId: run.runId } : {}),
+			decisions,
+			facts,
+			...(relationships ? { relationships } : {})
+		})
 	}
 }
 
@@ -1461,6 +1697,8 @@ export function registerEntryHandlers(
 	register(socket, entryListHandler, emitToUser)
 	register(socket, createEntryHandler, emitToUser)
 	register(socket, updateEntryHandler, emitToUser)
+	register(socket, entrySetMarksHandler, emitToUser)
+	register(socket, entrySessionEntriesHandler, emitToUser)
 	register(socket, deleteEntryHandler, emitToUser)
 	register(socket, updateEntryPositionsHandler, emitToUser)
 	register(socket, iterateNextEntryHandler, emitToUser)

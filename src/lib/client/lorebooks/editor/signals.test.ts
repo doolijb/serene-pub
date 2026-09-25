@@ -108,7 +108,10 @@ describe("signalFactsFrom — the turn, as facts", () => {
 		...over
 	})
 
-	/** Twelve judged entries, with the one being asked about second best. */
+	/**
+	 * Twelve entries read in, the one being asked about second best, and one
+	 * more only weighed — which a rank never counts (L1).
+	 */
 	const twelve = () =>
 		explanation({
 			rows: [
@@ -118,10 +121,15 @@ describe("signalFactsFrom — the turn, as facts", () => {
 					row({
 						key: `worldLore:${20 + i}`,
 						id: 20 + i,
-						score: 0.7 - i / 100,
-						outcome: "excluded"
+						score: 0.7 - i / 100
 					})
-				)
+				),
+				row({
+					key: "worldLore:40",
+					id: 40,
+					score: 0.1,
+					outcome: "excluded"
+				})
 			]
 		})
 

@@ -15,8 +15,11 @@ is the reference implementation of a sidebar view.
 ## 1. Principles
 
 1. **Roles, never hex.** A component asks for a colour role (`primary`, `surface-900`, `warning`)
-   and the active theme answers. No component names a hex, an oklch, or a specific theme. The one
-   exception is the rail's darkened ground, computed with `color-mix` from a role.
+   and the active theme answers. No component names a hex, an oklch, or a specific theme. The rail's
+   ground is the one computed value — `--sp-rail-bg` in `app.css`, a `color-mix` off a role that
+   sets the rail one step beyond the sidebar in whichever direction the mode runs. It was dark under
+   every mode until **2026-09-23**, when it was ruled to follow the mode like everything else; the
+   mix is still the same gesture, just mirrored under light.
 2. **One rail, one sidebar, one search.** Navigation lives on the rail. Whatever a rail item opens
    is a sidebar view. Jump is the only search surface. Nothing else may add a navigation strip, a
    second sidebar, or a search box that is not a view's own filter.
@@ -44,15 +47,15 @@ is the reference implementation of a sidebar view.
 Serene Pub is themeable. Every theme, built in or custom, defines the same Skeleton roles, each as
 an eleven-stop ladder from `50` (lightest) to `950` (darkest) with a `contrast-*` companion:
 
-| Role        | Ladder     | What it means in the interface                                  |
-| ----------- | ---------- | --------------------------------------------------------------- |
-| `primary`   | 50 – 950   | **Act on it.** Buttons, focus rings, links, the active rail bar. |
-| `secondary` | 50 – 950   | Secondary emphasis. Rarely needed; never for actions.            |
-| `tertiary`  | 50 – 950   | System and admin: the Admin rail item, lore-in-play dots.        |
-| `success`   | 50 – 950   | Healthy, connected, saved.                                       |
-| `warning`   | 50 – 950   | **The model is working.** Live dots, generating chips, the beta line. |
-| `error`     | 50 – 950   | Failed, destructive, a required field missing.                   |
-| `surface`   | 50 – 950   | Every ground, panel, border and text tone.                       |
+| Role        | Ladder   | What it means in the interface                                        |
+| ----------- | -------- | --------------------------------------------------------------------- |
+| `primary`   | 50 – 950 | **Act on it.** Buttons, focus rings, links, the active rail bar.      |
+| `secondary` | 50 – 950 | Secondary emphasis. Rarely needed; never for actions.                 |
+| `tertiary`  | 50 – 950 | System and admin: the Admin rail item, lore-in-play dots.             |
+| `success`   | 50 – 950 | Healthy, connected, saved.                                            |
+| `warning`   | 50 – 950 | **The model is working.** Live dots, generating chips, the beta line. |
+| `error`     | 50 – 950 | Failed, destructive, a required field missing.                        |
+| `surface`   | 50 – 950 | Every ground, panel, border and text tone.                            |
 
 Because components only ever ask for these roles, the shell looks like whichever theme is active.
 Under Rose it is rose; under Lamplight it is lamplight. This is the guarantee that lets one
@@ -63,26 +66,26 @@ implementation serve twenty-five themes.
 Lamplight is the default for new installs, branched from hamlindigo. It keeps the indigo ground
 and gives each role one job, with the 500 stop as the anchor:
 
-| Role        | 500 stop                    | Reads as                      |
-| ----------- | --------------------------- | ----------------------------- |
-| `primary`   | `oklch(80.3% 0.12 84deg)`   | lamp gold                     |
-| `secondary` | `oklch(80.28% 0.08 267deg)` | hamlindigo's pale indigo      |
-| `tertiary`  | `oklch(64.32% 0.06 213deg)` | teal                          |
-| `success`   | `oklch(68% 0.11 160deg)`    | moss                          |
-| `warning`   | `oklch(70% 0.17 45deg)`     | ember                         |
-| `error`     | `oklch(60% 0.19 20deg)`     | warm red                      |
+| Role        | 500 stop                    | Reads as                 |
+| ----------- | --------------------------- | ------------------------ |
+| `primary`   | `oklch(80.3% 0.12 84deg)`   | lamp gold                |
+| `secondary` | `oklch(80.28% 0.08 267deg)` | hamlindigo's pale indigo |
+| `tertiary`  | `oklch(64.32% 0.06 213deg)` | teal                     |
+| `success`   | `oklch(68% 0.11 160deg)`    | moss                     |
+| `warning`   | `oklch(70% 0.17 45deg)`     | ember                    |
+| `error`     | `oklch(60% 0.19 20deg)`     | warm red                 |
 
 Its surface ladder is hamlindigo's with two deeper stops, so the shell has room for its layers:
 
-| Stop  | Value                        | Used for                                     |
-| ----- | ---------------------------- | -------------------------------------------- |
-| 50    | `oklch(93.75% 0.01 267deg)`  | ink on dark                                  |
-| 200   | `oklch(89.7% 0.02 267deg)`   | prose, secondary ink                         |
-| 400   | `oklch(70.33% 0.05 267deg)`  | muted text, rest icons                       |
-| 500   | `oklch(56.88% 0.07 267deg)`  | quiet text, placeholders, hints              |
-| 800   | `oklch(38% 0.05 267deg)`     | borders, hover, the selected row (dark)      |
-| 900   | `oklch(32% 0.04 267deg)`     | the page, and cards on a 950 ground          |
-| 950   | `oklch(26% 0.04 267deg)`     | the sidebar, popovers, inputs on a 900 page  |
+| Stop | Value                       | Used for                                    |
+| ---- | --------------------------- | ------------------------------------------- |
+| 50   | `oklch(93.75% 0.01 267deg)` | ink on dark                                 |
+| 200  | `oklch(89.7% 0.02 267deg)`  | prose, secondary ink                        |
+| 400  | `oklch(70.33% 0.05 267deg)` | muted text, rest icons                      |
+| 500  | `oklch(56.88% 0.07 267deg)` | quiet text, placeholders, hints             |
+| 800  | `oklch(38% 0.05 267deg)`    | borders, hover, the selected row (dark)     |
+| 900  | `oklch(32% 0.04 267deg)`    | the page, and cards on a 950 ground         |
+| 950  | `oklch(26% 0.04 267deg)`    | the sidebar, popovers, inputs on a 900 page |
 
 The rail is one step deeper still: `color-mix(in oklch, var(--color-surface-950), black 20%)`.
 That is the only computed colour in the shell and it exists because the rail needs to sit under
@@ -114,18 +117,18 @@ for hints and placeholders that can be missed.
 
 ### 2.4 Selection and emphasis
 
-| State                       | Treatment                                                                       |
-| --------------------------- | ------------------------------------------------------------------------------- |
-| Selected row                | `.sidebar-row-active`: `bg-surface-200 dark:bg-surface-800` + `inset 3px 0 0 primary-500`, with `aria-current` |
-| Active rail item            | `text-primary-500 bg-surface-900` + the same inset bar                          |
-| Open-but-inactive view      | a 6px `primary-500` dot on the rail item                                        |
-| Active toggle or chip       | `preset-tonal-primary`                                                          |
-| Selected card               | `ring-2 ring-primary-500 ring-offset-2 ring-offset-surface-950` (an inset bar hides under an image) |
-| Hover on a row              | `surface-200-800`                                                               |
-| Primary button              | `preset-filled-primary-500`                                                     |
-| Secondary button            | `preset-tonal` or `preset-tonal-surface`                                        |
-| Quiet action                | text in `surface-400`, `hover:text-surface-200`                                 |
-| Destructive                 | text or fill in `error`                                                         |
+| State                  | Treatment                                                                                                      |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Selected row           | `.sidebar-row-active`: `bg-surface-200 dark:bg-surface-800` + `inset 3px 0 0 primary-500`, with `aria-current` |
+| Active rail item       | `text-primary-500 bg-surface-900` + the same inset bar                                                         |
+| Open-but-inactive view | a 6px `primary-500` dot on the rail item                                                                       |
+| Active toggle or chip  | `preset-tonal-primary`                                                                                         |
+| Selected card          | `ring-2 ring-primary-500 ring-offset-2 ring-offset-surface-950` (an inset bar hides under an image)            |
+| Hover on a row         | `surface-200-800`                                                                                              |
+| Primary button         | `preset-filled-primary-500`                                                                                    |
+| Secondary button       | `preset-tonal` or `preset-tonal-surface`                                                                       |
+| Quiet action           | text in `surface-400`, `hover:text-surface-200`                                                                |
+| Destructive            | text or fill in `error`                                                                                        |
 
 `preset-filled-primary-500` is a button. It is never a selected row, an active tab, or a badge:
 the old convention failed contrast at 3.62:1 and was retired app-wide.
@@ -141,8 +144,12 @@ is about 5:1, which is why muted text stops at 400 and quiet text is never body 
 
 ### 2.6 Light mode
 
-The design is dark first. A literal dark stop such as `bg-surface-950` or `text-surface-400` reads
-wrong under a light theme, so anything that is not already a paired token is written as a pair:
+The design is dark first, and **nothing is exempt**. The rail used to be, and the shell's own
+grounds quietly were: `Layout.svelte` carried unpaired `bg-surface-950` on the sidebar container and
+the phone's bottom bar, so under a light theme the panel stayed dark while its text went dark with
+the mode — every sidebar view, not one of them. Fixed 2026-09-23. A literal dark stop such as
+`bg-surface-950` or `text-surface-400` reads wrong under a light theme, so anything that is not
+already a paired token is written as a pair:
 `bg-surface-100 dark:bg-surface-950`, `border-surface-300 dark:border-surface-800`,
 `text-surface-600 dark:text-surface-400`. Skeleton's paired utilities (`surface-200-800`,
 `preset-filled-surface-100-900`) do this in one token and are preferred. A component that only
@@ -163,11 +170,11 @@ declares dark stops is a bug, even if it looks right today.
 
 ### 3.1 Faces
 
-| Face               | Role                                             | Weights shipped | Source                          |
-| ------------------ | ------------------------------------------------ | --------------- | ------------------------------- |
-| **Funnel Display** | Titles, view names, session names, speaker names | 400, 600, 700   | `@fontsource/funnel-display`    |
-| **Funnel Sans**    | Everything else: controls, labels, lists, body   | 400, 500, 600, 700 | `@fontsource/funnel-sans`    |
-| **Fira Mono**      | Code, receipts, keyboard hints                   | 400             | `@fontsource/fira-mono`         |
+| Face               | Role                                                                                  | Weights shipped      | Source                                             |
+| ------------------ | ------------------------------------------------------------------------------------- | -------------------- | -------------------------------------------------- |
+| **Funnel Display** | Titles, view names, session names, speaker names                                      | 400, 600, 700        | `@fontsource/funnel-display`                       |
+| **Funnel Sans**    | Everything else: controls, labels, lists, body                                        | 400, 500, 600, 700   | `@fontsource/funnel-sans`                          |
+| **Fira Mono**      | Code, receipts, keyboard hints                                                        | 400                  | `@fontsource/fira-mono`                            |
 | **Literata**       | Story prose in a session: the message log, the composer's preview and the Writer skin | 400, 500, 400 italic | `@fontsource/literata`, as `--sp-prose` on `:root` |
 
 Fonts are self-hosted and imported in `src/app.css`; nothing is fetched from the web. The theme
@@ -187,18 +194,18 @@ fourth face.
 
 The interface uses a fixed set of sizes. Pick from this table; do not invent a size.
 
-| Size  | Line height | Weight  | Face    | Used for                                                   |
-| ----- | ----------- | ------- | ------- | ---------------------------------------------------------- |
-| 32px  | 1.15        | 600     | Display | The home greeting                                          |
-| 24px  | 1.2         | 600     | Display | A page title inside the main area (the admin header)       |
-| 20px  | 1.2         | 600     | Display | A session's name in its header, beside the cast stack and the genre name |
-| 18px  | 1.3         | 600     | Display | A detail hero's name, a continue card's title              |
-| 16px  | 1.4         | 600     | Display | A sidebar view's title                                     |
-| 15px  | 1.4         | 500     | Sans    | A list row's name                                          |
-| 14px  | 1.5         | 400/500 | Sans    | Body, rail labels, inputs                                  |
-| 13px  | 1.45        | 400/500 | Sans    | Tabs, chips, buttons in the dock, secondary body           |
-| 12px  | 1.4         | 400     | Sans    | Field labels, timestamps, meta lines                       |
-| 11px  | 1.3         | 400     | Sans    | Group names on the rail, counts, keyboard hints            |
+| Size | Line height | Weight  | Face    | Used for                                                                 |
+| ---- | ----------- | ------- | ------- | ------------------------------------------------------------------------ |
+| 32px | 1.15        | 600     | Display | The home greeting                                                        |
+| 24px | 1.2         | 600     | Display | A page title inside the main area (the admin header)                     |
+| 20px | 1.2         | 600     | Display | A session's name in its header, beside the cast stack and the genre name |
+| 18px | 1.3         | 600     | Display | A detail hero's name, a continue card's title                            |
+| 16px | 1.4         | 600     | Display | A sidebar view's title                                                   |
+| 15px | 1.4         | 500     | Sans    | A list row's name                                                        |
+| 14px | 1.5         | 400/500 | Sans    | Body, rail labels, inputs                                                |
+| 13px | 1.45        | 400/500 | Sans    | Tabs, chips, buttons in the dock, secondary body                         |
+| 12px | 1.4         | 400     | Sans    | Field labels, timestamps, meta lines                                     |
+| 11px | 1.3         | 400     | Sans    | Group names on the rail, counts, keyboard hints                          |
 
 Letter-spacing is tightened only on Display at 20px and above (`-0.01em`, `-0.015em` at 32px).
 Sans is never tracked. Nothing is set in all caps: a label that needs to look like a label is 12px
@@ -246,20 +253,20 @@ The base unit is 4px. Everything below is a multiple of it, with the two excepti
 
 ### 4.2 Heights and widths
 
-| Thing                      | Size                                              |
-| -------------------------- | ------------------------------------------------- |
-| Rail                       | 64px narrow, 208px wide                           |
-| Rail item                  | 44 × 44 narrow; 40px rows wide                    |
-| Sidebar                    | 400px                                             |
-| Sidebar header             | 56px                                              |
-| List pane at full page     | 340px default, 360–380px for card lists           |
-| Input, filter box, button  | 40px; 32px for the small size                     |
-| List row                   | 44px minimum                                      |
-| Tab                        | 40px                                              |
-| Icon-only rail toggle      | 44 × 44 narrow, 32 × 32 wide                      |
-| Touch target               | 44px, everywhere a finger can land                |
-| Jump pill                  | 34px tall, fixed at top 8px, right 16px           |
-| Jump overlay               | min(640px, 92vw) wide, at most 64vh tall, 12vh from the top |
+| Thing                     | Size                                                        |
+| ------------------------- | ----------------------------------------------------------- |
+| Rail                      | 64px narrow, 208px wide                                     |
+| Rail item                 | 44 × 44 narrow; 40px rows wide                              |
+| Sidebar                   | 400px                                                       |
+| Sidebar header            | 56px                                                        |
+| List pane at full page    | 340px default, 360–380px for card lists                     |
+| Input, filter box, button | 40px; 32px for the small size                               |
+| List row                  | 44px minimum                                                |
+| Tab                       | 40px                                                        |
+| Icon-only rail toggle     | 44 × 44 narrow, 32 × 32 wide                                |
+| Touch target              | 44px, everywhere a finger can land                          |
+| Jump pill                 | 34px tall, fixed at top 8px, right 16px                     |
+| Jump overlay              | min(640px, 92vw) wide, at most 64vh tall, 12vh from the top |
 
 The two exceptions to the 4px grid are the 34px pill, sized to sit inside a 56px header with
 11px above and below, and the 3px inset bar, which is a line, not a box.
@@ -300,10 +307,10 @@ The switch is `ViewModeTracker`, which measures the view and answers `compact` u
 
 Inside a view, use container variants on the `view` container:
 
-| Variant                   | Fires at | Use it for                                          |
-| ------------------------- | -------- | --------------------------------------------------- |
-| `@lg/view:`               | 512px    | Two-column field rows, side-by-side metrics         |
-| `@min-[900px]/view:`      | 900px    | Anything that mirrors the desk switch in CSS        |
+| Variant              | Fires at | Use it for                                   |
+| -------------------- | -------- | -------------------------------------------- |
+| `@lg/view:`          | 512px    | Two-column field rows, side-by-side metrics  |
+| `@min-[900px]/view:` | 900px    | Anything that mirrors the desk switch in CSS |
 
 Never `@sm/view:` for a two-column decision: it fires at 384px, which is narrower than the 399px
 dock, so it would fire in the sidebar. Never a viewport variant (`sm:`, `md:`, `lg:`) inside a view:
@@ -317,15 +324,15 @@ app already is, and a new one must be too.
 
 ### 5.4 Layering
 
-| z-index  | Layer                                                    |
-| -------- | -------------------------------------------------------- |
-| 10       | The shell: rail, sidebar, main                           |
-| 40       | The mobile More sheet                                    |
-| 44       | The Jump pill                                            |
-| 45       | A view open as a mobile sheet                            |
-| 50       | Modal backdrops and dialogs, including the Jump overlay  |
-| 100      | The update notice bar                                    |
-| 1000     | Popovers and menus                                       |
+| z-index | Layer                                                   |
+| ------- | ------------------------------------------------------- |
+| 10      | The shell: rail, sidebar, main                          |
+| 40      | The mobile More sheet                                   |
+| 44      | The Jump pill                                           |
+| 45      | A view open as a mobile sheet                           |
+| 50      | Modal backdrops and dialogs, including the Jump overlay |
+| 100     | The update notice bar                                   |
+| 1000    | Popovers and menus                                      |
 
 The pill sits **under** every sidebar view and above the rest of the page (ruled 2026-09-17). It
 is not rendered at all while a view is full page on desktop, nor while a view is open as a sheet
@@ -344,6 +351,11 @@ One primary button per surface. It is `preset-filled-primary-500`, 40px (or `btn
 dock), with a 16px icon before a one-word label when the icon helps. Secondary actions are tonal.
 Actions that would be clutter as buttons are quiet text links. A destructive action is never the
 primary.
+
+Where one control has two outcomes and the second is the dangerous one, it is a **split button**:
+the safe action fills the primary, a chevron beside it opens a popover, and the dangerous action
+sits inside carrying its whole warning in the item — never a toast after the fact. The lorebook
+editor's Save while reading as of a date is the pattern (`EntryWorkspace.svelte`, `amendSave`).
 
 ### 6.2 Filter input
 
@@ -377,10 +389,40 @@ is a `<button aria-expanded>` that collapses the group; the rows inside are inde
 width and nothing else. Ungrouped rows come first with no header. A filter that empties a group
 hides its header rather than showing an empty one.
 
-A row that stands for a **connection** always shows its title and its service together: the
-title (the user's words) at 15px, then one 11px chip naming the service. Teal-tonal for a managed
-runtime (KoboldCPP, Ollama), outlined for a host (a preset's name such as OpenRouter, Anthropic,
-ONNX). Never one without the other: the title says which, the chip says what (ruled 2026-09-17).
+A row that stands for a **connection** is the title (the user's words) at 15px, a service chip
+where that chip says something the title has not, and then four fixed slots the row's status
+module fills and the row composes: the **state chip** (one or two words beside a dot), the
+**detail** on line two, the **metric** right-aligned in an 86px column, and at most one action.
+Teal-tonal chip for a managed runtime (KoboldCPP, Ollama), outlined for a host (OpenRouter,
+Anthropic, ONNX).
+
+The 2026-09-17 rule was _never one without the other_ — the title says which, the chip says what.
+**Amended 2026-09-23** on both halves. The chip is suppressed where it would only repeat the
+title, because a connection's default name IS its service label, so every row read `Anthropic
+(Claude)` beside a chip saying `Anthropic (Claude)`. And the single `·`-joined status line became
+slots, because in a 400px column it truncated from the right, which is where the fact is
+(`9 models · api.anthropic.com · checked 2 min…`). A slot has a width, so nothing is cut, and a
+column of states can be scanned instead of read.
+
+Muted text is `surface-600-400`; **quiet (`surface-500`) is never a fact the reader came
+for**. A row's metric ("9 models"), a job tile's state ("Not set up") and a group header's trade
+("private · free") are all muted — the last of those measured 3.45:1 as quiet at 11px, which fails
+AA. And the ground decides, not the role: the model table's column headers and its default row sit
+on `surface-200-800`, where muted measures 3.77:1, so those cells step up to `surface-700-300`.
+Measure a pairing when you add one (§2.5).
+
+Only ONE of a connection's five states is red. `ready` is success, `idle` is quiet, `unfinished`
+is **primary** — the app is waiting on the person, and nothing has failed — `busy` is warning,
+and `broken` alone is error. A fresh install showed two red rows and two **Fix** buttons because
+two connections had no API key yet; incomplete is not broken and must not be coloured as though
+it were.
+
+A **model row** is the same shape: the model's display name (the identifier with the packager,
+format, quantisation and parameter count lifted out), the gold default mark, and one quiet facts
+line — `12.2B · Q4_K_M · 7.5 GB · 32k context`. `Use` is outlined and inline; delete and the rest
+are in the `⋯` menu. Never a card with a `Size:`/`Modified:`/`Parameters:` table and a filled
+green button beside a filled red one: `preset-filled-*` is a button, not a badge (§2.4), and the
+one irreversible action does not belong on every row.
 
 A card is `rounded-[12px] border border-surface-800` with `p-4`, on the ground one step lighter
 than what it sits on. That recipe is the `.panel-card` utility in `app.css`, paired for light mode;
@@ -466,8 +508,24 @@ same markup unstyled.
   From 40rem the article drops `prose-sm` and prose's 65ch cap (`prose-base max-w-none`), a step
   before the outline: the column bounds the line, and a capped column beside a list pane reads as a
   slot, not a page.
-- **Search** is Jump (§6.8): a heading is a `doc` hit, the chip reads *Documentation* while Help or
+- **Search** is Jump (§6.8): a heading is a `doc` hit, the chip reads _Documentation_ while Help or
   `/docs` is open, and `doc:` narrows. Neither Help nor `/docs` has a search box of its own.
+
+### 6.10 Host elements (sp elements)
+
+An **sp element** (`sp-popover`, `sp-menu`, `sp-message-body`, …; NOMENCLATURE, _host element_) is the
+page's own behaviour offered to a plugin's remote component, so it carries **structure, not a
+look** (R22): the element itself gets `.sp-<name>`, its parts the classes its `.d.ts` lists
+(`.sp-popover-panel`, `.sp-progress-fill`), and the widget's own `class` passes through. An sp element sets
+no `preset-*`, colour, radius or spacing beyond what the behaviour needs — a popover is positioned,
+a progress bar is visible (`currentColor`), a form control uses Skeleton's base `input` / `textarea`
+class so a dark theme never draws page-coloured text on a browser-white field. Everything else is a
+skin's (§2.7 applies to skins as to screens). Popovers, menus and dialogs inside sp elements follow
+§6.6; their portalled panels carry the widget box's `data-widget-instance`, so a skin still reaches them.
+Unstyled-but-correct is the accepted failure mode; broken is not. Core's own skin over the parts —
+the §6.6 dialog, menu and tooltip recipes — is `src/lib/client/styles/hostElements.css`; a
+popover's panel is left bare because its body is the widget's own card.
+
 ## 7. Iconography
 
 Icons are lucide, stroke 1.6, on the 24px grid: 20px on the rail, 18px in menus and rows, 16px

@@ -417,13 +417,34 @@ describe("the pipeline owns its row", () => {
 		expect(row.error).toBeNull()
 		expect(row.isEdited).toBe(false)
 
-		// The nodes that ran, in the reply's shape: inlet → placeholder → … →
-		// generate → save. The oracle's binding actually ran — no preview
-		// halt, no adapter road — and the update targeted the placeholder.
+		// The nodes that ran, in the reply's shape: inlet → the reads →
+		// speaker → placeholder → … → generate → save. The placeholder comes
+		// AFTER the speaker node since 2026-09-21 — the row is made for
+		// whoever was chosen — and before anything costs a token. The
+		// oracle's binding actually ran — no preview halt, no adapter road —
+		// and the update targeted the placeholder.
 		const keys = receipt.nodes.map((n) => n.nodeKey)
 		expect(keys[0]).toBe("input")
+		// The settings document rides the inlet (PLAN-turn-order §4.12, R13;
+		// A3): resolved once by `runSpec` and published as `$.input.session`,
+		// so a spec reads a setting without knowing which table holds it.
+		const inletSession = (receipt.nodes[0]!.output as any).session
+		expect(inletSession.v).toBe(1)
+		expect(inletSession.sessionId).toBe(sessionId)
+		expect(inletSession.genreId).toBe("core:genre/chat")
+		expect(inletSession.cast.sessionCharacters.map((c: any) => c.character.id)).toEqual([
+			characterId
+		])
+		// No `speaker` node since A6 (PLAN-turn-order §4.4): the fired entry
+		// names who speaks, and `placeholder` is the second node — the row
+		// is made before anything costs a token.
+		expect(keys).not.toContain("speaker")
 		expect(keys[1]).toBe("placeholder")
-		expect(keys.at(-1)).toBe("save")
+		expect(keys.indexOf("placeholder")).toBeLessThan(keys.indexOf("generate"))
+		// The save fills the row; only the sprite tail (DESIGN-sprites §5)
+		// follows it, and it writes nothing for a card with no sprites.
+		expect(keys.indexOf("save")).toBe(keys.length - 2)
+		expect(keys.at(-1)).toBe("sprites")
 		const generate = receipt.nodes.find((n) => n.nodeKey === "generate")!
 		expect(generate.result).toBe("ok")
 		expect((generate.output as any).text).toBe(CHUNKS.join(""))
@@ -574,15 +595,18 @@ describe("the pipeline owns its row", () => {
 		expect(row!.isGenerating).toBe(false)
 		// A verb's rewrite is history moving (R-15): the finishing write
 		// recorded `message-updated` with the verb, for the next reply's
-		// inlet — where a fresh turn's finish records nothing.
+		// inlet — and the row landing as `message-completed` (PLAN-turn-order
+		// §4.1, A2), which a fresh turn's finish records too.
 		const changes = await db
 			.select()
 			.from(schema.sessionChanges)
 			.where(eq(schema.sessionChanges.sessionId, sessionId))
 		expect(changes.map((c) => [c.event, c.messageId, (c.payload as any).verb])).toEqual([
-			["core:event/message-updated@1", existing.id, "continue"]
+			["core:event/message-updated@1", existing.id, "continue"],
+			["core:event/message-completed@1", existing.id, undefined]
 		])
 		expect(changes[0]!.runId).toBe(outcome.receipt!.runId)
+		expect(changes[1]!.runId).toBe(outcome.receipt!.runId)
 	})
 
 	/**
@@ -865,14 +889,21 @@ describe("Stop is a run-level guarantee", () => {
 		expect(row!.content).toBe(CHUNKS[0]!.trim())
 		expect(row!.content.length).toBeGreaterThan(0)
 		// And the stop is a change the next reply's inlet will see, recorded
-		// once, by the run that was filling the row.
+		// once, by the run that was filling the row — followed by the row
+		// landing (`message-completed`, PLAN-turn-order §4.1, A2): a stopped
+		// reply is a row that is not generating.
 		const changes = await db
 			.select()
 			.from(schema.sessionChanges)
 			.where(eq(schema.sessionChanges.sessionId, sessionId))
 		expect(changes.map((c) => [c.event, c.messageId, c.runId])).toEqual([
-			["core:event/message-stopped@1", row!.id, started.data.runId]
+			["core:event/message-stopped@1", row!.id, started.data.runId],
+			["core:event/message-completed@1", row!.id, started.data.runId]
 		])
+		expect((changes[1]!.payload as any).cause).toEqual({
+			kind: "run",
+			runId: started.data.runId
+		})
 		expect(changes[0]!.payload).toMatchObject({
 			textLength: CHUNKS[0]!.trim().length
 		})
@@ -953,13 +984,14 @@ describe("Stop is a run-level guarantee", () => {
 		expect(row.content).toBe(CHUNKS[0]!.trim())
 		expect(rows.filter((m) => m.role === "assistant").length).toBe(1)
 		// Whichever release won — the handler's or the run's — the stop was
-		// recorded exactly once.
+		// recorded exactly once, and the row landed once (A2).
 		const changes = await db
 			.select()
 			.from(schema.sessionChanges)
 			.where(eq(schema.sessionChanges.sessionId, sessionId))
 		expect(changes.map((c) => [c.event, c.messageId])).toEqual([
-			["core:event/message-stopped@1", row.id]
+			["core:event/message-stopped@1", row.id],
+			["core:event/message-completed@1", row.id]
 		])
 	})
 

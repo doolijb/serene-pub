@@ -777,3 +777,50 @@ describe("reading a channel with more than one lane", () => {
 		expect(await write("text-messages:0")).toBe("text-messages")
 	}, 60_000)
 })
+
+describe("W1 · a second message on the live row's channel is refused at run time", () => {
+	const create = { key: "reply", definitionId: "core:outlet/create-message" } as any
+	const greet = { key: "greet", definitionId: "core:outlet/seed-greetings" } as any
+	const hello = [{ text: "Hello." }]
+
+	it("refuses a second row on the live row's channel from the same run, and allows it elsewhere", async () => {
+		const host = createHost(db, { sessionId: phoneSessionId, userId })
+		await host.commit!({ text: "", generating: true, channel: "phone" }, create)
+		// A wired channel the validator could not see: the host is the check.
+		await expect(
+			host.commit!({ text: "a rival", channel: "phone" }, { ...create, key: "rival" })
+		).rejects.toThrow(/second message on channel 'phone', the live row's channel/)
+		await expect(
+			host.commit!({ greetings: hello, channel: "phone:1" }, greet)
+		).rejects.toThrow(HostScopeError)
+		// Empty greetings write nothing, so they race nothing.
+		await expect(
+			host.commit!({ greetings: [], channel: "phone" }, greet)
+		).resolves.toMatchObject({ count: 0 })
+		// A complete message somewhere the reply is not is an ordinary write.
+		await expect(
+			host.commit!({ text: "an aside" }, { ...create, key: "aside" })
+		).resolves.toMatchObject({ id: expect.any(Number) })
+	}, 60_000)
+
+	it("a complete message is not the live row — two in one run land", async () => {
+		const host = createHost(db, { sessionId: phoneSessionId, userId })
+		await host.commit!({ text: "one", channel: "phone" }, create)
+		await expect(
+			host.commit!({ text: "two", channel: "phone" }, { ...create, key: "two" })
+		).resolves.toMatchObject({ id: expect.any(Number) })
+	}, 60_000)
+
+	it("is the run's fact — a new run opens its own live row", async () => {
+		await createHost(db, { sessionId: phoneSessionId, userId }).commit!(
+			{ text: "", generating: true, channel: "phone" },
+			create
+		)
+		await expect(
+			createHost(db, { sessionId: phoneSessionId, userId }).commit!(
+				{ text: "", generating: true, channel: "phone" },
+				create
+			)
+		).resolves.toMatchObject({ id: expect.any(Number) })
+	}, 60_000)
+})

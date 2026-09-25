@@ -134,7 +134,11 @@ export function widgetDeclFromPanel(p: PanelInstance): WidgetDecl {
 		title: p.title,
 		...(p.icon ? { icon: p.icon } : {}),
 		role: p.role,
-		surface: p.surface,
+		// Back to the declaration's spelling (R25): a component by slug, or
+		// the frame alias. Layout reads neither; it only needs one.
+		...(p.surface.kind === "frame"
+			? { surface: p.surface }
+			: { component: p.surface.component }),
 		...(p.channels?.length ? { channels: p.channels } : {}),
 		...(p.settings ? { settings: p.settings } : {}),
 		...(p.layout?.prefer === "drawer"
@@ -152,8 +156,10 @@ export function widgetDeclFromPanel(p: PanelInstance): WidgetDecl {
  * mode that re-declares `messages` cannot cost the conversation its anchor
  * guarantee.
  */
-export function declsFor(panels: readonly PanelInstance[] = []): LayoutDecls {
-	const byId = new Map<string, WidgetDecl>(CORE_WIDGETS.map((w) => [w.id, w]))
+export function declsFor(panels: readonly PanelInstance[] = [], omit: ReadonlySet<string> = new Set()): LayoutDecls {
+	// What the genre withholds (R71) is not declared, so `resolve` never
+	// appends it — the conversation included, when a genre places its own middle.
+	const byId = new Map<string, WidgetDecl>(CORE_WIDGETS.filter((w) => !omit.has(w.id)).map((w) => [w.id, w]))
 	for (const p of panels)
 		if (!byId.has(p.id)) byId.set(p.id, widgetDeclFromPanel(p))
 	return { widgets: [...byId.values()], looks: CORE_LOOKS }

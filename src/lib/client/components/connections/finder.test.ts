@@ -31,7 +31,9 @@ import {
 	type Destination,
 	type FinderRow,
 	type RowContext,
-	SerialAsk
+	SerialAsk,
+	repoTitle,
+	repoOwner
 } from "./finder"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 
@@ -280,13 +282,16 @@ describe("kcppRecommendedRows", () => {
 		)
 		expect(row.bytes).toBe(2.74 * GB)
 		expect(row.fit).toBe("fits")
-		expect(secondLine(row)).toMatch(/^2\.7 GB · 7B/)
+		// The owner leads the line now; the title carries the repo.
+		expect(secondLine(row)).toMatch(/^TheBloke · 2\.7 GB · 7B/)
 	})
 
 	test("the row is a name, a size, its params and one line", () => {
 		const [row] = kcppRecommendedRows(models, ctx())
 		expect(row.name).toBe("TheBloke/Mistral-7B-GGUF")
-		expect(secondLine(row)).toBe("4.0 GB · 7B · A small instruct model")
+		expect(secondLine(row)).toBe(
+			"TheBloke · 4.0 GB · 7B · A small instruct model"
+		)
 		expect(row.tier).toEqual({ label: "Budget", matches: true })
 		expect(row.fit).toBe("fits")
 		expect(row.presence).toBeNull()
@@ -653,5 +658,41 @@ describe("SerialAsk — replies that carry no echo of the ask", () => {
 		asks.reset()
 		expect(asks.settle()).toBe(false)
 		expect(sent).toEqual(["a"])
+	})
+})
+
+describe("repoTitle / repoOwner — the owner is information, not a prefix", () => {
+	test("splits owner from repo so the title is what differs", () => {
+		expect(repoTitle("unsloth/Qwen3.5-4B-GGUF")).toBe("Qwen3.5-4B-GGUF")
+		expect(repoOwner("unsloth/Qwen3.5-4B-GGUF")).toBe("unsloth")
+	})
+
+	test("keeps the size and format, so four sizes stay four rows", () => {
+		// The one reason this is not `nameFromIdentifier`: the finder lists
+		// several sizes of one model at once.
+		expect(repoTitle("unsloth/Qwen3.5-4B-GGUF")).not.toBe(
+			repoTitle("unsloth/Qwen3.5-9B-GGUF")
+		)
+	})
+
+	test("a bare Ollama tag has no owner and keeps its whole name", () => {
+		expect(repoTitle("llama3.1:8b")).toBe("llama3.1:8b")
+		expect(repoOwner("llama3.1:8b")).toBe("")
+	})
+
+	test("survives an empty or odd id rather than rendering blank", () => {
+		expect(repoTitle("")).toBe("")
+		expect(repoTitle("/trailing")).toBe("trailing")
+		expect(repoOwner("/trailing")).toBe("")
+	})
+
+	test("secondLine leads with the owner", () => {
+		expect(
+			secondLine({
+				name: "bartowski/MN-12B-Lyra-v4-GGUF",
+				sizeLabel: "7.1 GB",
+				facts: "12B"
+			} as any)
+		).toBe("bartowski · 7.1 GB · 12B")
 	})
 })

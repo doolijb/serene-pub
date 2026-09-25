@@ -36,12 +36,13 @@
 	import { capabilityLabel } from "@serene-pub/sdk"
 	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
 	import PanelTabStrip from "$lib/client/components/panels/PanelTabStrip.svelte"
-	import KoboldCppModelsTab from "$lib/client/components/koboldcppManager/KoboldCppModelsTab.svelte"
+	import ManagedModelsTab from "./ManagedModelsTab.svelte"
+	import type { CapabilityDefaultRef } from "./modelSystemDefaults"
 	import KoboldCppPerfTab from "$lib/client/components/koboldcppManager/KoboldCppPerfTab.svelte"
 	import KoboldCppSettingsTab from "$lib/client/components/koboldcppManager/KoboldCppSettingsTab.svelte"
 	import KoboldCppSetupScreen from "$lib/client/components/koboldcppManager/KoboldCppSetupScreen.svelte"
 	import KoboldCppBinaryVariantPicker from "$lib/client/components/koboldcppManager/KoboldCppBinaryVariantPicker.svelte"
-	import OllamaInstalledTab from "$lib/client/components/ollamaManager/OllamaInstalledTab.svelte"
+
 	import OllamaSettingsTab from "$lib/client/components/ollamaManager/OllamaSettingsTab.svelte"
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
@@ -73,12 +74,20 @@
 		title: string
 		isAdmin: boolean
 		/** Every transform's registered pair, for the Remove dialog's cost. */
-		capabilityDefaults: Record<
-			string,
-			{ connectionId?: number | null } | undefined
-		>
+		capabilityDefaults: Record<string, CapabilityDefaultRef | undefined>
 		/** This runtime's rows — KoboldCPP has two, text and image. */
 		managedConnectionIds: readonly number[]
+		/**
+		 * The whole list, so the Models tab can read THIS runtime's rows.
+		 *
+		 * The synced `connection.models` is the one list of what is installed;
+		 * the managers' own `ollama:modelsList` / `koboldcpp:listModels` answered
+		 * the same question from a different shape, which is how the two could
+		 * disagree. See `ManagedModelsTab`.
+		 */
+		connections?: readonly (Sockets.Connections.List.Row & { id: number })[]
+		/** Open one model's own view. */
+		onOpenModel?: (connectionId: number, modelId: number) => void
 		onBack: () => void
 		/** Open the model finder scoped to this connection (ruling R3). */
 		onGetModels: (connectionId: number) => void
@@ -100,6 +109,8 @@
 		isAdmin,
 		capabilityDefaults,
 		managedConnectionIds,
+		connections = [],
+		onOpenModel,
 		onBack,
 		onGetModels,
 		onOpenDownloads,
@@ -270,6 +281,26 @@
 			icon: ((Icons as any)[t.icon] as any) ?? Icons.Package,
 			hasActivity: t.value === "downloads" && inFlightHere > 0
 		}))
+	)
+
+	/**
+	 * This runtime's own rows, out of the list.
+	 *
+	 * KoboldCPP has two — the text endpoint this view IS, and an image sibling
+	 * the index folds into it — and the Models tab lists both under their own
+	 * headings. Ollama has one, so `imageConnection` is undefined and the
+	 * heading is dropped with it.
+	 */
+	const textConnection = $derived(
+		connections.find((c) => c.id === connectionId)
+	)
+	const imageConnection = $derived(
+		connections.find(
+			(c) =>
+				c.id !== connectionId &&
+				managedConnectionIds.includes(c.id) &&
+				c.modality === "image-gen"
+		)
 	)
 
 	let showDetails = $state(false)
@@ -942,11 +973,16 @@
 					hidden={tab !== "models"}
 				>
 					{#if tab === "models"}
-						{#if isKcpp}
-							<KoboldCppModelsTab />
-						{:else}
-							<OllamaInstalledTab />
-						{/if}
+						<ManagedModelsTab
+							kind={isKcpp ? "koboldcpp" : "ollama"}
+							connection={textConnection}
+							{imageConnection}
+							{capabilityDefaults}
+							{isAdmin}
+							onOpenModel={(c, m) => onOpenModel?.(c, m)}
+							onGetModels={() => onGetModels(connectionId)}
+							onRefresh={onRefreshModels}
+						/>
 					{/if}
 				</div>
 				<div

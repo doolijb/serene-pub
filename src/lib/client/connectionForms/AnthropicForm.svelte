@@ -105,22 +105,9 @@
 {#if connection && fields}
 	<!-- Model picker removed: models live in the Models section below. -->
 
-	<div class="mt-4 flex gap-2">
-		<button
-			type="button"
-			class="btn preset-tonal-success btn-sm w-full"
-			onclick={handleTestConnection}
-			disabled={Object.keys(validationErrors).length > 0}
-		>
-			{#if testResult?.ok === true}
-				Test: Okay!
-			{:else if testResult?.ok === false}
-				Test: Failed!
-			{:else}
-				Test Connection
-			{/if}
-		</button>
-	</div>
+	<!-- The Test button lives on the connection view's status card, not
+	     here. Two Test buttons on one screen, styled differently and
+	     reporting into different places, was the shipped state. -->
 	{#if testResult?.ok === false && testResult.error}
 		<p class="text-error-500 mt-1 text-sm" role="alert">
 			{testResult.error}
@@ -157,8 +144,10 @@
 	</div>
 
 	<details class="mt-4">
-		<summary class="cursor-pointer font-semibold">
-			Advanced Settings
+		<summary
+			class="hover:preset-tonal-primary flex cursor-pointer items-center gap-2 rounded-[10px] px-2 py-2 text-[13px] font-medium"
+		>
+			Request settings
 		</summary>
 		<section class="w-full space-y-4 pt-2">
 			<Switch

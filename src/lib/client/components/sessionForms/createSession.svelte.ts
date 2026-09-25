@@ -11,6 +11,7 @@
  * an administrator has switched off, so the payload this module builds is a
  * proposal: it names both, and the preset wins. See `sessionsCreateHandler`.
  */
+import type { StoredSwapContribution } from "$lib/shared/swaps"
 import {
 	INITIAL_PRESET_FILLABLE_FIELDS,
 	resolvePresetFill,
@@ -246,7 +247,8 @@ export interface CreateSessionInput {
 	scenario?: string
 	tags?: string[]
 	genreFields?: Record<string, unknown>
-	groupReplyStrategy?: string
+	/** Swaps to seat the session with (R40); absent or empty inherits every pin. */
+	swaps?: StoredSwapContribution[]
 	lorebookId?: number | null
 }
 
@@ -266,7 +268,7 @@ export function buildCreatePayload(
 		session: {
 			name: input.name.trim(),
 			scenario: (input.scenario ?? "").trim(),
-			groupReplyStrategy: input.groupReplyStrategy ?? "ordered",
+			...(input.swaps?.length ? { swaps: input.swaps } : {}),
 			lorebookId: input.lorebookId ?? null,
 			genreId: input.genreId,
 			// The preset picks the genre server-side: a `genreId` above that
@@ -435,7 +437,7 @@ export class StartSessionFlow {
 			scenario: this.fields.scenario,
 			tags: this.fields.tags,
 			genreFields: this.fields.genreFields,
-			groupReplyStrategy: this.fields.groupReplyStrategy,
+			swaps: this.fields.swaps,
 			lorebookId: this.fields.lorebookId
 		})
 	}

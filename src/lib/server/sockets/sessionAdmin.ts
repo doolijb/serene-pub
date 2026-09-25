@@ -11,10 +11,12 @@
 import { sessionEvents } from "@serene-pub/sdk"
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
+import { answersEvent } from "$lib/server/pipelines/entities/presetBindings"
 import { asc, desc, eq, inArray, sql } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import {
 	listGenreActions,
+	listOfferedGenres,
 	listSessionGenres,
 	normalizeIncludedActions,
 	promoteIncludedActions
@@ -94,16 +96,21 @@ const presetRow = (
  * key. Skipping the emit alone would save nothing; those reads are the cost.
  */
 async function buildSessionGenres(): Promise<Sockets.SessionAdmin.Genres.Response> {
-	const modes = await listSessionGenres(db)
+	const modes = await listOfferedGenres(db)
 	const settings = await db.select().from(schema.sessionGenreSettings)
+	// Counted as listed (R67): a disabled plugin's presets are not.
+	const { disabledPlugins } = await import("$lib/server/plugins/disabledPlugins")
+	const off = await disabledPlugins(db)
 	const presets = await db
 		.select({
 			genreId: schema.sessionPresets.genreId,
-			n: sql<number>`count(*)`.mapWith(Number)
+			ownerPluginId: schema.sessionPresets.ownerPluginId
 		})
 		.from(schema.sessionPresets)
-		.groupBy(schema.sessionPresets.genreId)
-	const countBy = new Map(presets.map((p) => [p.genreId, p.n]))
+	const countBy = new Map<string, number>()
+	for (const p of presets)
+		if (!off.owns(p.ownerPluginId))
+			countBy.set(p.genreId, (countBy.get(p.genreId) ?? 0) + 1)
 	const settingBy = new Map((settings as any[]).map((s) => [s.genreId, s]))
 	// A genre's create pipeline (24 §3), for the workspace link — via the
 	// input lock: the spec whose active version answers session-created
@@ -186,6 +193,8 @@ export const sessionGenresUpdate: Handler<
 		// so the four reads behind it are paid only where a genre list is
 		// open. Skipping the emit alone would save nothing.
 		await emitToUser("sessionGenres:list", () => buildSessionGenres())
+		// The hub shows the switch too (R66).
+		await emitToUser("sessionGenres:detail", () => buildGenreDetail(params.slug))
 		return res
 	}
 }
@@ -196,6 +205,185 @@ export const sessionGenresUpdate: Handler<
  * its session count. Every fact here is a SELECT made elsewhere — this is the
  * dashboard where they meet.
  */
+/**
+ * Every swap an ENABLED plugin contributes to one of these pipelines (R29),
+ * with the admin's switch for it (`plugins.disabled_swaps`, R66). A disabled
+ * plugin's contributions are not listed — owner ruling 2026-09-24: a plugin
+ * that is off appears nowhere outside the plugins page — but its switches
+ * stay stored, so turning it back on restores them.
+ */
+async function genreSwapContributions(
+	specNames: Map<string, string>
+): Promise<Sockets.SessionAdmin.GenreDetail.SwapRow[]> {
+	if (!specNames.size) return []
+	const { swapKey } = await import("$lib/server/pipelines/entities/bindings")
+	const { i18nText } = await import("@serene-pub/sdk")
+	const plugins = await db
+		.select({
+			pluginId: schema.plugins.pluginId,
+			name: schema.plugins.name,
+			enabled: schema.plugins.enabled,
+			manifest: schema.plugins.manifest,
+			disabledSwaps: schema.plugins.disabledSwaps
+		})
+		.from(schema.plugins)
+		.where(eq(schema.plugins.enabled, true))
+		.orderBy(asc(schema.plugins.id))
+	const registry = await db
+		.select({
+			definitionId: schema.pipelineDefinitionRegistry.definitionId,
+			version: schema.pipelineDefinitionRegistry.version,
+			i18n: schema.pipelineDefinitionRegistry.i18n
+		})
+		.from(schema.pipelineDefinitionRegistry)
+	const nameOf = new Map(
+		(registry as any[]).map((r) => [
+			`${r.definitionId}@${r.version}`,
+			i18nText(r.i18n?.name) || r.definitionId
+		])
+	)
+	const out: Sockets.SessionAdmin.GenreDetail.SwapRow[] = []
+	for (const p of plugins as any[]) {
+		const swaps = (p.manifest?.swaps ?? []) as Array<{
+			spec?: string
+			node?: string
+			definition?: string
+		}>
+		for (const c of Array.isArray(swaps) ? swaps : []) {
+			if (!c?.spec || !c.node || !c.definition || !specNames.has(c.spec)) continue
+			out.push({
+				pluginId: p.pluginId,
+				pluginName: p.name ?? p.pluginId,
+				spec: c.spec,
+				specName: specNames.get(c.spec)!,
+				node: c.node,
+				definition: c.definition,
+				name: nameOf.get(c.definition) ?? c.definition,
+				enabled: !(p.disabledSwaps ?? []).includes(
+					swapKey(c.spec, c.node, c.definition)
+				)
+			})
+		}
+	}
+	return out
+}
+
+/**
+ * One genre's hub (admin IA 2026-08-28; grown by B4, R66): identity, its
+ * app-wide switch, the event surface, its presets, its session count, and
+ * the swap contributions plugins make to its pipelines. Built apart from the
+ * handler so the hub's writes can re-send it to whoever has it open.
+ */
+async function buildGenreDetail(
+	genreId: string
+): Promise<Sockets.SessionAdmin.GenreDetail.Response> {
+	const genres = await listOfferedGenres(db)
+	const genre = genres.find((g) => g.genreId === genreId)
+	if (!genre) {
+		const res: Sockets.SessionAdmin.GenreDetail.Response = {
+			slots: [],
+			presets: [],
+			sessionCount: 0,
+			error: `'${genreId}' is not a genre this build registers.`
+		}
+		return res
+	}
+
+	// The candidates, off the input locks — one SELECT, grouped by event.
+	const specRows = await db
+		.select({
+			slug: schema.pipelineSpecs.slug,
+			name: schema.pipelineSpecs.name,
+			activeVersionId: schema.pipelineSpecs.activeVersionId,
+			versionId: schema.pipelineSpecVersions.id,
+			status: schema.pipelineSpecVersions.status,
+			inputGenre: schema.pipelineSpecVersions.inputGenre,
+			inputEvent: schema.pipelineSpecVersions.inputEvent,
+			inputEvents: schema.pipelineSpecVersions.inputEvents,
+			sourcePluginId: schema.pipelineSpecs.sourcePluginId
+		})
+		.from(schema.pipelineSpecs)
+		.innerJoin(
+			schema.pipelineSpecVersions,
+			eq(schema.pipelineSpecVersions.specId, schema.pipelineSpecs.id)
+		)
+	// A disabled plugin's pipelines are no candidate here (R67).
+	const { disabledPlugins } = await import("$lib/server/plugins/disabledPlugins")
+	const off = await disabledPlugins(db)
+	const active = (specRows as any[]).filter(
+		(r) =>
+			r.activeVersionId === r.versionId &&
+			r.status === "published" &&
+			r.inputGenre === genreId &&
+			!off.owns(r.sourcePluginId)
+	)
+	const events = genre.events ?? {}
+	const eventNames = new Set([
+		...Object.keys(events),
+		...active.flatMap((r) => [r.inputEvent, ...(r.inputEvents ?? [])]).filter(Boolean)
+	])
+	const slots: Sockets.SessionAdmin.GenreDetail.Slot[] = [
+		...eventNames
+	].map((event) => ({
+		event,
+		required: !!events[event]?.required,
+		open: !!events[event]?.open,
+		candidates: active
+			.filter((r) => answersEvent(r, event))
+			.map((r) => ({ slug: r.slug, name: r.name ?? r.slug }))
+	}))
+
+	const presetRows = (
+		await db
+			.select()
+			.from(schema.sessionPresets)
+			.where(eq(schema.sessionPresets.genreId, genreId))
+			.orderBy(asc(schema.sessionPresets.id))
+	).filter((p) => !off.owns(p.ownerPluginId))
+
+	const sessions = await db
+		.select({ n: sql<number>`count(*)`.mapWith(Number) })
+		.from(schema.sessions)
+		.where(eq(schema.sessions.genreId, genreId))
+
+	const createSpecSlug =
+		active.find((r) => r.inputEvent === sessionEvents.sessionCreated)?.slug ??
+		null
+
+	const staleByPreset = await staleBindingsByPreset(
+		(presetRows as any[]).map((p) => p.id)
+	)
+
+	// The app-wide switch (R66): no row states it, so it is on.
+	const [setting] = await db
+		.select()
+		.from(schema.sessionGenreSettings)
+		.where(eq(schema.sessionGenreSettings.genreId, genreId))
+		.limit(1)
+
+	const res: Sockets.SessionAdmin.GenreDetail.Response = {
+		genre: {
+			genreId: genre.genreId,
+			name: genre.name,
+			description: genre.description ?? "",
+			family: genre.family ?? "",
+			shape: (genre.shape ?? {}) as Record<string, unknown>,
+			createSpecSlug,
+			enabled: setting ? !!setting.enabled : true,
+			defaultPresetId: setting?.defaultPresetId ?? null
+		},
+		swaps: await genreSwapContributions(
+			new Map(active.map((r) => [r.slug as string, (r.name ?? r.slug) as string]))
+		),
+		slots,
+		presets: (presetRows as any[]).map((p) =>
+			presetRow(p, staleByPreset.get(p.id))
+		),
+		sessionCount: (sessions as any[])[0]?.n ?? 0
+	}
+	return res
+}
+
 export const sessionGenresDetail: Handler<
 	Sockets.SessionAdmin.GenreDetail.Params,
 	Sockets.SessionAdmin.GenreDetail.Response
@@ -203,92 +391,111 @@ export const sessionGenresDetail: Handler<
 	event: "sessionGenres:detail",
 	handler: async (socket, params, emitToUser) => {
 		adminOnly(socket)
-		const genres = await listSessionGenres(db)
-		const genre = genres.find((g) => g.genreId === params.genreId)
-		if (!genre) {
-			const res: Sockets.SessionAdmin.GenreDetail.Response = {
-				slots: [],
-				presets: [],
-				sessionCount: 0,
-				error: `'${params.genreId}' is not a genre this build registers.`
-			}
-			emitToUser("sessionGenres:detail:error", res)
-			return res
-		}
+		const res = await buildGenreDetail(params.genreId)
+		emitToUser(res.genre ? "sessionGenres:detail" : "sessionGenres:detail:error", res)
+		return res
+	}
+}
 
-		// The candidates, off the input locks — one SELECT, grouped by event.
-		const specRows = await db
-			.select({
-				slug: schema.pipelineSpecs.slug,
-				name: schema.pipelineSpecs.name,
-				activeVersionId: schema.pipelineSpecs.activeVersionId,
-				versionId: schema.pipelineSpecVersions.id,
-				status: schema.pipelineSpecVersions.status,
-				inputGenre: schema.pipelineSpecVersions.inputGenre,
-				inputEvent: schema.pipelineSpecVersions.inputEvent
-			})
-			.from(schema.pipelineSpecs)
-			.innerJoin(
-				schema.pipelineSpecVersions,
-				eq(schema.pipelineSpecVersions.specId, schema.pipelineSpecs.id)
-			)
-		const active = (specRows as any[]).filter(
-			(r) =>
-				r.activeVersionId === r.versionId &&
-				r.status === "published" &&
-				r.inputGenre === params.genreId
-		)
-		const events = genre.events ?? {}
-		const eventNames = new Set([
-			...Object.keys(events),
-			...active.map((r) => r.inputEvent).filter(Boolean)
-		])
-		const slots: Sockets.SessionAdmin.GenreDetail.Slot[] = [
-			...eventNames
-		].map((event) => ({
-			event,
-			required: !!events[event]?.required,
-			open: !!events[event]?.open,
-			candidates: active
-				.filter((r) => r.inputEvent === event)
-				.map((r) => ({ slug: r.slug, name: r.name ?? r.slug }))
-		}))
-
-		const presetRows = await db
+/**
+ * Every preset of a genre on or off at once (R66, Q-B4d) — the bulk half of
+ * the hub's per-preset switches, which stay `sessionPresets:update`. Turning
+ * presets on is validated exactly as one at a time is (a preset missing a
+ * required binding cannot be enabled); each refusal is reported by name and
+ * the rest go through. Withdrawn presets are left alone.
+ */
+export const sessionGenresSetPresetsEnabled: Handler<
+	Sockets.SessionAdmin.SetPresetsEnabled.Params,
+	Sockets.SessionAdmin.SetPresetsEnabled.Response
+> = {
+	event: "sessionGenres:setPresetsEnabled",
+	handler: async (socket, params, emitToUser) => {
+		adminOnly(socket)
+		const rows = (await db
 			.select()
 			.from(schema.sessionPresets)
-			.where(eq(schema.sessionPresets.genreId, params.genreId))
-			.orderBy(asc(schema.sessionPresets.id))
-
-		const sessions = await db
-			.select({ n: sql<number>`count(*)`.mapWith(Number) })
-			.from(schema.sessions)
-			.where(eq(schema.sessions.genreId, params.genreId))
-
-		const createSpecSlug =
-			active.find((r) => r.inputEvent === sessionEvents.sessionCreated)?.slug ??
-			null
-
-		const staleByPreset = await staleBindingsByPreset(
-			(presetRows as any[]).map((p) => p.id)
-		)
-
-		const res: Sockets.SessionAdmin.GenreDetail.Response = {
-			genre: {
-				genreId: genre.genreId,
-				name: genre.name,
-				description: genre.description ?? "",
-				family: genre.family ?? "",
-				shape: (genre.shape ?? {}) as Record<string, unknown>,
-				createSpecSlug
-			},
-			slots,
-			presets: (presetRows as any[]).map((p) =>
-				presetRow(p, staleByPreset.get(p.id))
-			),
-			sessionCount: (sessions as any[])[0]?.n ?? 0
+			.where(eq(schema.sessionPresets.genreId, params.genreId))) as any[]
+		let changed = 0
+		const refused: Array<{ id: number; name: string; reason: string }> = []
+		for (const p of rows) {
+			if (p.withdrawnAt != null || !!p.enabled === params.enabled) continue
+			if (params.enabled) {
+				const reason = await validateBindings(p.genreId, p.bindings ?? {}, {
+					enabled: true
+				})
+				if (reason) {
+					refused.push({ id: p.id, name: p.name, reason })
+					continue
+				}
+			}
+			await db
+				.update(schema.sessionPresets)
+				.set({ enabled: params.enabled, updatedAt: new Date() })
+				.where(eq(schema.sessionPresets.id, p.id))
+			changed++
 		}
-		emitToUser("sessionGenres:detail", res)
+		const res = { genreId: params.genreId, changed, refused }
+		emitToUser("sessionGenres:setPresetsEnabled", res)
+		await emitToUser("sessionGenres:detail", () => buildGenreDetail(params.genreId))
+		return res
+	}
+}
+
+/**
+ * One plugin swap contribution on or off (R29, R66): the admin's decision,
+ * kept in `plugins.disabled_swaps` and never overwritten by a reinstall.
+ * Only a contribution the plugin's manifest declares may be switched, so the
+ * list cannot fill with keys that name nothing.
+ */
+export const sessionGenresSetSwapEnabled: Handler<
+	Sockets.SessionAdmin.SetSwapEnabled.Params,
+	Sockets.SessionAdmin.SetSwapEnabled.Response
+> = {
+	event: "sessionGenres:setSwapEnabled",
+	handler: async (socket, params, emitToUser) => {
+		adminOnly(socket)
+		const { swapKey } = await import("$lib/server/pipelines/entities/bindings")
+		const [plugin] = (await db
+			.select({
+				id: schema.plugins.id,
+				manifest: schema.plugins.manifest,
+				disabledSwaps: schema.plugins.disabledSwaps
+			})
+			.from(schema.plugins)
+			.where(eq(schema.plugins.pluginId, params.pluginId))
+			.limit(1)) as any[]
+		const declared = ((plugin?.manifest?.swaps ?? []) as any[]).some(
+			(c) =>
+				c?.spec === params.spec &&
+				c?.node === params.node &&
+				c?.definition === params.definition
+		)
+		if (!plugin || !declared) {
+			const res = {
+				ok: false,
+				error: `'${params.pluginId}' does not contribute that swap.`
+			}
+			emitToUser("sessionGenres:setSwapEnabled:error", res)
+			return res
+		}
+		const key = swapKey(params.spec, params.node, params.definition)
+		const off = new Set<string>(plugin.disabledSwaps ?? [])
+		if (params.enabled) off.delete(key)
+		else off.add(key)
+		await db
+			.update(schema.plugins)
+			.set({ disabledSwaps: [...off] })
+			.where(eq(schema.plugins.id, plugin.id))
+		const res = { ok: true }
+		emitToUser("sessionGenres:setSwapEnabled", res)
+		if (params.genreId)
+			await emitToUser("sessionGenres:detail", () =>
+				buildGenreDetail(params.genreId!)
+			)
+		// The plugins page counts each plugin's live swaps (R66); lazy — it
+		// costs nothing unless that page is open.
+		const { emitList } = await import("./plugins")
+		await emitList(emitToUser)
 		return res
 	}
 }
@@ -314,7 +521,13 @@ async function buildSessionPresets(
 	const staleByPreset = await staleBindingsByPreset(
 		(rows as any[]).map((r) => r.id)
 	)
-	let out = (rows as any[]).map((r) => presetRow(r, staleByPreset.get(r.id)))
+	// A disabled plugin's presets are listed to nobody, admins included
+	// (R67); a preset an uninstalled plugin left behind still is, to admins.
+	const { disabledPlugins } = await import("$lib/server/plugins/disabledPlugins")
+	const off = await disabledPlugins(db)
+	let out = (rows as any[])
+		.filter((r) => !off.owns(r.ownerPluginId))
+		.map((r) => presetRow(r, staleByPreset.get(r.id)))
 	// The picker's cut: a non-admin sees only what they may start.
 	if (!isAdmin) {
 		const settings = await db.select().from(schema.sessionGenreSettings)
@@ -370,6 +583,9 @@ async function validateBindings(
 			status: schema.pipelineSpecVersions.status,
 			inputGenre: schema.pipelineSpecVersions.inputGenre,
 			inputEvent: schema.pipelineSpecVersions.inputEvent,
+			// Multi-event locks (0154): without them a spec locked on several
+			// events answered "nothing" and every preset save was refused.
+			inputEvents: schema.pipelineSpecVersions.inputEvents,
 			genre: schema.pipelineSpecVersions.genre
 		})
 		.from(schema.pipelineSpecs)
@@ -394,8 +610,8 @@ async function validateBindings(
 		const spec = active.find((r) => r.slug === b.spec)
 		if (!spec)
 			return `'${b.spec}' is not published on this instance, so it cannot answer '${event}'.`
-		if (spec.inputGenre !== genreId || spec.inputEvent !== event)
-			return `'${b.spec}' answers '${spec.inputEvent ?? "nothing"}' for '${spec.inputGenre ?? "no genre"}' — it cannot bind to '${event}' of '${genreId}' (24 §4).`
+		if (spec.inputGenre !== genreId || !answersEvent(spec, event))
+			return `'${b.spec}' answers '${[spec.inputEvent, ...(spec.inputEvents ?? [])].filter(Boolean).join("', '") || "nothing"}' for '${spec.inputGenre ?? "no genre"}' — it cannot bind to '${event}' of '${genreId}' (24 §4).`
 		if (b.config != null) {
 			const [config] = await db
 				.select({
@@ -532,7 +748,13 @@ export const sessionPresetsUpdate: Handler<
 			>) ??
 			{}
 		const nextEnabled = params.enabled ?? !!(existing as any).enabled
-		{
+		// Switching a preset OFF, and nothing else, is never refused: a
+		// preset whose binding went stale must still be hideable from its
+		// own switch, as it is from the hub's Hide all (R66 review).
+		const onlyHiding =
+			params.enabled === false &&
+			Object.keys(params).every((k) => k === "id" || k === "enabled")
+		if (!onlyHiding) {
 			const refusal = await validateBindings(
 				(existing as any).genreId,
 				nextBindings,
@@ -617,6 +839,10 @@ export const sessionPresetsUpdate: Handler<
 		// LAZY, like the genre re-list above.
 		await emitToUser("sessionPresets:list", () =>
 			buildSessionPresets(!!socket.user?.isAdmin)
+		)
+		// The genre hub switches presets too (R66).
+		await emitToUser("sessionGenres:detail", () =>
+			buildGenreDetail((row as any).genreId)
 		)
 		return res
 	}
@@ -753,6 +979,8 @@ export function registerSessionAdminHandlers(
 	register(socket, sessionGenresList, emitToUser)
 	register(socket, sessionGenresUpdate, emitToUser)
 	register(socket, sessionGenresDetail, emitToUser)
+	register(socket, sessionGenresSetPresetsEnabled, emitToUser)
+	register(socket, sessionGenresSetSwapEnabled, emitToUser)
 	register(socket, sessionPresetsList, emitToUser)
 	register(socket, sessionPresetsCreate, emitToUser)
 	register(socket, sessionPresetsUpdate, emitToUser)

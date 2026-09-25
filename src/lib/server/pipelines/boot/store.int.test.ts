@@ -97,6 +97,21 @@ describe("pipeline store", () => {
 		expect(back).toEqual(doc)
 	})
 
+	it("round-trips a node's expose mark and swaps, so a reader finds them off the registry (R28)", async () => {
+		const { TURN_ORDER_BY_GENRE, CHAT_TURN_ORDER_SPEC_ID } = await import("@serene-pub/core-catalog")
+		const doc = TURN_ORDER_BY_GENRE.find((t) => t.spec === CHAT_TURN_ORDER_SPEC_ID)!.build()
+		const saved = await saveDocument(db, { ...doc, id: "test:spec/expose-round-trip" }, { publish: true })
+		const back = await loadDocument(db, saved.specVersionId)
+		const strategy = back.nodes.find((n) => n.key === "decide.rules.strategy")!
+		expect(strategy.expose?.session).toBe(true)
+		expect(strategy.expose?.swaps).toContain("core:task/turn-manual@1")
+		expect(back.nodes.find((n) => n.key === "history")!.expose).toBeUndefined()
+		// The lock over several events reads back too (it was written but
+		// not read before M2).
+		expect(back.input).toEqual(doc.input)
+		expect(canonicalHash(back)).toBe(canonicalHash({ ...doc, id: "test:spec/expose-round-trip" }))
+	})
+
 	it("round-trips nested blocks, which is where the mapping actually breaks", async () => {
 		const doc = agentic()
 		const saved = await saveDocument(db, doc)
@@ -500,13 +515,12 @@ describe("saveDocument runs validate() (U5d review, W9)", () => {
 		const doc = compile(
 			spec("core:spec/test-forged-world", {
 				version: "1.0.0",
-				taxonomy: { role: "action", genre: chatGenre.id },
+				taxonomy: { role: "action"},
 				contributes: {
 					actions: [
 						{
 							key: "grant",
 							function: "grant",
-							genre: chatGenre.id,
 							venue: { kind: "composer" },
 							label: { en: "Grant" }
 						}

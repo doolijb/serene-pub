@@ -43,7 +43,7 @@
 	 */
 	import { getContext } from "svelte"
 	import * as Icons from "@lucide/svelte"
-	import { capabilityLabel } from "@serene-pub/sdk"
+	import { capabilityLabel, capabilityTagline } from "@serene-pub/sdk"
 	import { Dialog, Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { JUMP_CONTEXT, type JumpCtx } from "$lib/client/shell/jump.svelte"
 	import PanelFilterInput from "$lib/client/components/panels/PanelFilterInput.svelte"
@@ -54,7 +54,8 @@
 	import ConnectionRow from "./ConnectionRow.svelte"
 	import DefaultsLedger from "./DefaultsLedger.svelte"
 	import DownloadsTray from "./DownloadsTray.svelte"
-	import ReadinessCard from "./ReadinessCard.svelte"
+	import StatusStrip from "./StatusStrip.svelte"
+	import JobsGrid from "./JobsGrid.svelte"
 	import {
 		countConnections,
 		filterConnections,
@@ -77,6 +78,7 @@
 		type ReadinessRow
 	} from "./readiness"
 	import { connectionRowStatus, type RowStatus } from "./connectionRowStatus"
+	import { defaultsForConnection, groupConnections } from "./connectionGroups"
 	import {
 		endpointKind,
 		isLocalOnnxType,
@@ -86,6 +88,7 @@
 	import { timeAgo } from "$lib/client/utils/timeAgo"
 	import { downloads } from "./downloads.svelte"
 	import type { CapabilityDefaultRef } from "./modelSystemDefaults"
+	import { buildJobTiles, chatFacts, type JobTile } from "./jobTile"
 
 	type Row = Sockets.Connections.List.Row & { id: number }
 	type ModelOf = Row["models"][number]
@@ -109,6 +112,17 @@
 		focusConnectionId?: number | null
 		/** The connection open beside the list at desk width. */
 		selectedConnectionId?: number | null
+		/**
+		 * The view's measured mode.
+		 *
+		 * ⚠ Passed in rather than measured here, and passed in rather than
+		 * asked of a container query: at full page this column is 340px while
+		 * the VIEW is 1,500px, so `@min-[900px]/view` answers about the wrong
+		 * box. The one thing it decides is whether the jobs grid renders — at
+		 * desk the detail pane shows it four-across, and two copies of the same
+		 * grid a few hundred pixels apart is not emphasis.
+		 */
+		mode?: "compact" | "desk"
 		onAddNew: () => void
 		/** Switch a manager on and open its connection. */
 		onEnableManager: (kind: "koboldcpp" | "ollama") => void
@@ -126,6 +140,20 @@
 		onOpenDownloads: () => void
 		onRefresh: (connection: Row) => void
 		onAddModel: (connection: Row, model: string, name: string) => void
+		/**
+		 * Handed back up so the FULL-PAGE empty pane can render the same
+		 * dashboard this view renders in a column.
+		 *
+		 * Lifted rather than recomputed: the tiles depend on live status this
+		 * view is the only subscriber to (the KoboldCPP process, the two ONNX
+		 * lanes), and a second derivation in the sidebar would disagree with
+		 * this one exactly when something was wrong.
+		 */
+		onFacts?: (facts: {
+			chat: ReturnType<typeof chatFacts>
+			tiles: JobTile[]
+			connectionCount: number
+		}) => void
 	}
 	let {
 		connectionsList,
@@ -137,6 +165,7 @@
 		initialFilter = null,
 		focusConnectionId = null,
 		selectedConnectionId = null,
+		mode = "compact",
 		onAddNew,
 		onEnableManager,
 		onOpenConnection,
@@ -146,7 +175,8 @@
 		onGetModel,
 		onOpenDownloads,
 		onRefresh,
-		onAddModel
+		onAddModel,
+		onFacts
 	}: Props = $props()
 
 	const socket = useTypedSocket()
@@ -218,6 +248,13 @@
 	const hasNoMatches = $derived(
 		!isLoading && rows.length > 0 && visible.length === 0
 	)
+	/**
+	 * The visible rows, split into "On this machine" and "Services".
+	 *
+	 * Derived from `visible` and not from `rows`, so a filter that empties a
+	 * group drops its header too rather than leaving a heading over nothing.
+	 */
+	const groups = $derived(groupConnections(visible, endpointKind))
 
 	function labelOf(id: string): string {
 		try {
@@ -582,6 +619,12 @@
 				onRefresh(connection)
 				return
 			case "fix":
+			case "setup":
+				// Both open the connection. They are separate verbs because
+				// they are separate SENTENCES — "Fix" admits something failed,
+				// "Set up" says you have not finished — and a row that says
+				// Fix about a key nobody has typed yet is the false alarm this
+				// whole split removes.
 				onOpenConnection(connection)
 				return
 		}
@@ -618,6 +661,15 @@
 	}
 	const readiness = $derived(readinessRows(summary.entries, factsFor))
 	const sectionOrder = CONNECTION_SECTIONS.map((s) => s.starCapability)
+
+	/** Chat for the status strip, and the rest as tiles. Both pure — `jobTile`. */
+	const chat = $derived(chatFacts(summary.entries, readiness))
+	const jobTiles = $derived(
+		buildJobTiles(summary.entries, readiness, sectionOrder)
+	)
+	$effect(() => {
+		onFacts?.({ chat, tiles: jobTiles, connectionCount: allRows.length })
+	})
 
 	/**
 	 * A readiness row's one fix.
@@ -743,12 +795,13 @@
 	blurb: string,
 	tile: string,
 	size: string,
-	run: () => void
+	run: () => void,
+	trades: string[] = []
 )}
 	{@const DoorIcon = icon}
 	<button
 		type="button"
-		class="hover:preset-tonal-primary focus-visible:ring-primary-500 flex min-h-11 w-full items-center gap-2.5 rounded-[10px] px-1.5 py-1 text-left focus-visible:ring-2 focus-visible:outline-none"
+		class="hover:preset-tonal-primary focus-visible:ring-primary-500 flex min-h-11 w-full items-start gap-2.5 rounded-[10px] px-1.5 py-1.5 text-left focus-visible:ring-2 focus-visible:outline-none"
 		onclick={run}
 	>
 		<span
@@ -762,10 +815,23 @@
 			<span class="text-surface-600-400 block truncate text-xs">
 				{blurb}
 			</span>
+			{#if trades.length}
+				<span class="mt-1.5 flex flex-wrap gap-1">
+					{#each trades as trade (trade)}
+						<!-- A cost is not a warning: every chip is the same
+						     quiet tone, and the WORDS carry the difference. -->
+						<span
+							class="preset-tonal-surface text-surface-700-300 rounded-md px-1.5 py-0.5 text-[11px] font-medium"
+						>
+							{trade}
+						</span>
+					{/each}
+				</span>
+			{/if}
 		</span>
 		<Icons.ChevronRight
 			size={16}
-			class="text-surface-500 shrink-0"
+			class="text-surface-500 mt-1 shrink-0"
 			aria-hidden="true"
 		/>
 	</button>
@@ -785,14 +851,26 @@
 			canAddByName={addByNameTargets.length > 0}
 		/>
 		<div class="flex-1"></div>
-		<button
-			type="button"
-			class="btn btn-sm preset-filled-primary-500 shrink-0"
-			onclick={() => onGetModel()}
-		>
-			<Icons.Download size={16} aria-hidden="true" />
-			Get a model
-		</button>
+		<!--
+			Quiet, and absent while nothing is connected.
+
+			It was `preset-filled-primary-500` beside Add — two filled buttons
+			competing in the header, with the gold one offering to fetch a model
+			on a fresh install where there is nowhere to put one. Getting a model
+			is a thing you do to a runtime, so it belongs where a runtime is: the
+			managed connection's own view, and the capability views. It stays
+			here as a quiet shortcut once there is a destination for it.
+		-->
+		{#if rows.length}
+			<button
+				type="button"
+				class="btn btn-sm preset-tonal-surface shrink-0"
+				onclick={() => onGetModel()}
+			>
+				<Icons.Download size={16} aria-hidden="true" />
+				Get a model
+			</button>
+		{/if}
 	</div>
 
 	<!-- No filter box over an empty list: there is nothing to narrow, and the
@@ -899,36 +977,48 @@
 			     matters, and the three doors are the three answers. -->
 			<section class="panel-card flex flex-col gap-2">
 				<h3 class="funnel-display text-lg font-semibold">
-					Nothing is connected yet
+					Where should the writing happen?
 				</h3>
 				<p class="text-surface-600-400 text-sm">
-					A session cannot reply until it has a chat model. Where
-					should it run?
+					A session can't reply until one model is connected. Pick the
+					trade you prefer — the others can be added later.
 				</p>
+				<!--
+					Each door names what it COSTS, in three chips.
+
+					The doors used to describe themselves ("Already installed
+					here or on another machine") and left the actual decision —
+					privacy, money, memory — unstated, so the one question a
+					first-timer is really asking had no answer on the screen
+					they were asked it on.
+				-->
 				<div class="flex flex-col gap-1">
 					{@render doorRow(
 						Icons.Cpu,
 						"On this machine",
-						"KoboldCPP, installed and run by Serene Pub. Best with 8 GB or more of memory.",
+						"KoboldCPP, installed and run by Serene Pub.",
 						"preset-tonal-primary",
 						"size-10",
-						onSetUpChat
-					)}
-					{@render doorRow(
-						Icons.Server,
-						"Ollama",
-						"Already installed here or on another machine.",
-						"preset-tonal-surface",
-						"size-10",
-						() => onEnableManager("ollama")
+						onSetUpChat,
+						["Private", "Free", "Needs ~8 GB"]
 					)}
 					{@render doorRow(
 						Icons.Cloud,
-						"A cloud service",
-						"OpenAI, Anthropic, OpenRouter, Groq and more. Needs an API key.",
+						"A service",
+						"OpenAI, Anthropic, OpenRouter, Groq and 20 more.",
 						"preset-tonal-surface",
 						"size-10",
-						onAddNew
+						onAddNew,
+						["Fast", "Nothing to install", "Costs per message"]
+					)}
+					{@render doorRow(
+						Icons.Server,
+						"Something I already run",
+						"Ollama, LM Studio, llama.cpp — here or on another machine.",
+						"preset-tonal-surface",
+						"size-10",
+						() => onEnableManager("ollama"),
+						["Private", "Free"]
 					)}
 				</div>
 				<hr class="border-surface-300-700 my-1" />
@@ -968,12 +1058,24 @@
 				)}
 			</section>
 		{:else}
-			<ReadinessCard
-				rows={readiness}
-				{sectionOrder}
-				onOpen={onOpenCapability}
-				onFix={handleReadinessFix}
+			<StatusStrip
+				modelName={chat.modelName}
+				connectionName={chat.connectionName}
+				problem={chat.problem}
+				onChange={() => onOpenCapability("text->text")}
+				onSetUp={() => {
+					const row = readiness.find(
+						(r) => r.capability === "text->text"
+					)
+					if (chat.set && row) handleReadinessFix(row)
+					else onSetUpChat()
+				}}
 			/>
+
+			<!-- Dock only: the detail pane carries it at desk. -->
+			{#if mode !== "desk"}
+				<JobsGrid tiles={jobTiles} onOpen={onOpenCapability} />
+			{/if}
 
 			{#if filter === "defaults"}
 				<DefaultsLedger
@@ -994,39 +1096,75 @@
 					</button>
 				</div>
 			{:else}
-				<section class="flex flex-col gap-1">
-					<div class="flex items-baseline gap-2 px-0.5">
-						<h3 class="text-surface-500 min-w-0 flex-1 text-xs">
-							Connections · {visible.length}
-						</h3>
-						{#if addByNameTargets.length}
-							<button
-								type="button"
-								class="text-surface-600-400 hover:text-surface-950-50 shrink-0 text-xs"
-								onclick={openAddByName}
-							>
-								Add by name
-							</button>
-						{/if}
-					</div>
-					{#each visible as connection (connection.id)}
-						<div id={`connection-row-${connection.id}`}>
-							<ConnectionRow
-								title={connection.name || "Untitled connection"}
-								serviceLabel={serviceLabel(connection)}
-								kind={endpointKind(connection.type)}
-								managed={MANAGED_KINDS.has(
-									endpointKind(connection.type)
-								)}
-								status={statusOf(connection)}
-								selected={selectedConnectionId ===
-									connection.id}
-								onOpen={() => onOpenConnection(connection)}
-								onAction={(verb) =>
-									handleRowAction(connection, verb)}
-							/>
+				<!--
+					Grouped by where the compute is, which is the trade a person
+					is actually weighing: on this machine is private and free,
+					a service is fast and billed. The header names it once so
+					no row has to. See `connectionGroups`.
+				-->
+				<section class="flex flex-col gap-3">
+					{#each groups as { group, rows: groupRows } (group.id)}
+						{@const GroupIcon =
+							((Icons as any)[group.icon] as any) ?? Icons.Cable}
+						<div class="flex flex-col gap-1">
+							<div class="flex items-center gap-2 px-0.5">
+								<GroupIcon
+									size={13}
+									class="text-surface-600-400 shrink-0"
+									aria-hidden="true"
+								/>
+								<h3
+									class="text-surface-600-400 shrink-0 text-xs font-medium"
+								>
+									{group.label}
+								</h3>
+								<span
+									class="bg-surface-300-700 h-px min-w-2 flex-1"
+								></span>
+								<!-- Muted, not quiet: measured 3.45:1 at 11px,
+								     which fails AA. §2.5. -->
+								<span
+									class="text-surface-600-400 shrink-0 text-[11px]"
+								>
+									{group.trade}
+								</span>
+							</div>
+							{#each groupRows as connection (connection.id)}
+								<div id={`connection-row-${connection.id}`}>
+									<ConnectionRow
+										title={connection.name ||
+											"Untitled connection"}
+										serviceLabel={serviceLabel(connection)}
+										kind={endpointKind(connection.type)}
+										managed={MANAGED_KINDS.has(
+											endpointKind(connection.type)
+										)}
+										status={statusOf(connection)}
+										defaultFor={defaultsForConnection(
+											connection.id,
+											capabilityDefaults,
+											(c) => capabilityLabel(c as any)
+										)}
+										selected={selectedConnectionId ===
+											connection.id}
+										onOpen={() =>
+											onOpenConnection(connection)}
+										onAction={(verb) =>
+											handleRowAction(connection, verb)}
+									/>
+								</div>
+							{/each}
 						</div>
 					{/each}
+					{#if addByNameTargets.length}
+						<button
+							type="button"
+							class="text-surface-600-400 hover:text-surface-950-50 self-start px-0.5 text-xs"
+							onclick={openAddByName}
+						>
+							Add a model by name
+						</button>
+					{/if}
 				</section>
 			{/if}
 		{/if}

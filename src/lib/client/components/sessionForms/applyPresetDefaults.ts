@@ -3,7 +3,7 @@
  * (23 §9: "Optional pre-fill for creation (fields, lorebook policy…)").
  *
  * The bug this fixes: switching presets used to overwrite `name`, `scenario`,
- * `tags`, `lorebookId`, `groupReplyStrategy` and `genreFields` unconditionally,
+ * `tags`, `lorebookId`, the turn strategy and `genreFields` unconditionally,
  * so a scenario the user had already typed was silently discarded the moment
  * they picked a different preset. The fix is "fill only pristine fields": a
  * default is applied to a field only if that field still holds its initial
@@ -17,13 +17,14 @@
  * `defaults.genreFields` can specify only a subset and the component merges
  * it key-by-key into whatever mode fields already hold.
  */
-import { GroupReplyStrategies } from "$lib/shared/constants/GroupReplyStrategies"
+import { storedSwapsOf, type StoredSwapContribution } from "$lib/shared/swaps"
 
 /** The subset of EditSessionForm's fields a preset's `defaults` can fill. */
 export interface PresetFillableFields {
 	name: string
 	scenario: string
-	groupReplyStrategy: string
+	/** Swaps to seat the session with (R40); empty inherits every node's pin. */
+	swaps: StoredSwapContribution[]
 	lorebookId: number | null
 	tags: string[]
 	genreFields: Record<string, unknown>
@@ -33,7 +34,7 @@ export interface PresetFillableFields {
 export const INITIAL_PRESET_FILLABLE_FIELDS: PresetFillableFields = {
 	name: "",
 	scenario: "",
-	groupReplyStrategy: "ordered",
+	swaps: [],
 	lorebookId: null,
 	tags: [],
 	genreFields: {}
@@ -50,7 +51,7 @@ export const INITIAL_PRESET_FILLABLE_FIELDS: PresetFillableFields = {
 export interface PresetFillState {
 	name?: string
 	scenario?: string
-	groupReplyStrategy?: string
+	swaps?: StoredSwapContribution[]
 	lorebookId?: number | null
 	tags?: string[]
 	genreFields?: Record<string, unknown>
@@ -96,6 +97,15 @@ export function resolvePresetFill(
 	const nextFillState: PresetFillState = { ...fillState }
 
 	if (!defaults || typeof defaults !== "object") {
+		// No defaults at all still means "this preset seeds no swaps": clear
+		// the previous preset's, when untouched (see the swaps block below).
+		if (
+			fillState.swaps &&
+			JSON.stringify(current.swaps) === JSON.stringify(fillState.swaps)
+		) {
+			fields.swaps = []
+			delete nextFillState.swaps
+		}
 		return { fields, fillState: nextFillState }
 	}
 
@@ -133,25 +143,26 @@ export function resolvePresetFill(
 		}
 	}
 
-	if (
-		typeof defaults.groupReplyStrategy === "string" &&
-		GroupReplyStrategies.options.some(
-			(o) => o.value === defaults.groupReplyStrategy
+	// Seeded swaps (R40), not validated choices: whether a node offers a
+	// definition is the server's to say at create (`setSessionNodeRebind`
+	// refuses with a sentence and the session still starts on the pin).
+	{
+		const value = storedSwapsOf(defaults.swaps)
+		const pristine = isPristine(
+			current.swaps,
+			INITIAL_PRESET_FILLABLE_FIELDS.swaps,
+			fillState.swaps,
+			(a, b) => JSON.stringify(a) === JSON.stringify(b)
 		)
-	) {
-		const value = defaults.groupReplyStrategy
-		if (
-			isPristine(
-				current.groupReplyStrategy,
-				INITIAL_PRESET_FILLABLE_FIELDS.groupReplyStrategy,
-				fillState.groupReplyStrategy,
-				stringsEqual
-			)
-		) {
-			fields.groupReplyStrategy = value
-			nextFillState.groupReplyStrategy = value
+		if (pristine) {
+			// A preset with no swaps clears what the previous one seeded, so
+			// preset B never starts on preset A's strategy (M2 review) — the
+			// form shows no swaps control until A8, so nobody could see it.
+			fields.swaps = value
+			if (value.length) nextFillState.swaps = value
+			else delete nextFillState.swaps
 		} else {
-			delete nextFillState.groupReplyStrategy
+			delete nextFillState.swaps
 		}
 	}
 

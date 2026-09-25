@@ -328,6 +328,12 @@ export function frameCsp(manifest: unknown, adminDenied?: string[] | null): stri
 		"media-src 'self' blob:",
 		connect ? `connect-src ${connect}` : "connect-src 'none'",
 		"form-action 'none'",
-		"base-uri 'none'"
+		"base-uri 'none'",
+		// The sandbox is the DOCUMENT's, not only the iframe attribute's: a
+		// direct navigation to a plugin's page (a link, a new tab) still runs
+		// it at an opaque origin — never as this app, with its cookies.
+		"sandbox allow-scripts",
+		// Framed by this app's own pages and nobody else's.
+		"frame-ancestors 'self'"
 	].join("; ")
 }

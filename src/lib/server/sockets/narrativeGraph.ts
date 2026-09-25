@@ -46,9 +46,7 @@ import {
 } from "$lib/server/connections/capabilityTarget"
 import { activityError, activityStore } from "$lib/server/utils/activityStore"
 import { deriveNextBindingToken } from "$lib/server/utils/lorebookBindingToken"
-import {
-	syncLorebookBindingsForCharacter
-} from "$lib/server/utils/characterBindingSync"
+import { syncLorebookBindingsForCharacter } from "$lib/server/utils/characterBindingSync"
 import {
 	buildSceneCastList,
 	collectAliases,
@@ -402,6 +400,8 @@ export const narrativeGraphListHandler: Handler<
 		}
 
 		const res: Sockets.NarrativeGraph.List.Response = {
+			// The scope the gate reads. See the Response type.
+			lorebookId: params.lorebookId,
 			nodes,
 			// Entries are on the graph too: an entry with an edge is a node,
 			// and the endpoint carries what it takes to draw one.
@@ -1997,6 +1997,7 @@ export const narrativeGraphApplyProposalHandler: Handler<
 				columns: { id: true }
 			})
 			return {
+				lorebookId,
 				nodes,
 				relationships: wiredRelationships,
 				ungraphedSceneCount: ungraphedScenes.length,

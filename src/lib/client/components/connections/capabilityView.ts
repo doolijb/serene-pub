@@ -49,6 +49,13 @@ import {
 } from "./connectionIndexFilter"
 import type { ReadinessRow, ReadinessState } from "./readiness"
 import { endpointKind, type EndpointKind } from "./modelManagement"
+import { scopeForCapability } from "./finder"
+import {
+	formatContext,
+	formatPrice,
+	type ModelFacts
+} from "$lib/shared/connections/modelFacts"
+import { formatSize } from "./modelDisplay"
 
 /**
  * One model, as this view reads it: the index's fields plus the disk state the
@@ -57,6 +64,10 @@ import { endpointKind, type EndpointKind } from "./modelManagement"
  */
 export interface CapabilityModel extends IndexModel {
 	local?: SummaryLocalState
+	/** What the host said — context, price, size. See `modelFactLine`. */
+	facts?: ModelFacts | null
+	/** The admin's override, which wins over `facts.contextWindow`. */
+	contextWindow?: number | null
 }
 
 export interface CapabilityConnection extends IndexConnection {
@@ -162,7 +173,20 @@ export function getModelButtonLabel(label: string, empty: boolean): string {
 }
 
 /** The 12px note under it. */
-export function finderNote(label: string): string {
+/**
+ * What the door under the candidate list actually does.
+ *
+ * ⚠ It promises a scope only where the finder HAS one. The finder's scopes are
+ * the four modalities (`chat` · `images` · `embeddings` · `entities`); vision,
+ * document reading, speech and the rest have none, and
+ * `scopeForCapability` answers null for them — so the view opens on Chat.
+ * Saying "scoped to vision" under a button that lands on Chat is the panel
+ * telling a small lie about itself, and a person who notices stops trusting the
+ * larger claims.
+ */
+export function finderNote(label: string, capability?: string | null): string {
+	if (capability && !scopeForCapability(capability))
+		return "Opens the model finder."
 	return `Opens the model finder scoped to ${lowerLabel(label)}.`
 }
 
@@ -227,7 +251,42 @@ export function factFromStateWord(stateWord: string): string {
 
 /** That clause for one model: loaded · on disk · listed · not listed · … */
 export function modelFact(model: SummaryModel): string {
-	return factFromStateWord(pairState(model).stateWord)
+	const state = factFromStateWord(pairState(model).stateWord)
+	// The state alone ("listed") is true of every row and so distinguishes
+	// none of them — and this view IS the chooser: eight Claude models, each
+	// row saying `Anthropic (Claude) · listed`, with nothing to pick on. The
+	// host's own facts go first because those are what a choice turns on; the
+	// state follows, and is dropped once there is anything better to say than
+	// "the host still lists it".
+	const facts = modelFactLine(model as { facts?: ModelFacts | null })
+	if (!facts) return state
+	return state === "listed" ? facts : `${facts} · ${state}`
+}
+
+/**
+ * Context, price and size, in that order, for one model. Empty when the host
+ * said nothing — which is most of them, and reads as no line rather than a
+ * line of dashes.
+ */
+export function modelFactLine(model: {
+	facts?: ModelFacts | null
+	contextWindow?: number | null
+}): string {
+	const parts: string[] = []
+	const context = formatContext(
+		model.contextWindow ?? model.facts?.contextWindow
+	)
+	if (context) parts.push(`${context} context`)
+	const price = formatPrice(
+		model.facts?.pricing?.inPerMTok,
+		model.facts?.pricing?.currency
+	)
+	// In-price only: two prices on a row this narrow is a table, and the table
+	// is what full page is for.
+	if (price) parts.push(price === "Free" ? "Free" : `${price} in`)
+	const size = formatSize(model.facts?.sizeBytes)
+	if (size) parts.push(size)
+	return parts.join(" · ")
 }
 
 /** The mark for where the compute is — `ConnectionRow`'s table, one copy. */

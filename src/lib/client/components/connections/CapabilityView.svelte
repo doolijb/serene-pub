@@ -149,6 +149,16 @@
 	const nothingServes = $derived(!entry.set && candidates.rows.length === 0)
 	const hidden = $derived(hiddenSentence(candidates.hidden))
 	let showAll = $state(false)
+
+	/**
+	 * Whether every candidate sits on one connection. See the row's second line.
+	 *
+	 * Computed over `candidates.rows` rather than `shown`, so expanding "Show
+	 * all N" cannot make the name appear or vanish halfway down a list.
+	 */
+	const oneConnection = $derived(
+		new Set(candidates.rows.map((r) => r.connectionId)).size <= 1
+	)
 	const shown = $derived(
 		showAll ? candidates.rows : candidates.rows.slice(0, CANDIDATE_LIMIT)
 	)
@@ -313,12 +323,37 @@
 								{chip}
 							</span>
 						</span>
+						<!--
+							⚠ The service is printed only where it is not
+							already the name. The shipped card read "Anthropic
+							(Claude) · Anthropic (Claude) · listed" — a
+							connection's default name IS its service label, so
+							every default-named connection said itself twice and
+							then truncated. Same amendment as `ConnectionRow`
+							(NOMENCLATURE §10, service chip, 2026-09-23).
+						-->
 						<span
 							class="text-surface-600-400 block min-w-0 truncate text-xs"
 						>
-							{connection.name ?? "Untitled connection"} · {serviceLabel(
-								connection
-							)} · {pairFact}
+							{[
+								connection.name ?? "Untitled connection",
+								serviceLabel(connection),
+								pairFact
+							]
+								.filter(
+									(part, i, all) =>
+										!!part &&
+										all
+											.slice(0, i)
+											.every(
+												(earlier) =>
+													earlier
+														?.trim()
+														.toLowerCase() !==
+													part.trim().toLowerCase()
+											)
+								)
+								.join(" · ")}
 						</span>
 					</span>
 					<Icons.ChevronRight
@@ -383,10 +418,23 @@
 								>
 									{row.modelName}
 								</span>
+								<!--
+									⚠ The connection's name is dropped when every
+									candidate is on the SAME connection, which is
+									the common case: eight Claude models each
+									prefixed "Anthropic (Claude)" is one word
+									printed down a column, and it was pushing the
+									facts a person is choosing on off the right
+									edge ("200k context · $1…"). Where the list
+									spans two connections it is back, because
+									then it is the thing that distinguishes them.
+								-->
 								<span
 									class="text-surface-600-400 block truncate text-xs"
 								>
-									{row.connectionTitle} · {row.fact}
+									{oneConnection
+										? row.fact
+										: `${row.connectionTitle} · ${row.fact}`}
 								</span>
 							</span>
 						</button>
@@ -436,7 +484,7 @@
 				{getModelButtonLabel(label, nothingServes)}
 			</button>
 			<p class="text-surface-500 px-0.5 text-xs">
-				{finderNote(label)}
+				{finderNote(label, capability)}
 			</p>
 		</div>
 	</div>

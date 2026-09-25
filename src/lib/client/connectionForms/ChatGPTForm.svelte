@@ -126,14 +126,10 @@
 			</p>
 		{/if}
 	</div>
-	<button
-		type="button"
-		class="btn preset-filled-primary-500 mt-2 w-full"
-		onclick={handleTestConnection}
-		disabled={Object.keys(validationErrors).length > 0}
-	>
-		Test Connection
-	</button>
+
+	<!-- The Test button lives on the connection view's status card, not
+	     here. Two Test buttons on one screen, styled differently and
+	     reporting into different places, was the shipped state. -->
 	{#if testResult}
 		<div class="mt-1 text-sm">
 			{#if testResult.ok}

@@ -141,10 +141,17 @@ describe("readInFacts — one entry's place in a run", () => {
 		budget: { headline: "World lore", used: 338, total: 900 }
 	}
 
-	it("ranks the entry among the entries the run judged", () => {
+	it("ranks the entry among the entries the run read in", () => {
+		// The ranking store's meaning (L1): 7 and 4 went in; 9 was only weighed.
 		expect(readInFacts(4, explanation as any)).toEqual(
-			expect.objectContaining({ rank: 2, of: 3, tokens: 218 })
+			expect.objectContaining({ rank: 2, of: 2, tokens: 218 })
 		)
+	})
+
+	it("gives an entry left out no rank, only its reason", () => {
+		const facts = readInFacts(9, explanation as any)
+		expect(facts.rank).toBeUndefined()
+		expect(facts.of).toBeUndefined()
 	})
 
 	it("counts the room the whole retrieved context was given", () => {
@@ -156,7 +163,7 @@ describe("readInFacts — one entry's place in a run", () => {
 	})
 
 	it("leaves a row nothing offered to the ranker out of the count", () => {
-		expect(readInFacts(7, explanation as any).of).toBe(3)
+		expect(readInFacts(7, explanation as any).of).toBe(2)
 	})
 
 	it("carries the run's own verdict as the reason", () => {

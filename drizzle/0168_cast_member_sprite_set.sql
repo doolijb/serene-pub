@@ -1,0 +1,1 @@
+ALTER TABLE "lorebook_bindings" ADD COLUMN "sprite_set" text;

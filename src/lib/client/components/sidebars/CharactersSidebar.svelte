@@ -681,7 +681,7 @@
 			key: "import",
 			icon: Icons.Upload,
 			title: "Import a card",
-			blurb: "PNG, APNG, JPEG, WEBP or JSON.",
+			blurb: "PNG, APNG, JPEG, WEBP, JSON or CHARX.",
 			run: handleImportClick
 		},
 		{
@@ -883,7 +883,7 @@
 	}
 
 	function handleConfirmCharacterExport(options: {
-		format: "json" | "png"
+		format: "json" | "png" | "charx"
 		lorebookId: number | null
 	}) {
 		if (!exportingCharacter?.id) return
@@ -1717,11 +1717,11 @@
 									class="text-surface-600 dark:text-surface-400 mb-2 text-sm"
 								>
 									Upload a file (PNG, APNG, JPEG, JPG, WEBP,
-									JSON):
+									JSON, CHARX):
 								</p>
 								<FileDropzone
 									name="character-card"
-									accept=".png,.apng,.jpeg,.jpg,.webp,.json"
+									accept=".png,.apng,.jpeg,.jpg,.webp,.json,.charx"
 									onFileAccept={handleFileImport}
 								/>
 							</div>

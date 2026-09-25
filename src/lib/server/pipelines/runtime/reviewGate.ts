@@ -80,14 +80,22 @@ const parked = new Map<string, Parked>()
  * a socket handler, an event, a schedule — and they all reach the same
  * person the same way.
  */
-let pushToUser:
-	| ((userId: number, event: string, data: unknown) => void)
-	| null = null
+type Push = (userId: number, event: string, data: unknown) => void
+/**
+ * On `globalThis`: a Vite SSR reload re-evaluates this module, and a
+ * module-level transport would stay null until the next socket connects —
+ * reviews parked meanwhile would reach nobody.
+ */
+const PUSH_KEY = Symbol.for("serene-pub.reviewPush")
+const pushToUser: Push | null = (userId, event, data) =>
+	((globalThis as Record<symbol, unknown>)[PUSH_KEY] as Push | undefined)?.(
+		userId,
+		event,
+		data
+	)
 
-export function setReviewTransport(
-	push: (userId: number, event: string, data: unknown) => void
-) {
-	pushToUser = push
+export function setReviewTransport(push: Push) {
+	;(globalThis as Record<symbol, unknown>)[PUSH_KEY] = push
 }
 
 const viewOf = (e: PendingReview): PendingReviewView => ({

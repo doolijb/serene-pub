@@ -213,6 +213,14 @@ export async function resolvePortrayals(
 			case "participant":
 				portrayal = runOwnerIsMember ? PERSON(runOwnerUserId) : NONE
 				break
+			// R57's catch-alls: every human member (the asker, when they are
+			// one), and the model's context — which no person holds.
+			case "person":
+				portrayal = runOwnerIsMember ? PERSON(runOwnerUserId) : NONE
+				break
+			case "ai":
+				portrayal = AI
+				break
 			case "run-owner":
 				portrayal = PERSON(runOwnerUserId)
 				break

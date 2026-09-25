@@ -51,10 +51,10 @@ The session list, a new-session form, and a session view/edit pair. A few things
 - Every message from a character or persona has a **View `<name>`** link to a read-only detail page (their description, personality, scenario, or first message); if it belongs to you, that page also has an **Edit** link.
 - The **last** message in a session, if it's from a character, gets **Swipe Left (Previous Response)** / **Swipe Right (Next Response)** and **Regenerate** buttons, plus a "Response X of Y" indicator.
 - Hidden ("ghosted") messages — excluded from what the AI sees but still visible in the transcript — show a note explaining that, and any message you own has a **Hide from AI** / **Unhide** toggle.
-- Beyond the standard **Get Next Response** button (which asks the server to work out whose turn it is), a **Get a Response From a Specific Character** control lets you force a particular character to reply right now — useful in group sessions where the automatic turn order doesn't pick who you meant, or after a full round has already completed.
+- **Get a Response From** says who is next in the session's turn order and selects them by default. Choose someone else, or the narrator, to make them reply instead. When it is your turn to write, it says so and nothing is preselected.
 - "Skip to latest message" and "Skip to message box" links sit right below the session title, so a screen-reader or keyboard user can jump straight past the message history instead of tabbing through it.
 
-The edit page covers the session's name, characters, personas, guests, group reply strategy, scenario, and tags. It does **not** cover attaching a lorebook, per-character visibility/disable toggles, or per-session AI-override settings (sampling/context/prompt configs) — sessions created or edited here use whatever the system defaults are. Use the standard site for those. See [Sessions](./sessions.md) for the full picture of what a session can do.
+The edit page covers the session's name, characters, personas, guests, the turn-order strategy and any other step the session may swap (each with its own **Apply**), the fields its genre declares (such as **Auto-advance**), scenario, and tags. It does **not** cover attaching a lorebook, per-character visibility/disable toggles, or per-session AI-override settings (sampling/context/prompt configs) — sessions created or edited here use whatever the system defaults are. Use the standard site for those. See [Sessions](./sessions.md) for the full picture of what a session can do.
 
 ### Characters and Personas
 

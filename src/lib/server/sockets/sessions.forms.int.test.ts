@@ -25,8 +25,10 @@
  *     is recorded with `answeredBy: 'oracle'` and the next reply's inlet
  *     sees it. A grandchild parked at review parks nothing in the answer
  *     run: it ends `ok`, and resolving the review lands the line.
- *  4. **The cycle guard.** An action that always re-asks: the tree stops
- *     at depth 4, the refusal receipted as `halt` naming the cap, no loop.
+ *  4. **The cycle guard.** An action that always re-asks: the tree parks
+ *     at depth 4 for the session owner (E1c's cap pause) — Continue runs
+ *     one more window and parks again, Stop here receipts the parked run as
+ *     `cancelled` naming the cap; nothing loops unasked.
  *     The descendants cap reached at the **fire door** (W1) is a receipted
  *     halt too — the would-be child's row, lineage filled, the routed spec
  *     named — and the answer run halts on the cap; an oracle's answer that
@@ -75,6 +77,7 @@
  *     first was answered — while any other line still supersedes every open
  *     form on the row.
  */
+import { TURN_ORDER_BY_GENRE } from "@serene-pub/core-catalog"
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
@@ -279,12 +282,11 @@ async function publishAskAndAnswer(
 	const ids: Ids = { answerFn, answerAction: `${answerId}#${answerFn}` }
 	const askBuilder = spec(askId, {
 		version: "1.0.0",
-		taxonomy: { role: "action", genre: CHAT },
+		taxonomy: { role: "action"},
 		contributes: {
 			actions: [
 				{
 					key: askFn,
-					genre: CHAT,
 					venue: { kind: "composer" },
 					label: { en: "Ask" }
 				},
@@ -327,12 +329,11 @@ async function publishAskAndAnswer(
 	)
 	const answerBuilder = spec(answerId, {
 		version: "1.0.0",
-		taxonomy: { role: "action", genre: CHAT },
+		taxonomy: { role: "action"},
 		contributes: {
 			actions: [
 				{
 					key: answerFn,
-					genre: CHAT,
 					venue: { kind: opts.answerVenue ?? "form" },
 					audience: { see: ["participant"], act: ["participant"] },
 					label: { en: "Answer" }
@@ -400,7 +401,28 @@ async function fire(userId: number, params: Record<string, unknown>) {
 	return sessionsTriggerFunctionHandler.handler(fakeSocket(userId), params as any, noopEmit)
 }
 
+/**
+ * The runs a session produced — **excluding the turn-order recompute**.
+ *
+ * Since PLAN-turn-order A6 every session event runs its genre's turn-order spec:
+ * five reads and a `jsonb_set`, no model, no message. It is a real run and
+ * it is on this table, but it is not what any assertion in this file is
+ * about — the form road is — and listing it in every expected array would
+ * say "a form was asked, and also the order was recomputed" over and over.
+ * The recompute has its own tests (`turnStrategies.test.ts`,
+ * `sessionEvents.emit.int.test.ts`).
+ */
+// Every genre's own (R27): core's six turn-order specs, from the table the
+// catalog publishes them by.
+const TURN_ORDER_SPECS = new Set(TURN_ORDER_BY_GENRE.map((t) => t.spec))
+
 async function runsOf(sessionId: number) {
+	return (await allRunsOf(sessionId)).filter(
+		(r) => !TURN_ORDER_SPECS.has(r.specSlug ?? "")
+	)
+}
+
+async function allRunsOf(sessionId: number) {
 	const schema = await import("$lib/server/db/schema")
 	return testDb
 		.select({
@@ -997,10 +1019,15 @@ describe("R-15 · Elara asks Tom, and the AI answers as Tom", () => {
 })
 
 describe("01 §8 · the cycle guard", () => {
-	test("an action that always re-asks stops at depth 4, receipted as halt with the cap named", async () => {
-		const { owner, session, tom } = await sessionWithTom("loop")
+	test("an action that always re-asks parks at depth 4 for the session owner; Continue runs one more window, Stop here cancels", async () => {
+		const { owner, guest, session, tom } = await sessionWithTom("loop")
 		const { _resetLineage } = await import("$lib/server/pipelines/runtime/lineage")
+		const { pendingCapPausesFor, resolveCapPause, _resetCapPauses } = await import(
+			"$lib/server/pipelines/runtime/capPause"
+		)
+		const { settleSessionEvents } = await import("$lib/server/pipelines/runtime/sessionEvents")
 		_resetLineage()
+		_resetCapPauses()
 		// `answer` writes ANOTHER block addressed to Tom firing `answer`:
 		// asked → answered → asked → answered → …
 		const { askId, askFn, answerId } = await publishAskAndAnswer(
@@ -1014,26 +1041,62 @@ describe("01 §8 · the cycle guard", () => {
 			action: `${askId}#${askFn}`
 		})
 		expect(asked.error).toBeUndefined()
-		const runs = (await runsOf(session.id)).sort((a, b) => a.depth - b.depth)
-		// root(0) → answer-form(1) → answer(2) → answer-form(3) → answer(4)
-		// → the fifth dispatch is refused and receipted.
+		const byDepth = async () => (await runsOf(session.id)).sort((a, b) => a.depth - b.depth)
+		const runs = await byDepth()
+		// root(0) → answer-form(1) → answer(2) → answer-form(3) → answer(4);
+		// the fifth dispatch parks: no row, nothing run.
 		expect(runs.map((r) => `${r.specSlug}@${r.depth}`)).toEqual([
 			`${askId}@0`,
 			"core:spec/answer-form-chat@1",
 			`${answerId}@2`,
 			"core:spec/answer-form-chat@3",
-			`${answerId}@4`,
-			"core:spec/answer-form-chat@5"
+			`${answerId}@4`
 		])
-		const refused = runs[runs.length - 1]!
-		expect(refused.outcome).toBe("halt")
-		expect(refused.haltReason).toMatch(/cycle guard.*5 dispatches deep.*cap of 4/)
-		expect(refused.rootRunId).toBe(runs[0]!.runId)
-		expect(refused.parentRunId).toBe(runs[4]!.runId)
-		expect((refused.receipt as any).nodes).toEqual([])
-		// Two answers were asked of the model, not an infinity.
+		for (const r of runs) expect(r.outcome).toBe("ok")
 		expect(modelCalls - before).toBe(2)
-		for (const r of runs.slice(0, 5)) expect(r.outcome).toBe("ok")
+
+		// The session owner is asked, the chain named root first.
+		const [pause, ...more] = pendingCapPausesFor(owner.id)
+		expect(more).toEqual([])
+		expect(pause!.depth).toBe(5)
+		expect(pause!.specSlug).toBe("core:spec/answer-form-chat")
+		expect(pause!.chain).toHaveLength(6)
+		expect(pause!.cap).toMatch(/cycle guard.*5 dispatches deep.*cap of 4/)
+		// Only the owner: the guest does not see it, and cannot answer it.
+		expect(pendingCapPausesFor(guest.id)).toEqual([])
+		await expect(resolveCapPause(testDb as any, pause!.id, guest.id, "continue")).rejects.toThrow(
+			/no longer waiting/
+		)
+
+		// Continue: one more window of four, then it parks again at depth 9.
+		await resolveCapPause(testDb as any, pause!.id, owner.id, "continue")
+		await settleSessionEvents(session.id)
+		const again = await byDepth()
+		expect(again.map((r) => r.depth)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8])
+		expect(modelCalls - before).toBe(4)
+		const [second] = pendingCapPausesFor(owner.id)
+		expect(second!.depth).toBe(9)
+		expect(second!.cap).toMatch(/cap of 8/)
+
+		// Stop here: the parked run is receipted as cancelled, naming the cap.
+		await resolveCapPause(testDb as any, second!.id, owner.id, "cancel")
+		expect(pendingCapPausesFor(owner.id)).toEqual([])
+		const done = await byDepth()
+		const stopped = done[done.length - 1]!
+		expect(stopped.depth).toBe(9)
+		expect(stopped.outcome).toBe("cancelled")
+		expect(stopped.haltReason).toMatch(/stopped at the cycle cap by the session owner/)
+		expect(stopped.rootRunId).toBe(runs[0]!.runId)
+		expect((stopped.receipt as any).nodes).toEqual([])
+		// Answered once: a second answer finds nothing.
+		await expect(resolveCapPause(testDb as any, second!.id, owner.id, "continue")).rejects.toThrow(
+			/no longer waiting/
+		)
+		// And nothing is left holding the tree: every run in it — the clicks'
+		// and answers' `form-answered` children included — has settled.
+		await settleSessionEvents(session.id)
+		const { _treeCount } = await import("$lib/server/pipelines/runtime/lineage")
+		expect(_treeCount()).toBe(0)
 	})
 
 	test("the descendants cap reached at the fire door is a receipted halt — the would-be child's row, lineage filled, the routed spec named — and no run errs (W1)", async () => {
@@ -1348,8 +1411,8 @@ describe("the review's rulings (2026-09-17)", () => {
 			],
 			{
 				askActions: [
-					{ key: "dup-a", genre: CHAT, venue: { kind: "composer" }, label: { en: "A" } },
-					{ key: "dup-b", genre: CHAT, venue: { kind: "composer" }, label: { en: "B" } }
+					{ key: "dup-a", venue: { kind: "composer" }, label: { en: "A" } },
+					{ key: "dup-b", venue: { kind: "composer" }, label: { en: "B" } }
 				]
 			}
 		)
@@ -1374,12 +1437,11 @@ describe("the review's rulings (2026-09-17)", () => {
 			compile(
 				spec(id, {
 					version: "1.0.0",
-					taxonomy: { role: "action", genre: CHAT },
+					taxonomy: { role: "action"},
 					contributes: {
 						actions: [
 							{
 								key: "legacy-grant",
-								genre: CHAT,
 								venue: { kind: "composer" },
 								effects: "world",
 								label: { en: "Grant" }
@@ -1455,12 +1517,11 @@ describe("the review's rulings (2026-09-17)", () => {
 			compile(
 				spec(grantId, {
 					version: "1.0.0",
-					taxonomy: { role: "action", genre: CHAT },
+					taxonomy: { role: "action"},
 					contributes: {
 						actions: [
 							{
 								key: "foreign-grant",
-								genre: CHAT,
 								venue: { kind: "composer" },
 								effects: "world",
 								label: { en: "Grant" }
@@ -1600,11 +1661,11 @@ describe("the review's rulings (2026-09-17)", () => {
 		const doc = compile(
 			spec(id, {
 				version: "1.0.0",
-				taxonomy: { role: "action", genre: CHAT },
+				taxonomy: { role: "action"},
 				contributes: {
 					actions: [
-						{ key: "twice", genre: CHAT, venue: { kind: "composer" }, label: { en: "Twice" } },
-						{ key: "pick", genre: CHAT, venue: { kind: "form" }, label: { en: "Pick" } }
+						{ key: "twice", venue: { kind: "composer" }, label: { en: "Twice" } },
+						{ key: "pick", venue: { kind: "form" }, label: { en: "Pick" } }
 					]
 				}
 			})
@@ -2124,12 +2185,11 @@ describe("F41 · the effects line", () => {
 		const doc: SpecDocument = compile(
 			spec("core:spec/test-grant", {
 				version: "1.0.0",
-				taxonomy: { role: "action", genre: CHAT },
+				taxonomy: { role: "action"},
 				contributes: {
 					actions: [
 						{
 							key: "grant",
-							genre: CHAT,
 							venue: { kind: "composer" },
 							effects: "world",
 							label: { en: "Grant" }
@@ -2175,18 +2235,16 @@ describe("F41 · the effects line", () => {
 		const doc: SpecDocument = compile(
 			spec(id, {
 				version: "1.0.0",
-				taxonomy: { role: "action", genre: CHAT },
+				taxonomy: { role: "action"},
 				contributes: {
 					actions: [
 						{
 							key: "world-ask",
-							genre: CHAT,
 							venue: { kind: "composer" },
 							label: { en: "Ask" }
 						},
 						{
 							key: "grant",
-							genre: CHAT,
 							venue: { kind: "composer" },
 							// Its own slash name: `core:spec/test-grant` claims
 							// `/grant` in the same genre (V2: one name, one action).
@@ -2305,18 +2363,16 @@ describe("F41 · the effects line", () => {
 		const doc: SpecDocument = compile(
 			spec(id, {
 				version: "1.0.0",
-				taxonomy: { role: "action", genre: CHAT },
+				taxonomy: { role: "action"},
 				contributes: {
 					actions: [
 						{
 							key: "owner-ask",
-							genre: CHAT,
 							venue: { kind: "composer" },
 							label: { en: "Ask" }
 						},
 						{
 							key: "mine",
-							genre: CHAT,
 							venue: { kind: "composer" },
 							effects: "world",
 							label: { en: "Mine" }
@@ -2405,18 +2461,16 @@ describe("F41 · the effects line", () => {
 			const doc: SpecDocument = compile(
 				spec(id, {
 					version: "1.0.0",
-					taxonomy: { role: "action", genre: CHAT },
+					taxonomy: { role: "action"},
 					contributes: {
 						actions: [
 							{
 								key: `ask-${k}`,
-								genre: CHAT,
 								venue: { kind: "composer" },
 								label: { en: "Ask" }
 							},
 							{
 								key: `mine-${k}`,
-								genre: CHAT,
 								venue: { kind: "composer" },
 								effects: "world",
 								label: { en: "Mine" }

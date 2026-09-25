@@ -75,6 +75,8 @@ interface Row {
 	enabled: boolean
 	manifest?: PluginManifest | null
 	adminDenied?: string[] | null
+	/** The admin's switched-off swap contributions (R29, R66). */
+	disabledSwaps?: string[] | null
 	storageQuotaOverride?: number | null
 	settings?: Record<string, unknown> | null
 }
@@ -117,12 +119,67 @@ function toDescriptor(r: Row): PluginDescriptor {
 		sequential: r.sequential,
 		storageQuotaBytes: storageGrant(eff, r.storageQuotaOverride),
 		networkHosts: networkGrant(eff),
-		...(settings ? { settings } : {})
+		// Handles for the hook, plaintext host-side (R63) — as `store.ts` does.
+		...(settings
+			? {
+					settings: settings.settings,
+					...(Object.keys(settings.secrets).length
+						? { secrets: settings.secrets, lentSecrets: settings.lent, secretNonce: settings.nonce }
+						: {})
+				}
+			: {})
 	}
 }
 
 async function allRows(): Promise<Row[]> {
 	return db.select().from(schema.plugins).orderBy(asc(schema.plugins.name))
+}
+
+/**
+ * Each plugin's swap contributions as the plugins page shows them (R66): a
+ * read-only count — the switches live on the genre hub — and the genre whose
+ * hub holds them (the first contributed pipeline's), for the link.
+ */
+async function swapSummaries(
+	rows: Row[]
+): Promise<Map<string, NonNullable<Sockets.Plugins.PluginRow["swaps"]>>> {
+	const out = new Map<string, NonNullable<Sockets.Plugins.PluginRow["swaps"]>>()
+	const withSwaps = rows.filter(
+		(r) => Array.isArray((r.manifest as any)?.swaps) && (r.manifest as any).swaps.length
+	)
+	if (!withSwaps.length) return out
+	const { swapKey } = await import("$lib/server/pipelines/entities/bindings")
+	const specs = (await db
+		.select({
+			slug: schema.pipelineSpecs.slug,
+			activeVersionId: schema.pipelineSpecs.activeVersionId,
+			versionId: schema.pipelineSpecVersions.id,
+			inputGenre: schema.pipelineSpecVersions.inputGenre
+		})
+		.from(schema.pipelineSpecs)
+		.innerJoin(
+			schema.pipelineSpecVersions,
+			eq(schema.pipelineSpecVersions.specId, schema.pipelineSpecs.id)
+		)) as any[]
+	const genreOf = new Map(
+		specs
+			.filter((r) => r.activeVersionId === r.versionId)
+			.map((r) => [r.slug as string, (r.inputGenre ?? null) as string | null])
+	)
+	for (const r of withSwaps) {
+		// Only swaps onto a published pipeline — the ones a genre hub lists.
+		const swaps = ((r.manifest as any).swaps as any[]).filter(
+			(c) => c?.spec && c?.node && c?.definition && genreOf.has(c.spec)
+		)
+		if (!swaps.length) continue
+		const off = new Set<string>(r.disabledSwaps ?? [])
+		out.set(r.pluginId, {
+			total: swaps.length,
+			off: swaps.filter((c) => off.has(swapKey(c.spec, c.node, c.definition))).length,
+			genreId: swaps.map((c) => genreOf.get(c.spec)).find((g) => !!g) ?? null
+		})
+	}
+	return out
 }
 
 async function listPayload(): Promise<Sockets.Plugins.List.Response> {
@@ -131,10 +188,12 @@ async function listPayload(): Promise<Sockets.Plugins.List.Response> {
 	// Warm/cold is live truth, so it is annotated from the live manager
 	// rather than stored: with the gate off nothing is ever loaded.
 	const mgr = sandboxEnabled ? getManager() : null
+	const swapsOf = await swapSummaries(rows)
 	return {
 		plugins: rows.map((r) => ({
 			...toPluginRow(r),
-			warm: mgr ? mgr.isWarm(r.pluginId) : false
+			warm: mgr ? mgr.isWarm(r.pluginId) : false,
+			...(swapsOf.has(r.pluginId) ? { swaps: swapsOf.get(r.pluginId)! } : {})
 		})),
 		sandboxEnabled
 	}
@@ -153,7 +212,7 @@ async function listPayload(): Promise<Sockets.Plugins.List.Response> {
  * here answers ONLY through this push — so the empty array a closed gate yields
  * reaches nothing but a direct-call test.
  */
-async function emitList(
+export async function emitList(
 	emitToUser: Emit
 ): Promise<Sockets.Plugins.PluginRow[]> {
 	let plugins: Sockets.Plugins.PluginRow[] = []
@@ -313,6 +372,17 @@ export const pluginsInstall: Handler<
 				emitToUser("error", { error: msg })
 				throw new Error(msg)
 			}
+			// Swap contributions (R29): refused here with the SDK's sentence
+			// rather than offered to nobody, or offered and mis-wired.
+			const { swapContributionProblems } = await import(
+				"$lib/server/plugins/swaps"
+			)
+			const problems = await swapContributionProblems(db, params.manifest as any)
+			if (problems.length) {
+				const msg = `This package cannot install: ${problems.join("; ")}`
+				emitToUser("error", { error: msg })
+				throw new Error(msg)
+			}
 		}
 		// `backends` is a compiled fact: run the bundle on both sandboxes and
 		// take the set it actually loads on, ignoring any author claim.
@@ -337,6 +407,15 @@ export const pluginsInstall: Handler<
 			sequential: params.sequential,
 			manifest: params.manifest
 		})
+		// Its declared events (E1b), replacing what an earlier version of
+		// this plugin declared — boot re-registers the same list from the
+		// stored manifest.
+		{
+			const { registerPluginEvents } = await import("$lib/server/plugins/pluginEvents")
+			const refused = registerPluginEvents(params.manifest, params.pluginId)
+			if (refused.length)
+				console.warn(`[plugins] '${params.pluginId}' events refused: ${refused.join("; ")}`)
+		}
 		// The frame surfaces' documents (20 §12), replaced wholesale like the
 		// bundle. Refused paths are logged, not fatal — a plugin with one bad
 		// path still installs, minus that file.

@@ -17,7 +17,7 @@
  */
 
 import { describe, it, expect, beforeAll, vi } from "vitest"
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 
@@ -374,105 +374,353 @@ describe("bindings (19 §3; plans/31 V2)", () => {
 	})
 })
 
-describe("the strategy swap (19 §5)", () => {
-	it("swapping to round-robin changes what the run executes — and it decides", async () => {
-		const { setSessionSpeakerStrategy, getSessionSpeakerStrategy } =
-			await import("$lib/server/pipelines/entities/bindings")
-		const { runTurn } = await import(
-			"$lib/server/pipelines/runtime/runTurn"
-		)
+describe("the session-scope rebind (PLAN-turn-order §4.7, R28, R29)", () => {
+	// Chat's own turn-order spec (R27): the session under test is a chat session.
+	const TURN_ORDER = "core:spec/chat-turn-order"
+	// Chat's strategy sits behind its model path (M4): the key comes from the
+	// table in the app, spelled here.
+	const STRATEGY = "decide.rules.strategy"
 
-		const set = await setSessionSpeakerStrategy(db, {
+	it("writes a session-scope rebind of the turn-order spec's `strategy` node", async () => {
+		const { setSessionNodeRebind } = await import(
+			"$lib/server/pipelines/entities/bindings"
+		)
+		const set = await setSessionNodeRebind(db, {
 			sessionId,
 			userId,
-			definitionId: "core:task/turn-round-robin@1"
+			spec: TURN_ORDER,
+			nodeKey: STRATEGY,
+			definitionId: "core:task/turn-user-split@1"
 		})
 		expect(set.error).toBeUndefined()
-		expect(await getSessionSpeakerStrategy(db, sessionId)).toBe(
-			"core:task/turn-round-robin@1"
-		)
-
-		// No explicit pick: under the pinned turn-manual this turn would have
-		// no speaker at all. The rebound strategy decides — Alice has never
-		// replied, so the rotation seats her.
-		const receipt = await runTurn({
-			db: db,
-			sessionId,
-			userId,
-			currentCharacterId: null,
-			text: "Who rides next?",
-			seed: "rebind:1",
-			skipReceipt: true
-		})
-		const speaker = receipt.nodes.find((n: any) => n.nodeKey === "speaker")
-		expect(speaker!.definitionId).toBe("core:task/turn-round-robin@1")
-		expect(speaker!.output).toMatchObject({
-			characterId,
-			strategy: "round-robin",
-			main: { via: "strategy" }
-		})
-	}, 30_000)
-
-	it("a non-strategy refuses at write; an incompatible row degrades to the pin at load", async () => {
-		const { setSessionSpeakerStrategy, applyNodeRebinds, setNodeRebind } =
-			await import("$lib/server/pipelines/entities/bindings")
-		const { loadPublished } = await import(
-			"$lib/server/pipelines/boot/bootstrap"
-		)
-
-		const refused = await setSessionSpeakerStrategy(db, {
-			sessionId,
-			userId,
-			definitionId: "core:task/assemble@2"
-		})
-		expect(refused.error).toContain("not a next-speaker strategy")
-
-		// The generic setter refuses on shape too.
-		const generic = await setNodeRebind(db, {
-			scope: { kind: "session", id: sessionId },
-			specSlug: "core:spec/respond",
-			nodeKey: "speaker",
-			definitionId: "core:task/assemble@2",
-			userId
-		})
-		expect(generic.error).toContain("does not publish the same shape")
-
-		// A row that went bad *after* writing (forged, or stale across a
-		// re-projection) is the load-side guard's case: the pin survives.
 		const [spec] = await db
 			.select()
 			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, "core:spec/respond"))
-		await db.insert(schema.pipelineNodeRebinds).values({
-			specId: spec.id,
-			scopeKind: "session",
-			scopeId: sessionId,
-			nodeKey: "prompt",
-			definitionId: "core:task/turn-none@1", // wrong shape for `prompt`
-			updatedBy: userId
+			.where(eq(schema.pipelineSpecs.slug, TURN_ORDER))
+		const [row] = await db
+			.select()
+			.from(schema.pipelineNodeRebinds)
+			.where(
+				and(
+					eq(schema.pipelineNodeRebinds.specId, spec.id),
+					eq(schema.pipelineNodeRebinds.scopeKind, "session"),
+					eq(schema.pipelineNodeRebinds.scopeId, sessionId)
+				)
+			)
+		expect(row).toMatchObject({
+			nodeKey: STRATEGY,
+			definitionId: "core:task/turn-user-split@1"
 		})
+
+		// And it is what the spec actually runs.
+		const { applyNodeRebinds } = await import(
+			"$lib/server/pipelines/entities/bindings"
+		)
+		const { loadPublished } = await import(
+			"$lib/server/pipelines/boot/bootstrap"
+		)
 		const doc = await applyNodeRebinds(
 			db,
-			await loadPublished(db, "core:spec/respond"),
-			{ specSlug: "core:spec/respond", sessionId }
+			await loadPublished(db, TURN_ORDER),
+			{ specSlug: TURN_ORDER, sessionId }
 		)
-		const prompt = (doc.nodes as any[]).find((n) => n.key === "prompt")
-		expect(prompt.definitionId).toBe("core:task/assemble")
+		expect(
+			(doc.nodes as any[]).find((n) => n.key === STRATEGY).definitionId
+		).toBe("core:task/turn-user-split")
+	})
 
-		// And the good rebind from the previous test is still in force.
-		const speaker = (doc.nodes as any[]).find((n) => n.key === "speaker")
-		expect(speaker.definitionId).toBe("core:task/turn-round-robin")
+	it("offers the pin first, then the node's declared swaps, read off the registry", async () => {
+		const { listSessionNodeSwaps } = await import(
+			"$lib/server/pipelines/entities/bindings"
+		)
+		const [spec] = await db
+			.select()
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, TURN_ORDER))
+		const offered = await listSessionNodeSwaps(db, {
+			spec: TURN_ORDER,
+			nodeKey: STRATEGY,
+			specVersionId: spec.activeVersionId!
+		})
+		expect(offered.map((o) => o.definitionId)).toEqual([
+			"core:task/turn-round-robin@1",
+			"core:task/turn-user-split@1",
+			"core:task/turn-random@1",
+			"core:task/turn-scripted@1",
+			"core:task/turn-manual@1",
+			"core:task/turn-narrator@1"
+		])
+	})
+
+	it("refuses a definition the node does not offer", async () => {
+		const { setSessionNodeRebind } = await import(
+			"$lib/server/pipelines/entities/bindings"
+		)
+		const refused = await setSessionNodeRebind(db, {
+			sessionId,
+			userId,
+			spec: TURN_ORDER,
+			nodeKey: STRATEGY,
+			definitionId: "core:task/assemble@2"
+		})
+		expect(refused.error).toContain("is not offered")
+	})
+
+	it("refuses a spec that serves another genre — the rebind would never run", async () => {
+		const { setSessionNodeRebind } = await import(
+			"$lib/server/pipelines/entities/bindings"
+		)
+		const refused = await setSessionNodeRebind(db, {
+			sessionId,
+			userId,
+			spec: "core:spec/adventure-turn-order",
+			nodeKey: STRATEGY,
+			definitionId: "core:task/turn-narrator@1"
+		})
+		expect(refused.error).toContain("serves 'core:genre/adventure'")
+	})
+
+	it("lists the session's pipeline cards: the turn-order strategy, with its offered swaps (A8)", async () => {
+		const { listSessionPipelineCards } = await import(
+			"$lib/server/pipelines/entities/bindings"
+		)
+		const cards = await listSessionPipelineCards(db, sessionId)
+		const card = cards.find((c) => c.spec === TURN_ORDER && c.nodeKey === STRATEGY)
+		expect(card).toBeDefined()
+		expect(card!.options.length).toBeGreaterThan(1)
+		expect(card!.default).toBe(card!.options[0].definitionId)
+	})
+
+	it("refuses a spec whose lock answers no event — nothing would run the rebind (A7r review)", async () => {
+		const { setSessionNodeRebind } = await import(
+			"$lib/server/pipelines/entities/bindings"
+		)
+		const [spec] = await db
+			.select({ activeVersionId: schema.pipelineSpecs.activeVersionId })
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, TURN_ORDER))
+		const [before] = await db
+			.select({
+				inputEvent: schema.pipelineSpecVersions.inputEvent,
+				inputEvents: schema.pipelineSpecVersions.inputEvents
+			})
+			.from(schema.pipelineSpecVersions)
+			.where(eq(schema.pipelineSpecVersions.id, spec.activeVersionId!))
+		await db
+			.update(schema.pipelineSpecVersions)
+			.set({ inputEvent: null, inputEvents: null })
+			.where(eq(schema.pipelineSpecVersions.id, spec.activeVersionId!))
+		try {
+			const refused = await setSessionNodeRebind(db, {
+				sessionId,
+				userId,
+				spec: TURN_ORDER,
+				nodeKey: STRATEGY,
+				definitionId: "core:task/turn-user-split@1"
+			})
+			expect(refused.error).toContain("answers no event")
+		} finally {
+			await db
+				.update(schema.pipelineSpecVersions)
+				.set(before)
+				.where(eq(schema.pipelineSpecVersions.id, spec.activeVersionId!))
+		}
+	})
+
+	it("refuses a node not in session settings, and a definition a session node does not offer", async () => {
+		const { setSessionNodeRebind } = await import(
+			"$lib/server/pipelines/entities/bindings"
+		)
+		// `write` is the outlet: not in session settings at all.
+		const outlet = await setSessionNodeRebind(db, {
+			sessionId,
+			userId,
+			spec: TURN_ORDER,
+			nodeKey: "write",
+			definitionId: "core:outlet/set-turn-order@1"
+		})
+		expect(outlet.error).toContain("not a node a session may swap")
+		// `pool` is in session settings for its params, and offers only its
+		// pin (plus any contribution) — a strategy is not among them.
+		const pool = await setSessionNodeRebind(db, {
+			sessionId,
+			userId,
+			spec: TURN_ORDER,
+			nodeKey: "pool",
+			definitionId: "core:task/turn-random@1"
+		})
+		expect(pool.error).toContain("is not offered")
+	})
+
+	it("refuses a node the spec does not have at all", async () => {
+		const { setSessionNodeRebind } = await import(
+			"$lib/server/pipelines/entities/bindings"
+		)
+		const refused = await setSessionNodeRebind(db, {
+			sessionId,
+			userId,
+			spec: TURN_ORDER,
+			nodeKey: "nope",
+			definitionId: "core:task/turn-manual@1"
+		})
+		expect(refused.error).toContain("no node 'nope'")
+	})
+
+	it("a plugin's own spec is rebindable exactly like core's — the mark rides the row (R26)", async () => {
+		const { setSessionNodeRebind } = await import(
+			"$lib/server/pipelines/entities/bindings"
+		)
+		const { saveDocument } = await import("$lib/server/pipelines/boot/store")
+		const { turnOrderSpec, chatGenre } = await import("@serene-pub/core-catalog")
+		const C = await import("@serene-pub/contracts")
+		await saveDocument(
+			db,
+			turnOrderSpec({
+				id: "acme.rp:spec/chat-turn-order-alt",
+				genre: chatGenre,
+				events: ["core:event/message-completed@1"],
+				strategy: C.turnRoundRobin,
+				swaps: [C.turnRandom]
+			}),
+			{ publish: true }
+		)
+		const rebind = () =>
+			setSessionNodeRebind(db, {
+				sessionId,
+				userId,
+				spec: "acme.rp:spec/chat-turn-order-alt",
+				nodeKey: "strategy",
+				definitionId: "core:task/turn-random@1"
+			})
+		// Not a pipeline this session runs: a swap there would change nothing.
+		expect((await rebind()).error).toMatch(/is not a pipeline this session runs/)
+		// Once the session runs it — its own binding — the swap is its to make.
+		const { bindSubject } = await import("$lib/server/pipelines/entities/bindings")
+		const bound = await bindSubject(db, {
+			scope: { kind: "session", id: sessionId },
+			genreId: "core:genre/chat",
+			subject: "core:event/message-completed@1",
+			specSlug: "acme.rp:spec/chat-turn-order-alt",
+			userId
+		})
+		expect(bound.error).toBeUndefined()
+		expect((await rebind()).error).toBeUndefined()
+	})
+
+	it("an enabled plugin's contribution is offered after the declared swaps; a disabled one is not", async () => {
+		const { listSessionNodeSwaps, swapKey } = await import(
+			"$lib/server/pipelines/entities/bindings"
+		)
+		await db.insert(schema.pipelineDefinitionRegistry).values({
+			definitionId: "acme:task/turn-natural",
+			version: 1,
+			kind: "task",
+			// Public: a contribution runs in core's pipeline (R62).
+			isPublic: true,
+			i18n: { name: { en: "Natural" } },
+			// A strategy's ports, as the install check (plugins/swaps.ts) holds it to.
+			ports: {
+				in: { candidates: "core:shape/turn-candidates@1", messages: "core:shape/messages@1" },
+				out: { main: "core:shape/turn-entries@1", order: "core:shape/turn-entries@1" }
+			}
+		})
+		await db.insert(schema.plugins).values({
+			pluginId: "acme",
+			name: "Acme",
+			bundleSource: "// x",
+			bundleHash: "deadbeef",
+			enabled: true,
+			manifest: {
+				swaps: [{ spec: TURN_ORDER, node: STRATEGY, definition: "acme:task/turn-natural@1" }]
+			}
+		})
+		const [spec] = await db
+			.select()
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, TURN_ORDER))
+		const list = () =>
+			listSessionNodeSwaps(db, {
+				spec: TURN_ORDER,
+				nodeKey: STRATEGY,
+				specVersionId: spec.activeVersionId!
+			})
+		const offered = (await list()).map((o) => o.definitionId)
+		expect(offered.at(-1)).toBe("acme:task/turn-natural@1")
+		expect((await list()).at(-1)?.name).toBe("Natural")
+
+		// A session picks it — the row is written through the one verb.
+		const { setSessionNodeRebind, applyNodeRebinds } = await import(
+			"$lib/server/pipelines/entities/bindings"
+		)
+		const { loadPublished } = await import("$lib/server/pipelines/boot/bootstrap")
+		expect(
+			(
+				await setSessionNodeRebind(db, {
+					sessionId,
+					userId,
+					spec: TURN_ORDER,
+					nodeKey: STRATEGY,
+					definitionId: "acme:task/turn-natural@1"
+				})
+			).error
+		).toBeUndefined()
+
+		await db
+			.update(schema.plugins)
+			.set({ disabledSwaps: [swapKey(TURN_ORDER, STRATEGY, "acme:task/turn-natural@1")] })
+			.where(eq(schema.plugins.pluginId, "acme"))
+		expect((await list()).map((o) => o.definitionId)).not.toContain("acme:task/turn-natural@1")
+		// Disabling withdraws it from the session that already picked it, not
+		// only from new picks (M2 review): the run falls back to the pin.
+		const doc = await applyNodeRebinds(db, await loadPublished(db, TURN_ORDER), {
+			specSlug: TURN_ORDER,
+			sessionId
+		})
+		expect((doc.nodes as any[]).find((n) => n.key === STRATEGY).definitionId).toBe(
+			"core:task/turn-round-robin"
+		)
+		// And the person can still clear it.
+		expect(
+			(
+				await setSessionNodeRebind(db, {
+					sessionId,
+					userId,
+					spec: TURN_ORDER,
+					nodeKey: STRATEGY,
+					definitionId: null
+				})
+			).error
+		).toBeUndefined()
+
+		await db
+			.update(schema.plugins)
+			.set({ disabledSwaps: [], enabled: false })
+			.where(eq(schema.plugins.pluginId, "acme"))
+		expect((await list()).map((o) => o.definitionId)).not.toContain("acme:task/turn-natural@1")
 	})
 
 	it("clearing restores the pin — reset-is-delete", async () => {
-		const { setSessionSpeakerStrategy, getSessionSpeakerStrategy } =
-			await import("$lib/server/pipelines/entities/bindings")
-		const cleared = await setSessionSpeakerStrategy(db, {
+		const { setSessionNodeRebind, applyNodeRebinds } = await import(
+			"$lib/server/pipelines/entities/bindings"
+		)
+		const { loadPublished } = await import(
+			"$lib/server/pipelines/boot/bootstrap"
+		)
+		const cleared = await setSessionNodeRebind(db, {
 			sessionId,
 			userId,
+			spec: TURN_ORDER,
+			nodeKey: STRATEGY,
 			definitionId: null
 		})
 		expect(cleared.error).toBeUndefined()
-		expect(await getSessionSpeakerStrategy(db, sessionId)).toBe(null)
+		const doc = await applyNodeRebinds(
+			db,
+			await loadPublished(db, TURN_ORDER),
+			{ specSlug: TURN_ORDER, sessionId }
+		)
+		expect(
+			(doc.nodes as any[]).find((n) => n.key === STRATEGY).definitionId
+		).toBe("core:task/turn-round-robin")
 	})
 })

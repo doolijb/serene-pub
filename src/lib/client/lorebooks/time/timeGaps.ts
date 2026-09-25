@@ -13,7 +13,12 @@
  * one month rather than as a gap.
  */
 
-import { dateValue, formatDate, type StoryDate } from "../sections/historyDates"
+import {
+	compareDates,
+	dateValue,
+	formatDate,
+	type StoryDate
+} from "../sections/historyDates"
 
 export type DateUnit = "year" | "month" | "day"
 
@@ -74,12 +79,12 @@ export function findGaps(dates: readonly StoryDate[]): TimeGap[] {
 	if (dates.length < 2) return []
 	const unit = coarsestUnit(dates)
 	const scale = scaleOf(dates)
-	const sorted = [...dates].sort((a, b) => dateValue(a) - dateValue(b))
+	const sorted = [...dates].sort(compareDates)
 	const points: StoryDate[] = []
 	for (const date of sorted)
 		if (
 			points.length === 0 ||
-			dateValue(points[points.length - 1]) !== dateValue(date)
+			compareDates(points[points.length - 1], date) !== 0
 		)
 			points.push(date)
 

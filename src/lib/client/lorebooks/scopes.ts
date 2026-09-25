@@ -157,6 +157,24 @@ export function readingLine(
 	)} reached the last turn`
 }
 
+/**
+ * What the session reading this book is doing with it.
+ *
+ * ⚠ "as of now" is not decoration. Retrieval never reads as-of, so the session
+ * is always at now on its own line — the sentence says it because the author
+ * standing at Y2 needs to know the model is not standing there with them.
+ */
+export function readingIntoSentence(
+	lineName: string,
+	reached: number | null
+): string {
+	const read =
+		reached === null || reached === 0
+			? "nothing reached the last turn"
+			: `${plural(reached, "entry", "entries")} reached the last turn`
+	return `Reading this book on ${lineName}, as of now · ${read}`
+}
+
 export type SavedScopeId = "needs-keywords" | "loose-ends" | "pinned"
 
 export const SAVED_SCOPES: {

@@ -100,7 +100,6 @@ import {
 	isRefusal,
 	type ExpressionScope
 } from "$lib/server/state/expressions"
-import { GroupReplyStrategies } from "$lib/shared/constants/GroupReplyStrategies"
 
 /** One cast member of a session, as every read here needs them. */
 export interface CastMemberLink {
@@ -1171,8 +1170,7 @@ async function whoFor(
 	const [session] = await db
 		.select({
 			userId: schema.sessions.userId,
-			isGroup: schema.sessions.isGroup,
-			groupReplyStrategy: schema.sessions.groupReplyStrategy
+			isGroup: schema.sessions.isGroup
 		})
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
@@ -1193,9 +1191,7 @@ async function whoFor(
 	else if (owner && opts.userId && opts.userId === session?.userId)
 		who.user = owner
 
-	const next = entry(
-		await nextTurn(db, sessionId, session?.isGroup ?? false, session?.groupReplyStrategy)
-	)
+	const next = entry(await nextTurn(db, sessionId, session?.isGroup ?? false))
 	if (next) who.next = next
 
 	return who
@@ -1232,35 +1228,33 @@ async function personaOf(
 }
 
 /**
- * Whose turn is next, when the session has a turn order at all.
+ * Whose turn is next: the head of the session's stored turn order
+ * (PLAN-turn-order §4.7, A7).
  *
- * Reuses `getNextCharacterTurn` rather than restating the rotation: it is the
- * function the turn itself asks, and a `who.next` that disagreed with who
- * actually replies would be worse than no key. Absent for a session that is not
- * a group or whose strategy is manual — there is no order to read off those,
- * and the whole read (every message, every seat) is skipped with it.
+ * Read, not computed. The preview this replaced resolved the session's
+ * strategy and re-ran the rotation, which meant two answers to one question
+ * and an honest `known: false` whenever the strategy was random or
+ * scripted. Turn order is state now — `core:spec/<genre>-turn-order` wrote it down
+ * — so this is a row read, it is right for every strategy including the
+ * ones a preview could not know, and it cannot disagree with who actually
+ * replies because it IS what will be fired.
+ *
+ * Null when nothing is prepared, when the head is not a character's (a
+ * narrator entry names nobody, and this key is a character id), and for a
+ * session that is not a group, which is the shape this key has always had.
  */
 async function nextTurn(
 	db: Db,
 	sessionId: number,
-	isGroup: boolean,
-	strategy: string | null | undefined
+	isGroup: boolean
 ): Promise<number | null> {
-	if (!isGroup || !strategy || strategy === GroupReplyStrategies.MANUAL)
-		return null
-	const session = await db.query.sessions.findFirst({
-		where: eq(schema.sessions.id, sessionId),
-		with: {
-			sessionMessages: true,
-			sessionCharacters: { with: { character: true } },
-			sessionPersonas: { with: { persona: true } }
-		}
-	})
-	if (!session) return null
-	const { getNextCharacterTurn } = await import(
-		"$lib/server/utils/getNextCharacterTurn"
-	)
-	return getNextCharacterTurn(session as any, strategy)
+	if (!isGroup) return null
+	const { headTurnEntry } = await import("$lib/server/sessions/fireTurn")
+	const head = await headTurnEntry(db, sessionId)
+	const ref = head?.ref
+	if (typeof ref !== "string" || !ref.startsWith("character:")) return null
+	const id = Number(ref.slice("character:".length))
+	return Number.isInteger(id) ? id : null
 }
 
 /**

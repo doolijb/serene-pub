@@ -144,6 +144,97 @@ describe("characters import/export (PGlite integration)", () => {
 		expect(res.book?.entries).toHaveLength(1)
 	})
 
+	test("imports a CHARX (zip) card with its lorebook and its main icon as the avatar", async () => {
+		const { charactersImportCard } = await import("./characters")
+		const { zipSync, strToU8 } = await import("fflate")
+		const { PNG } = await import("pngjs")
+		const user = await makeUser("charx-import-user")
+
+		const png = new PNG({ width: 2, height: 2 })
+		png.data.fill(255)
+		const icon = PNG.sync.write(png)
+		const card = {
+			spec: "chara_card_v3",
+			spec_version: "3.0",
+			data: {
+				...minimalV2Card.data,
+				name: "Risa",
+				character_book: {
+					name: "Risa's Lore",
+					extensions: {},
+					entries: [
+						{ keys: ["tower"], content: "It leans.", extensions: {}, enabled: true, insertion_order: 0 }
+					]
+				},
+				assets: [
+					{ type: "icon", uri: "embeded://assets/icon/images/main.png", name: "main", ext: "png" }
+				]
+			}
+		}
+		const charx = zipSync({
+			"card.json": strToU8(JSON.stringify(card)),
+			"assets/icon/images/main.png": icon
+		})
+
+		const res = await charactersImportCard.handler(
+			fakeSocket(user.id),
+			{ file: Buffer.from(charx).toString("base64") },
+			noopEmit
+		)
+
+		expect(res.status).toBe("created")
+		expect(res.character?.name).toBe("Risa")
+		expect(res.book?.name).toBe("Risa's Lore")
+		expect(res.warnings).toBeUndefined()
+		const row = await testDb.query.characters.findFirst({
+			where: eq(schema.characters.id, res.character!.id)
+		})
+		expect(row?.avatarMediaId).not.toBeNull()
+	}, 60_000)
+
+	test("a CHARX's emotion images become the character's sprites; non-images are reported", async () => {
+		const { charactersImportCard } = await import("./characters")
+		const { listSpriteSets } = await import("$lib/server/sprites")
+		const { zipSync, strToU8 } = await import("fflate")
+		const { PNG } = await import("pngjs")
+		const user = await makeUser("charx-emotion-user")
+		const png = (seed: number) => {
+			const img = new PNG({ width: 2, height: 2 })
+			img.data.fill(seed)
+			return PNG.sync.write(img)
+		}
+		const card = {
+			spec: "chara_card_v3",
+			spec_version: "3.0",
+			data: {
+				...minimalV2Card.data,
+				name: "Emo",
+				assets: [
+					{ type: "emotion", uri: "embeded://assets/emotion/images/0.png", name: "joy", ext: "png" },
+					{ type: "emotion", uri: "embeded://assets/emotion/images/1.png", name: "anger", ext: "png" },
+					{ type: "emotion", uri: "embeded://assets/emotion/images/2.png", name: "broken", ext: "png" }
+				]
+			}
+		}
+		const charx = zipSync({
+			"card.json": strToU8(JSON.stringify(card)),
+			"assets/emotion/images/0.png": png(10),
+			"assets/emotion/images/1.png": png(20),
+			"assets/emotion/images/2.png": strToU8("not an image")
+		})
+		const res = await charactersImportCard.handler(
+			fakeSocket(user.id),
+			{ file: Buffer.from(charx).toString("base64") },
+			noopEmit
+		)
+		expect(res.status).toBe("created")
+		const sets = await listSpriteSets(testDb as any, res.character!.id)
+		expect(sets.map((s) => s.name)).toEqual(["default"])
+		expect(sets[0].sprites.map((s) => s.label).sort()).toEqual(["anger", "joy"])
+		expect(sets[0].sprites.every((s) => s.source === "card")).toBe(true)
+		expect(res.warnings?.join(" ")).toMatch(/1 of the card's sprites was not imported \(broken:/)
+	}, 60_000)
+
 	test("re-importing the exact bytes of a previously-imported card (same uuid) reports unchanged with no new row", async () => {
 		const { charactersImportCard, charactersExportCard } = await import(
 			"./characters"

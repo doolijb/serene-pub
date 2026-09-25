@@ -83,11 +83,17 @@ describe("managedTabs", () => {
 			"settings"
 		])
 	})
-	test("Get models is its own tab, not the retired Available one", () => {
-		expect(managedTabs("tabs").map((t) => t.label)).toContain("Get models")
+	test("Get is its own tab, not the retired Available one", () => {
+		expect(managedTabs("tabs").map((t) => t.label)).toContain("Get")
 		expect(managedTabs("tabs").map((t) => t.label)).not.toContain(
 			"Available"
 		)
+	})
+
+	test("every label is one word, so four fit across the dock", () => {
+		// "Get models" and "Downloads" rendered as "Get mo…" / "Downlo…".
+		for (const tab of managedTabs("tabs"))
+			expect(tab.label.split(" ")).toHaveLength(1)
 	})
 })
 

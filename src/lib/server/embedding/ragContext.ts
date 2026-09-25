@@ -511,6 +511,8 @@ export async function fetchScopedCandidates(
 					context.allLorebookIds
 				),
 				eq(schema.lorebookEntries.enabled, true),
+				// Archived is out of retrieval, like disabled (L1).
+				eq(schema.lorebookEntries.archived, false),
 				eq(schema.lorebookEntries.typeId, typeId),
 				eq(schema.lorebookEntryVectors.vectorName, DEFAULT_VECTOR_NAME),
 				eq(schema.lorebookEntryVectors.chunkIndex, 0),

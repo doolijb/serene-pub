@@ -2,7 +2,7 @@
  * Install-time requirement enforcement (24 §10, T7b).
  *
  * A package's declaration artifact records what it references but does not
- * ship — `requires: string[]` of genre/spec ids. The CLI never bundles them;
+ * ship — `requires: string[]` of genre, spec and event ids. The CLI never bundles them;
  * the instance is the authority on whether they exist, checked here at
  * install so a missing dependency is a refusal with names, not a runtime
  * surprise. Author-side types are advisory; this is the check that counts.
@@ -10,6 +10,7 @@
 import { sessionEvents } from "@serene-pub/sdk"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { isRegisteredPackageEvent } from "./pluginEvents"
 
 /** Which of these ids this instance cannot satisfy right now. */
 export async function missingRequirements(
@@ -48,6 +49,9 @@ export async function missingRequirements(
 	for (const id of requires) {
 		if (id.includes(":genre/")) {
 			if (!publishedGenres.has(id)) missing.push(id)
+		} else if (id.includes(":event/")) {
+			// Another package's event: declared by one installed here.
+			if (!isRegisteredPackageEvent(id)) missing.push(id)
 		} else if (publishedSlugs.has(id)) {
 			// A published spec satisfies a spec reference of any shape.
 		} else {

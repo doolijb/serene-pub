@@ -428,9 +428,13 @@ module.exports = {
 				if (job.grants.fetch)
 					bridgeFetch(
 						context,
-						fetchHostFor(bundle.config, function () {
-							return (Atomics.load(flags, 0) & STOP_ABORT) !== 0
-						}),
+						fetchHostFor(
+							bundle.config,
+							function () {
+								return (Atomics.load(flags, 0) & STOP_ABORT) !== 0
+							},
+							job.secrets
+						),
 						function () {
 							return contextLive
 						},
@@ -729,6 +733,7 @@ export class QuickJsSandbox implements PluginSandbox {
 			timeoutMs: opts.timeoutMs,
 			memoryLimitBytes: this.memoryLimitBytes,
 			rows: opts.rows,
+			secrets: opts.secrets,
 			// Derived here, on the host, from the kind the caller named — the
 			// worker never sees the kind, only what it grants (R-3). Throws on
 			// a call that names none: a host bug, surfaced loudly, never a

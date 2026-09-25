@@ -46,7 +46,15 @@
 	import { setLorePoolCtx } from "./sections/poolContext"
 	import type { EntryDecisions } from "./markers"
 	import type { PoolSource, SectionDescriptor } from "./sections/types"
-	import { dateValue } from "./sections/historyDates"
+	import { compareDates, dateValue } from "./sections/historyDates"
+	import { formatDate } from "./sections/historyDates"
+	import { parseMoment } from "./time/moment"
+	import AmendmentList from "./time/AmendmentList.svelte"
+	import {
+		changedFields,
+		offWindowAmendments,
+		offWindowProblem
+	} from "$lib/shared/lorebooks/amendments"
 	import { timelineCursor } from "./timelineCursor.svelte"
 	import { keysAfter, orderByMoment } from "./timelineStrip"
 
@@ -77,6 +85,16 @@
 		 */
 		bookPool: PoolItem[]
 		/**
+		 * The book's dated overlays, as a function over rows.
+		 *
+		 * This scope keeps its own copy of the rows, so it cannot read the
+		 * workspace's resolved ones — it is handed the resolver instead. The
+		 * moment and the branch are decided there, once.
+		 */
+		resolve?: (rows: readonly PoolSource[]) => PoolSource[]
+		/** This book's overlays, sliced to one entry. Empty until A3b lands one. */
+		amendmentsFor?: (entryId: number) => Sockets.Amendments.EntryRow[]
+		/**
 		 * The book's typed edges, which are the half of the Refs board no text
 		 * scan can find. Empty until the graph read lands, never guessed at.
 		 */
@@ -106,6 +124,8 @@
 		descriptor,
 		doors,
 		bookPool,
+		resolve,
+		amendmentsFor,
 		bookLinks,
 		mode,
 		hasUnsavedChanges = $bindable(false),
@@ -124,6 +144,7 @@
 	const sceneSummarizesCtx: SceneSummarizesCtx =
 		getContext("sceneSummarizesCtx")
 	const compileEntriesCtx: CompileEntriesCtx = getContext("compileEntriesCtx")
+	const userCtxForReadout: UserCtx | undefined = getContext("userCtx")
 
 	// The star is the switch: embeddings are on when something is registered
 	// for `text->embedding`.
@@ -156,6 +177,15 @@
 	/** Which row the draft belongs to, so a re-render does not discard edits. */
 	let draftKey = $state<string | null>(null)
 	/**
+	 * The draft as it was BUILT, so a save can say what the author changed.
+	 *
+	 * Kept beside the draft rather than re-derived from the source, because
+	 * the source moves underneath an open editor — an amendment landing, or
+	 * the moment being dragged — and the diff must be against what was on
+	 * screen when the editing started.
+	 */
+	let pristineDraft = $state<Record<string, any> | null>(null)
+	/**
 	 * The row a write of ours is in flight for.
 	 *
 	 * The server normalizes what it stores — keywords come back re-joined — so
@@ -183,6 +213,8 @@
 	let newMenuOpen = $state(false)
 	/** The open row's own menu, which holds what is not a field. */
 	let editorMenuOpen = $state(false)
+	/** The save control's second half, offered only while reading as-of. */
+	let saveMenuOpen = $state(false)
 
 	let orderBy = $derived(chosenOrder ?? DEFAULT_POOL_SORT)
 
@@ -206,25 +238,48 @@
 			: (openSessionCtx.sessionName ?? "the open session")
 	)
 
+	/**
+	 * This scope's rows as they READ at the moment being read.
+	 *
+	 * The list and the editor both draw from this, so the reader edits what
+	 * they were shown. What makes that safe is that a save writes only the
+	 * DIFF (`changedFields`) — see `sourceByKey` and `save`.
+	 */
+	let resolvedByKind = $derived.by(() => {
+		if (!resolve) return rowsByKind
+		const out: Record<string, PoolSource[]> = {}
+		for (const [kind, rows] of Object.entries(rowsByKind))
+			out[kind] = resolve(rows)
+		return out
+	})
+
 	let poolItems = $derived.by(() => {
 		const out: PoolItem[] = []
 		for (const door of poolDoors) {
 			const rows =
 				door.store === "scenes"
 					? sceneList
-					: (rowsByKind[door.kind!] ?? [])
+					: (resolvedByKind[door.kind!] ?? [])
 			for (const row of rows) out.push(door.toPoolItem(row))
 		}
 		return out
 	})
 
+	/**
+	 * The row behind each key, as it READS at the moment.
+	 *
+	 * The editor draws from this, so what is edited is what was on screen. That
+	 * is only safe because neither save action writes the draft whole: both
+	 * write `changedFields(draft, pristineDraft)`, so a value this resolved
+	 * from an amendment is never folded into wherever the save lands.
+	 */
 	let sourceByKey = $derived.by(() => {
 		const map = new Map<string, PoolSource>()
 		for (const door of poolDoors) {
 			const rows =
 				door.store === "scenes"
 					? sceneList
-					: (rowsByKind[door.kind!] ?? [])
+					: (resolvedByKind[door.kind!] ?? [])
 			for (const row of rows) map.set(door.toPoolItem(row).key, row)
 		}
 		return map
@@ -320,6 +375,15 @@
 			: doors.filter((d) => d.creatable && d.kind)
 	)
 
+	/**
+	 * Whether the AUTHOR has changed anything.
+	 *
+	 * ⚠ Measured against the draft as it was built, not against the row as it
+	 * reads now. Those were the same thing until entries could be amended;
+	 * since then the row moves under an open editor on its own — an amendment
+	 * lands, or the moment is dragged — and calling that "unsaved changes"
+	 * told the reader they had edits they had never made.
+	 */
 	let dirty = $derived.by(() => {
 		if (!draft) return false
 		if (isNew)
@@ -328,10 +392,19 @@
 				!!draft.content?.trim() ||
 				!!draft.summary?.trim()
 			)
-		if (!selectedSource) return false
+		if (!pristineDraft) return false
+		return (
+			JSON.stringify(pristineDraft) !==
+			JSON.stringify($state.snapshot(draft))
+		)
+	})
+
+	/** Whether the row has moved under the editor since the draft was built. */
+	let sourceMoved = $derived.by(() => {
+		if (!draft || isNew || !selectedSource || !pristineDraft) return false
 		return (
 			JSON.stringify(activeDoor.toDraft(selectedSource)) !==
-			JSON.stringify($state.snapshot(draft))
+			JSON.stringify(pristineDraft)
 		)
 	})
 
@@ -339,8 +412,7 @@
 		const rows = rowsByKind[HISTORY_TYPE_ID] ?? []
 		let best: PoolSource | null = null
 		for (const row of rows)
-			if (!best || dateValue(row as any) > dateValue(best as any))
-				best = row
+			if (!best || compareDates(row as any, best as any) > 0) best = row
 		return best?.id ?? null
 	})
 
@@ -473,6 +545,7 @@
 		creatingDoor = null
 		draft = null
 		draftKey = null
+		pristineDraft = null
 		hasUnsavedChanges = false
 	}
 
@@ -510,6 +583,7 @@
 		creatingDoor = door
 		draftKey = "new"
 		draft = door.newDraft(lorebookId)
+		pristineDraft = { ...$state.snapshot(draft) }
 	}
 
 	async function closeEditor() {
@@ -517,6 +591,124 @@
 		const wasCreating = creatingDoor !== null
 		discardDraft()
 		if (!wasCreating) void loreRoute.navigate({ type: "back" })
+	}
+
+	/**
+	 * The date being read, when one is being read. `null` is now.
+	 *
+	 * Now is not a moment the author can amend AT: at now every dated
+	 * amendment already applies, so "from now on" and "change the entry" are
+	 * the same sentence, and offering two buttons for one outcome would be a
+	 * choice about nothing.
+	 */
+	let momentDate = $derived(parseMoment(route.moment))
+
+	/**
+	 * Whether this save is a choice.
+	 *
+	 * Only an existing ENTRY read at a moment can be amended: a scene has no
+	 * amendment table, and a row that does not exist yet has no base to leave
+	 * alone.
+	 */
+	let canAmend = $derived(
+		momentDate !== null &&
+			!isNew &&
+			activeDoor.store === "entries" &&
+			selectedSource != null
+	)
+
+	/** What the author changed, which is all either action writes. */
+	function pendingFields(): Record<string, unknown> | null {
+		if (!draft) return null
+		if (!activeDoor.validate(draft, siblings, true)) return null
+		const fields = changedFields(
+			$state.snapshot(draft) as Record<string, unknown>,
+			pristineDraft ?? {}
+		)
+		if (!Object.keys(fields).length) {
+			toaster.error({ title: "Nothing has changed" })
+			return null
+		}
+		return fields
+	}
+
+	/**
+	 * File the change as a dated overlay. The base is left alone.
+	 *
+	 * The draft is discarded rather than kept: the server answers with the
+	 * book's whole amendment list, the resolved rows change under the editor,
+	 * and a draft built before that would be a copy of the old reading.
+	 */
+	function saveAsAmendment() {
+		if (!momentDate || !selectedSource) return
+		const fields = pendingFields()
+		if (!fields) return
+		socket.emit("amendments:create", {
+			lorebookId,
+			entryId: selectedSource.id,
+			year: momentDate.year,
+			month: momentDate.month ?? null,
+			day: momentDate.day ?? null,
+			fields
+		} satisfies Sockets.Amendments.Create.Params)
+		toaster.success({
+			title: `Amended as of ${formatDate(momentDate)}`
+		})
+		discardDraft()
+	}
+
+	/**
+	 * "Off from D1 until D2" — one gesture, two amendments.
+	 *
+	 * An amendment sets a value from a date forward, so a PERIOD is two step
+	 * changes: off at the start, on again at the end. The author should not
+	 * have to think that way, and before this the only way to say "the harbour
+	 * is closed for three years" was to work out both halves and file them
+	 * separately, in the right order, with the right fields.
+	 *
+	 * ⚠ The composition itself lives in `offWindowAmendments` so the two halves
+	 * cannot drift apart, and so the "until is exclusive" reading is written
+	 * down once and tested rather than living in this form.
+	 */
+	let offWindowOpen = $state(false)
+	let offFrom = $state({ year: "", month: "", day: "" })
+	let offUntil = $state({ year: "", month: "", day: "" })
+
+	const partsToDate = (p: { year: string; month: string; day: string }) =>
+		p.year.trim() === ""
+			? null
+			: {
+					year: Number(p.year),
+					month: p.month.trim() === "" ? null : Number(p.month),
+					day: p.day.trim() === "" ? null : Number(p.day)
+				}
+
+	let offProblem = $derived(
+		offWindowProblem(partsToDate(offFrom), partsToDate(offUntil))
+	)
+
+	function resetOffWindow() {
+		offWindowOpen = false
+		offFrom = { year: "", month: "", day: "" }
+		offUntil = { year: "", month: "", day: "" }
+	}
+
+	function fileOffWindow() {
+		const from = partsToDate(offFrom)
+		if (!from || offProblem || !selectedSource) return
+		for (const planned of offWindowAmendments(from, partsToDate(offUntil)))
+			socket.emit("amendments:create", {
+				lorebookId,
+				entryId: selectedSource.id,
+				...planned
+			} satisfies Sockets.Amendments.Create.Params)
+		toaster.success({
+			title: partsToDate(offUntil)
+				? "Switched off for that period"
+				: "Switched off from then on"
+		})
+		resetOffWindow()
+		editorMenuOpen = false
 	}
 
 	function save() {
@@ -540,12 +732,24 @@
 		const channel = channels.get(activeDoor.kind!)
 		if (!channel) return
 		if (isNew) {
+			// ⚠ An entry created while reading a line belongs to that line.
+			// Anything else would put a fork's new entry on main, where it
+			// would read as something that was always true of both stories.
+			if (route.branch != null) payload.branchId = route.branch
 			awaitingSave = `new:${activeDoor.kind}`
 			channel.create(payload)
 			discardDraft()
 		} else {
+			// ⚠ The DIFF, never the whole draft. The editor draws the entry as
+			// it reads at the moment, so the draft holds other amendments'
+			// values too — writing it whole would bake them into the base.
+			const fields = pendingFields()
+			if (!fields) return
 			awaitingSave = `entry#${payload.id}`
-			channel.update(payload as Record<string, unknown> & { id: number })
+			channel.update({ ...fields, id: payload.id } as Record<
+				string,
+				unknown
+			> & { id: number })
 		}
 	}
 
@@ -593,6 +797,26 @@
 	// is rebuilt. The source is read on every run rather than behind the
 	// guard, so the arrival of the addressed row is a dependency of this
 	// effect and not something it has stopped listening for.
+	/**
+	 * A clean draft follows the row it is showing.
+	 *
+	 * The row moves without the address moving: an amendment is filed or
+	 * removed, or the Moment bar is dragged, and what this entry SAYS changes
+	 * while the entry stays the same row. `draftStale` cannot see that — it
+	 * watches the key — so an editor left open would keep drawing an older
+	 * reading.
+	 *
+	 * ⚠ Only while clean. Edits in flight are never discarded to follow a
+	 * reading; the save writes a diff against what was on screen when the
+	 * typing started, so a draft left behind still cannot write a value the
+	 * author did not enter.
+	 */
+	$effect(() => {
+		if (!sourceMoved || dirty || !selectedSource) return
+		draft = activeDoor.toDraft(selectedSource)
+		pristineDraft = { ...$state.snapshot(draft) }
+	})
+
 	$effect(() => {
 		const key = creatingDoor ? "new" : selectedKey
 		const source = !creatingDoor && key ? sourceByKey.get(key) : undefined
@@ -610,6 +834,7 @@
 		draft = source
 			? doorForKey(key, poolItems, descriptor).toDraft(source)
 			: null
+		pristineDraft = draft ? { ...$state.snapshot(draft) } : null
 	})
 
 	$effect(() => {
@@ -702,7 +927,9 @@
 	})
 
 	onMount(() => {
-		retrievalReadout.open(socket)
+		retrievalReadout.open(socket, {
+			isAdmin: !!userCtxForReadout?.user?.isAdmin
+		})
 		for (const door of entryDoors) {
 			const kind = door.kind!
 			channels.set(
@@ -748,16 +975,22 @@
 								// the server re-joins keywords, so the draft
 								// and the row are only the same text once it
 								// comes back.
-								if (draftKey === key)
+								if (draftKey === key) {
 									draft = door.toDraft(entry)
+									pristineDraft = {
+										...$state.snapshot(draft)
+									}
+								}
 								return
 							}
 							// A write from somewhere else about the row that is
 							// open — a Teach it lever, an archive, another tab.
 							// A draft nobody has touched follows it; one being
 							// typed is left alone.
-							if (draftKey === key && !dirty)
+							if (draftKey === key && !dirty) {
 								draft = door.toDraft(entry)
+								pristineDraft = { ...$state.snapshot(draft) }
+							}
 						},
 						onDeleted: () =>
 							toaster.success({ title: `${door.label} deleted` }),
@@ -937,6 +1170,74 @@
 	</button>
 {/snippet}
 
+{#snippet offWindowForm()}
+	<!-- A period, in the author's words. What the book stores is two dated
+	     changes; `offWindowAmendments` is the one place that translation
+	     happens, and it is tested. -->
+	<div class="flex flex-col gap-1">
+		<span class="text-sm font-semibold">Off for a while</span>
+		<p class="text-surface-700-300 text-xs leading-relaxed">
+			The entry stops being read from the first date, and starts again at
+			the second. Leave the second blank and it stays off.
+		</p>
+	</div>
+
+	{#each [{ label: "From", parts: offFrom }, { label: "Until", parts: offUntil }] as row (row.label)}
+		<div class="flex items-center gap-1">
+			<span class="text-surface-600-400 w-12 shrink-0 text-xs">
+				{row.label}
+			</span>
+			<input
+				class="input input-sm w-16 shrink-0"
+				bind:value={row.parts.year}
+				placeholder="Year"
+				aria-label="{row.label} year"
+			/>
+			<input
+				class="input input-sm w-14 shrink-0"
+				bind:value={row.parts.month}
+				placeholder="Mo."
+				aria-label="{row.label} month, optional"
+			/>
+			<input
+				class="input input-sm w-14 shrink-0"
+				bind:value={row.parts.day}
+				placeholder="Day"
+				disabled={row.parts.month.trim() === ""}
+				title={row.parts.month.trim() === ""
+					? "A day needs a month: the calendar narrows left to right"
+					: "Day"}
+				aria-label="{row.label} day, optional"
+			/>
+		</div>
+	{/each}
+
+	{#if offProblem && offFrom.year.trim() !== ""}
+		<p class="text-warning-700-300 text-xs leading-relaxed">
+			{offProblem}
+		</p>
+	{/if}
+
+	<div class="flex gap-1">
+		<button
+			class="btn btn-sm preset-filled-primary-500 flex-1"
+			type="button"
+			onclick={fileOffWindow}
+			disabled={!!offProblem}
+			title={offProblem ?? "File it as dated changes"}
+		>
+			Switch it off
+		</button>
+		<button
+			class="btn btn-sm preset-filled-surface-400-600"
+			type="button"
+			onclick={resetOffWindow}
+		>
+			Cancel
+		</button>
+	</div>
+{/snippet}
+
 {#snippet editorMenu()}
 	<!-- What is not a field: archiving is a state the row is put into rather
 	     than a value the editor holds, and it is written straight through. -->
@@ -955,29 +1256,122 @@
 		<Portal>
 			<Popover.Positioner class="z-[1000]!">
 				<Popover.Content
-					class="card bg-surface-100-900 flex min-w-40 flex-col gap-1 p-2 shadow-xl"
+					class="card bg-surface-100-900 flex w-[min(90vw,300px)] flex-col gap-2 p-3 shadow-xl"
 				>
-					{#if selectedSource?.archived}
-						<button
-							class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
-							type="button"
-							onclick={() => setArchived(false)}
-						>
-							<Icons.ArchiveRestore size={14} /> Unarchive
-						</button>
+					{#if offWindowOpen}
+						{@render offWindowForm()}
 					{:else}
+						{#if selectedSource?.archived}
+							<button
+								class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
+								type="button"
+								onclick={() => setArchived(false)}
+							>
+								<Icons.ArchiveRestore size={14} /> Unarchive
+							</button>
+						{:else}
+							<button
+								class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
+								type="button"
+								onclick={() => setArchived(true)}
+							>
+								<Icons.Archive size={14} /> Archive
+							</button>
+						{/if}
 						<button
 							class="btn btn-sm preset-filled-surface-400-600 w-full justify-start"
 							type="button"
-							onclick={() => setArchived(true)}
+							onclick={() => (offWindowOpen = true)}
 						>
-							<Icons.Archive size={14} /> Archive
+							<Icons.CalendarOff size={14} /> Off for a while…
 						</button>
 					{/if}
 				</Popover.Content>
 			</Popover.Positioner>
 		</Portal>
 	</Popover>
+{/snippet}
+
+{#snippet amendSave()}
+	<!--
+	  Two actions, because at a moment they are two different things: one says
+	  "from this date", the other says "always". Ruled 2026-09-23.
+
+	  The destructive one is in the menu and never the primary (style 6.1), and
+	  it carries the whole warning in the item itself — a toast afterwards would
+	  arrive after the base was already rewritten.
+	-->
+	{@const dated = formatDate(momentDate!)}
+	<div class="flex shrink-0 items-center">
+		<button
+			class="btn btn-sm preset-filled-success-500 rounded-r-none"
+			type="button"
+			onclick={saveAsAmendment}
+			disabled={!activeDoor.validate(draft!, siblings)}
+			title="File this change as an amendment dated {dated}"
+		>
+			<Icons.Save size={16} aria-hidden="true" />
+			<span>Save as of {dated}</span>
+		</button>
+		<Popover
+			open={saveMenuOpen}
+			onOpenChange={(e) => (saveMenuOpen = e.open)}
+			positioning={{ placement: "bottom-end" }}
+		>
+			<Popover.Trigger
+				class="btn btn-sm preset-filled-success-500 rounded-l-none border-l border-white/25 p-2"
+				title="Other ways to save this change"
+				aria-label="Other ways to save this change"
+			>
+				<Icons.ChevronDown size={16} aria-hidden="true" />
+			</Popover.Trigger>
+			<Portal>
+				<Popover.Positioner class="z-[1000]!">
+					<Popover.Content
+						class="card bg-surface-100-900 flex w-[min(90vw,320px)] flex-col gap-3 p-4 shadow-xl"
+					>
+						<div class="flex flex-col gap-1">
+							<span class="text-sm font-semibold">
+								Save as of {dated}
+							</span>
+							<p
+								class="text-surface-700-300 text-xs leading-relaxed"
+							>
+								The entry is left as it is. The change begins at
+								{dated} and reads from then on.
+							</p>
+						</div>
+						<hr class="border-surface-300-700" />
+						<div class="flex flex-col gap-2">
+							<p
+								class="text-surface-700-300 text-xs leading-relaxed"
+							>
+								Or change the entry itself: it reads this way
+								<strong>everywhere</strong>
+								, on every line and at every moment — including before
+								{dated}, where it is what was always true.
+							</p>
+							<button
+								class="btn btn-sm preset-tonal-warning w-full justify-start"
+								type="button"
+								onclick={() => {
+									saveMenuOpen = false
+									save()
+								}}
+								disabled={!activeDoor.validate(
+									draft!,
+									siblings
+								)}
+							>
+								<Icons.PenLine size={14} aria-hidden="true" />
+								Change the base
+							</button>
+						</div>
+					</Popover.Content>
+				</Popover.Positioner>
+			</Portal>
+		</Popover>
+	</div>
 {/snippet}
 
 {#snippet editor()}
@@ -1010,15 +1404,19 @@
 							? "Unsaved changes"
 							: "Saved"}
 				</span>
-				<button
-					class="btn btn-sm preset-filled-success-500 shrink-0"
-					type="button"
-					onclick={save}
-					disabled={!activeDoor.validate(draft, siblings)}
-				>
-					<Icons.Save size={16} aria-hidden="true" />
-					<span>{isNew ? "Create" : "Save"}</span>
-				</button>
+				{#if canAmend}
+					{@render amendSave()}
+				{:else}
+					<button
+						class="btn btn-sm preset-filled-success-500 shrink-0"
+						type="button"
+						onclick={save}
+						disabled={!activeDoor.validate(draft, siblings)}
+					>
+						<Icons.Save size={16} aria-hidden="true" />
+						<span>{isNew ? "Create" : "Save"}</span>
+					</button>
+				{/if}
 				{#if !isNew && selectedSource && activeDoor.store === "entries"}
 					{@render editorMenu()}
 				{/if}
@@ -1039,6 +1437,11 @@
 			     above the account of why. A row nothing has saved has no run to
 			     report on. -->
 			{#if !isNew && selectedItem && activeDoor.store === "entries"}
+				<AmendmentList
+					{lorebookId}
+					amendments={amendmentsFor?.(selectedItem.id) ?? []}
+					moment={route.moment}
+				/>
 				<ReadInLine
 					{lorebookId}
 					sessionId={readingSessionId}

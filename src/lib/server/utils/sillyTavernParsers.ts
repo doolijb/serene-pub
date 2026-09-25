@@ -247,16 +247,15 @@ export function normalizeTimestamp(timestamp: number | string): Date {
 /**
  * Map SillyTavern activation strategy to Serene Pub group reply strategy
  */
-export function mapGroupReplyStrategy(strategy: string | undefined): string {
-	switch (strategy) {
-		case "manual":
-			return "MANUAL"
-		case "natural_order":
-			return "NATURAL"
-		case "list_order":
-		case "pooled_order":
-			return "ORDERED"
-		default:
-			return "ORDERED"
-	}
+/**
+ * SillyTavern's group `activation_strategy`, as the next-speaker strategy
+ * pin the imported session is rebound to — or null to inherit the respond
+ * spec's own (round robin), which is where `list_order`, `pooled_order` and
+ * the mention-driven `natural_order` all land: the closest thing core ships
+ * to each. Only `manual` is a rebind.
+ */
+export function mapGroupReplyStrategy(
+	strategy: string | undefined
+): string | null {
+	return strategy === "manual" ? "core:task/turn-manual@1" : null
 }

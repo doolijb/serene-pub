@@ -33,8 +33,9 @@ import {
 	actionIdentity,
 	parseActionIdentity
 } from "$lib/shared/actions/identity"
-import { and, asc, eq, isNull } from "drizzle-orm"
+import { and, asc, eq, inArray, isNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { answersEvent } from "$lib/server/pipelines/entities/presetBindings"
 import {
 	presetEventSpec,
 	type PresetFallback
@@ -86,6 +87,12 @@ export interface SessionGenre {
 	 * that declares none, and for the transitional inlet-declared genres.
 	 */
 	envoys?: EnvoyDecl[]
+	/**
+	 * The genre's pinned setting values (PLAN-turn-order §4.13, R14) — the
+	 * genre layer of the settings cascade, off the same row. Absent for a
+	 * genre that pins nothing, which is every core genre today.
+	 */
+	settings?: Record<string, unknown>
 }
 
 /** Display text in `en` through the SDK's one resolver (R-20); blank for a value publish never let in. */
@@ -130,6 +137,11 @@ export async function listSessionGenres(db: Db): Promise<SessionGenre[]> {
 				| undefined,
 			...(Array.isArray(r.genre?.envoys) && r.genre.envoys.length
 				? { envoys: r.genre.envoys as EnvoyDecl[] }
+				: {}),
+			...(r.genre?.settings &&
+			typeof r.genre.settings === "object" &&
+			!Array.isArray(r.genre.settings)
+				? { settings: r.genre.settings as Record<string, unknown> }
 				: {})
 		}))
 
@@ -155,6 +167,37 @@ export async function listSessionGenres(db: Db): Promise<SessionGenre[]> {
 		}))
 
 	return [...fromSpecs, ...fromInputs]
+}
+
+/**
+ * The genres a LISTING offers (R67): every registered genre minus those a
+ * disabled plugin provides — its create spec's `source_plugin_id`, or its id
+ * under the plugin's namespace. Only for pickers and admin lists: a session
+ * already on such a genre keeps resolving it through `listSessionGenres`.
+ */
+export async function listOfferedGenres(db: Db): Promise<SessionGenre[]> {
+	const all = await listSessionGenres(db)
+	const { disabledPlugins } = await import("$lib/server/plugins/disabledPlugins")
+	const off = await disabledPlugins(db)
+	if (!off.ids.size) return all
+	// Only a genre whose CREATE spec the plugin owns is the plugin's: every
+	// spec carries an `input_genre` lock, and a plugin's reply or swap spec
+	// locked to Chat must not take Chat with it (R67 review).
+	const owned = await db
+		.select({ inputGenre: schema.pipelineSpecVersions.inputGenre })
+		.from(schema.pipelineSpecs)
+		.innerJoin(
+			schema.pipelineSpecVersions,
+			eq(schema.pipelineSpecVersions.id, schema.pipelineSpecs.activeVersionId)
+		)
+		.where(
+			and(
+				inArray(schema.pipelineSpecs.sourcePluginId, [...off.ids]),
+				eq(schema.pipelineSpecVersions.inputEvent, sessionEvents.sessionCreated)
+			)
+		)
+	const hidden = new Set(owned.map((r) => r.inputGenre).filter(Boolean))
+	return all.filter((g) => !hidden.has(g.genreId) && !off.ownsId(g.genreId))
 }
 
 export async function getSessionGenre(
@@ -412,45 +455,11 @@ export async function sessionGenreAvailable(
 	}
 }
 
-/* --- turn-taking (19 §5, U-C4) ----------------------------------------- */
-
-/** The membership test — publishing this on `main` is being a strategy. */
-const SPEAKER_SELECTION_SHAPE = "core:shape/speaker-selection@1"
-
-export interface SpeakerStrategy {
-	/** The strategy's pinned definition id. */
-	definitionId: string
-	name: string
-}
-
-/**
- * The swap list (19 §5): every next-speaker strategy this build registers.
- *
- * Membership is the shape, not a list — a task whose `main` publishes
- * `speaker-selection@1` *is* a strategy, so an extension's appears beside
- * core's by being registered, exactly as a session mode does. Same one-SELECT
- * posture as `listSessionGenres`, and the same F29 footing: an empty registry
- * returns an empty list and nothing downstream blocks on it.
- */
-export async function listSpeakerStrategies(
-	db: Db
-): Promise<SpeakerStrategy[]> {
-	const rows = await db
-		.select()
-		.from(schema.pipelineDefinitionRegistry)
-		.where(eq(schema.pipelineDefinitionRegistry.kind, "task"))
-		.orderBy(asc(schema.pipelineDefinitionRegistry.id))
-	return (rows as any[])
-		.filter(
-			(r) =>
-				r.status === "live" &&
-				r.ports?.out?.main === SPEAKER_SELECTION_SHAPE
-		)
-		.map((r) => ({
-			definitionId: `${r.definitionId}@${r.version}`,
-			name: en(r.i18n?.name) || r.definitionId
-		}))
-}
+/* --- turn-taking ------------------------------------------------------ */
+// `listTurnStrategies` retired 2026-09-23 (PLAN-turn-order R28): what a
+// session may pick is the turn-order spec's `strategy` node's own
+// `expose.swaps` plus enabled contributions — `listSessionNodeSwaps` in
+// entities/bindings.ts, the same list for every swappable node.
 
 /* --- subject routing (19 §3, U-C3; plans/31 V2) ------------------------ */
 
@@ -730,7 +739,7 @@ export async function resolveSubjectVerdict(
 				 * this spec answers the event for this genre.
 				 */
 				if (isGenreId) {
-					if (v.inputGenre !== genreId || v.inputEvent !== event) continue
+					if (v.inputGenre !== genreId || !answersEvent(v, event)) continue
 				} else {
 					if (!primary) continue
 					/**
@@ -823,8 +832,12 @@ export async function resolveSubjectVerdict(
 		/**
 		 * 2. The session's preset (24 §1), through the same reader
 		 *    `resolveSessionEventSpec` uses — two doors onto one fact, so a
-		 *    reply and a dispatched event can never route differently. An
-		 *    event subject only: a preset binds events, never actions.
+		 *    reply and a dispatched event agree on the session and preset
+		 *    layers. ⚠ Only those: this resolver also reads the instance
+		 *    binding (layer 3) and the companion rule, and the dispatcher
+		 *    reads neither, so an instance-scope binding of a turn-order event
+		 *    is stored and never dispatched (A7r review; owed). An event
+		 *    subject only: a preset binds events, never actions.
 		 *
 		 * A binding that stopped resolving carries on to the layers below and
 		 * takes its account with it (ruled 2026-09-10): the reply still

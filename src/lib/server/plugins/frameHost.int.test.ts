@@ -196,6 +196,11 @@ describe("the composed CSP", () => {
 		expect(denied).toContain("default-src 'none'")
 		expect(denied).toContain("connect-src 'none'")
 		expect(denied).toContain("form-action 'none'")
+		// The document is sandboxed by its own header, so a direct navigation
+		// never runs it as the app; only this app's pages may frame it.
+		expect(denied).toContain("sandbox allow-scripts")
+		expect(denied).not.toMatch(/allow-same-origin/)
+		expect(denied).toContain("frame-ancestors 'self'")
 
 		// A declared-but-unreviewed host is not a grant: until an admin has
 		// consented, the frame reaches no further than a plugin with no

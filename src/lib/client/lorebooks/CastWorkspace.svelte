@@ -25,6 +25,7 @@
 	import { castPool, type CastMember, type CastRow } from "./castPool"
 	import CastDuplicatesPanel from "./cast/CastDuplicatesPanel.svelte"
 	import CastMemberForm from "./cast/CastMemberForm.svelte"
+	import PresencesPanel from "./cast/PresencesPanel.svelte"
 	import CastRelationships from "./cast/CastRelationships.svelte"
 	import {
 		castHeaderLine,
@@ -33,6 +34,10 @@
 		reviewLine
 	} from "./cast/castRelationships"
 	import { stateBadge, visibilityBadge } from "./cast/castVocabulary"
+	import { changedFields } from "$lib/shared/lorebooks/amendments"
+	import { formatDate } from "./sections/historyDates"
+	import { parseMoment } from "./time/moment"
+	import AmendmentList from "./time/AmendmentList.svelte"
 	import {
 		laterLabel as laterLabelOf,
 		splitByMoment,
@@ -68,6 +73,30 @@
 		decisions?: EntryDecisions | null
 		/** Opens the graph lens on a member. Absent when graphs are off. */
 		onViewRelationships?: (castId: number) => void
+		/**
+		 * The book's cast overlays, as a function over rows.
+		 *
+		 * This board keeps its own copy of the members (its own socket
+		 * conversation), so it is handed the RESOLVER rather than resolved
+		 * rows — the same seam `EntryWorkspace` uses, for the same reason.
+		 */
+		resolveCast?: <T extends { id: number }>(rows: readonly T[]) => T[]
+		/** One member's overlays, for their own account of them. */
+		castAmendmentsFor?: (castId: number) => Sockets.Amendments.CastRow[]
+		/** The moment being read. Absent is now, where a save is just a save. */
+		moment?: string
+		/**
+		 * Every placement in the book, for the member page's own panel.
+		 *
+		 * ⚠ The whole book's, not this member's: the panel filters, and the
+		 * hub already holds one copy that the World bar and the Lives lens
+		 * read from. A second, narrower copy is a second source of truth.
+		 */
+		presences?: readonly Sockets.Amendments.Presence[]
+		/** The line being read, for a placement written on it. NULL = main. */
+		branchId?: number | null
+		/** That line's name, for the sentence that says where it lands. */
+		branchName?: string | null
 	}
 
 	let {
@@ -75,7 +104,13 @@
 		mode,
 		hasUnsavedChanges = $bindable(false),
 		decisions = null,
-		onViewRelationships
+		onViewRelationships,
+		resolveCast,
+		castAmendmentsFor,
+		moment,
+		presences = [],
+		branchId = null,
+		branchName = null
 	}: Props = $props()
 
 	const socket = useTypedSocket()
@@ -125,8 +160,31 @@
 	let inspectorTab = $state<"suggestions" | "duplicates">("suggestions")
 
 	let route = $derived(loreRoute.route)
-	let pool = $derived(castPool(castRows, loreEntries, search))
-	let allMembers = $derived(castPool(castRows, loreEntries).members)
+	/**
+	 * The members as they READ at the moment, on the line being read.
+	 *
+	 * Everything below draws from this rather than from `castRows`: the list,
+	 * the editor and the card. A member whose card was swapped at Y20 is a
+	 * different person on screen before and after Y20, which is the whole
+	 * point of the ruling.
+	 */
+	let resolvedCast = $derived.by(() => {
+		const rows = resolveCast ? resolveCast(castRows) : castRows
+		if (rows === castRows) return rows
+		// ⚠ **Re-join the card when an overlay moved it.** `characterId` is a
+		// column like any other, so the resolver swaps it happily — but the
+		// list draws the NAME from the joined `character` object and the kind
+		// from the id. Leaving the join behind would show the new card's kind
+		// under the old card's name, which is worse than not resolving at all.
+		return rows.map((row) => {
+			const base = castRows.find((b) => b.id === row.id)
+			if (!base || row.characterId === base.characterId) return row
+			const card = characterList.find((c) => c.id === row.characterId)
+			return { ...row, character: (card ?? null) as any }
+		})
+	})
+	let pool = $derived(castPool(resolvedCast, loreEntries, search))
+	let allMembers = $derived(castPool(resolvedCast, loreEntries).members)
 	let selectedMember = $derived(
 		route.castId != null
 			? (allMembers.find((m) => m.id === route.castId) ?? null)
@@ -134,7 +192,7 @@
 	)
 	let selectedRow = $derived(
 		selectedMember
-			? (castRows.find((r) => r.id === selectedMember.id) ?? null)
+			? (resolvedCast.find((r) => r.id === selectedMember.id) ?? null)
 			: null
 	)
 	let anchoredLore = $derived(
@@ -147,7 +205,7 @@
 	)
 	let editorOpen = $derived(!!selectedMember || creatingLore)
 
-	let bindingsForEditor = $derived(castRows as BindingWithRelations[])
+	let bindingsForEditor = $derived(resolvedCast as BindingWithRelations[])
 
 	/** Alias rows fold into the parent they were absorbed into. */
 	let parentNodes = $derived(graphRows.filter((n) => !n.parentNodeId))
@@ -321,11 +379,62 @@
 		}
 	}
 
+	/**
+	 * The date being read, when one is. `null` is now.
+	 *
+	 * At now there is no choice to offer: every dated amendment already
+	 * applies, so "from now on" and "change the member" are one sentence.
+	 */
+	let momentDate = $derived(parseMoment(moment))
+
+	/**
+	 * A change to a cast member: to the member, or dated from this moment.
+	 *
+	 * ⚠ The patch is already a DIFF — `CastMemberForm` sends only what it
+	 * changed — so both paths write the same fields and neither can fold a
+	 * resolved value into the other. That is the same property the entry
+	 * editor gets from `changedFields`, arrived at from the other direction.
+	 */
+	/**
+	 * What the author actually changed, against the row as it READS now.
+	 *
+	 * ⚠ The form hands back every editable field, not a diff, and the row it
+	 * was filled from is the RESOLVED one. Writing that whole set to the base
+	 * would bake an amendment's value into it — the same hazard the entry
+	 * editor avoids with `changedFields`, which is the function used here too.
+	 */
+	function memberDiff(patch: Record<string, unknown>) {
+		return changedFields(patch, (selectedRow ?? {}) as any)
+	}
+
 	function saveMember(patch: Record<string, unknown>) {
 		if (!selectedMember) return
+		const fields = memberDiff(patch)
+		if (!Object.keys(fields).length) {
+			toaster.error({ title: "Nothing has changed" })
+			return
+		}
 		socket.emit("lorebooks:updateBinding", {
-			lorebookBinding: { id: selectedMember.id, ...patch }
+			lorebookBinding: { id: selectedMember.id, ...fields }
 		} as Sockets.Lorebooks.UpdateBinding.Params)
+	}
+
+	function amendMember(raw: Record<string, unknown>) {
+		if (!selectedMember || !momentDate) return
+		const patch = memberDiff(raw)
+		if (!Object.keys(patch).length) {
+			toaster.error({ title: "Nothing has changed" })
+			return
+		}
+		socket.emit("amendments:create", {
+			lorebookId,
+			castId: selectedMember.id,
+			year: momentDate.year,
+			month: momentDate.month ?? null,
+			day: momentDate.day ?? null,
+			fields: patch
+		} satisfies Sockets.Amendments.Create.Params)
+		toaster.success({ title: `Amended as of ${formatDate(momentDate)}` })
 	}
 
 	function confirmDeleteMember() {
@@ -440,6 +549,9 @@
 	}
 
 	function handleGraphList(msg: Sockets.NarrativeGraph.List.Response) {
+		// The scope the gate reads; checked here too, so a stale book's
+		// reply arriving after a switch cannot paint this one.
+		if (msg.lorebookId !== lorebookId) return
 		graphRows = msg.nodes
 		relationships = msg.relationships
 	}
@@ -889,6 +1001,8 @@
 				row={selectedRow}
 				bind:hasUnsavedChanges={memberDirty}
 				onSave={saveMember}
+				onAmend={momentDate ? amendMember : undefined}
+				momentLabel={momentDate ? formatDate(momentDate) : null}
 				onDelete={() => (deleteTarget = selectedMember)}
 				onUnlink={() => unlink(selectedMember!.id)}
 				onLinkCharacter={() => {
@@ -896,6 +1010,25 @@
 					characterPickerOpen = true
 				}}
 			/>
+
+			<PresencesPanel
+				{lorebookId}
+				castId={selectedMember.id}
+				memberName={selectedMember.name}
+				{presences}
+				{branchId}
+				{branchName}
+				{moment}
+			/>
+
+			{#if castAmendmentsFor}
+				<AmendmentList
+					{lorebookId}
+					amendments={castAmendmentsFor(selectedMember.id)}
+					{moment}
+					subject="cast"
+				/>
+			{/if}
 
 			<CastRelationships
 				rows={selectedEdges}

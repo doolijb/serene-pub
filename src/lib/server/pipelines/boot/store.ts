@@ -19,7 +19,8 @@
  * parity corpus is byte-identical (08 §5b, docs-dev/INTEGRATING.md).
  */
 
-import { and, asc, eq, ne } from "drizzle-orm"
+import { pluginRuleRef } from "@serene-pub/sdk"
+import { and, asc, eq, inArray, ne } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
 	actionDocumentFindings,
@@ -33,10 +34,12 @@ import {
 	importDocument,
 	sessionEvents,
 	slashCollisions,
+	subjectsOf,
 	validate,
 	type EnvoyDecl,
 	type SpecDocument
 } from "@serene-pub/sdk"
+import { mayRecord } from "$lib/server/plugins/pluginEvents"
 import { invalidateDeclaredEnvoys } from "$lib/server/pipelines/entities/envoys"
 import { getSessionGenre } from "$lib/server/pipelines/entities/sessionGenres"
 
@@ -91,6 +94,7 @@ export async function saveDocument(
 ): Promise<SavedSpec> {
 	const hash = canonicalHash(doc)
 	assertValidates(doc)
+	assertRecordingsInScope(doc)
 
 	const saved = await db.transaction(async (tx: Db) => {
 		await assertEnvoysSound(tx, doc, opts.batch)
@@ -99,6 +103,14 @@ export async function saveDocument(
 			.from(schema.pipelineSpecs)
 			.where(eq(schema.pipelineSpecs.slug, doc.id))
 			.limit(1)
+		// A plugin's private node belongs in its own pipelines only (R62).
+		// The stored owner first: a caller cannot borrow a spec row's
+		// ownership by naming itself.
+		await assertPrivateNodesOwned(
+			tx,
+			doc,
+			existing[0]?.sourcePluginId ?? opts.sourcePluginId ?? null
+		)
 
 		const spec =
 			existing[0] ??
@@ -157,6 +169,11 @@ export async function saveDocument(
 						null,
 					inputGenre: doc.input?.genre ?? null,
 					inputEvent: doc.input?.event ?? null,
+					// The multi-event lock (PLAN-turn-order §4.1): null for
+					// the ordinary one-event form, so nothing existing moves.
+					inputEvents:
+						(doc.input as { events?: string[] } | undefined)?.events ??
+						null,
 					contributes:
 						(doc.contributes as Record<string, any>) ?? null,
 					taxonomy:
@@ -196,7 +213,10 @@ export async function saveDocument(
 					clauseId: n.clauseId ?? null,
 					clauseKind: n.clauseKind ?? null,
 					clauseChain: n.clauseChain ?? null,
-					position: n.position
+					position: n.position,
+					// The session-settings mark (R28): stored so every reader
+					// reads it off the published spec, a plugin's as well as core's.
+					expose: n.expose ?? null
 				}))
 			)
 			.returning()
@@ -488,6 +508,86 @@ function assertValidates(doc: SpecDocument): void {
 				)
 				.join("; ")
 	)
+}
+
+/**
+ * Every event this document records literally is one its subjects may record
+ * (R52, E1b) — judged in the genre its lock names, or in any genre when it
+ * names none. The host judges again at the write, in the session's genre;
+ * this is the same answer, earlier, so an out-of-scope recording is a
+ * publish refusal rather than a failed turn. A wired event id is known only
+ * at the write and is judged there alone. Core events are the validator's.
+ */
+function assertRecordingsInScope(doc: SpecDocument): void {
+	const refused: string[] = []
+	for (const node of doc.nodes) {
+		if (node.definitionId !== "core:outlet/record-event") continue
+		const event = (node.config as Record<string, unknown> | undefined)?.event
+		if (typeof event !== "string" || event.startsWith("core:")) continue
+		const verdict = mayRecord(event, doc.input?.genre, subjectsOf(doc as never))
+		if (!verdict.ok) refused.push(`${node.key}: ${verdict.reason}`)
+	}
+	if (refused.length)
+		throw new Error(
+			`'${doc.id}' cannot be saved: it records outside its scope — ${refused.join("; ")}` +
+				pluginRuleRef("events")
+		)
+}
+
+/**
+ * Every node a document pins that a plugin made private belongs to the
+ * document's own plugin (R62): a node is as public as its handler, and a
+ * private one may change without warning, so another package's pipeline —
+ * or a person's — may not build on it. Refused at the publish door with the
+ * owner named; the run refuses it again (`pluginNodeBindings`) for a document
+ * that reached a run another way. Core's nodes are public to all.
+ */
+async function assertPrivateNodesOwned(
+	tx: Db,
+	doc: SpecDocument,
+	ownerPluginId: number | null
+): Promise<void> {
+	// What the document pins, and what its nodes offer as swaps (`expose.swaps`,
+	// `id@N`): a private node is refused in either place.
+	const offered = doc.nodes.flatMap((n) =>
+		((n as { expose?: { swaps?: string[] } }).expose?.swaps ?? []).map((id) => {
+			const [definitionId, version] = id.split("@")
+			return { key: `${n.key} (swap)`, definitionId: definitionId!, definitionVersion: Number(version) }
+		})
+	)
+	const uses = [...doc.nodes, ...offered]
+	const ids = [...new Set(uses.map((n) => n.definitionId))]
+	if (!ids.length) return
+	const rows = await tx
+		.select({
+			definitionId: schema.pipelineDefinitionRegistry.definitionId,
+			version: schema.pipelineDefinitionRegistry.version,
+			ownerPluginId: schema.pipelineDefinitionRegistry.ownerPluginId,
+			isPublic: schema.pipelineDefinitionRegistry.isPublic,
+			owner: schema.plugins.pluginId
+		})
+		.from(schema.pipelineDefinitionRegistry)
+		.innerJoin(
+			schema.plugins,
+			eq(schema.plugins.id, schema.pipelineDefinitionRegistry.ownerPluginId)
+		)
+		.where(inArray(schema.pipelineDefinitionRegistry.definitionId, ids))
+	const refused: string[] = []
+	for (const n of uses) {
+		const row = rows.find(
+			(r) => r.definitionId === n.definitionId && r.version === n.definitionVersion
+		)
+		if (!row || row.isPublic || row.ownerPluginId === ownerPluginId) continue
+		refused.push(
+			`${n.key} uses ${n.definitionId}@${n.definitionVersion}, which is private to '${row.owner}'`
+		)
+	}
+	if (refused.length)
+		throw new Error(
+			`'${doc.id}' cannot be saved: ${refused.join("; ")} — only its own pipelines may use a ` +
+				`private node; its author makes it reusable with handler(…, { visibility: 'public' })` +
+				pluginRuleRef("private-nodes")
+		)
 }
 
 /**
@@ -800,11 +900,15 @@ export async function loadDocument(
 		id: spec.slug,
 		version: version.semver,
 		...(version.genre ? { genre: version.genre } : {}),
-		...(version.inputGenre || version.inputEvent
+		...(version.inputGenre || version.inputEvent || version.inputEvents?.length
 			? {
 					input: {
 						...(version.inputGenre ? { genre: version.inputGenre } : {}),
-						...(version.inputEvent ? { event: version.inputEvent } : {})
+						...(version.inputEvent ? { event: version.inputEvent } : {}),
+						// The lock over several events (§4.1): written since A6
+						// (0154) but not read back until M2, so a published
+						// turn-order spec reloaded without its events.
+						...(version.inputEvents?.length ? { events: [...version.inputEvents] } : {})
 					}
 				}
 			: {}),
@@ -825,7 +929,9 @@ export async function loadDocument(
 			...(n.clauseId ? { clauseId: n.clauseId } : {}),
 			...(n.clauseKind ? { clauseKind: n.clauseKind } : {}),
 			...(n.clauseChain ? { clauseChain: n.clauseChain } : {}),
-			position: n.position
+			position: n.position,
+			// Only when stored, so a document read back hashes as it was written.
+			...(n.expose ? { expose: n.expose } : {})
 		})),
 		edges: edgeRows.map((e: any) => ({
 			from: e.fromClauseId ?? keyOf.get(e.fromNodeId)!,

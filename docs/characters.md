@@ -4,7 +4,7 @@ Characters are the people in a session — the ones the AI plays and, since the 
 
 ## Overview
 
-Every character lives in your personal character list, accessible from the Characters sidebar. The **New** button at the top of the list opens a menu with the three ways to add one: **Write a character** starts from a blank card, **Browse the library** opens the community character library, and **Import a card** brings in an existing character card (PNG, APNG, JPEG, JPG, WEBP, or JSON). Dropping a card file anywhere on the list imports it too. Each character has a required **Name** and **Description**; every other field is optional. Characters can be attached to a [lorebook](./lorebooks.md) for world/setting info, tagged for organization (see [Tags](./tags.md)), marked as a favorite, and added to any number of [sessions](./sessions.md), including group sessions with multiple characters.
+Every character lives in your personal character list, accessible from the Characters sidebar. The **New** button at the top of the list opens a menu with the three ways to add one: **Write a character** starts from a blank card, **Browse the library** opens the community character library, and **Import a card** brings in an existing character card (PNG, APNG, JPEG, JPG, WEBP, JSON, or CHARX). Dropping a card file anywhere on the list imports it too. Each character has a required **Name** and **Description**; every other field is optional. Characters can be attached to a [lorebook](./lorebooks.md) for world/setting info, tagged for organization (see [Tags](./tags.md)), marked as a favorite, and added to any number of [sessions](./sessions.md), including group sessions with multiple characters.
 
 Characters are private to your account — the character list is scoped to the logged-in user, so different accounts on the same Serene Pub instance don't see each other's characters. See [Users & Accounts](./users-and-accounts.md) for more on account scoping.
 
@@ -144,6 +144,31 @@ To choose your own:
 
 **Reset** puts the crop back to the default rule rather than to whatever it was before. The crop is never destructive: the full image is always kept, so a lightbox still shows everything and you can re-crop as often as you like. Changing the crop re-cuts the small picture and gives it a new address, so every open view switches to it at once (see below).
 
+## Sprites
+
+A character's **sprites** are the faces it can show beside what it says: an emotion (`joy`, `anger`), an outfit (`swimsuit`) or a pose (`sleeping`). Each sprite has a **sprite label**, the name the image goes by, and a label can hold several images (**variants**). Sprites are part of the character card, so every lorebook and session that uses the card shows the same art.
+
+Open a character and switch to the **Sprites** tab to manage them.
+
+- **Upload** takes one or more images at once and labels each by its file name, the way SillyTavern does: `joy.png` and `joy-2.png` are both "joy".
+- **Start from the standard set** adds 28 empty emotion slots (SillyTavern's standard list). Upload into an empty slot by clicking it.
+- Each image has a menu to make it the label's first variant, add another variant, change its label, move it to another set, or delete it. Deleting a sprite never deletes an image that is also the avatar or part of a conversation.
+- **Try a line** shows which sprite a reply like the one you type would show, with how closely it matched.
+
+Sprite images do not appear in the **Gallery** tab, because they have their own home here. The avatar stays in the gallery even when the same image is also a sprite.
+
+### Sprite sets
+
+A **sprite set** groups sprites: an outfit, an age, a form. Every character with sprites has a **default set**, and you can add more from the set menu (**New set**, **Rename set**, **Make default**, **Delete set**). The default set can only be deleted when it is the last one.
+
+Which set a character is shown in is decided by the story, not the card:
+
+1. A session can show a character in another set for itself alone — see [Sessions](./sessions.md#sprites).
+2. Otherwise, a lorebook's cast member can name a set, and change it at dates in the story like any other cast field (see [Lorebooks](./lorebooks.md)).
+3. Otherwise, the card's default set is used.
+
+A set is chosen by name, so renaming one leaves anything that chose the old name showing the default set until it is pointed at the new one; the rename dialog says so.
+
 ## Creating a Character
 
 There are two ways to create a character, both reachable from **Write a character** under the **New** button in the Characters sidebar (**Write a persona**, in the same menu, is the same flow with the Persona flag already on):
@@ -182,7 +207,9 @@ The Serene Pub catalog is sourced live from a public, community-maintained catal
 
 ## Importing a Character from a File
 
-Besides the library, **Import a card** under the **New** button opens a dialog that accepts a local file upload, and dropping a card file anywhere on the list imports it the same way; the dialog accepts a local file upload in PNG, APNG, JPEG, JPG, WEBP, or JSON format — this covers standard character card formats (including cards exported from other apps). See [Importing from SillyTavern](./importing-from-sillytavern.md) for details on cross-compatibility with SillyTavern-style cards. On import, fields such as name, nickname, description, personality, scenario, first message, example dialogues, alternate greetings, creator notes, post-history instructions, character version, aliases, summary, and tags are all mapped in from the card, and the avatar image (if embedded) is extracted and set automatically.
+Besides the library, **Import a card** under the **New** button opens a dialog that accepts a local file upload, and dropping a card file anywhere on the list imports it the same way; the dialog accepts a local file upload in PNG, APNG, JPEG, JPG, WEBP, JSON, or CHARX format — this covers standard character card formats (including cards exported from other apps). See [Importing from SillyTavern](./importing-from-sillytavern.md) for details on cross-compatibility with SillyTavern-style cards. On import, fields such as name, nickname, description, personality, scenario, first message, example dialogues, alternate greetings, creator notes, post-history instructions, character version, aliases, summary, and tags are all mapped in from the card, and the avatar image (if embedded) is extracted and set automatically.
+
+A **CHARX** file is the zip-based Character Card V3 container that RisuAI writes. Serene Pub reads the card and any embedded lorebook from it, takes the card's main icon as the avatar, and imports its emotion images as the character's [sprites](#sprites). RisuAI's PNG cards and older RisuAI cards carry emotion images too, and those are imported the same way. Other assets, such as backgrounds, alternate icons and RisuAI modules, are not imported. The import toast says how many were left behind, because exporting the character again will not include them. An image stored as a web address is not downloaded, so a sprite or icon kept only online is left behind and counted.
 
 ### What Happens After Import
 
@@ -190,9 +217,10 @@ A successful import shows a confirmation toast naming the imported character and
 
 ## Exporting a Character
 
-From the edit form of an existing character, click the **export button** (upload icon) in the header to open the **Export Character** dialog, which offers two formats:
+From the edit form of an existing character, click the **export button** (upload icon) in the header to open the **Export Character** dialog, which offers three formats:
 
 - **Export as JSON** — downloads the character as a standard character-card JSON file.
+- **Export as CHARX, with sprites** — a zip holding the card, the avatar and every sprite. This is the only format that carries sprites. The default set's first image for each sprite label is written as a standard emotion asset, which RisuAI and SillyTavern read; other sets and extra variants use a Serene Pub asset type that those apps keep and re-export, and that Serene Pub reads back into the same sets.
 - **Export as PNG Card** — embeds the character card data into the character's avatar image and downloads it as a PNG. This option is disabled ("No Avatar") if the character has no avatar image set.
 
 If the character has one or more lorebooks bound to it, the dialog also shows an **Include a lorebook (optional)** dropdown above the format buttons, letting you embed one of those bound lorebooks into the exported card so it travels with the character on import (see [Lorebooks](./lorebooks.md)). Leave it set to "None" to export the character without any lorebook data.
@@ -201,7 +229,7 @@ Both formats build a CharacterCard V2-compatible structure, including the charac
 
 ### Export File Names
 
-Exported files are named automatically from the character's name (lowercased, with non-alphanumeric characters stripped), e.g. a character named "Dr. John Watson" exports as `dr_john_watson.json` or `dr_john_watson.png`.
+Exported files are named automatically from the character's name (lowercased, with non-alphanumeric characters stripped), e.g. a character named "Dr. John Watson" exports as `dr_john_watson.json`, `dr_john_watson.charx` or `dr_john_watson.png`.
 
 ## Visibility Settings
 

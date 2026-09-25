@@ -279,9 +279,15 @@ export async function listSessionActions(
 
 	// 1. Availability: the contributed actions in force (session → preset →
 	//    companion rule) and the verbs the genre offers.
-	const contributed: GenreAction[] = opts.offered
-		? opts.offered.filter((f) => f.enabled)
-		: await enabledSessionFunctions(db, sessionId, genreId, viewer.userId)
+	// A disabled plugin's actions are neither listed nor fired (R67): its
+	// handlers are not loaded, so the press would fail mid-run anyway.
+	const { disabledPlugins } = await import("$lib/server/plugins/disabledPlugins")
+	const off = await disabledPlugins(db)
+	const contributed: GenreAction[] = (
+		opts.offered
+			? opts.offered.filter((f) => f.enabled)
+			: await enabledSessionFunctions(db, sessionId, genreId, viewer.userId)
+	).filter((a) => !off.ownsId(a.specSlug))
 	const genre = await getSessionGenre(db, genreId)
 	const verbs = resolveMessageVerbs(genre?.shape)
 	const core = CORE_ACTIONS.filter(

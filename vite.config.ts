@@ -145,6 +145,12 @@ function serenePubDocs() {
 }
 
 export default defineConfig({
+	/**
+	 * The UI worker (§3.5, C2) is a MODULE worker: the page starts it from the
+	 * `/ui-worker` route, whose response carries the worker's own CSP and
+	 * `import`s this bundle. An IIFE bundle cannot be imported.
+	 */
+	worker: { format: "es" },
 	plugins: [
 		tailwindcss(),
 		sveltekit(),

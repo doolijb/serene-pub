@@ -28,11 +28,10 @@
  * ## What a tool may not be
  *
  * Read-only, all of them, and that is a rule rather than a coincidence of what
- * has been written so far. A write reached from inside a loop is the exact
- * shape `validate.ts` refuses on the spine (F7: one write is one transaction),
- * and a tool is a loop body's inner call — so a writing tool would smuggle N
- * writes past the check that exists to stop them. What a run changes, it
- * changes through a Consumer after the loop.
+ * has been written so far. A document declares its writes — each an outlet
+ * with its own review gate, receipt line and caused event — and a tool is
+ * chosen by the model at run time, so a writing tool would be a write no
+ * document declared. What a run changes, it changes through an outlet.
  */
 
 import type { HostTable } from "$lib/server/pipelines/runtime/bindingTypes"

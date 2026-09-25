@@ -19,7 +19,7 @@
  * allowed to see rather than against the query it happened to send (F30).
  */
 
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm"
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
 	BINDING_VISIBILITY_POLICY,
@@ -65,7 +65,8 @@ import {
 	stampBlockActions,
 	undeclaredBlockFunctions,
 	effectsLineVerdict,
-	i18nText
+	i18nText,
+	opensLiveRow
 } from "@serene-pub/sdk"
 import { randomUUID } from "node:crypto"
 import { CORE_BLOCKS_PART } from "$lib/server/messages/blocks"
@@ -79,16 +80,20 @@ import { streamingModeFrom } from "$lib/server/connections/streaming"
 import type { LiveRow, SessionIo } from "$lib/server/pipelines/runtime/liveRow"
 import type { StatusRelay } from "$lib/server/pipelines/runtime/runStatus"
 import { broadcastToSessionUsers } from "$lib/server/sockets/utils/broadcastHelpers"
+import { speakerRefOf } from "$lib/server/messages/sessionChanges"
+import { SHOW_SPRITE_SPEC_ID } from "@serene-pub/core-catalog"
 import {
-	recordSessionChange,
-	speakerRefOf
-} from "$lib/server/messages/sessionChanges"
+	asShownSprite,
+	nextSpriteMetadata,
+	type ShownSprite
+} from "$lib/shared/sprites"
 import {
 	DEFAULT_CHANNEL,
 	DEFAULT_LANE,
 	byLaneThenTime,
 	canonicalChannel,
 	channelRefusal,
+	channelsOf,
 	channelSpansLanes,
 	channelWhere,
 	isAllChannels,
@@ -280,10 +285,28 @@ export interface HostScope {
 	 */
 	inletDefinitionId?: string
 	/**
+	 * The running document's inlet lock — the events it hears. Read by
+	 * `record-event`, which judges the recording scope on the subjects this
+	 * document serves (E1b); the running document's, not its row's, so a
+	 * draft run or a republish mid-run is judged on what actually runs.
+	 */
+	input?: { event?: string; events?: readonly string[] }
+	/**
+	 * The running document's nodes, every rebind already applied (session and
+	 * instance scope alike — `applyNodeRebinds` ran at load). Read by
+	 * `turnStrategyPin`, so the order's `strategy` names what actually ran.
+	 */
+	nodes?: ReadonlyArray<{ key: string; kind: string; definitionId: string; definitionVersion: number }>
+	/**
 	 * Where this run stands in a tree of runs (01 §8; U5d) — absent for a
 	 * root. Read by `answer-form`, whose fire is this run's child.
 	 */
 	lineage?: RunLineage
+	/**
+	 * This run was fired by auto-advance (PLAN-turn-order §4.6). Rides onto
+	 * every session event the run's writes cause, as `cause.auto`.
+	 */
+	auto?: boolean
 	/**
 	 * The forms this run addressed to a participant the AI portrays (R-15
 	 * *Forms*; U5d), pushed by the message writes when a block's
@@ -418,6 +441,130 @@ async function settledMessage(
 }
 
 /**
+ * Whose annex a spec reads and writes by default (PLAN-turn-order §4.3):
+ * its own **namespace** — the segment before the colon in its slug.
+ * `core:spec/<genre>-turn-order` owns `core`; `acme.rp:spec/clock` owns `acme.rp`;
+ * a user-authored spec owns `user:<slug>`. A host with no spec named (wired
+ * by hand) owns `core`, which is the only owner such a host could mean.
+ */
+/**
+ * Which definition produced the order being written (§4.2's `strategy`).
+ *
+ * Found by what the nodes are, never by a key (R26, M4): with the session's
+ * `turnMode` at `model`, the spec's oracle produced it (the model path's
+ * junction fires on exactly that); otherwise the task whose `main` publishes turn entries
+ * — `strategy` on the plain line, `decide.rules.strategy` behind a model
+ * path, whatever a plugin's spec calls it. Read off the running document,
+ * where every rebind is already applied, so a receipt and the run cannot
+ * disagree about what ran.
+ *
+ * Null for a spec with no such node, or a host with no document; nothing
+ * else in core writes a turn order, so that is a hand-wired host.
+ */
+async function turnStrategyPin(
+	db: Db,
+	specId: string | undefined,
+	sessionId: number,
+	running?: HostScope["nodes"]
+): Promise<string | null> {
+	// The running document only: it carries every rebind, at every scope,
+	// already applied — the same answer the run gave, by construction. A host
+	// wired by hand with no document names no strategy; a second reading from
+	// rows here would miss instance-scope rebinds and disagree (A7r review).
+	if (!specId || !running?.length) return null
+	return await strategyOfNodes(db, sessionId, running)
+}
+
+/** The strategy among a document's nodes: its oracle under `turnMode: model`, else the task publishing turn entries. */
+async function strategyOfNodes(
+	db: Db,
+	sessionId: number,
+	nodes: NonNullable<HostScope["nodes"]>
+): Promise<string | null> {
+	const oracle = nodes.find((n) => n.kind === "oracle")
+	if (oracle) {
+		const { resolveSessionSettings } = await import("$lib/server/sessions/settings")
+		if ((await resolveSessionSettings(db, sessionId))?.fields?.turnMode === "model")
+			return `${oracle.definitionId}@${oracle.definitionVersion}`
+	}
+	const registry = await db
+		.select({
+			definitionId: schema.pipelineDefinitionRegistry.definitionId,
+			version: schema.pipelineDefinitionRegistry.version,
+			ports: schema.pipelineDefinitionRegistry.ports
+		})
+		.from(schema.pipelineDefinitionRegistry)
+	const publishesEntries = new Set(
+		(registry as any[])
+			.filter((r) => r.ports?.out?.main === "core:shape/turn-entries@1")
+			.map((r) => `${r.definitionId}@${r.version}`)
+	)
+	const producer = nodes.find(
+		(n) => n.kind === "task" && publishesEntries.has(`${n.definitionId}@${n.definitionVersion}`)
+	)
+	return producer ? `${producer.definitionId}@${producer.definitionVersion}` : null
+}
+
+/**
+ * Every reference that may hold a turn in this session now: seated
+ * characters and personas (a persona is a character row, 0132), and seated
+ * envoys that speak in turn. Removed seats and on-action envoys are never
+ * in it — the pool's floors, restated where the write happens.
+ */
+async function liveCastRefs(db: Db, sessionId: number): Promise<Set<string>> {
+	const [characters, personas, envoys] = await Promise.all([
+		db
+			.select({ characterId: schema.sessionCharacters.characterId })
+			.from(schema.sessionCharacters)
+			.where(
+				and(
+					eq(schema.sessionCharacters.sessionId, sessionId),
+					isNull(schema.sessionCharacters.removedAt)
+				)
+			),
+		db
+			.select({ personaId: schema.sessionPersonas.personaId })
+			.from(schema.sessionPersonas)
+			.where(
+				and(
+					eq(schema.sessionPersonas.sessionId, sessionId),
+					isNull(schema.sessionPersonas.removedAt)
+				)
+			),
+		import("$lib/server/pipelines/entities/envoys").then(({ seatedEnvoys }) =>
+			seatedEnvoys(db, sessionId)
+		)
+	])
+	const out = new Set<string>()
+	for (const r of characters) if (r.characterId != null) out.add(`character:${r.characterId}`)
+	for (const r of personas) if (r.personaId != null) out.add(`character:${r.personaId}`)
+	for (const e of envoys as Array<{ slug: string; speaks?: string; removedAt?: unknown }>)
+		if (e.removedAt == null && e.speaks !== "on-action") out.add(`envoy:${e.slug}`)
+	return out
+}
+
+function annexOwnerOf(specId: string | undefined): string {
+	if (!specId) return "core"
+	const at = specId.indexOf(":")
+	return at > 0 ? specId.slice(0, at) : specId
+}
+
+/** Deep equality for plain JSON values, key order ignored — what jsonb compares. */
+function sameJson(a: unknown, b: unknown): boolean {
+	const norm = (v: unknown): unknown =>
+		Array.isArray(v)
+			? v.map(norm)
+			: v && typeof v === "object"
+				? Object.fromEntries(
+						Object.keys(v as object)
+							.sort()
+							.map((k) => [k, norm((v as Record<string, unknown>)[k])])
+					)
+				: v
+	return JSON.stringify(norm(a)) === JSON.stringify(norm(b))
+}
+
+/**
  * The narrator's display name for a session, snapshotted onto a narration row
  * at the write so a later rename does not relabel messages already made.
  *
@@ -471,6 +618,8 @@ const STEP_TYPE_LIST = [
 	"core:oracle/summarize-synth",
 	"core:oracle/name-entry",
 	"core:oracle/extract-cast",
+	// The turn-order model path (PLAN-turn-order R41, M4).
+	"core:oracle/turn-advise",
 	"core:oracle/graph-pre-filter",
 	"core:oracle/graph-node-resolution",
 	"core:oracle/graph-perspective",
@@ -809,9 +958,9 @@ const linkEndId = (raw: unknown): number | null => {
  * The other end of a lore link — an entry id, or a **name** resolved within
  * this lorebook (L2, 2026-09-17).
  *
- * A name is the half that makes the one-write law survivable: F7 allows one
- * write-class outlet per pipeline, so a run that creates a room cannot also
- * link it, and the *next* run has only the name to go on. It is also the half
+ * A name is what lets a link follow a create without holding an id — a later
+ * outlet in the same run, or a later run, has only the name to go on. It is
+ * also the half
  * that can be wrong in two ways, and both are refused with a sentence rather
  * than repaired:
  *
@@ -973,6 +1122,21 @@ export interface CoreHostServices extends HostServices {
 
 export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 	/**
+	 * The live row's channel, once this run has opened it (W1). A run writes
+	 * as often as it likes, but a second message on the reply's own channel
+	 * is two rows racing for one place. The validator refuses that where the
+	 * channel is a literal; a wired channel is known only here, so the host
+	 * refuses the rest. One host serves one run, so the fact is the run's.
+	 */
+	let liveChannel: string | undefined
+	const racesLiveRow = (nodeKey: string, raw: unknown): string | null => {
+		if (liveChannel === undefined) return null
+		const channel = canonicalChannel(raw)
+		return channel === liveChannel
+			? `${nodeKey}: refused — a second message on channel '${channel}', the live row's channel; put it on the live row as blocks, or on another channel`
+			: null
+	}
+	/**
 	 * The genre's per-channel prompt shaping (R-C), read **once per host**.
 	 *
 	 * A fact about the genre, and a genre does not change under a run, so a
@@ -1049,6 +1213,88 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 	) => {
 		if (!scope.artifacts || typeof entityId !== "number") return
 		scope.artifacts.push({ kind, entityId, action, nodeKey: node.key })
+	}
+
+	/**
+	 * A session event this run's write caused (PLAN-turn-order §4.1, A2),
+	 * through the one emitter. `cause` is the run's unless the write is a
+	 * person's edit, hide, delete or swipe performed by a built-in's run —
+	 * then `{ kind: 'edit', userId, runId }`: the person did it, this run
+	 * wrote it. A spec the genre binds to the event runs as this run's
+	 * CHILD (`childLineage`), so the cycle caps hold across the event; the
+	 * payload's own `lineage` is this run's place in the tree. A host with
+	 * no user on its scope (wired by hand) emits nothing: there is nobody
+	 * to emit as, and no run to be the child of.
+	 */
+	const emit = async (
+		event: string,
+		payload: Record<string, unknown> & { sessionId: number },
+		cause: { kind: "run" | "edit" },
+		/**
+		 * `asChild`: dispatch as a child of this run, so the lineage caps
+		 * apply (01 §8). For an event a spec can re-cause by answering it —
+		 * `annex-changed`, where a spec bound to it may write the annex
+		 * again — unlike a recompute, which cannot (see below). Such an
+		 * event also never carries `auto`: it is raised mid-run, and the
+		 * round continues on the reply's `message-completed`, never on a
+		 * write made while the reply is still streaming (R34).
+		 */
+		opts: { asChild?: boolean } = {}
+	) => {
+		if (scope.userId == null) return
+		const { emitSessionEvent } = await import(
+			"$lib/server/pipelines/runtime/sessionEvents"
+		)
+		const { childLineage, listenerLineage } = await import(
+			"$lib/server/pipelines/runtime/lineage"
+		)
+		await emitSessionEvent(db, {
+			sessionId: payload.sessionId,
+			userId: scope.userId,
+			event,
+			payload: {
+				...payload,
+				event,
+				cause: {
+					kind: cause.kind,
+					...(cause.kind === "edit" ? { userId: scope.userId } : {}),
+					...(scope.runId ? { runId: scope.runId } : {}),
+					// Whether auto-advance fired this run (§4.6) — the fact
+					// `round` continues on. Only ever true on a run's own
+					// cause: a person's edit is never automatic.
+					...(cause.kind === "run" && scope.auto && !opts.asChild ? { auto: true } : {})
+				},
+				...(scope.lineage ? { lineage: scope.lineage } : {})
+			},
+			/**
+			 * **Inside this run's tree, on the listener lane** (R65).
+			 *
+			 * A spec bound to a data event is core's own listener lane (§3's
+			 * diagram), not this pipeline's fan-out, so it never spends the
+			 * writing run's descendant budget: counting the turn-order
+			 * recompute there once made a message carrying nine questions
+			 * starve its own answers. But it rides the tree, so a loop — a
+			 * spec answering `message-completed` that writes a message — meets
+			 * the depth cap and parks for the session owner instead of running
+			 * forever (B3 review). `turn-order-changed` does not come through
+			 * here: auto-advance answers it under its own cause rule and cap.
+			 *
+			 * `asChild` is the counted form, for an event a spec re-causes by
+			 * answering it mid-run (`annex-changed`, a recording).
+			 */
+			...(scope.runId
+				? {
+						...(opts.asChild
+							? { lineage: childLineage({ runId: scope.runId, lineage: scope.lineage }) }
+							: {
+									lineage: listenerLineage({ runId: scope.runId, lineage: scope.lineage }),
+									depthOnly: true
+								})
+					}
+				: {}),
+			io: scope.io,
+			signal: scope.signal
+		})
 	}
 
 	/**
@@ -1478,6 +1724,84 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						.from(schema.sessions)
 						.where(eq(schema.sessions.id, sessionId))
 						.limit(1)
+				}
+
+				case "session_settings": {
+					// The settings document (PLAN-turn-order §4.12, way 2):
+					// `core:query/session-settings@1` re-reads it after a
+					// write that may have moved a value. One resolver behind
+					// the declared node — sessions/settings.ts — the same
+					// posture as the greetings read below.
+					const sessionId = q.sessionId ?? scope.sessionId
+					assertScoped(node, q.sessionId, scope.sessionId)
+					if (sessionId === undefined) return null
+					const { resolveSessionSettings } = await import(
+						"$lib/server/sessions/settings"
+					)
+					return await resolveSessionSettings(db, sessionId)
+				}
+
+				case "session_annex": {
+					/**
+					 * One owner's annex document (PLAN-turn-order §4.3).
+					 *
+					 * The owner is the running spec's own namespace unless
+					 * the node's params name another AND `sharedAnnex` is on
+					 * — the default is the whole safety of the field: a spec
+					 * reads its own document without saying anything, and
+					 * has to say `sharedAnnex` out loud to read anybody
+					 * else's. A refusal answers `{}` with a note rather than
+					 * halting: the annex is memory, and a read of memory
+					 * that is not there is an ordinary state.
+					 */
+					const sessionId = q.sessionId ?? scope.sessionId
+					assertScoped(node, q.sessionId, scope.sessionId)
+					if (sessionId === undefined) return null
+					const params = (q.params ?? {}) as {
+						owner?: unknown
+						sharedAnnex?: unknown
+					}
+					const own = annexOwnerOf(scope.specId)
+					const named =
+						typeof params.owner === "string" && params.owner.trim()
+							? params.owner.trim()
+							: null
+					const owner =
+						named && named !== own
+							? params.sharedAnnex === true
+								? named
+								: null
+							: own
+					if (owner === null) return {}
+					const [row] = await db
+						.select({
+							annex: schema.sessions.annex,
+							audiences: schema.sessions.annexAudiences
+						})
+						.from(schema.sessions)
+						.where(eq(schema.sessions.id, sessionId))
+						.limit(1)
+					if (!row) return null
+					const annex = (row.annex ?? {}) as Record<string, unknown>
+					const doc = annex[owner]
+					const whole =
+						doc && typeof doc === "object" && !Array.isArray(doc)
+							? (doc as Record<string, unknown>)
+							: {}
+					if (q.view !== "ai") return whole
+					// The AI's view (R57): only what the model's context may
+					// carry — for this speaker, when the prompt has one.
+					const { aiHolds, visibleTo } = await import("@serene-pub/sdk")
+					const { isParticipantRef, canonicalParticipantRef } = await import("@serene-pub/sdk")
+					const speaker =
+						typeof q.speaker === "string" && isParticipantRef(q.speaker)
+							? canonicalParticipantRef(q.speaker)
+							: null
+					return (
+						visibleTo({ [owner]: whole }, (row.audiences ?? {}) as never, (refs) =>
+							aiHolds(refs, speaker as never)
+						)[owner] ?? {}
+					)
 				}
 
 				case "session_greetings": {
@@ -2781,6 +3105,48 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					}
 				}
 
+				case "sprites_for": {
+					/**
+					 * What a line's speaker can show (DESIGN-sprites §5.2): the
+					 * sprite set in force and its labels, the speaker's recent
+					 * faces, and the line's text. The set is decided in
+					 * `spriteChoicesFor` — override, then amendment, then the
+					 * card's default — and `decidedBy` rides out on the receipt.
+					 */
+					const sessionId = q.sessionId ?? scope.sessionId
+					assertScoped(node, q.sessionId, scope.sessionId)
+					const messageId = refId(q.message)
+					if (sessionId === undefined || messageId === null) return null
+					const { spriteChoicesFor } = await import(
+						"$lib/server/sprites/choices"
+					)
+					// The tail runs AFTER the reply is saved: a fault choosing a
+					// face must never turn a delivered reply into a failed turn,
+					// so a read that throws degrades to "nothing to choose".
+					let choices: Awaited<ReturnType<typeof spriteChoicesFor>>
+					try {
+						choices = await spriteChoicesFor(db, { sessionId, messageId })
+					} catch (e) {
+						console.warn(
+							`${node.key}: could not read the speaker's sprites — ${String(e)}`
+						)
+						return null
+					}
+					if (!choices.has)
+						return { ...choices, lineVector: null, labelVectors: null }
+					// The local lane, exactly as `entity-link` embeds names: no
+					// connection, no model call added to the turn.
+					const { spriteVectors } = await import(
+						"$lib/server/sprites/vectors"
+					)
+					const { getLoadedModelId, batchEmbed } = await embeddingApi()
+					const vectors = await spriteVectors(choices.text, choices.labels, {
+						modelId: getLoadedModelId(),
+						batchEmbed
+					})
+					return { ...choices, ...vectors }
+				}
+
 				case "mention_spans": {
 					/**
 					 * What the scene refers to by **describing** it — the query
@@ -3437,7 +3803,11 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 									scope.userId != null
 										? String(scope.userId)
 										: undefined,
-								runId: scope.runId
+								runId: scope.runId,
+								// A tool called from another package's pipeline —
+								// or a person's — runs with only the secrets its
+								// owner lends (R63).
+								foreignPipeline: provider.binding.pluginId !== scope.ownerPluginId
 							}
 						)
 						return r.ok
@@ -3482,7 +3852,10 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							),
 							samplingId: refId(p.sampling),
 							label: p.label,
-							signal: scope.signal
+							signal: scope.signal,
+							// A step that asks for a shape (turn-advise) gets the
+							// strongest structured door its connection has.
+							...(p.schema ? { schema: p.schema } : {})
 						})
 						// Steps that ask for JSON get it parsed here rather than
 						// in each binding: the models wrap it in prose often
@@ -3544,6 +3917,8 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					)
 					if (refusal)
 						throw new HostScopeError(`${node.key}: ${refusal}`)
+					const race = racesLiveRow(node.key, p.channel)
+					if (race) throw new HostScopeError(race)
 
 					const { insertLegacy, updateLegacyWhere } = await import(
 						"$lib/server/messages/store"
@@ -3561,7 +3936,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					 * Narration: not a character's turn. `characterId` stays
 					 * **null** even when a real speaker was picked — that is the
 					 * whole of "not inserted into the round-robin" surviving
-					 * contact with the database. `getNextCharacterTurn` drops
+					 * contact with the database. The rotation (`rotationTurns`) drops
 					 * `isNarratorResponse` rows before it matches ids, but the
 					 * column is also what `computeDueCharacter` reads on every
 					 * other path, and a side-character turn is not the
@@ -3831,6 +4206,27 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					const blocks = await writeBlocks(node, row, p.blocks)
 					if (blocks) await announceWithParts(row.id)
 
+					// A row that is not generating LANDED (PLAN-turn-order
+					// §4.1): a person's own line through an action, a reply
+					// written whole. Never for a placeholder — that row
+					// completes when `update-message` finishes it.
+					if (row.isGenerating !== true)
+						await emit(
+							"core:event/message-completed@1",
+							{ sessionId: row.sessionId, messageId: row.id },
+							{ kind: "run" }
+						)
+
+					// A placeholder or a claimed row is the run's live row; a
+					// complete message is an ordinary write (F7, W1 — see
+					// `racesLiveRow`). A claimed row keeps the channel it
+					// already sits on, whatever the payload says.
+					if (opensLiveRow(p))
+						liveChannel ??= canonicalChannel(
+							claimId !== null
+								? (row as { channel?: unknown }).channel
+								: p.channel
+						)
 					return { id: row.id, sessionId: row.sessionId }
 				}
 
@@ -3867,6 +4263,12 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						throw new HostScopeError(
 							`${node.key}: ${greetingRefusal}`
 						)
+					// Empty greetings write nothing, so they race nothing.
+					const race =
+						Array.isArray(p.greetings) && p.greetings.length > 0
+							? racesLiveRow(node.key, p.channel)
+							: null
+					if (race) throw new HostScopeError(race)
 
 					const { writeSessionGreetings } = await import(
 						"$lib/server/sessions/greetings"
@@ -3886,6 +4288,15 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					// first committed consumer, this consumer publishes `ids[]`,
 					// and so a greeting seed recorded nothing at all.
 					for (const id of ids) record(node, "message", id, "created")
+					// Each seeded greeting is a row that landed (§4.1): one
+					// `message-completed` per row, as the create-message
+					// commit emits for the one row it writes.
+					for (const id of ids)
+						await emit(
+							"core:event/message-completed@1",
+							{ sessionId, messageId: id },
+							{ kind: "run" }
+						)
 					return { ids, count: ids.length, sessionId }
 				}
 
@@ -4011,16 +4422,30 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							// the history growing, not moving, and records
 							// nothing.
 							if (scope.verb)
-								await recordSessionChange(db, {
-									event: "core:event/message-updated@1",
+								await emit(
+									"core:event/message-updated@1",
+									{
+										sessionId: finished.sessionId,
+										messageId: finished.id,
+										verb: scope.verb,
+										...(scope.previous
+											? { previous: scope.previous }
+											: {})
+									},
+									{ kind: "run" }
+								)
+							// The reply LANDED (PLAN-turn-order §4.1): the
+							// event the turn-order spec answers, emitted from
+							// the finishing write whether the turn was fresh
+							// or a verb's — a row that is not generating.
+							await emit(
+								"core:event/message-completed@1",
+								{
 									sessionId: finished.sessionId,
-									messageId: finished.id,
-									verb: scope.verb,
-									...(scope.previous
-										? { previous: scope.previous }
-										: {}),
-									runId: scope.runId
-								})
+									messageId: finished.id
+								},
+								{ kind: "run" }
+							)
 							await settledMessage(
 								finished.id,
 								finished.sessionId
@@ -4082,6 +4507,388 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 				// lost or replaced. The event itself rides the outlet's
 				// `causesEvent` onto the receipt.
 
+				case "core:outlet/set-turn-order": {
+					/**
+					 * The one write path for `metadata.turnOrder` (PLAN
+					 * §4.2, §4.4) — and the only outlet that writes
+					 * `metadata` at all.
+					 *
+					 * Two drops before the write, each a receipt note rather
+					 * than a refusal: an entry naming a ref the pool did not
+					 * admit (a script or a plugin strategy cannot seat
+					 * somebody nobody pooled), and an entry on a channel
+					 * this session does not have (a turn nothing would ever
+					 * render). Then `writeTurnOrder`, whose staleness rule
+					 * is what stands between two recomputes finishing out of
+					 * order — and a stale write is a note too, never an
+					 * error: a newer order already answers a newer event.
+					 */
+					const sessionId = scope.sessionId
+					if (sessionId === undefined)
+						throw new HostScopeError(
+							`${node.key} has no session to write a turn order for — the run was started without a session scope`
+						)
+					const candidates = Array.isArray(p.candidates)
+						? (p.candidates as Array<Record<string, unknown>>)
+						: []
+					// Candidates as the pool published them, held to the live cast
+					// (M4 review): the pool node is swappable and contributable, so
+					// its floors — no removed seat, no on-action envoy — are
+					// re-checked here, where no swap can reach (§6).
+					const live = await liveCastRefs(db, sessionId)
+					const admitted = new Set(
+						candidates.map((c) => String(c?.ref)).filter((ref) => live.has(ref))
+					)
+					const [row] = await db
+						.select({ genreId: schema.sessions.genreId })
+						.from(schema.sessions)
+						.where(eq(schema.sessions.id, sessionId))
+						.limit(1)
+					const { getSessionGenre, STANDARD_GENRE_ID } = await import(
+						"$lib/server/pipelines/entities/sessionGenres"
+					)
+					const declared = new Set(
+						channelsOf(
+							(
+								await getSessionGenre(
+									db,
+									row?.genreId ?? STANDARD_GENRE_ID
+								)
+							)?.shape
+						)
+					)
+					const notes: string[] = []
+					const order: Array<Record<string, unknown>> = []
+					for (const raw of Array.isArray(p.order) ? p.order : []) {
+						if (!raw || typeof raw !== "object") continue
+						const entry = raw as Record<string, unknown>
+						if (entry.ref !== null && !admitted.has(String(entry.ref))) {
+							notes.push(
+								`dropped ${String(entry.ref)}: not a candidate this recompute pooled`
+							)
+							continue
+						}
+						if (typeof entry.channel === "string" && entry.channel) {
+							const channel = canonicalChannel(entry.channel)
+							if (!declared.has(parseChannel(channel).slug)) {
+								notes.push(
+									`dropped ${String(entry.ref ?? "the narrator")}: this session has no channel '${entry.channel}'`
+								)
+								continue
+							}
+							entry.channel = channel
+						}
+						order.push(entry)
+					}
+
+					const at = Number(p.basedOnAt)
+					const next = {
+						v: 1 as const,
+						order: order as never,
+						candidates: candidates as never,
+						basedOnAt: Number.isFinite(at) ? at : Date.now(),
+						computedAt: Date.now(),
+						runId: scope.runId ?? null,
+						event:
+							typeof p.event === "string" && p.event ? p.event : null,
+						// Which strategy produced this order (§4.2's
+						// `strategy`): the node the spec ran, read off the
+						// running document rather than guessed — the key is
+						// `strategy` by the spec's own declaration (§4.5).
+						strategy: await turnStrategyPin(db, scope.specId, sessionId, scope.nodes)
+					}
+					const { writeTurnOrder } = await import(
+						"$lib/server/sessions/turnOrder"
+					)
+					const result = await writeTurnOrder(db, sessionId, next)
+					if (!result.written) {
+						notes.push(
+							result.reason === "stale"
+								? "not written: a newer turn order already answers a newer event"
+								: "not written: the session no longer exists"
+						)
+						const { readTurnOrder } = await import("@serene-pub/sdk")
+						const [current] = await db
+							.select({ metadata: schema.sessions.metadata })
+							.from(schema.sessions)
+							.where(eq(schema.sessions.id, sessionId))
+							.limit(1)
+						return {
+							written: false,
+							sessionId,
+							notes,
+							turnOrder: readTurnOrder(current?.metadata)
+						}
+					}
+					record(node, "session", sessionId, "updated")
+					/**
+					 * `turn-order-changed`, carrying **the inlet's cause**
+					 * (PLAN-turn-order §4.4) — not this run's.
+					 *
+					 * That is the whole of auto-advance's rule: the listener
+					 * asks why the order moved, and the answer has to be why
+					 * the *event* fired, not that a pipeline wrote a row. A
+					 * person's send recomputes and may fire; a person's edit
+					 * recomputes and may not. `causesEvent` on the
+					 * declaration is what a receipt records; this is the
+					 * emission, on the one road every session event takes.
+					 */
+					if (scope.userId != null) {
+						const { emitSessionEvent } = await import(
+							"$lib/server/pipelines/runtime/sessionEvents"
+						)
+						const cause =
+							p.cause && typeof p.cause === "object"
+								? (p.cause as Record<string, unknown>)
+								: { kind: "system" }
+						await emitSessionEvent(db, {
+							sessionId,
+							userId: scope.userId,
+							event: "core:event/turn-order-changed@1",
+							payload: {
+								sessionId,
+								runId: scope.runId ?? null,
+								turnOrder: next,
+								cause,
+								...(scope.lineage ? { lineage: scope.lineage } : {})
+							},
+							io: scope.io,
+							signal: scope.signal
+						})
+					}
+					return {
+						written: true,
+						sessionId,
+						...(notes.length ? { notes } : {}),
+						turnOrder: next
+					}
+				}
+
+				case "core:outlet/set-session-annex": {
+					/**
+					 * The annex write (§4.3): one owner's document, merged
+					 * into what is there unless `merge` is off, under
+					 * `pg_advisory_xact_lock(hashtext('annex'), sessionId)`
+					 * through `jsonb_set` — so two specs writing two owners'
+					 * documents at once cannot lose each other's, and
+					 * neither can read-modify-write the column.
+					 *
+					 * Naming another owner needs `sharedAnnex`; without it
+					 * the write is refused with a note rather than silently
+					 * landing in the spec's own document, which would be the
+					 * worse of the two failures.
+					 */
+					const sessionId = scope.sessionId
+					if (sessionId === undefined)
+						throw new HostScopeError(
+							`${node.key} has no session to write an annex for — the run was started without a session scope`
+						)
+					const params = (p.params ?? {}) as {
+						owner?: unknown
+						merge?: unknown
+						sharedAnnex?: unknown
+					}
+					const own = annexOwnerOf(scope.specId)
+					const named =
+						typeof params.owner === "string" && params.owner.trim()
+							? params.owner.trim()
+							: null
+					if (named && named !== own && params.sharedAnnex !== true)
+						return {
+							written: false,
+							sessionId,
+							notes: [
+								`refused: '${own}' may not write the annex of '${named}' — set 'Write another owner' on this node to allow it`
+							]
+						}
+					const owner = named ?? own
+					const value =
+						p.value && typeof p.value === "object" && !Array.isArray(p.value)
+							? (p.value as Record<string, unknown>)
+							: {}
+					const merge = params.merge !== false
+					// Who may see what this writes (R57): the node's `see`
+					// literal, applied to every key it sets. Absent is
+					// pipelines only (R59). Judged again here, whatever
+					// publish saw.
+					const { dataAudienceFindings, canonicalParticipantRef } = await import("@serene-pub/sdk")
+					const audienceProblem = dataAudienceFindings(p.see)
+					if (audienceProblem)
+						throw new HostScopeError(`${node.key}: refused — ${audienceProblem}`)
+					// Stored in each reference's one spelling, so every reader's
+					// lookup — keyed canonically — finds it.
+					const see = [
+						...new Set(((p.see as string[] | undefined) ?? []).map((r) => canonicalParticipantRef(r)))
+					].sort()
+					const sameAudience = (a: readonly string[]) =>
+						a.length === see.length && [...a].sort().every((r, i) => r === see[i])
+					const annex = await db.transaction(async (tx) => {
+						await tx.execute(
+							sql`select pg_advisory_xact_lock(hashtext('annex'), ${sessionId})`
+						)
+						const [current] = await tx
+							.select({
+								annex: schema.sessions.annex,
+								audiences: schema.sessions.annexAudiences
+							})
+							.from(schema.sessions)
+							.where(eq(schema.sessions.id, sessionId))
+							.limit(1)
+						if (!current) return null
+						const held = (current.annex ?? {}) as Record<string, unknown>
+						const previous =
+							held[owner] && typeof held[owner] === "object" &&
+							!Array.isArray(held[owner])
+								? (held[owner] as Record<string, unknown>)
+								: {}
+						const heldAudiences = (
+							(current.audiences ?? {}) as Record<string, Record<string, string[]>>
+						)[owner] ?? {}
+						// A key has one audience (R57): writing it under another
+						// is refused, never a quiet move from one reader to
+						// another. Clear it first (a write with `merge` off
+						// that leaves it out) to change who may see it.
+						for (const key of Object.keys(value))
+							if (Object.hasOwn(previous, key) && !sameAudience(heldAudiences[key] ?? []))
+								return { conflict: key, was: heldAudiences[key] ?? [] }
+						const next = merge ? { ...previous, ...value } : value
+						const nextAudiences: Record<string, string[]> = merge
+							? { ...heldAudiences }
+							: {}
+						for (const key of Object.keys(value))
+							if (see.length) nextAudiences[key] = see
+							else delete nextAudiences[key]
+						if (sameJson(previous, next) && Object.hasOwn(held, owner))
+							return { next, changed: false, seen: false }
+						// Whether anybody's view can have moved: a value somebody
+						// may see was written, or one they could see was dropped.
+						// A pipelines-only write — most of them — pushes nothing.
+						const seen =
+							see.length > 0 ||
+							Object.keys(heldAudiences).some((k) => !Object.hasOwn(nextAudiences, k))
+						await tx.execute(sql`
+							update ${schema.sessions}
+							set ${sql.identifier("annex")} = jsonb_set(
+								coalesce(${schema.sessions.annex}, '{}'::jsonb),
+								ARRAY[${owner}]::text[],
+								${JSON.stringify(next)}::jsonb,
+								true
+							),
+							${sql.identifier("annex_audiences")} = jsonb_set(
+								coalesce(${schema.sessions.annexAudiences}, '{}'::jsonb),
+								ARRAY[${owner}]::text[],
+								${JSON.stringify(nextAudiences)}::jsonb,
+								true
+							)
+							where ${schema.sessions.id} = ${sessionId}
+						`)
+						return { next, changed: true, seen }
+					})
+					if (annex === null)
+						throw new HostScopeError(
+							`${node.key}: session ${sessionId} no longer exists`
+						)
+					if ("conflict" in annex && annex.conflict !== undefined) {
+						const was = annex.was ?? []
+						throw new HostScopeError(
+							`${node.key}: refused — '${annex.conflict}' is stored for ` +
+								`${was.length ? was.join(", ") : "pipelines only"}, and this write names ` +
+								`${see.length ? see.join(", ") : "pipelines only"}; a key has one audience — ` +
+								`clear it first to change who may see it`
+						)
+					}
+					// An unchanged write wrote nothing: no artifact, no event.
+					if (annex.changed) record(node, "session", sessionId, "updated")
+					// `annex-changed` (R30/R45): the one event a pipeline's own
+					// state causes, after the transaction (the emitter's plugin
+					// fan-out must never run inside one) and only when the value
+					// moved — so a spec bound to it that rewrites the same value
+					// cannot feed itself.
+					if (annex.changed)
+						await emit(
+							"core:event/annex-changed@1",
+							{ sessionId, owner },
+							{ kind: "run" },
+							{ asChild: true }
+						)
+					// Every member's own view, re-sent (R57): what each may see
+					// of the annex, never the annex.
+					if (annex.changed && annex.seen && scope.io) {
+						const { pushAnnexViews } = await import("$lib/server/sessions/annexViews")
+						await pushAnnexViews(db, scope.io, sessionId).catch((err) =>
+							console.warn(`[annex] the view push for session ${sessionId} failed:`, err)
+						)
+					}
+					// An unchanged document wrote nothing, and says so: the
+					// executor then skips the write's event (M3/W1).
+					return {
+						written: annex.changed,
+						sessionId,
+						owner,
+						annex: annex.next
+					}
+				}
+
+				case "core:outlet/record-event": {
+					/**
+					 * A package's event, recorded (R45/R47/R52, E1b). The
+					 * recording is a write — the ledger row — and the event it
+					 * causes is the one it names; bound pipelines run as
+					 * children of this run, so the depth cap bounds a chain.
+					 *
+					 * Refused here, at run time, whatever publish saw: an event
+					 * no installed package declares (withdrawn on uninstall),
+					 * and a pipeline outside the event's recording scope. Scope
+					 * is judged on the subjects this spec serves — its inlet
+					 * lock's events, or on the action event its actions.
+					 */
+					const sessionId = scope.sessionId
+					if (sessionId === undefined)
+						throw new HostScopeError(
+							`${node.key} has no session to record an event in — the run was started without a session scope`
+						)
+					// A recording is a write on someone's behalf; a run with no
+					// user would record for nobody and the listeners could not
+					// be run as anyone.
+					if (scope.userId === undefined)
+						throw new HostScopeError(
+							`${node.key} has no user to record an event for — the run was started without one`
+						)
+					const eventId = typeof p.event === "string" ? p.event : ""
+					const { mayRecord, eventScopeOf } = await import("$lib/server/plugins/pluginEvents")
+					const { subjectsOf, recordedPayloadFindings } = await import("@serene-pub/sdk")
+					const [session] = await db
+						.select({ genreId: schema.sessions.genreId })
+						.from(schema.sessions)
+						.where(eq(schema.sessions.id, sessionId))
+						.limit(1)
+					if (!session) throw new HostScopeError(`${node.key}: session ${sessionId} does not exist`)
+					const subjects = subjectsOf({
+						id: scope.specId ?? "",
+						input: scope.input ?? {},
+						contributes: scope.contributes
+					} as never)
+					const verdict = mayRecord(eventId, session.genreId, subjects)
+					if (!verdict.ok)
+						throw new HostScopeError(`${node.key}: refused — ${verdict.reason}`)
+					// The payload is checked again here, whatever publish saw: a
+					// wired value is only known now, and a listener trusts it.
+					const payloadProblem = recordedPayloadFindings(
+						eventScopeOf(eventId, session.genreId)!.payload,
+						p.payload
+					)
+					if (payloadProblem)
+						throw new HostScopeError(`${node.key}: refused — ${payloadProblem}`)
+					await emit(
+						eventId,
+						{ sessionId, payload: p.payload ?? null },
+						{ kind: "run" },
+						{ asChild: true }
+					)
+					record(node, "session", sessionId, "updated")
+					return { written: true, sessionId, event: eventId }
+				}
+
 				case "core:outlet/delete-message": {
 					assertBuiltInSpec(node)
 					const id = refId(p.target)
@@ -4111,14 +4918,88 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						channel: current.channel,
 						metadata: current.metadata
 					}
-					await recordSessionChange(db, {
-						event: "core:event/message-deleted@1",
-						sessionId: current.sessionId,
-						messageId: id,
-						lost,
-						runId: scope.runId
-					})
+					await emit(
+						"core:event/message-deleted@1",
+						{ sessionId: current.sessionId, messageId: id, lost },
+						{ kind: "edit" }
+					)
 					return { id, sessionId: current.sessionId, lost }
+				}
+
+				case "core:outlet/show-sprite": {
+					/**
+					 * Record a line's **shown sprite** (DESIGN-sprites §5.2) on
+					 * its ACTIVE swipe — `swipes.spriteHistory[currentIdx]`,
+					 * mirrored to `metadata.sprite` exactly as `thinking` is.
+					 *
+					 * Who chose it is decided HERE, never by a port: a run of
+					 * `core:spec/show-sprite` is a person's pick from the
+					 * message menu (checked against the item rule like an
+					 * edit); every other run is a picker's. A picker never
+					 * overwrites a person's pick, and a picker that chose
+					 * nothing leaves a line that shows nothing untouched.
+					 */
+					const id = refId(p.target)
+					if (id === null)
+						throw new HostScopeError(
+							`${node.key} was given no message id — wire 'target' from the saved line.`
+						)
+					const current = await legacyMessage(db, id)
+					if (!current)
+						throw new HostScopeError(
+							`${node.key}: no message ${id} to show a sprite on`
+						)
+					assertScoped(node, current.sessionId, scope.sessionId)
+					const byPerson = scope.specId === SHOW_SPRITE_SPEC_ID
+					if (byPerson) {
+						if (scope.ownerPluginId !== undefined)
+							throw new HostScopeError(
+								`${node.key}: only core's own sprite action records a person's pick.`
+							)
+						await assertMayAct(node, id)
+					}
+					const decided = nextSpriteMetadata(
+						current.metadata as Record<string, any>,
+						p.pick,
+						byPerson
+					)
+					if (decided.kept) {
+						return {
+							id: current.id,
+							sessionId: current.sessionId,
+							sprite: decided.sprite,
+							kept: true
+						}
+					}
+					const next = decided.sprite
+					const patched = decided.metadata
+					const { updateLegacy } = await import(
+						"$lib/server/messages/store"
+					)
+					const row = await updateLegacy(db, id, { metadata: patched })
+					if (!row)
+						throw new HostScopeError(
+							`${node.key}: no message ${id} to show a sprite on`
+						)
+					record(node, "message", row.id, "updated")
+					await announce(row)
+					await emit(
+						"core:event/sprite-shown@1",
+						{
+							sessionId: row.sessionId,
+							messageId: row.id,
+							characterId: row.characterId ?? null,
+							sprite: next,
+							source: next?.source ?? (byPerson ? "person" : "picker")
+						},
+						{ kind: byPerson ? "edit" : "run" }
+					)
+					return {
+						id: row.id,
+						sessionId: row.sessionId,
+						sprite: next,
+						kept: false
+					}
 				}
 
 				case "core:outlet/hide-message": {
@@ -4146,13 +5027,11 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						)
 					record(node, "message", row.id, "hidden")
 					await announce(row)
-					await recordSessionChange(db, {
-						event: "core:event/message-hidden@1",
-						sessionId: row.sessionId,
-						messageId: row.id,
-						hidden,
-						runId: scope.runId
-					})
+					await emit(
+						"core:event/message-hidden@1",
+						{ sessionId: row.sessionId, messageId: row.id, hidden },
+						{ kind: "edit" }
+					)
 					return { id: row.id, sessionId: row.sessionId, hidden }
 				}
 
@@ -4217,13 +5096,11 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						)
 					record(node, "message", row.id, "edited")
 					await announce(row)
-					await recordSessionChange(db, {
-						event: "core:event/message-edited@1",
-						sessionId: row.sessionId,
-						messageId: row.id,
-						previous,
-						runId: scope.runId
-					})
+					await emit(
+						"core:event/message-edited@1",
+						{ sessionId: row.sessionId, messageId: row.id, previous },
+						{ kind: "edit" }
+					)
 					return { id: row.id, sessionId: row.sessionId, previous }
 				}
 
@@ -4260,6 +5137,8 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						currentIdx: null as number | null,
 						history: [] as string[],
 						thinkingHistory: [] as (string | null)[],
+						// DESIGN-sprites §3.3: each alternative keeps its own face.
+						spriteHistory: [] as (ShownSprite | null)[],
 						...(metadata.swipes ?? {})
 					}
 					const previous = {
@@ -4274,13 +5153,23 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						if (swipes.currentIdx === null) {
 							swipes.currentIdx = 0
 							swipes.history = [current.content]
+							// The face the row already shows belongs to the
+							// alternative it already holds.
+							swipes.spriteHistory = [
+								asShownSprite(metadata.sprite)
+							]
 						}
 						while (
 							swipes.thinkingHistory.length < swipes.history.length
 						)
 							swipes.thinkingHistory.push(null)
+						while (
+							swipes.spriteHistory.length < swipes.history.length
+						)
+							swipes.spriteHistory.push(null)
 						swipes.history.push(p.text)
 						swipes.thinkingHistory.push(null)
+						swipes.spriteHistory.push(null)
 						swipeIndex = swipes.history.length - 1
 					} else {
 						const index = Number(p.index)
@@ -4305,7 +5194,9 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							...metadata,
 							swipes,
 							// The reasoning shown follows the alternative.
-							thinking: swipes.thinkingHistory[swipeIndex] ?? null
+							thinking: swipes.thinkingHistory[swipeIndex] ?? null,
+							// And so does the face (DESIGN-sprites §3.3).
+							sprite: swipes.spriteHistory?.[swipeIndex] ?? null
 						},
 						// A stop belongs to the alternative that was streaming
 						// (U5b review W2): selecting another one — an existing
@@ -4321,14 +5212,16 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						)
 					record(node, "message", row.id, "swiped")
 					await announce(row)
-					await recordSessionChange(db, {
-						event: "core:event/message-swiped@1",
-						sessionId: row.sessionId,
-						messageId: row.id,
-						previous,
-						swipeIndex,
-						runId: scope.runId
-					})
+					await emit(
+						"core:event/message-swiped@1",
+						{
+							sessionId: row.sessionId,
+							messageId: row.id,
+							previous,
+							swipeIndex
+						},
+						{ kind: "edit" }
+					)
 					return {
 						id: row.id,
 						sessionId: row.sessionId,
@@ -4385,13 +5278,18 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					// On the NEW session: its first reply learns it was
 					// forked, and from where. The source's history is
 					// untouched, so it has nothing to be told.
-					await recordSessionChange(db, {
-						event: "core:event/session-branched@1",
-						sessionId: created.id,
-						fromSessionId: sessionId,
-						fromMessageId,
-						runId: scope.runId
-					})
+					// A person's history operation, like an edit: it never
+					// fires a turn (§4.6) — the branch's own recompute gives
+					// the new session its order (§4.5).
+					await emit(
+						"core:event/session-branched@1",
+						{
+							sessionId: created.id,
+							fromSessionId: sessionId,
+							fromMessageId
+						},
+						{ kind: "edit" }
+					)
 					return { id: created.id, sessionId: created.id }
 				}
 
@@ -4797,13 +5695,12 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					 */
 					const lorebookId = session.lorebookId
 					/**
-					 * The links, in the SAME transaction as the row (L2, F7).
+					 * The links, in the SAME transaction as the row (L2).
 					 *
-					 * A pipeline has one write-class outlet, so a spec cannot
-					 * create an entry here and then link it with
-					 * `core:outlet/link-lore-entries@1` — those are two writes.
-					 * Writing them together is the way round that costs
-					 * nothing, and it is the honest one: a room whose exits
+					 * `core:outlet/link-lore-entries@1` may follow this outlet
+					 * (F7 limits only the live row), but that is a second
+					 * transaction. Writing them together is the honest shape
+					 * when they are one thought: a room whose exits
 					 * name an entry that is not there fails **with** the room
 					 * rather than leaving half a room behind, because the
 					 * refusal is raised inside the transaction.
@@ -5050,6 +5947,10 @@ function toMessage(r: any, shaping?: ChannelShaping | null) {
 		characterId: r.characterId ?? null,
 		personaId: r.personaId ?? null,
 		isNarratorResponse: r.isNarratorResponse,
+		// Who voiced it, when a row says so by reference (`envoy:<slug>`) —
+		// the turn rules read it (an envoy's reply has no character id). Only
+		// when present, so every other row reads exactly as it did.
+		...(typeof r.metadata?.speaker === "string" ? { speaker: r.metadata.speaker } : {}),
 		// Which lane it came from, carried rather than dropped (20 §7). A read
 		// is scoped to one channel, but a whole-channel read spans that
 		// channel's lanes (ruling 2026-09-09), so this is what tells the five
@@ -5160,6 +6061,10 @@ function toLoreEntry(
 		priority: row.priority ?? 1,
 		constant: row.constant ?? false,
 		enabled: row.enabled ?? true,
+		// Carried so a mechanism can exclude it (L1): this mapper is a column
+		// whitelist, and a scoping column it drops fails OPEN — the archived
+		// entry reached ranking as though it were live.
+		archived: row.archived ?? false,
 		position: row.position ?? 0,
 		lorebookBindingId: row.lorebookBindingId ?? null,
 		bindingCharacterId,

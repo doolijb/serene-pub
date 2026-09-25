@@ -222,7 +222,8 @@ export async function syncConnectionModels(
 					connectionId,
 					model: m.model,
 					name: m.name || m.model,
-					enabled: true
+					enabled: true,
+					facts: m.facts ?? {}
 				}))
 			)
 			.onConflictDoNothing({
@@ -249,13 +250,32 @@ export async function syncConnectionModels(
 	// ensured at create, before any listing ("claude-sonnet-4-5" against
 	// the catalogue's "Claude Sonnet 4.5") — take it. A name a person
 	// typed differs from the identifier and is never touched.
-	const listedName = new Map(listed.map((m) => [m.model, m.name]))
+	//
+	// The facts ride along in the same UPDATE. They are the host's claim and
+	// the host is re-stating it right now, so a listing that revises a price or
+	// widens a context window REPLACES the bag wholesale rather than merging
+	// into it: a field the host has stopped sending is a field it no longer
+	// claims, and keeping the old value would be this app quoting a number
+	// nobody stands behind. Nothing a person set lives in here — that is
+	// `context_window`, two columns away, and this write never touches it.
+	const byId = new Map(listed.map((m) => [m.model, m]))
 	for (const r of rows) {
-		const offered = listedName.get(r.model)
-		if (!offered || offered === r.model || r.name !== r.model) continue
+		const offered = byId.get(r.model)
+		if (!offered) continue
+		const renaming =
+			offered.name && offered.name !== r.model && r.name === r.model
+		const nextFacts = offered.facts ?? {}
+		// An empty bag from a host that never had facts is not a change; only a
+		// bag that differs is worth a write on every ten-minute sync.
+		const factsChanged =
+			JSON.stringify(nextFacts) !== JSON.stringify(r.facts ?? {})
+		if (!renaming && !factsChanged) continue
 		await db
 			.update(schema.connectionModels)
-			.set({ name: offered })
+			.set({
+				...(renaming ? { name: offered.name } : {}),
+				...(factsChanged ? { facts: nextFacts } : {})
+			})
 			.where(eq(schema.connectionModels.id, r.id))
 	}
 

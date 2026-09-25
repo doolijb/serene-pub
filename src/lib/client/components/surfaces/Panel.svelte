@@ -7,9 +7,10 @@
 	 * grid and drawer never changes parent — the law that keeps frames from
 	 * reloading (21 §4).
 	 */
-	import type { Snippet } from "svelte"
+	import { getContext, type Snippet } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import PluginFrame from "$lib/client/components/frames/PluginFrame.svelte"
+	import ComponentMount from "$lib/client/components/host/ComponentMount.svelte"
 	import WidgetHost from "$lib/client/sessionLayout/WidgetHost.svelte"
 	import WidgetStyleOverlay from "$lib/client/sessionLayout/WidgetStyleOverlay.svelte"
 	import {
@@ -18,6 +19,7 @@
 	} from "$lib/client/stores/widgetStyles.svelte"
 	import { widgetSettingValues } from "$lib/client/stores/widgetSettings.svelte"
 	import { resolveWidgetInstance } from "$lib/shared/widgets/settings"
+	import { SESSION_DOSSIER_KEY } from "$lib/shared/widgets/context"
 	import { nativeSurface } from "$lib/client/surfaces/registry"
 	import type { PanelInstance } from "$lib/client/surfaces/types"
 	import type { SurfaceManager } from "$lib/client/surfaces/panelManager.svelte"
@@ -95,6 +97,16 @@
 	   header's title, the lane the subscription reads, and the settings the
 	   widget gets on its ctx. Both bodies below read the same triple, so a
 	   frame is a native widget minus the iframe here too. */
+	/**
+	 * What this remote was granted beyond the base sections (C5): the
+	 * conversation dossier, when its plugin holds `widget:session:full`.
+	 */
+	const dossierCtx = getContext<{ current: unknown } | undefined>(SESSION_DOSSIER_KEY)
+	const granted = $derived(new Set(instance.grants ?? []))
+	const grantedScoped = $derived(
+		granted.has("session:full") && dossierCtx?.current ? { session_full: dossierCtx.current } : undefined
+	)
+
 	let resolved = $derived(
 		resolveWidgetInstance(
 			{
@@ -288,6 +300,52 @@
 				label={resolved.title}
 				mount="frame"
 			/>
+		{:else if instance.surface.kind === "remote" && instance.src}
+			<!-- A plugin's component, run in its owner's UI worker and mirrored
+			     through the host-element allowlist (§3.5, C2). Inside WidgetHost
+			     like a native widget: its skin scopes the box, and the style
+			     controls cover it. The data is the frame's — a remote is a frame
+			     minus the document. -->
+			<!-- Mounted once the session is here: the projection reads it, as
+			     the native branch below waits for it too. -->
+			{#if session}
+				<WidgetHost
+					widget={{
+						id: instance.id,
+						instanceId: instance.id,
+						title: resolved.title
+					}}
+					session={session as any}
+					messages={((session as any)?.sessionMessages ?? []) as any}
+					channels={resolved.channels}
+					props={{ panelId: instance.id, title: resolved.title }}
+					settings={resolved.settings}
+					{placement}
+					source={manager}
+					{actions}
+					{actionDispatch}
+					onAction={onFrameAction}
+				>
+					<ComponentMount
+						scoped={grantedScoped}
+						owner={instance.surface.owner}
+						src={instance.src}
+						title={resolved.title}
+						session={frameSession}
+						channels={resolved.channels}
+						messages={frameMessages}
+						props={{ panelId: instance.id, title: resolved.title }}
+						settings={resolved.settings}
+						surfaceId={instance.id}
+						{placement}
+						source={manager}
+						{actions}
+						{actionDispatch}
+						{suspended}
+						onAction={onFrameAction}
+					/>
+				</WidgetHost>
+			{/if}
 		{:else if NativeCmp}
 			<!-- Provide the unified widget ctx around the native surface (PLAN
 			     25). Additive: NativeCmp still gets its legacy props, and a
@@ -333,7 +391,7 @@
 				<Icons.PackageOpen size={20} />
 				<span>
 					This panel's surface isn't available
-					{#if instance.surface.kind === "frame"}(its plugin may be
+					{#if instance.surface.kind !== "native"}(its plugin may be
 						disabled){/if}.
 				</span>
 			</div>

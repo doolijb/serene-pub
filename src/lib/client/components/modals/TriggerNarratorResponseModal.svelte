@@ -13,7 +13,7 @@
 	 * ⚠ **participant ≠ character.** Choosing somebody here does not add them
 	 * to the session's cast and does not put them in the rotation. The server
 	 * enforces both — nothing writes a cast row, and the message it writes is a
-	 * narration row, which `getNextCharacterTurn` drops before it matches ids —
+	 * narration row, which the rotation (`rotationTurns`) drops before it matches ids —
 	 * but the wording here says so too, because a picker that looks like an
 	 * "add someone" control and is not would be worse than no picker.
 	 */

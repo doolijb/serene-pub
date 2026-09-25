@@ -259,11 +259,33 @@ async function listModels(
 			)
 			.sort((a, b) => a.localeCompare(b))
 
+		// The registry rows were already read above to filter the listing, and
+		// they carry the only facts a file on disk can offer — what it was
+		// downloaded as, how big it is, what the list said about it. Reading
+		// them twice would be a second query; dropping them was a second
+		// screen with nothing on it.
+		const byFilename = new Map(rows.map((m) => [m.filename, m]))
 		return {
-			models: models.map((filename) => ({
-				model: filename,
-				name: filename
-			}))
+			models: models.map((filename) => {
+				const row = byFilename.get(filename)
+				const facts = {
+					...(row?.quantization
+						? { quantization: row.quantization }
+						: {}),
+					...(row?.sizeBytes ? { sizeBytes: row.sizeBytes } : {}),
+					...(row?.description
+						? { description: row.description }
+						: {}),
+					source: "file" as const
+				}
+				return {
+					model: filename,
+					// The registry's own name where it has one — a filename is
+					// an identifier, not a title.
+					name: row?.modelName || filename,
+					...(Object.keys(facts).length > 1 ? { facts } : {})
+				}
+			})
 		}
 	} catch (e: any) {
 		return {

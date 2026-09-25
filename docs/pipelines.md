@@ -78,6 +78,8 @@ A reply pipeline runs end to end, whatever its shape. It creates its own reply r
 
 **The window is computed once.** The context budget a step sizes the prompt to, the window the connection is sent with, and the token figure the pipeline panel shows beside a share all come from one calculation over the same two facts: the sampling config the generating step is pointed at, and the model's own context window where the connection's model states one. A per-step connection or sampling choice, or the session's own sampling choice, reaches all three as one answer.
 
+**A character's reply ends by choosing its face.** The reply pipelines that voice a character — the chat reply, the tool loop, a side character's turn, the guide and the writing room — finish with a short **sprite tail** after their save step, so choosing a face never delays the reply. `sprites-for` reads which sprite set the speaker is in (the session's own choice, else the lorebook cast member's, else the card's default) and embeds the line and the set's sprite labels on the local embedding lane. A junction stops quietly when there is nothing to choose — a narrator's line, a card with no sprites. The **sprite picker** (`pick-sprite-similarity`) chooses, and `show-sprite` records it on the line's active swipe and emits `sprite-shown`. The picker is a declared session setting, so its switch and thresholds appear in session settings, and a plugin can offer another picker as a pure task that publishes the same `sprite-pick` shape. A person's **Change sprite** from the message menu runs the one-step action spec `show-sprite`, and the automatic picker never overwrites what a person chose. See [Sessions](./sessions.md#sprites).
+
 ## What changed since the last reply
 
 The message actions that alter history — delete, hide, edit, swipe, branch, and a stop — are **built-ins**: Serene Pub performs each as its own one-step pipeline run (`core:spec/builtin-delete` and its siblings, a request step straight into the write step), so the write is receipted, may be put behind a review gate like any other write, and always records an event saying what changed and what was lost. A regenerate, a continue and a swipe's fresh alternative are the reply pipeline's own **save** step, whose `message-updated` event then carries the verb that re-drove the row. Which actions a genre may switch off, and which it may not, is on the [sessions page](./sessions.md#floors-built-ins-and-what-each-action-emits).
@@ -140,10 +142,40 @@ The person who pressed sees the tree being made: the answer run's stage — *Ans
 once the whole tree has finished, or as soon as any run in it has parked at a gate.
 
 Two caps hold the tree (01 §8): no run stands more than **four** dispatches deep, and no asking
-run fathers more than **sixteen**. A dispatch past either is refused **and receipted** — a halted
-run row naming the cap, its lineage filled — whether it was the answer pipeline being dispatched or
-the action an answer fires, so an answer that asks another question stops on a sentence in the
-inspector rather than looping.
+run fathers more than **sixteen**. What happens past one depends on the door.
+
+A pipeline answering a run's own write belongs to the same tree without counting against either
+cap: the turn order recomputed after a reply, or a pipeline bound to *Message completed*. It has a
+third cap instead. No more than **four** writes in a row may each answer the event the last one
+caused, so a pipeline that writes a message every time a message completes stops after the fourth
+and waits for the session owner like any other. Anything in between that does count, such as a form
+answer, starts that count again.
+
+- **A pipeline answering an event** — the answer pipeline for a form, a pipeline bound to
+  `annex-changed`, one bound to an event a package recorded — **waits for the session owner**. A
+  *Keep going?* dialog names the pipelines so far (*Ask → Answer a form → Ask → … → Answer a
+  form*), and nothing more runs until they answer. **Continue** lets the tree run one more window
+  of each cap (four more deep, sixteen more runs) and asks again if it reaches that; **Stop here**
+  ends it, and the waiting pipeline's row in the inspector reads *cancelled*, naming who stopped it
+  and the cap. With nobody there it waits, and waiting costs nothing. A tree has one pause at a time: if
+  several of its pipelines reach the cap before the owner answers, they wait on the same dialog
+  (*3 runs wait for you*), and one answer covers them all. Continue runs exactly the pipeline the
+  dialog named — if the session's binding changed meanwhile, nothing runs and the row says why.
+  The dialog reaches every tab the owner has open, and an answer in one retires it in the others;
+  a session deleted meanwhile drops its pause. A wait does not survive a restart: the tree simply
+  ends there.
+- **The action an answer fires** is refused **and receipted**: a halted run row naming the cap,
+  its lineage filled.
+
+Either way, pipelines that set each other off stop on a sentence rather than looping. Turns that
+auto-advance start their own trees, so a long round never trips a cap part-way through.
+
+**Events a plugin records.** A plugin can declare events of its own, such as Twenty Questions'
+*Guess made*, and record them from its pipelines with the **record-event** step. Everything in the
+session hears one: pipelines bound to it, other plugins, and the session's widgets. So an event
+never carries anything secret; a plugin keeps secrets in state. The plugin says which of its
+pipelines may record each event, per genre. A pipeline outside that scope is refused when it is
+saved and again when it runs, and so is one recording an event that no installed plugin declares.
 
 **The line.** An action declares which side of it the result falls: `fiction` (the default —
 messages, state proposals, narration, a branch) or `world` — cards, lorebook data, settings,
@@ -168,7 +200,8 @@ the omission, and validation warns on every pipeline that places it.
 **What the instance checks at publish.** Every document an instance stores — the shipped catalog,
 an import, a hand-written one — is run through the SDK's `validate()` when it is saved, and any
 finding of error severity refuses the save with the finding's own sentence: one input step first,
-one primary row, no branching, every wired port's shape accepted by the port it feeds, a built-in
+one reply row per run (a pipeline may write as often as it likes beside it, but never a second
+message on the reply's own channel, and never the reply row inside a repeat), no branching, every wired port's shape accepted by the port it feeds, a built-in
 write only in its own pipeline, `answer-form` only under `form-addressed`, and the action model's
 rules above. A warning is let through and reported.
 
@@ -205,16 +238,42 @@ between a model that keeps asking and a turn that never ends. The run's report
 says which of the two ended it, how many passes there were, and what each tool
 returned, so "why did this take eight calls" is answerable afterwards.
 
-Nothing a tool does can change anything. They read; the pipeline's single write
-happens once, after the loop, exactly as it does on every other pipeline.
+Nothing a tool does can change anything. They read; what the run changes, it
+changes through the pipeline's own write steps, exactly as every other pipeline does.
 
 **Tool loop (reference)** in the pipelines list is a worked example, deliberately
 offered on no session type — it is there to be read and copied, not run from a
 composer.
 
+## A pipeline's own session state: the annex
+
+A pipeline often needs to remember something between turns that is not a message — a game clock, a score, whose secret is revealed. Each session has an **annex** for that: a small JSON document per owner, where the owner is the pipeline's namespace (`core`, `acme.rp`). A pipeline reads its own entry with the **Session annex** query and writes it with the **Set session annex** outlet, which merges into what is there by default. Writing another owner's entry needs the node's **Write another owner** setting.
+
+Writing the annex causes the **Annex changed** event (`core:event/annex-changed@1`), naming the owner — but only when the value actually changed, so a pipeline that rewrites the same value cannot set itself off. A pipeline that answers the event by writing a *different* value each time will re-trigger itself; at the run caps it waits for the session owner (see above), but design the value to settle. A genre that wants its own state to decide turns lists that event on its turn-order pipeline.
+
+**Who may see a value.** Every value in the annex has an **audience**, set by the write that stores it (its `see`, a list of participant references):
+
+| `see` | Who sees it, besides pipelines |
+|---|---|
+| left out | nobody: pipelines only (the default, so a secret never leaks by being forgotten) |
+| `participant` | everyone in the session, and the model's context |
+| `person` | every human in the session |
+| `ai` | the model's context only |
+| `owner`, `user:<id>` | that person |
+| `character:<id>`, `envoy:<slug>` | whoever plays that character or envoy, and that speaker's prompt |
+
+Pipelines always read the whole annex. People never do: each person's screen and widgets get their own view, only the values whose audience includes them — and every widget on that screen, whichever plugin it comes from, sees that same view. The annex is for session state: never put credentials or personal data in it. A plugin's private data belongs in its own storage. For a prompt, read the annex with the query's **view** set to `ai`, and wire the speaker: that returns only what the model may carry for that speaker. A pipeline that feeds the whole annex into a prompt — the query without the AI view, or the session settings document that carries the annex — gets a warning when it is saved. A key keeps one audience; writing it again for a different audience is refused and stops the run, so clear it first (write the document with **Merge** off, leaving the key out). Twenty Questions' answer, for instance, would be written with no `see` at all.
+
+Two conventions, not enforced:
+
+- **Keep narrative out of the annex.** Story facts belong in messages and lore, where retrieval and the reader can see them; the annex is bookkeeping.
+- **Version your entry.** Put a `v` number in your owner's document and migrate your own data when you read an older one; core never touches it.
+
+A package can also declare events of its own and record them (see *Events a plugin records* above); an event is heard by everything in the session, so it never carries a secret — the annex does, with an audience.
+
 ## Inspecting a run
 
-Every run leaves a report, and the **run inspector** is how you read one. It opens from three places: the **Inspect run** action in an assistant message's ⋮ menu, the **Inspect** button on the progress card once a run finishes, and a row in the **Runs** list of the pipelines section in `/admin`.
+Every run leaves a report, and the **run inspector** is how you read one. **Only administrators see run reports**: a report records everything a run touched, every step's inputs and outputs, including anything a pipeline keeps hidden from the people in a session. A person still sees what a run tells them about their own turn, such as the sentence on a progress card when a reply stops. For an administrator the inspector opens from three places: the **Inspect run** action in an assistant message's ⋮ menu, the **Inspect** button on the progress card once a run finishes, and a row in the **Runs** list of the pipelines section in `/admin`.
 
 It opens on a single sentence saying what happened, so the first glance answers the question: _Ran all 27 nodes_, or _Stopped at generate on request_, or _Halted at keeperWrite_ with the reason the pipeline gave.
 
@@ -232,6 +291,40 @@ Under that are two levels and no third. On the left, every stage in the order it
 **What the adapter actually sent.** Above the stop lists, the Wire tab shows the exchange itself: the URL and method the connection's adapter posted to, the request body it built (pretty-printed, with a **Copy request** button), and the raw response as it arrived, before anything was parsed out of it. A streamed reply says how many frames it came in; a long one is kept to the first 64 KB and says so. A stage that made more than one call lists each. That is what the receipt has instead of a proxy: the assembled prompt is one rendering earlier, and the prompt format, role mapping, sampler names, `stop` list and structured-output field a given service wants are only visible here. When it is present, the **Prompt** tab shows those turns as the adapter sent them and labels them so.
 
 Connections belong to the administrator, so a stage that called a model shows only that it did. The model name, the connection, the request it built and the whole exchange above are administrator-only. A request cannot be described without naming where it went, so for everyone else the exchange is removed at the server and the tab shows the stop lists alone, without the wire mode that decided them. The inspector shows what the server sent rather than reconstructing anything that was withheld.
+
+## What a ranker decided is recorded
+
+Every step that publishes decisions (core's ranker, or one a plugin ships) has them recorded when its run is saved: one record per candidate it judged, with whether it went in, a short reason, the score, the rank among those included, the tokens and, for lore, the keys that matched and the message each matched in. Nothing needs switching on. A preview run, such as the lorebook's fire test, records nothing. A session keeps its newest 200 rankings; the per-entry counts they add up to are kept after the records themselves are pruned.
+
+A plugin's ranker records its own decisions the same way: publish them on a port of the decisions shape, naming each candidate's subject as `<your slug>:<kind>` and a reason code. A short explanation and a small detail object are optional. At most 2,000 decisions are kept per ranking, and 2 KB of detail each; anything past that is counted and noted on the ranking.
+
+## Turning a plugin off
+
+Switching a plugin off in **Admin → Plugins** removes everything it provides from every screen but that one: its genres from the session picker and the Genres list, and its pipelines, presets, actions, prompts, templates, scripts, swaps, widgets and widget styles from their lists and pickers. Nobody can start a new session in its genre.
+
+Nothing is deleted. Its settings and your choices about it, such as which of its swaps are switched off, are kept, and turning the plugin back on restores all of it. A session already running on something the plugin provided keeps running. Its actions are no longer offered, though, because the plugin's code is not loaded while it is off.
+
+## The events page
+
+**Admin → Events** (`/admin/pipelines/events`, also linked from the pipelines page) shows every event this instance knows and what answers it. It is for administrators only.
+
+The top half is the list of events: core's first, then any an installed plugin declares, marked **package**. Choose one to see:
+- its family: **data** is something written, **action** is a request to run something;
+- whether it touches a user's account or assets;
+- the shape of what a listener receives;
+- which writes cause it;
+- the genres that list it, and whether each one requires it;
+- how many presets bind it;
+- for a plugin's event, who declared it and, per genre, which pipelines may record it.
+
+The bottom half is the **event map**. It shows what is installed, not what is running. Each box is an event, a pipeline or a listener, and three kinds of line join them:
+- **binds**: a pipeline's inlet answers the event;
+- **causes**: running the pipeline or listener records the event;
+- **listens**: a listener hears the event.
+
+An event nothing causes is marked **root**, since it starts a chain. The map opens on Chat. Pick another genre, or clear the genre to draw every published pipeline at once. Pick a preset, or open the page with `?session=<id>`, and the map keeps only the pipeline that preset or session runs for each event; an Action can be answered by many pipelines, so it keeps them all. Events with no line in the chosen scope are left off the map and stay in the list above.
+
+Click an event to select it in the list, a pipeline to open its page, or a plugin's listener to open the plugins page. The selected event's card lists the same neighbours as links, under **On the event map**, so everything the map opens can also be reached from the keyboard.
 
 ## Related
 

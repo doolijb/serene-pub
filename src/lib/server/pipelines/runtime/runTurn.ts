@@ -35,6 +35,7 @@ import {
 } from "@serene-pub/sdk"
 import {
 	childLineage,
+	beginRoot,
 	releaseRoot,
 	type RunLineage
 } from "$lib/server/pipelines/runtime/lineage"
@@ -73,6 +74,7 @@ import {
 	createLiveRow,
 	type SessionIo
 } from "$lib/server/pipelines/runtime/liveRow"
+import { noteRun } from "$lib/server/pipelines/runtime/capPause"
 import { createStatusRelay } from "$lib/server/pipelines/runtime/runStatus"
 import { narratingProvider } from "$lib/server/pipelines/runtime/specShape"
 import {
@@ -102,6 +104,12 @@ export interface TurnRequest {
 	db: Db
 	sessionId: number
 	userId: number
+	/**
+	 * Fired by auto-advance (PLAN-turn-order §4.6). Forwarded to the run so
+	 * its writes carry `auto` on their cause — without it a `round` never
+	 * continues past the first automatic reply (A8 walk, 2026-09-24).
+	 */
+	auto?: boolean
 	/** Whose turn it is. Null in narrator mode. */
 	currentCharacterId: number | null
 	/**
@@ -222,6 +230,13 @@ export interface SpecRunRequest {
 	db: Db
 	sessionId: number
 	userId: number
+	/**
+	 * This run was started by auto-advance (PLAN-turn-order §4.6), not by a
+	 * press. Every session event the run's writes cause carries it on the
+	 * cause (`{ kind: 'run', runId, auto }`), which is the one fact the
+	 * auto-advance listener reads to decide whether a `round` continues.
+	 */
+	auto?: boolean
 	/** Which spec to run. */
 	specId: string
 	/**
@@ -463,6 +478,21 @@ function forceOverrides(
 }
 
 export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
+	// A root holds its run tree from its first instant to its last, whatever
+	// it throws (E1c): a child its write caused may be queued before the root
+	// returns, and the tree's count must survive until that child settles.
+	if (request.lineage) return runSpecOnce(request)
+	const runId = request.runId ?? uuidv4()
+	beginRoot(runId)
+	noteRun(runId, request.specId)
+	try {
+		return await runSpecOnce({ ...request, runId })
+	} finally {
+		releaseRoot(runId)
+	}
+}
+
+async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 	const { specId } = request
 	const loaded = await loadPublished(request.db, specId)
 	if (!loaded)
@@ -545,6 +575,7 @@ export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
 		io: request.io,
 		sessionId: request.sessionId,
 		runId,
+		userId: request.userId,
 		streamingNode: narratingProvider(doc)
 	})
 
@@ -637,6 +668,18 @@ export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
 		// to perform under any inlet but `form-addressed@1` by the latter.
 		contributes: doc.contributes,
 		inletDefinitionId: inletDefinitionIdOf(doc),
+		input: (doc as { input?: { event?: string; events?: string[] } }).input,
+		// The document as it runs — rebinds applied — for what reads a node's
+		// definition after the fact (the turn order's `strategy`).
+		nodes: doc.nodes.map((n: any) => ({
+			key: n.key,
+			kind: n.kind,
+			definitionId: n.definitionId,
+			definitionVersion: n.definitionVersion
+		})),
+		// Fired by auto-advance (PLAN-turn-order §4.6), so every session
+		// event this run's writes cause says so on its cause.
+		auto: request.auto,
 		lineage: request.lineage,
 		addressed,
 		fires,
@@ -676,7 +719,8 @@ export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
 				seed,
 				nowMs: Date.now(),
 				runId,
-				user
+				user,
+				specOwner: ownerPluginId
 			})
 		}
 	}
@@ -694,9 +738,50 @@ export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
 	// is written and the next turn resolves exactly as it would have.
 	forceOverrides(world, request.overrides, request.sessionId)
 
+	/**
+	 * The settings document (PLAN-turn-order §4.12, R13), resolved **once
+	 * per run, here, after every write that caused this run has landed** and
+	 * before the first node — like `portrayals`, and for the same reason: a
+	 * run that re-asked per node could read two answers across one turn.
+	 *
+	 * It reaches the graph as the inlet's `session` port (every core inlet
+	 * that takes a session declares it; the identity binding hands it on),
+	 * and the script applier as the read-only extra `session`. No node
+	 * re-queries a table for a setting; `core:query/session-settings@1` is
+	 * the one re-read, for a node placed after a write.
+	 *
+	 * Null only when the session is gone, in which case the input is handed
+	 * on untouched and the run halts where it always has.
+	 */
+	const { resolveSessionSettings } = await import(
+		"$lib/server/sessions/settings"
+	)
+	const session = await resolveSessionSettings(request.db, request.sessionId)
+	const input =
+		session &&
+		request.input &&
+		typeof request.input === "object" &&
+		!Array.isArray(request.input)
+			? {
+					...(request.input as Record<string, unknown>),
+					session,
+					/**
+					 * The document's **cast**, beside it (PLAN §8 (17)).
+					 *
+					 * `core:inlet/session-event@1` declares `cast` as its own
+					 * port because a data edge is `{ node, port }` and
+					 * nothing addresses a field inside a port's value — so
+					 * the turn-order spec wires the pool's `cast` from here.
+					 * The same value, projected once: an inlet that declares
+					 * no `cast` port simply never publishes it.
+					 */
+					cast: session.cast
+				}
+			: request.input
+
 	const receipt = await run(doc, {
 		world,
-		input: request.input,
+		input,
 		runId,
 		seed,
 		triggerSource: request.preview ? "ui" : "event",
@@ -731,7 +816,11 @@ export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
 						// control with no effect wearing a contract.
 						extras: await scriptExtras(request.db, {
 							...scope,
-							speaker: request.sideCharacter ?? null
+							speaker: request.sideCharacter ?? null,
+							// The settings document (§4.12, way 3): every
+							// script point declares `session`; this is where
+							// it gets its value, from the one resolution above.
+							session
 						}),
 						// The connection's own stop guards ride along (18 §4b):
 						// resolved by the same rule dispatch uses — the instance
@@ -861,8 +950,6 @@ export async function runSpec(request: SpecRunRequest): Promise<Receipt> {
 	 * the tree's reader can see.
 	 */
 	if (fires.length) await dispatchFires(request, receipt, fires)
-	// A root that has finished takes its descendant count with it.
-	if (!request.lineage) releaseRoot(runId)
 
 	return receipt
 }
@@ -1246,7 +1333,8 @@ export async function runTurn(request: TurnRequest): Promise<Receipt> {
 		preview: request.preview,
 		skipReceipt: request.skipReceipt,
 		meta: request.meta,
-		overrides: request.overrides
+		overrides: request.overrides,
+		...(request.auto ? { auto: true } : {})
 	})
 	if (pending.ids.length && producedReply(receipt)) {
 		const marked = await markSessionChangesConsumed(

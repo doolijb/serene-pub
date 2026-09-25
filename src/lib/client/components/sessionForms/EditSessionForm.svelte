@@ -8,6 +8,7 @@
 	 * carry live in `createSession.svelte.ts`. A session keeps its genre for
 	 * life, so the one genre control here is the upgrade along the same type.
 	 */
+	import PipelineCards from "./PipelineCards.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import {
 		declareInterest,
@@ -28,7 +29,6 @@
 	import { onMount, getContext } from "svelte"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
 	import { toaster } from "$lib/client/utils/toaster"
-	import { GroupReplyStrategies } from "$lib/shared/constants/GroupReplyStrategies"
 	import { SessionCharacterVisibility } from "$lib/shared/constants/SessionCharacterVisibility"
 	import { resolveUserHandle } from "$lib/shared/utils/resolveCharacterName"
 	import { z } from "zod"
@@ -47,8 +47,7 @@
 	// Zod validation schema
 	const sessionSchema = z.object({
 		name: z.string().min(1, "Session name is required").trim(),
-		scenario: z.string().optional(),
-		groupReplyStrategy: z.string().optional()
+		scenario: z.string().optional()
 	})
 
 	type ValidationErrors = Record<string, string>
@@ -113,7 +112,6 @@
 					id: number | undefined
 					name: string
 					scenario: string
-					groupReplyStrategy: string
 					lorebookId?: number | null
 					tags: string[]
 					samplingConfigId?: number | null
@@ -135,7 +133,6 @@
 					id: number | undefined
 					name: string
 					scenario: string
-					groupReplyStrategy: string
 					lorebookId?: number | null
 					tags: string[]
 					samplingConfigId?: number | null
@@ -154,7 +151,6 @@
 	// DATA FIELDS
 	let name = $state("")
 	let scenario = $state("")
-	let groupReplyStrategy = $state("ordered")
 	let lorebookId: number | null = $state(null)
 	let sessionSamplingConfigId: number | null = $state(null)
 	let sessionPromptConfigId: number | null = $state(null)
@@ -357,7 +353,6 @@
 	$effect(() => {
 		const _name = name.trim()
 		const _scenario = scenario.trim()
-		const _groupReplyStrategy = groupReplyStrategy || "ordered"
 		const _selectedCharacters = selectedCharacters
 		const _selectedPersonas = selectedPersonas
 		const _selectedGuests = selectedGuests
@@ -373,7 +368,6 @@
 				id: session?.id,
 				name: _name,
 				scenario: _scenario,
-				groupReplyStrategy: _groupReplyStrategy || "ordered",
 				lorebookId: _lorebookId,
 				tags: _tags,
 				samplingConfigId: _samplingConfigId,
@@ -585,8 +579,7 @@
 				session: {
 					...data.session,
 					name: name.trim(),
-					scenario: scenario.trim(),
-					groupReplyStrategy: groupReplyStrategy
+					scenario: scenario.trim()
 				}
 			}
 		}
@@ -674,8 +667,7 @@
 	function validateForm(): boolean {
 		const result = sessionSchema.safeParse({
 			name: name,
-			scenario: scenario,
-			groupReplyStrategy: groupReplyStrategy
+			scenario: scenario
 		})
 
 		if (result.success) {
@@ -730,7 +722,6 @@
 			}
 			name = session.name || ""
 			scenario = session.scenario || ""
-			groupReplyStrategy = session.groupReplyStrategy || "ordered"
 			// Removed participants stay out of the editable "active cast"
 			// list (and so don't get silently re-submitted on the next
 			// Save) — they surface instead in the "Removed" section below.
@@ -770,62 +761,12 @@
 		modesList = msg.genres || []
 	}
 
-	// The swap list (19 §5): which next-speaker strategy runs this session's
-	// turns. The list is rows (strategies are types); the selection is a
-	// session-scope rebind; null inherits the pipeline's pinned default.
-	let speakerStrategies: Sockets.Sessions.Bindings.SpeakerStrategies.Response["strategies"] =
-		$state([])
-	let selectedSpeakerStrategy: string | null = $state(null)
-
-	const handleSessionsSpeakerStrategies = (
-		msg: Sockets.Sessions.Bindings.SpeakerStrategies.Response
-	) => {
-		if (msg.sessionId !== session?.id) return
-		speakerStrategies = msg.strategies || []
-		selectedSpeakerStrategy = msg.selected
-	}
-
 	const handleAccountVisibility = (
 		msg: Sockets.Sessions.AccountVisibility.Response
 	) => {
 		if (msg.sessionId !== session?.id) return
 		accountVisibility = msg
 	}
-
-	const handleSessionsSetSpeakerStrategy = (
-		msg: Sockets.Sessions.Bindings.SetSpeakerStrategy.Response
-	) => {
-		if (msg.sessionId !== session?.id) return
-		if (msg.error) {
-			toaster.error({ title: "Turn order", description: msg.error })
-		} else {
-			toaster.success({ title: "Turn order updated" })
-		}
-		socket.emit("sessions:speakerStrategies", { sessionId: msg.sessionId })
-	}
-
-	function applySpeakerStrategy() {
-		if (!session?.id) return
-		socket.emit("sessions:setSpeakerStrategy", {
-			sessionId: session.id,
-			definitionId: selectedSpeakerStrategy
-		})
-	}
-
-	/**
-	 * The turn-order options for this session: the interest and the request in
-	 * one. BARE — `sessions:speakerStrategies` has no `SCOPED_EVENTS` entry, so
-	 * the handler's own `msg.sessionId !== session?.id` check is the filter.
-	 */
-	$effect(() => {
-		const id = session?.id
-		if (!id) return
-		return requestWithInterest(
-			"sessions:speakerStrategies",
-			{ sessionId: id },
-			handleSessionsSpeakerStrategies
-		)
-	})
 
 	// The preset this session runs on (19 §7). A preset is a pipeline
 	// configuration a person is allowed to see and use — what a non-admin is
@@ -1147,7 +1088,7 @@
 	 * `#<id>` key for an unscoped event matches NO payload at all, so each
 	 * handler's own `msg.sessionId !== session?.id` check stays the filter. The
 	 * one scoped key this form holds is `sessions:get`, declared in its own
-	 * effect above; `sessions:speakerStrategies`, `:presets` and `:functions`
+	 * effect above; `:presets` and `:functions`
 	 * are declared with the request that fills them, likewise above.
 	 *
 	 * Declared at initialisation and released when the form is destroyed: the
@@ -1194,10 +1135,6 @@
 	useInterest<"sessions:setFunction">(
 		"sessions:setFunction",
 		handleSessionsSetFunction
-	)
-	useInterest<"sessions:setSpeakerStrategy">(
-		"sessions:setSpeakerStrategy",
-		handleSessionsSetSpeakerStrategy
 	)
 
 	/**
@@ -1976,31 +1913,6 @@
 							</div>
 						</section>
 					{/if}
-
-					{#if selectedCharacters.length > 1 || selectedPersonas.length > 1}
-						<section class={CARD_CLASS}>
-							<label
-								class="text-surface-500 mb-1.5 block text-xs"
-								for="groupReplyStrategy"
-							>
-								Group reply strategy
-							</label>
-							<select
-								id="groupReplyStrategy"
-								class="select rounded-[10px]"
-								bind:value={groupReplyStrategy}
-								disabled={isGuest}
-							>
-								{#each GroupReplyStrategies.options as opt}
-									{#if opt.value !== GroupReplyStrategies.USER_SPLIT || systemSettingsCtx.settings?.isAccountsEnabled}
-										<option value={opt.value}>
-											{opt.label}
-										</option>
-									{/if}
-								{/each}
-							</select>
-						</section>
-					{/if}
 				</div>
 			</div>
 
@@ -2221,42 +2133,15 @@
 						</section>
 					{/if}
 
-					<!-- Turn order (19 §5): the dropdown IS the swap list — every
-						     registered next-speaker strategy, an extension's beside
-						     core's. "Pipeline default" inherits the pinned type;
-						     choosing writes a session-scope rebind, and the receipt names
-						     whichever type actually ran. -->
-					{#if session && !isGuest && speakerStrategies.length > 0}
-						<section class={CARD_CLASS}>
-							<label
-								class="text-surface-500 mb-1.5 block text-xs"
-								for="turnOrder"
-							>
-								Turn order
-							</label>
-							<div class="flex items-center gap-2">
-								<select
-									id="turnOrder"
-									class="select rounded-[10px]"
-									bind:value={selectedSpeakerStrategy}
-								>
-									<option value={null}>
-										Pipeline default
-									</option>
-									{#each speakerStrategies as s (s.definitionId)}
-										<option value={s.definitionId}>
-											{s.name}
-										</option>
-									{/each}
-								</select>
-								<button
-									class="btn btn-sm preset-tonal shrink-0"
-									onclick={applySpeakerStrategy}
-								>
-									Apply
-								</button>
-							</div>
-						</section>
+					<!-- Pipeline cards (PLAN-turn-order §4.11): every node the
+					     session's pipelines expose to it — the turn order's
+					     strategy first among them — as a swap picker. -->
+					{#if session}
+						<PipelineCards
+							sessionId={session.id}
+							canEdit={!isGuest}
+							cardClass={CARD_CLASS}
+						/>
 					{/if}
 
 					<!-- Mode-declared per-session fields (19 §2): rendered through the one

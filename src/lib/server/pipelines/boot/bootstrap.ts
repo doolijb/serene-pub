@@ -47,6 +47,7 @@ import "@serene-pub/core-catalog"
 import {
 	seedCoreSpecs,
 	syncEventRegistry,
+	type RebindMoveReport,
 	type SpecSeedReport
 } from "$lib/server/pipelines/boot/seed"
 import {
@@ -132,6 +133,13 @@ export interface BootstrapReport {
 	placedNodes?: PlacedNodeReconcileReport
 	/** ⏳ Which pre-V2 binding rows were re-keyed by subject, and which were dropped. */
 	bindingSubjects?: BindingSubjectReport
+	/**
+	 * ⏳ How many Turn order choices moved from the respond specs' `speaker`
+	 * node to `core:spec/<genre>-turn-order` `strategy` this boot (PLAN-turn-order
+	 * A5, R20). Zero on every boot after the first, and on any build that
+	 * has not published the spec.
+	 */
+	rebindMove?: RebindMoveReport
 	/**
 	 * What the attribute registry loaded from this install's rows, and what it
 	 * mirrored back as last-seen (R1, R4).
@@ -380,6 +388,16 @@ export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 		"$lib/server/pipelines/boot/presetReconcile"
 	)
 	report.presetBindings = await reconcilePresetBindings(db)
+
+	// ⏳ After the specs, and that is the whole reason it is here rather than
+	// in a migration (PLAN-turn-order R20): the Turn order control's row
+	// points at `core:spec/<genre>-turn-order` by id, and that spec's row is what the
+	// seed above just inserted. Idempotent and re-runnable; a no-op on every
+	// boot after the first and on any build that does not publish the spec.
+	const { moveSpeakerRebinds } = await import(
+		"$lib/server/pipelines/boot/seed"
+	)
+	report.rebindMove = await moveSpeakerRebinds(db)
 
 	// ⏳ Beside it, and after the specs for the same reason: a binding row a
 	// previous release keyed by function is re-keyed by subject (plans/31

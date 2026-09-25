@@ -132,6 +132,33 @@
 	let entriesByKind = $state<Record<string, any[]>>({})
 	let scenes = $state<SceneRow[]>([])
 	let isLoading = $state(true)
+	/**
+	 * Why the graph is not on screen, when it is not.
+	 *
+	 * ⚠ Before this, `isLoading` began `true` and was cleared by the success
+	 * handler alone: a load that could only succeed. A refused read, a dropped
+	 * socket or a handler that threw all left the spinner turning for as long
+	 * as the panel stayed open, with nothing said and nothing to press. The
+	 * server has always emitted `narrativeGraph:list:error` — the register
+	 * wrapper builds the name — and nothing listened for it.
+	 */
+	let loadError = $state<string | null>(null)
+	/**
+	 * The failure nobody reports: silence.
+	 *
+	 * An `:error` covers a handler that threw. It does not cover a socket that
+	 * went away mid-flight, which produces no reply at all — and "no reply" is
+	 * indistinguishable from "still loading" without a clock.
+	 */
+	const LOAD_TIMEOUT_MS = 20_000
+	let loadTimer: ReturnType<typeof setTimeout> | null = null
+
+	function clearLoadTimer() {
+		if (loadTimer !== null) {
+			clearTimeout(loadTimer)
+			loadTimer = null
+		}
+	}
 
 	let ungraphedSceneCount = $state(0)
 	let ungraphedUnsummarizedCount = $state(0)
@@ -424,9 +451,23 @@
 
 	function load() {
 		isLoading = true
+		loadError = null
+		clearLoadTimer()
+		loadTimer = setTimeout(() => {
+			loadTimer = null
+			if (!isLoading) return
+			isLoading = false
+			loadError = "The graph did not come back."
+		}, LOAD_TIMEOUT_MS)
 		socket.emit("narrativeGraph:list", {
 			lorebookId
 		} satisfies Sockets.NarrativeGraph.List.Params)
+	}
+
+	function handleListError(msg: Sockets.ErrorResponse) {
+		clearLoadTimer()
+		isLoading = false
+		loadError = msg?.error || "The graph could not be read."
 	}
 
 	function startLink(from: GraphNode, to: GraphNode) {
@@ -469,6 +510,9 @@
 	// Named so `off` can name them too: a bare off() removes every listener for
 	// the event, including any other open lorebooks UI.
 	function handleList(msg: Sockets.NarrativeGraph.List.Response) {
+		// The scope the gate reads; checked here too, so a stale book's
+		// reply arriving after a switch cannot paint this one.
+		if (msg.lorebookId !== lorebookId) return
 		nodes = msg.nodes
 		relationships = msg.relationships
 		if (appliedBaseline) {
@@ -483,6 +527,8 @@
 		totalDirectHistoryEntryCount = msg.totalDirectHistoryEntryCount ?? 0
 		unresolvedCastSceneCount = msg.unresolvedCastSceneCount ?? 0
 		namelessBindingCount = msg.namelessBindingCount ?? 0
+		clearLoadTimer()
+		loadError = null
 		isLoading = false
 	}
 
@@ -583,6 +629,18 @@
 			handleList
 		)
 	)
+	/**
+	 * ⚠ A BARE key, not a scoped one. The failure carries no `lorebookId` to
+	 * scope on, and the server sends it with a raw room emit precisely so the
+	 * interest gate cannot swallow it — a client waiting on a reply declared
+	 * interest in being told it failed.
+	 */
+	$effect(() =>
+		declareInterest<"narrativeGraph:list:error">(
+			"narrativeGraph:list:error",
+			handleListError
+		)
+	)
 	$effect(() =>
 		declareInterest<"entries:list">(
 			interestKey("entries:list", lorebookId),
@@ -649,6 +707,8 @@
 
 	onDestroy(() => {
 		hasUnsavedChanges = false
+		// A timer that outlives the panel would set state on a dead component.
+		clearLoadTimer()
 	})
 </script>
 
@@ -1219,7 +1279,32 @@
 		</div>
 	{/if}
 
-	{#if isLoading}
+	{#if loadError}
+		<!-- Say what happened and offer the one thing that can help. A spinner
+		     that never stops says neither. -->
+		<div
+			class="flex flex-col items-center justify-center gap-3 py-10 text-center"
+			data-lore-graph-error
+		>
+			<Icons.Unplug
+				size={24}
+				class="text-surface-500"
+				aria-hidden="true"
+			/>
+			<p class="text-surface-700-300 max-w-sm text-sm leading-relaxed">
+				{loadError} Nothing has been changed — the graph is still there,
+				this view could not read it.
+			</p>
+			<button
+				class="btn btn-sm preset-filled-primary-500"
+				type="button"
+				onclick={load}
+			>
+				<Icons.RefreshCw size={14} aria-hidden="true" />
+				Try again
+			</button>
+		</div>
+	{:else if isLoading}
 		<div class="flex items-center justify-center py-10">
 			<Icons.Loader2 size={20} class="text-surface-400 animate-spin" />
 		</div>

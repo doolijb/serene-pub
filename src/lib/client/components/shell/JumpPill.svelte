@@ -86,7 +86,7 @@
 		     across the page header. -->
 		<span class="hidden lg:inline">{label}</span>
 		<kbd
-			class="border-surface-800 text-surface-500 hidden rounded border px-1 py-px font-mono text-[11px] lg:inline"
+			class="border-surface-300-700 text-surface-600-400 hidden rounded border px-1 py-px font-mono text-[11px] lg:inline"
 		>
 			{hint}
 		</kbd>

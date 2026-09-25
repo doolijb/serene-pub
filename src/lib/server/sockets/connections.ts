@@ -53,6 +53,7 @@ import {
 	mergeEndpointModel
 } from "$lib/server/connections/models"
 import { loginRateLimit } from "$lib/server/services/loginRateLimit"
+import type { ModelFacts } from "$lib/shared/connections/modelFacts"
 import {
 	encryptApiKeyField,
 	decryptApiKeyField
@@ -114,6 +115,25 @@ async function connectionNameTaken(
  * the gate skips the two queries when no open view holds the key. Takes no
  * socket: the list is the same for every admin, and only admins are answered.
  */
+/**
+ * Whether this endpoint holds a credential at all — the one bit of the key the
+ * client is allowed to know.
+ *
+ * Truthiness on the stored field, deliberately, and no decryption: an empty
+ * string is what every preset seeds `apiKey` with, so "the field exists" is not
+ * the question — "did somebody put something in it" is. Decrypting here would
+ * cost a crypto call per endpoint per list build to learn a fact that
+ * `Boolean(value)` already answers.
+ */
+function hasStoredCredential(endpoint: {
+	extraJson?: Record<string, any> | null
+}): boolean {
+	const value = endpoint.extraJson?.apiKey
+	if (typeof value === "string") return value.trim().length > 0
+	// The encrypted envelope is an object; its presence is the answer.
+	return value != null && typeof value === "object"
+}
+
 export async function buildConnectionsList(): Promise<Sockets.Connections.List.Response> {
 	const endpoints = await db.query.connections.findMany({
 		orderBy: (c, { asc }) => [asc(c.type), asc(c.name)]
@@ -154,6 +174,13 @@ export async function buildConnectionsList(): Promise<Sockets.Connections.List.R
 				// anything. Nothing on this server reads it; it is carried, not
 				// consulted (see the column comment in schema.ts).
 				notes: c.notes,
+				// ⚠ A BOOLEAN, never the key. The index needs to tell "you have
+				// not typed a key yet" (unfinished, gold) from "the key was
+				// rejected" (broken, red), and it cannot without knowing one is
+				// there. The envelope itself stays in `extra_json`, walked only
+				// by `tokenCrypto`, and is what this projection exists to keep
+				// off the wire.
+				hasCredential: hasStoredCredential(c),
 				models: models.map((m) => modelRowView(c, m, local.get(m.id))),
 				modelsSync: modelsSyncView(c)
 			}
@@ -1313,6 +1340,11 @@ function modelRowView(
 		sortOrder: m.sortOrder,
 		capabilities: capabilityColumn(m),
 		satisfiableCapabilities: satisfiableTransforms(endpoint, m),
+		// Omitted entirely when the host said nothing, so a consumer branches on
+		// presence rather than on an empty object that reads like an answer.
+		...(m.facts && Object.keys(m.facts).length
+			? { facts: m.facts as ModelFacts }
+			: {}),
 		...(local ? { local } : {})
 	}
 }

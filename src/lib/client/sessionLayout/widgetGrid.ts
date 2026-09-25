@@ -100,15 +100,16 @@ export function isRetiredWidget(id: string): boolean {
 /**
  * The normal chat, expressed purely as widgets: Messages GROW-anchored to all
  * four edges, filling the middle, and required. This is the config a Chat genre
- * ships — nothing here is special-cased in the renderer.
+ * ships — nothing here is special-cased in the renderer. A genre that withholds
+ * the conversation (R71) names the widget that stands there instead.
  */
-export function defaultChatLayout(): GridLayout {
+export function defaultChatLayout(primaryId = "messages"): GridLayout {
 	return {
 		version: 1,
 		cell: DEFAULT_CELL,
 		widgets: [
 			{
-				id: "messages",
+				id: primaryId,
 				zone: "middle",
 				order: 0,
 				size: { w: "grow", h: "grow" },
@@ -304,8 +305,12 @@ function isSizeSpec(x: unknown): x is SizeSpec {
  * claim. The one exception is a RETIRED id, which names nothing this build can
  * render. `saved` is `unknown` because the blob is stored verbatim server-side.
  */
-export function loadChatLayout(saved: unknown): GridLayout {
-	const base = defaultChatLayout()
+export function loadChatLayout(
+	saved: unknown,
+	primaryId = "messages",
+	omit: ReadonlySet<string> = new Set()
+): GridLayout {
+	const base = defaultChatLayout(primaryId)
 	if (
 		!isPlainObject(saved) ||
 		saved.version !== 1 ||
@@ -315,7 +320,8 @@ export function loadChatLayout(saved: unknown): GridLayout {
 	}
 	const savedById = new Map<string, Record<string, unknown>>()
 	for (const w of saved.widgets) {
-		if (isPlainObject(w) && typeof w.id === "string" && !isRetiredWidget(w.id))
+		// A widget the genre withholds (R71) is not placed, whatever was saved.
+		if (isPlainObject(w) && typeof w.id === "string" && !isRetiredWidget(w.id) && !omit.has(w.id))
 			savedById.set(w.id, w)
 	}
 	const widgets = base.widgets.map((b): WidgetConfig => {

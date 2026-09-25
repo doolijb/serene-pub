@@ -14,10 +14,9 @@
  * spec, a connection and an embedding model to say nothing more about
  * permission than these do.
  *
- * The guest case is the one that is not a refusal of the guest: a guest is
- * turned back by the *lorebook* gate and the *cast* gate, which is only
- * reachable once the access gate has let them through. Owner-or-guest is the
- * rule, and this is how it is asserted without spending a turn.
+ * A guest reaches the session and is turned back all the same: the preview
+ * quotes the session's lorebook, which is its owner's, so only the owner or
+ * an administrator may ask for one.
  */
 import { beforeAll, describe, expect, it, vi } from "vitest"
 import * as schema from "$lib/server/db/schema"
@@ -119,17 +118,15 @@ describe("pipelines:previewRetrieval — permission and preconditions", () => {
 		)
 	}, 60_000)
 
-	it("lets a guest through the access gate, and stops them at the cast gate", async () => {
+	it("refuses a guest: the preview quotes the owner's lorebook", async () => {
 		const { pipelinesPreviewRetrieval } = await import("./pipelines")
 		const res: any = await pipelinesPreviewRetrieval.handler(
 			fakeSocket(guestId),
 			{ sessionId: castlessSessionId, content: "hello" } as any,
 			noop
 		)
-		// Owner-or-guest: a guest reaches a gate two steps past the one a
-		// stranger is turned back at, which is the whole assertion. The
-		// sentence is about the conversation, not about them.
-		expect(res.error).toContain("no active characters")
+		expect(res.error).toBe("Only the conversation's owner can preview its lore.")
+		expect(res.explanation).toBeUndefined()
 	}, 60_000)
 
 	it("refuses a conversation with no lorebook, with the reason", async () => {

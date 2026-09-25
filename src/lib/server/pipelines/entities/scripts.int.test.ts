@@ -65,6 +65,18 @@ describe("the view", () => {
 		expect(transform.extras).toContain("speakerName")
 		expect(transform.extras).toContain("castNames")
 	})
+
+	it("every type can read the ambient `session`, an interior-point type included (R32)", async () => {
+		// No slot lists `session` since the modder pass — the executor hands
+		// it to every site — so a type reachable only at an interior point
+		// (turn/select, at turn-scripted's `select`) reads it too.
+		const view = await scriptsView(db)
+		expect(view.types.length).toBeGreaterThan(0)
+		for (const t of view.types) expect(t.extras, t.typeId).toContain("session")
+		expect(view.types.find((t) => t.typeId === "core:script:turn/select@1")?.extras).toContain(
+			"session"
+		)
+	})
 })
 
 describe("authoring", () => {

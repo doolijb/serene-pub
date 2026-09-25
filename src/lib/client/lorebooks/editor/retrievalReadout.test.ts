@@ -110,7 +110,7 @@ afterEach(() => {
 describe("open / close", () => {
 	test("declares the run-explain pair and takes one listener per event", async () => {
 		const readout = await loadReadout()
-		readout.open(socket as any)
+		readout.open(socket as any, { isAdmin: true })
 		await settle()
 
 		expect(socket!.listenerCount("pipelines:runExplain")).toBe(1)
@@ -130,8 +130,8 @@ describe("open / close", () => {
 
 	test("a second editor adds nothing, and only the last close releases", async () => {
 		const readout = await loadReadout()
-		readout.open(socket as any)
-		readout.open(socket as any)
+		readout.open(socket as any, { isAdmin: true })
+		readout.open(socket as any, { isAdmin: true })
 		await settle()
 		expect(socket!.listenerCount("pipelines:runExplain")).toBe(1)
 
@@ -150,9 +150,9 @@ describe("open / close", () => {
 
 	test("re-opening after the last close declares again", async () => {
 		const readout = await loadReadout()
-		readout.open(socket as any)
+		readout.open(socket as any, { isAdmin: true })
 		readout.close(socket as any)
-		readout.open(socket as any)
+		readout.open(socket as any, { isAdmin: true })
 		await settle()
 
 		expect(socket!.listenerCount("pipelines:runExplain")).toBe(1)
@@ -176,7 +176,7 @@ describe("the decisions key", () => {
 
 	test("is taken when a book is named, and follows it", async () => {
 		const readout = await loadReadout()
-		readout.open(socket as any)
+		readout.open(socket as any, { isAdmin: true })
 		readout.ask(1, 2)
 		await settle()
 
@@ -199,7 +199,7 @@ describe("the decisions key", () => {
 
 	test("another book's decisions are not delivered to this one", async () => {
 		const readout = await loadReadout()
-		readout.open(socket as any)
+		readout.open(socket as any, { isAdmin: true })
 		readout.ask(1, 2)
 
 		socket!.dispatch("entries:recentDecisions", {
@@ -218,9 +218,24 @@ describe("the decisions key", () => {
 })
 
 describe("the run's account arrives through the registry", () => {
-	test("a decision asks for the explanation, and its facts land", async () => {
+	test("a non-administrator never asks for the run's account (R55)", async () => {
 		const readout = await loadReadout()
 		readout.open(socket as any)
+		readout.ask(1, 2)
+		socket!.dispatch("entries:recentDecisions", {
+			lorebookId: 1,
+			sessionId: 2,
+			runId: "run-1"
+		})
+		expect(requests().map((r) => r.event)).toEqual([
+			"entries:recentDecisions"
+		])
+		expect(readout.factsFor(1, 2, 7)).toEqual({})
+	})
+
+	test("a decision asks for the explanation, and its facts land", async () => {
+		const readout = await loadReadout()
+		readout.open(socket as any, { isAdmin: true })
 		readout.ask(1, 2)
 
 		expect(requests()).toEqual([
@@ -265,7 +280,7 @@ describe("the run's account arrives through the registry", () => {
 
 	test("a refusal stops the wait", async () => {
 		const readout = await loadReadout()
-		readout.open(socket as any)
+		readout.open(socket as any, { isAdmin: true })
 		readout.ask(1, 2)
 		socket!.dispatch("entries:recentDecisions", {
 			lorebookId: 1,

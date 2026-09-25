@@ -38,11 +38,11 @@
 	 * (`utils/formAnswer.ts` `staleOf`, the server's rule over the list the
 	 * client holds). Answered beats stale.
 	 */
-	import * as Icons from "@lucide/svelte"
 	import MessageBlocksView from "./MessageBlocksView.svelte"
-	import { renderMarkdownWithQuotedText } from "$lib/client/utils/markdownToHTML"
-	import { t } from "$lib/client/i18n/state.svelte"
+	import { useT } from "./conversation.svelte"
 	import { answeredChoiceLabel, answeredOf } from "$lib/client/utils/formAnswer"
+
+	const t = useT()
 
 	interface Props {
 		blocks: any[]
@@ -121,7 +121,7 @@
 	{#each blocks as block, i}
 		{#if block?.kind === "md"}
 			<div class="rendered-session-message-content">
-				{@html renderMarkdownWithQuotedText(String(block.text ?? ""))}
+				<sp-message-body text={String(block.text ?? "")}></sp-message-body>
 			</div>
 		{:else if block?.kind === "kv"}
 			<dl class="grid w-fit grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
@@ -169,8 +169,8 @@
 						aria-valuemax={block.max}
 					>
 						<div
-							class="bg-primary-500 h-full"
-							style:width="{Math.max(
+							class="sp-meter-fill bg-primary-500 h-full"
+							style="--sp-fill: {Math.max(
 								0,
 								Math.min(100, (block.value / block.max) * 100)
 							)}%"
@@ -190,7 +190,7 @@
 				class="flex flex-wrap items-center gap-1 text-sm opacity-60"
 				data-superseded="true"
 			>
-				<Icons.History size={14} aria-hidden="true" />
+				<sp-icon name="history" size="14"></sp-icon>
 				<span>{t("Superseded — the conversation moved on")}</span>
 			</p>
 		{:else if block?.kind === "choices"}
@@ -210,7 +210,7 @@
 				{#if answered}
 					<!-- Answered once: the answer stands in for the buttons. -->
 					<p class="flex items-center gap-1 text-sm">
-						<Icons.Check size={14} aria-hidden="true" />
+						<sp-icon name="check" size="14"></sp-icon>
 						<span class="font-medium">{t("Answered")}</span>
 						{#if answeredChoiceLabel(block, answered)}
 							<span>· {answeredChoiceLabel(block, answered)}</span>
@@ -236,7 +236,7 @@
 										blockIdOf(block)
 									)}
 							>
-								<Icons.Play size={14} aria-hidden="true" />
+								<sp-icon name="play" size="14"></sp-icon>
 								{action.label}
 							</button>
 						{/each}
@@ -249,7 +249,7 @@
 				class="flex flex-wrap items-center gap-1 text-sm opacity-60"
 				data-superseded="true"
 			>
-				<Icons.History size={14} aria-hidden="true" />
+				<sp-icon name="history" size="14"></sp-icon>
 				<span>{t("Superseded — the conversation moved on")}</span>
 			</p>
 		{:else if block?.kind === "form" && answeredOf(block)}
@@ -258,7 +258,7 @@
 					<p class="italic opacity-80">{caption(block)}</p>
 				{/if}
 				<p class="flex items-center gap-1">
-					<Icons.Check size={14} aria-hidden="true" />
+					<sp-icon name="check" size="14"></sp-icon>
 					<span class="font-medium">{t("Answered")}</span>
 				</p>
 			</div>
@@ -287,16 +287,17 @@
 									editField(i, key, e.currentTarget.checked)}
 							/>
 						{:else if d.type === "enum"}
-							<select
-								class="select select-sm"
-								value={formDrafts[i]?.[key] ?? d.default ?? ""}
-								onchange={(e) =>
-									editField(i, key, e.currentTarget.value)}
+							<sp-combobox
+								class="select-sm"
+								label={key}
+								value={String(formDrafts[i]?.[key] ?? d.default ?? "")}
+								onchange={(e: CustomEvent<{ value: string }>) =>
+									editField(i, key, e.detail.value)}
 							>
 								{#each d.of ?? [] as opt}
-									<option value={opt}>{opt}</option>
+									<sp-option value={opt}>{opt}</sp-option>
 								{/each}
-							</select>
+							</sp-combobox>
 						{:else if d.type === "number" || d.type === "integer"}
 							<input
 								type="number"

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { ConversationDossierV1 } from "$lib/shared/widgets/conversation"
 	/**
 	 * The **stage** — the live session drawn from a resolved layout document
 	 * (session layout v2, plan §3.1/§3.2). Behind `?stage=v2` until the parity
@@ -94,6 +95,8 @@
 		 * the unit sits in.
 		 */
 		conversationChildren?: Snippet
+		/** 🚧 Core's conversation widget's `session_full.v1` (C0b). */
+		conversationDossier?: ConversationDossierV1 | null
 		/**
 		 * The session's action venues (`sessions:actions`), threaded from the
 		 * page through `SessionLayout` — the `actions.v1` section every widget
@@ -125,6 +128,7 @@
 		sessionId,
 		session,
 		conversationChildren,
+		conversationDossier = null,
 		actions,
 		actionDispatch,
 		onFrameAction,
@@ -144,7 +148,7 @@
 			genreId
 		})
 	)
-	let decls = $derived(declsFor(manager.instances))
+	let decls = $derived(declsFor(manager.instances, manager.omitted))
 
 	// Handed over as getters rather than written in through an `$effect`: an
 	// effect runs AFTER the render that needed it, so the first paint would draw
@@ -575,6 +579,8 @@
 				{actions}
 				{actionDispatch}
 				onAction={onFrameAction}
+				grants={conversationDossier ? ["session:full"] : []}
+				scoped={conversationDossier ? { sessionFull: conversationDossier } : undefined}
 			>
 				{@render conversationChildren?.()}
 			</WidgetHost>

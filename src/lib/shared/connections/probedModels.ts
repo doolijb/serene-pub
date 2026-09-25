@@ -19,13 +19,28 @@
  * nothing usable is DROPPED rather than added as `""`, which the
  * `connection_models` check constraint refuses anyway — and which would mean
  * "the server's default model" on most services and an error on the rest.
+ *
+ * ⚠ It also no longer DISCARDS. Until 2026-09-23 `readOne` kept two fields and
+ * dropped every other key on the entry, which is why nothing downstream could
+ * say how big a context was or what a message cost — the facts arrived on every
+ * sync and died here. `readModelFacts` reads them; `modelSync` stores them.
  */
+import { readModelFacts, type ModelFacts } from "./modelFacts"
 
 export interface ProbedModel {
 	/** What the adapter would send. */
 	model: string
 	/** What to call it. Falls back to the identifier. */
 	name: string
+	/**
+	 * What the host said ABOUT it — context window, price, quantisation, size.
+	 *
+	 * Absent when the entry carried nothing, which is most of them: an OpenAI
+	 * official listing is `{id, object, created, owned_by}` and none of that is
+	 * a fact worth a column. See `modelFacts.ts` for why this is not merged into
+	 * `connection_models.context_window`.
+	 */
+	facts?: ModelFacts
 }
 
 /** Read one entry, in any of the shapes the adapters produce. */
@@ -45,7 +60,8 @@ function readOne(entry: unknown): ProbedModel | null {
 	const model = raw.trim()
 	const name =
 		typeof e.name === "string" && e.name.trim() ? e.name.trim() : model
-	return { model, name }
+	const facts = readModelFacts(e)
+	return facts ? { model, name, facts } : { model, name }
 }
 
 /**

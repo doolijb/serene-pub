@@ -62,17 +62,51 @@ function cacheUsageFrom(usage: unknown): {
 	}
 }
 
-// Known Claude models for listModels
+/**
+ * Known Claude models for `listModels`, with their facts.
+ *
+ * Anthropic's `GET /v1/models` answers `{id, display_name, created_at}` and
+ * nothing else — no context window, no pricing — so unlike every other service
+ * the facts here cannot come off the wire. They are stated, and they are stated
+ * as `source: "list"` rather than `"host"`: a person reading a price should know
+ * it came from a table in this repo that can go stale, not from Anthropic
+ * answering a question just now.
+ *
+ * ⚠ Prices are USD per MILLION tokens, which is how Anthropic publishes them —
+ * the OpenRouter reader multiplies because OpenRouter quotes per token. Two
+ * services, two units, one field; the conversion belongs at each seam.
+ */
+const CLAUDE_CONTEXT = 200_000
+const claude = (
+	id: string,
+	name: string,
+	inPerMTok: number,
+	outPerMTok: number,
+	maxOutputTokens: number,
+	vision = true
+) => ({
+	id,
+	name,
+	facts: {
+		contextWindow: CLAUDE_CONTEXT,
+		maxOutputTokens,
+		pricing: { inPerMTok, outPerMTok, currency: "USD" },
+		family: "claude",
+		...(vision ? { inputModalities: ["text", "image"] } : {}),
+		source: "list" as const
+	}
+})
+
 const ANTHROPIC_MODELS = [
-	{ id: "claude-opus-4-6", name: "Claude Opus 4.6" },
-	{ id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
-	{ id: "claude-opus-4-5", name: "Claude Opus 4.5" },
-	{ id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
-	{ id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5" },
-	{ id: "claude-3-7-sonnet-20250219", name: "Claude 3.7 Sonnet" },
-	{ id: "claude-3-5-sonnet-20241022", name: "Claude 3.5 Sonnet" },
-	{ id: "claude-3-5-haiku-20241022", name: "Claude 3.5 Haiku" },
-	{ id: "claude-3-opus-20240229", name: "Claude 3 Opus" }
+	claude("claude-opus-4-6", "Claude Opus 4.6", 15, 75, 32_000),
+	claude("claude-sonnet-4-6", "Claude Sonnet 4.6", 3, 15, 64_000),
+	claude("claude-opus-4-5", "Claude Opus 4.5", 15, 75, 32_000),
+	claude("claude-sonnet-4-5", "Claude Sonnet 4.5", 3, 15, 64_000),
+	claude("claude-haiku-4-5-20251001", "Claude Haiku 4.5", 1, 5, 64_000),
+	claude("claude-3-7-sonnet-20250219", "Claude 3.7 Sonnet", 3, 15, 64_000),
+	claude("claude-3-5-sonnet-20241022", "Claude 3.5 Sonnet", 3, 15, 8_192),
+	claude("claude-3-5-haiku-20241022", "Claude 3.5 Haiku", 0.8, 4, 8_192, false),
+	claude("claude-3-opus-20240229", "Claude 3 Opus", 15, 75, 4_096)
 ]
 
 // ── Attachments on the wire ─────────────────────────────────────────────────

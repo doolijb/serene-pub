@@ -24,9 +24,11 @@
  */
 import { getContext } from "svelte"
 import {
+	EMPTY_TURN_ORDER,
 	formatChannel,
 	parseChannel,
 	WIDGET_PROTOCOL,
+	type TurnOrderV1,
 	type WidgetProtocolVersion
 } from "@serene-pub/sdk"
 import { actionIdentity, parseActionIdentity } from "$lib/shared/actions/identity"
@@ -51,11 +53,17 @@ export type {
 	WidgetEvent,
 	WidgetEventKind,
 	WidgetPayload,
+	WidgetRequestKind,
+	WidgetRequests,
 	WidgetTier,
-	WidgetVerbs
+	WidgetVerbs,
+	ViewerV1
 } from "@serene-pub/sdk"
 
 import type {
+	ViewerV1,
+	WidgetRequestKind,
+	WidgetRequests,
 	ActionsV1,
 	LayoutV1,
 	MessageV1,
@@ -143,6 +151,14 @@ export interface ProjectInput {
 	settings?: Payload
 	/** The session's action venues (`sessions:actions`), as the host holds them. */
 	actions?: ActionsV1
+	/** The viewer's view of the session annex (R57), as the page holds it — already the viewer's. */
+	annex?: Record<string, Record<string, unknown>>
+	/** The viewer's language code — `locale.v1`; `en` when the host has none. */
+	locale?: string
+	/** Who is looking — `viewer.v1`; nobody in particular when the host has no one. */
+	viewer?: ViewerV1
+	/** The session's stored turn order — `turnOrder.v1`; empty when the host has none. */
+	turnOrder?: TurnOrderV1
 	placement: PlacementInput
 	/** The effective granted scopes (declared − admin-denied). Default none. */
 	grants?: WidgetScope[]
@@ -386,7 +402,12 @@ export function projectWidgetData(input: ProjectInput): WidgetData {
 		messages: { v1: scopeMessages(input.messages, input.channels) as MessageV1[] },
 		props: { v1: { ...(input.props ?? {}) } },
 		settings: { v1: { ...(input.settings ?? {}) } },
-		actions: { v1: projectActions(input.actions) }
+		actions: { v1: projectActions(input.actions) },
+		// Detached, like every section: a widget cannot reach into the page's copy.
+		annex: { v1: JSON.parse(JSON.stringify(input.annex ?? {})) },
+		locale: { v1: input.locale ?? "en" },
+		viewer: { v1: { ...NOBODY, ...(input.viewer ?? {}) } },
+		turnOrder: { v1: JSON.parse(JSON.stringify(input.turnOrder ?? EMPTY_TURN_ORDER)) }
 	}
 
 	// Scoped sections — present iff granted AND source data supplied.
@@ -538,6 +559,29 @@ export function buildNativeContext(
 			)
 	}
 }
+
+/** The viewer a host with no one to name reports: not an admin, not a guest. */
+const NOBODY: ViewerV1 = { userId: null, isAdmin: false, isGuest: false }
+
+/**
+ * What a host answers a widget's `request` with (C0b) — the session page
+ * provides one under {@link WIDGET_REQUESTS_KEY}; the native host and the
+ * widget wire both read it, so a native widget, a frame and a remote ask the
+ * same handler. Rejects to decline.
+ */
+export type WidgetRequestHandler = <K extends WidgetRequestKind>(
+	kind: K,
+	params: WidgetRequests[K]["params"],
+	/** Which widget asks, and whose it is — `core`, or the plugin's id. */
+	from: { widgetId: string; owner: string }
+) => Promise<WidgetRequests[K]["result"]>
+
+/** The Svelte context keys a session page provides beside the annex. */
+export const WIDGET_REQUESTS_KEY = "widgetRequests"
+export const SESSION_VIEWER_KEY = "sessionViewer"
+export const SESSION_TURN_ORDER_KEY = "sessionTurnOrder"
+/** The conversation dossier (`session_full.v1`), for a widget granted `session:full`. */
+export const SESSION_DOSSIER_KEY = "sessionDossier"
 
 /** The Svelte context key native widgets read their ctx from. */
 export const WIDGET_CONTEXT_KEY = "widget"

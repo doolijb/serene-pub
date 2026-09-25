@@ -245,7 +245,14 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 	const variableLabels = new Map<string, string>()
 	const promptLabels = new Map<string, string>()
 
+	// A disabled plugin's rows are not listed (R67, owner 2026-09-24): its
+	// pipelines, prompts and templates come back when it is turned on. A row
+	// an uninstalled plugin left behind has no owner and is still listed.
+	const { disabledPlugins } = await import("$lib/server/plugins/disabledPlugins")
+	const off = await disabledPlugins(db)
+
 	for (const spec of specs as any[]) {
+		if (off.owns(spec.sourcePluginId)) continue
 		const [version] = spec.activeVersionId
 			? await db
 					.select()
@@ -321,14 +328,16 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 			.select()
 			.from(schema.pipelinePrompts)
 			.orderBy(asc(schema.pipelinePrompts.id))
-	).map((p: any) => {
+	)
+		.filter((p: any) => !off.owns(p.ownerPluginId))
+		.map((p: any) => {
 		const poolId = promptPoolKeyFor(p.nodeDefinitionId, p.slot)
 		return {
 			id: p.id,
 			poolId,
 			// A row whose pool nothing currently declares still gets a heading
-			// — a prompt left behind by a disabled plugin is exactly what an
-			// admin came here to find. The id is a poor heading, so it is
+			// — a prompt an uninstalled plugin left behind is exactly what an
+			// admin came here to find (a disabled plugin's is not listed, R67). The id is a poor heading, so it is
 			// humanized rather than shown raw.
 			poolLabel:
 				promptLabels.get(poolId) ??
@@ -350,7 +359,9 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 			.select()
 			.from(schema.pipelineContextTemplates)
 			.orderBy(asc(schema.pipelineContextTemplates.id))
-	).map((t: any) => {
+	)
+		.filter((t: any) => !off.owns(t.ownerPluginId))
+		.map((t: any) => {
 		const engine = t.engine ?? CORE_TEMPLATE_ENGINE
 		return {
 			id: t.id,
@@ -375,7 +386,9 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 			.select()
 			.from(schema.pipelineVariableTemplates)
 			.orderBy(asc(schema.pipelineVariableTemplates.id))
-	).map((t: any) => {
+	)
+		.filter((t: any) => !off.owns(t.ownerPluginId))
+		.map((t: any) => {
 		// The registry is a fact about the running build and the row came from
 		// the database, so a layout whose plugin is disabled is normal rather
 		// than an error — it falls back to the raw id instead of vanishing from

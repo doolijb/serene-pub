@@ -32,7 +32,7 @@ Click **New** at the top of the Sessions sidebar — or **Start a session** on t
 
 A step with exactly one answer takes it silently and shows as its summary line rather than asking — so a stock install, one genre and one preset, opens on **Who is in it**. If an administrator has enabled no preset for a genre, the step says so and **Start** is disabled: there is nothing to start the session from.
 
-Everything else a session has — tags, the group reply strategy, turn order, per-pipeline settings, the lorebook again if you want to change it, and the scenario again if you skipped it here — is set afterwards in the session's own settings. See [Editing session settings](#editing-session-settings-later).
+Everything else a session has — tags, turn order, per-pipeline settings, the lorebook again if you want to change it, and the scenario again if you skipped it here — is set afterwards in the session's own settings. See [Editing session settings](#editing-session-settings-later).
 
 The preset is doing more than labelling the bundle: its **event bindings** are what decide which pipeline answers each of the genre's events — the reply, the greeting on creation, each action that comes along — and which named configuration that pipeline runs with, so two presets on one genre can differ entirely in what a turn actually does. Administrators set both of those, and the pre-filled values the start screen opens with, on the preset's own page under **Admin → Session presets** (bindings under _Event bindings_, the pre-fill under _Creation defaults_).
 
@@ -88,21 +88,33 @@ Inside a session, clicking a message's avatar opens an **avatar gallery modal** 
 
 A session becomes a "group session" as soon as it has more than one character attached. Group sessions add turn-order mechanics that 1:1 sessions don't need.
 
-### Group Reply Strategy
+### Turn order
 
-When a session has 2+ characters, _or_ 2+ personas with just one character, the session settings form shows a **Group Reply Strategy** dropdown with:
+Who replies next is **state**: every genre has its own turn-order pipeline, which runs after each message lands (and after cast or settings changes) and writes the session's prepared turns down. It writes no message; the order it wrote is what the "who's next" line and **Continue** read. By default it follows rules and calls no model. The session settings form shows a card for it, **Turn order (Chat) · Strategy**, which chooses the strategy those rules use. Its default, *Pipeline default*, is the pipeline's own, which for Chat is round robin. The same form shows a card for any other step a genre's pipelines let a session swap, each applied on its own.
 
-- **Ordered (Round-robin)** — the default. Characters take turns in their configured order — see Turn Order & Round-Robin Replies, below, for exactly how Serene Pub decides who's due.
-- **User-Split (Round-robin by user)** — only offered when user accounts are enabled system-wide, since it's meaningless with a single user. Instead of interleaving every participant's cast together, it groups personas and characters by which user owns them — one user's entire cast completes a turn before the next user's does.
-- **Manual (User selects)** — you pick who responds with **Pick who speaks** in the Actions row instead of relying on the automatic rotation.
+Chat can instead let **the model** decide: set **Who speaks next is decided by** to *The model*. Each time the order is recomputed, the model reads the recent conversation and orders who speaks next among those who have not spoken since your last message — so a round still ends. It costs one model call per recompute. When the model's answer names nobody who can speak, or no answer arrives, round robin stands and the run report says so. A plugin can offer its own model strategy in its place. Core's rule strategies:
+
+- **Round robin** — the default. Every active character speaks once, in their configured order, after each of your messages — see Turn Order & Round-Robin Replies, below.
+- **Round robin by user** — the characters owned by whoever sent the last message complete a turn before anyone else's. Only meaningful with several accounts in one session; with a single user it behaves like round robin.
+- **Random** — a seeded draw over the active characters (and any genre-provided speaker that takes turns). Seeded, so a replayed run seats the same character.
+- **Scripted** — round robin, with scripts in charge: attach **Select the speaker** scripts to the speaker step in the Pipelines panel (a script kind an extension can also provide) and the first script to name a candidate wins; when none does, the round-robin answer stands.
+- **Manual** — nobody auto-replies; the line beside the composer reads *Waiting for a message — or pick who speaks next*, and **Pick** chooses who responds.
+- **Narrator replies** — one narrator turn after each of your messages, in the pipeline's own voice rather than a character's.
+
+Which of these a session may choose is the genre's turn-order pipeline to say: Chat's offers the six above, plus any strategy an installed plugin contributes to it (an administrator can switch a contribution off, which also returns sessions that picked it to the default). The Guide, the Writing Room and the narrator-driven genres (Adventure, the Lair, Whodunit) offer no choice and show no Turn order control. A session preset can seed a strategy as a creation default. If a seeded choice cannot be applied (the step no longer offers it), the session still starts, on the pipeline's default for that step, and a notice says which setting was not applied and why.
 
 ### Who is due next
 
-In a group session, once it is a character's turn (and you have no draft and no edit in progress),
-one line appears beside the composer: the character's avatar, *Wren is ready to continue*, a quiet
-**Someone else** button to pick a different character, and **Continue** to send them in. While it
-shows, Continue is the one primary button on the surface and Send steps back to a tonal fill. The
-Messages panel's **Show who is due next** setting hides the line.
+The line beside the composer shows the head of the session's prepared turns, exactly as the turn-order pipeline wrote them. Nothing on the page works it out again. While you have no draft and no edit in progress:
+
+- a character's turn reads *Wren is ready to continue*, with **Continue** to send them in;
+- a narrator turn reads *The narrator is ready to continue*, also with **Continue**;
+- a person's turn reads *Your turn* for your own persona, or *<name>'s turn* for someone else's, with no Continue: a person's turn is taken by writing;
+- when nobody is prepared, because a round is over or the strategy is Manual, it reads *Waiting for a message — or pick who speaks next*.
+
+**Someone else** (or **Pick**) opens *Who speaks next?*, a list of the session's characters and speakers from the same prepared order, with the next one marked. Choosing one fires their turn instead. A session's owner may pick anyone; a guest may only take a prepared turn that is theirs. While the line offers Continue, Continue is the one primary button on the surface and Send steps back to a tonal fill.
+
+The Messages panel's **Who is due next** setting chooses how much the line shows: `head` (the default) is the line above, `list` adds who follows after that (*Then Mira, Tobin*), and `hidden` removes it. A panel that had *Show who is due next* switched off reads as `hidden`.
 
 ### Triggering Responses Manually
 
@@ -124,13 +136,11 @@ Deactivating a character is the right tool when you want to "bench" a character 
 
 ### Turn Order & Round-Robin Replies
 
-Serene Pub decides who's due for a reply by looking at recent message history, not by tracking a persistent "whose turn is it" pointer — the whole rotation is recomputed fresh every time. Let N be the number of active characters plus personas attached to the session. Any character who hasn't sent a message in the last N-1 messages is **due**. If more than one character is due at once, whichever has gone the longest without replying is suggested first. When every character has replied within those N-1 messages, nobody is due — it's your turn.
+Round robin is **once per turn of yours**: after each message you send, every active character speaks once, in their configured order, and a character who has already spoken since your last message is not due again until you speak again. When everyone has spoken, nobody is due — it's your turn. Sending twice in a row opens a fresh round.
 
-That lookback is the whole rule. Messages written outside the rotation — a character's answers to a form, two of your sends in a row, two manual triggers on one character — push the other cast members further back and make them due sooner; they never leave the rotation with nobody to pick.
+The rule is computed from the visible history every time, not tracked as a pointer, so nothing can get "stuck": manually triggering a character out of turn (see Triggering Responses Manually, above) simply counts as that character's turn for the round, and the others are still owed theirs. Hidden messages and Narrator responses are outside the rotation entirely, and a genre-provided speaker's line (the Guide's mascot, the Writing Room's scribe) never marks a character as having spoken. A brand-new session with greetings starts on your turn; one without them starts on the first character's.
 
-A character who has never sent a single message in the visible history is always treated as immediately due — this is what makes a brand-new session produce its first reply, and what gives a character newly added mid-session a first turn at once.
-
-Because this is recomputed from history rather than tracked as state, a persona doesn't have to wait for every other persona to speak before the next due character can go, and manually triggering a character out of turn (see Triggering Responses Manually, above) never leaves the rotation "stuck" on a character who was skipped — the very next automatic check just re-reads the updated history and picks correctly from it.
+The decision is recorded: every reply's run report names the strategy that ran and whether it seated the character the trigger asked for or one it chose itself — so "why did Bram speak?" is answered on the receipt, not guessed.
 
 ## Personas & Persona Switching
 
@@ -208,7 +218,7 @@ What the genre contributes comes first as filled chips: an adventure session has
 and **Time passes**; a chat session has its Narrator, **Side character** and **Image**, and whatever
 its pipelines add. After them, as outlined chips, the turn controls (hidden from guests):
 
-- **Continue** — checks who is due per the round-robin logic (see Group Sessions above) and keeps
+- **Continue** — asks the reply pipeline who is due (see Turn order above) and keeps
   generating, one at a time, until nobody is due. Present when the genre offers `continue`.
 - **Pick who speaks** — opens the character search (name, nickname, description or creator notes)
   with the Narrator pinned above the box, and generates exactly one response from whoever you pick;
@@ -363,9 +373,15 @@ a model: it belongs in the composer or the review gate, and a pipeline that trie
 message is refused at the write. So a character asking a question is fine, and a character
 granting another character permission is impossible by construction.
 
-### Auto-Cascading Group Replies
+### Auto-advance: what a send sets in motion
 
-In a group session, any single persona message is enough to trigger a check for whether a character is now due (see Turn Order & Round-Robin Replies, above) — Serene Pub doesn't wait for every persona in the session to chime in first. If a character is due, they're generated automatically; if not, nothing happens until the rotation says someone is.
+After you send, the turn order is recomputed, and the session's **Auto-advance** setting decides what happens next:
+
+- **Off** — nothing replies until you press **Continue** (or pick someone). A send with auto-advance off waits for you; that is the feature.
+- **Next turn** — the first prepared turn is fired once.
+- **Whole round** — Chat's default. The first turn is fired, and when that reply finishes the order is recomputed and the next is fired, until the order is empty, it reaches a person's turn, or a safety cap is hit.
+
+Only your own send starts this. Edits, deletes, settings changes and imports recompute the order but fire nothing. **Stop ends the round**: a reply you stop does not fire the next turn, whichever way the stop lands. A person's turn in the order is shown, never generated — that is how the session knows it is your turn. Under **Manual** the order is always empty, so nothing fires until you pick someone.
 
 ## Message Actions
 
@@ -388,7 +404,7 @@ nothing is reachable only by hovering (see [Where an action appears](#where-an-a
 | Edit                | Quick action; ⋮             | Any message, unless something is generating or it is hidden                 | Owner, or the persona/character's owner |
 | Branch from here    | ⋮                           | Any message, unless something is generating                                 | Owner                                   |
 | Select for summary  | ⋮                           | Any non-generating message                                                  | Any participant with session access     |
-| Inspect run         | ⋮                           | Character or Narrator messages a pipeline run produced                      | Whoever triggered that run              |
+| Inspect run         | ⋮                           | Character or Narrator messages a pipeline run produced                      | Administrators                          |
 | Prompt details      | ⋮                           | Character messages with recorded debug metadata, if context debugging is on | Anyone who can see the message          |
 | Hide / Unhide       | ⋮                           | Any message                                                                 | Owner, or the persona/character's owner |
 | Delete              | ⋮                           | Any message                                                                 | Owner, or the persona/character's owner |
@@ -418,7 +434,7 @@ the column.
 
   Members removed from the source are not copied at all: a removed row coming back as active in the branch would undo the removal.
 - **Select for summary** — enters summarization selection mode (see below). Not shown while a message is generating.
-- **Inspect run**. Only on a reply a pipeline run produced, and only once it has finished generating. Opens the run inspector: one sentence saying what the run did, every stage in the order it ran, and for a selected stage the prompt it built, what it published, and which stop sequences went on the wire. See [Inspecting a run](./pipelines.md#inspecting-a-run).
+- **Inspect run**. Administrators only, only on a reply a pipeline run produced, and only once it has finished generating. Opens the run inspector: one sentence saying what the run did, every stage in the order it ran, and for a selected stage the prompt it built, what it published, and which stop sequences went on the wire. See [Inspecting a run](./pipelines.md#inspecting-a-run).
 - **Prompt details** — only shown with context debugging enabled and only once the message has recorded debug metadata; opens the same Prompt Details modal described under Statistics, scoped to that message's generation.
 - **Hide / Unhide** — toggles `isHidden`; hidden messages are dimmed in the thread, marked with the ghost badge, and excluded from what gets sent to the model, without deleting them.
 - **Delete** — opens a confirmation modal before permanently removing the message.
@@ -753,6 +769,26 @@ When a session has a lorebook bound to it, the composer gains a **Lore** tab (bo
 - A **Recent Entries** list (up to five prior entries) for quick navigation back into lorebook history.
 
 This tab is a shortcut layer over the [lorebook](./lorebooks.md)'s own history-entry and scene features — the full editing experience lives in the Lorebooks panel.
+
+## Sprites
+
+When a character has [sprites](./characters.md#sprites), a session can show the face that fits each line.
+
+**Choosing a sprite automatically.** After a character's reply is saved, Serene Pub compares the reply with the character's sprite labels and records the closest one on the line. This uses the local embedding model, not the reply's model, so it adds no model call to a turn. With no embedding model loaded, nothing is chosen and faces stay as they were. To stop a face flickering on every line, the last sprite is kept unless a new one fits clearly better. The session's settings show this step's controls beside the turn controls: **Choose sprites** turns it off for the session, **Stickiness** sets how much better a new sprite must fit, and **Minimum similarity** sets how close a line must be to any sprite before one is chosen.
+
+**Changing a line's sprite.** The message menu's **Change sprite** lets anyone who can edit a character's line pick its face, or show none. The automatic choice never overwrites a sprite a person picked.
+
+**Swipes.** Each alternative of a message keeps its own sprite, so swiping back and forth changes the face with the text.
+
+**Where faces show.**
+
+- The **Scene Portraits** widget, set to show the scene, draws each character's **current sprite**: the one on their newest line. Its **Show sprites** setting turns this off.
+- The **Messages** widget's **Face beside each line** setting chooses between the character's avatar (the default) and the sprite that line showed. A line keeps the sprite set it was said in, so scrolling back past a change of outfit shows the old outfit on the old lines.
+- The cast faces in the session header follow the current sprite too.
+
+**Changing a character's sprite set for this session.** On a Scene Portraits face, the sprite-set menu shows the character in another of its card's sets for this session only, or returns to the set the story gives them. It appears when the card has more than one set. The session's owner or the character's owner can change it, and everyone in the session sees the change at once. Faces redraw straight away; new lines record the new set.
+
+Sprites can also gate actions: a genre or plugin can offer a button only while a character shows a given sprite (`sprites.<name>.label`).
 
 ## Pinned Images (Scene Images)
 

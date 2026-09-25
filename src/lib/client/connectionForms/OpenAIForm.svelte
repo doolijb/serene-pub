@@ -175,67 +175,12 @@
 </script>
 
 {#if connection}
-	<!-- Model picker removed: models live in the Models section below. -->
-	<div class="mt-4 flex gap-2">
-		<button
-			type="button"
-			class="btn preset-tonal-success btn-sm w-full"
-			onclick={handleTestConnection}
-			disabled={Object.keys(validationErrors).length > 0}
-		>
-			{#if testResult?.ok === true}
-				Test: Okay!
-			{:else if testResult?.ok === false}
-				Test: Failed!
-			{:else}
-				Test Connection
-			{/if}
-		</button>
-	</div>
-	{#if showFormat}
-		<Select
-			class="mt-2"
-			label="Prompt Format"
-			options={formatOptions.value}
-			bind:value={connection.promptFormat}
-		/>
-	{/if}
-	<Select
-		class="mt-2"
-		label="Token Counter"
-		options={TokenCounterOptions.options}
-		bind:value={connection.tokenCounter}
-	/>
-	<div class="mt-2 flex flex-col gap-1">
-		<label class="font-semibold" for="baseUrl">Base URL</label>
-		<input
-			id="baseUrl"
-			type="text"
-			bind:value={connection.baseUrl}
-			placeholder="https://api.openai.com/v1/"
-			required
-			class="input {validationErrors.baseUrl ? 'border-error-500' : ''}"
-			aria-invalid={validationErrors.baseUrl ? "true" : "false"}
-			aria-describedby={validationErrors.baseUrl
-				? "baseUrl-error"
-				: undefined}
-			oninput={() => {
-				if (validationErrors.baseUrl) {
-					const { baseUrl, ...rest } = validationErrors
-					validationErrors = rest
-				}
-			}}
-		/>
-		{#if validationErrors.baseUrl}
-			<p
-				id="baseUrl-error"
-				class="text-error-500 mt-1 text-sm"
-				role="alert"
-			>
-				{validationErrors.baseUrl}
-			</p>
-		{/if}
-	</div>
+	<!--
+		The CREDENTIAL first. It was the last field on the form, under Token
+		Counter and Base URL and below the fold — the one thing this connection
+		cannot work without, placed after two things most people never touch.
+		Prompt format and token counter moved into Advanced for the same reason.
+	-->
 	{#if openAIFields}
 		<div class="mt-2 flex flex-col gap-1">
 			<label class="font-semibold" for="apiKey">API Key</label>
@@ -268,11 +213,63 @@
 				</p>
 			{/if}
 		</div>
+		<!-- Model picker removed: models live in the Models section below. -->
+		<!-- The Test button lives on the connection view's status card, not
+	     here. Two Test buttons on one screen, styled differently and
+	     reporting into different places, was the shipped state. -->
+		<div class="mt-2 flex flex-col gap-1">
+			<label class="font-semibold" for="baseUrl">Base URL</label>
+			<input
+				id="baseUrl"
+				type="text"
+				bind:value={connection.baseUrl}
+				placeholder="https://api.openai.com/v1/"
+				required
+				class="input {validationErrors.baseUrl
+					? 'border-error-500'
+					: ''}"
+				aria-invalid={validationErrors.baseUrl ? "true" : "false"}
+				aria-describedby={validationErrors.baseUrl
+					? "baseUrl-error"
+					: undefined}
+				oninput={() => {
+					if (validationErrors.baseUrl) {
+						const { baseUrl, ...rest } = validationErrors
+						validationErrors = rest
+					}
+				}}
+			/>
+			{#if validationErrors.baseUrl}
+				<p
+					id="baseUrl-error"
+					class="text-error-500 mt-1 text-sm"
+					role="alert"
+				>
+					{validationErrors.baseUrl}
+				</p>
+			{/if}
+		</div>
 		<details class="mt-4">
-			<summary class="cursor-pointer font-semibold">
-				Advanced Settings
+			<summary
+				class="hover:preset-tonal-primary flex cursor-pointer items-center gap-2 rounded-[10px] px-2 py-2 text-[13px] font-medium"
+			>
+				Request settings
 			</summary>
 			<section class="w-full space-y-4 pt-2">
+				{#if showFormat}
+					<Select
+						class="mt-2"
+						label="Prompt Format"
+						options={formatOptions.value}
+						bind:value={connection.promptFormat}
+					/>
+				{/if}
+				<Select
+					class="mt-2"
+					label="Token Counter"
+					options={TokenCounterOptions.options}
+					bind:value={connection.tokenCounter}
+				/>
 				<Switch
 					name="stream"
 					checked={openAIFields.stream}

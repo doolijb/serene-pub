@@ -15,12 +15,13 @@
  */
 
 /** What the newest run did with an entry. */
-export type EntryDecision = "fired" | "considered"
+export type RetrievalMarker = "fired" | "considered"
 
 /** The newest run's decisions, by entry id. */
-export type EntryDecisions = Record<number, EntryDecision>
+export type EntryDecisions = Record<number, RetrievalMarker>
 
-export interface RetrievalMarker {
+/** How a retrieval marker is drawn and said. */
+export interface RetrievalMarkerDisplay {
 	glyph: string
 	/** The mark said in one word, for a screen reader and for a chip. */
 	label: string
@@ -28,7 +29,7 @@ export interface RetrievalMarker {
 	title: string
 }
 
-const MARKERS: Record<EntryDecision, RetrievalMarker> = {
+const MARKERS: Record<RetrievalMarker, RetrievalMarkerDisplay> = {
 	fired: {
 		glyph: "●",
 		label: "Fired",
@@ -45,7 +46,7 @@ const MARKERS: Record<EntryDecision, RetrievalMarker> = {
 export function markerFor(
 	decisions: EntryDecisions | null | undefined,
 	entryId: number
-): RetrievalMarker | null {
+): RetrievalMarkerDisplay | null {
 	const decision = decisions?.[entryId]
 	return decision ? MARKERS[decision] : null
 }

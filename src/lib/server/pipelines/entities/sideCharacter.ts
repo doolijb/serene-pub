@@ -15,7 +15,7 @@
  * literal — there is no row to add even if somebody wanted to.
  *
  * Round-robin exclusion is likewise **not** enforced here, deliberately.
- * `getNextCharacterTurn` drops every `isNarratorResponse` row before it matches
+ * the rotation (`rotationTurns`) drops every `isNarratorResponse` row before it matches
  * a character id, so a side-character turn is outside the rotation by the row it
  * writes. A second statement of the rule in this module would be free to
  * disagree with the first, and the first is the one the rotation actually reads.

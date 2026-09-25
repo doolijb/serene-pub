@@ -8,6 +8,7 @@
 	} from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
 	import EntityGalleryTab from "$lib/client/components/gallery/EntityGalleryTab.svelte"
+	import SpritesTab from "$lib/client/components/sprites/SpritesTab.svelte"
 	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
 	import PanelTabStrip from "$lib/client/components/panels/PanelTabStrip.svelte"
 
@@ -151,11 +152,18 @@
 	)
 
 	let activeTab = $state("details")
+	/** Stays true once the Sprites tab has been opened, so switching away does
+	 *  not drop and re-request its list. */
+	let spritesOpened = $state(false)
+	$effect(() => {
+		if (activeTab === "sprites") spritesOpened = true
+	})
 
-	/** The two halves of a character: what it says, and what it looks like. */
+	/** What a character says, what it looks like, and the faces it shows. */
 	const VIEW_TABS = [
 		{ value: "details", label: "Details", icon: Icons.UserRound },
-		{ value: "gallery", label: "Gallery", icon: Icons.Images }
+		{ value: "gallery", label: "Gallery", icon: Icons.Images },
+		{ value: "sprites", label: "Sprites", icon: Icons.Drama }
 	]
 </script>
 
@@ -412,6 +420,24 @@
 					isOwner={!!character.isOwner}
 					currentAvatarMediaId={character.avatarMediaId ?? null}
 				/>
+			</div>
+
+			<div
+				id="character-view-sprites"
+				role="tabpanel"
+				aria-labelledby="character-view-sprites-tab"
+				hidden={activeTab !== "sprites"}
+				class="min-h-0 flex-1 overflow-y-auto"
+			>
+				<!-- Mounted only once opened: the tab asks the server for the
+				     character's sprites, which a person reading Details never needs. -->
+				{#if activeTab === "sprites" || spritesOpened}
+					<SpritesTab
+						characterId={character.id}
+						characterName={character.nickname || character.name}
+						isOwner={!!character.isOwner}
+					/>
+				{/if}
 			</div>
 		</div>
 	{:else}

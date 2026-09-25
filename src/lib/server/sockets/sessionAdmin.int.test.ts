@@ -331,3 +331,94 @@ describe("sessions:create with a preset", () => {
 		])
 	}, 60_000)
 })
+
+describe("the genre hub's writes (B4, R66)", () => {
+	const GENRE = "test:genre/hub"
+
+	test("both refuse non-admins", async () => {
+		const { sessionGenresSetPresetsEnabled, sessionGenresSetSwapEnabled } =
+			await import("./sessionAdmin")
+		for (const h of [sessionGenresSetPresetsEnabled, sessionGenresSetSwapEnabled])
+			await expect(h.handler(user(), {} as any, noopEmit)).rejects.toThrow(/Unauthorized/)
+	})
+
+	test("disable all switches every live preset of the genre, and only that genre", async () => {
+		const { sessionGenresSetPresetsEnabled } = await import("./sessionAdmin")
+		const { eq } = await import("drizzle-orm")
+		const a = await makePreset({ genreId: GENRE, enabled: true })
+		const b = await makePreset({ genreId: GENRE, enabled: true })
+		const gone = await makePreset({ genreId: GENRE, enabled: true, withdrawnAt: new Date() })
+		const other = await makePreset({ genreId: "core:genre/chat", enabled: true })
+		const res = await sessionGenresSetPresetsEnabled.handler(
+			admin(),
+			{ genreId: GENRE, enabled: false },
+			noopEmit
+		)
+		expect(res).toMatchObject({ changed: 2, refused: [] })
+		const enabledOf = async (id: number) =>
+			(
+				await testDb
+					.select({ enabled: schema.sessionPresets.enabled })
+					.from(schema.sessionPresets)
+					.where(eq(schema.sessionPresets.id, id))
+			)[0].enabled
+		expect(await enabledOf(a.id)).toBe(false)
+		expect(await enabledOf(b.id)).toBe(false)
+		expect(await enabledOf(gone.id)).toBe(true)
+		expect(await enabledOf(other.id)).toBe(true)
+	})
+
+	test("a swap switch writes disabled_swaps, and refuses a swap the plugin does not declare", async () => {
+		const { sessionGenresSetSwapEnabled } = await import("./sessionAdmin")
+		const { eq } = await import("drizzle-orm")
+		const pluginId = "acme.swaps-hub"
+		await testDb.insert(schema.plugins).values({
+			pluginId,
+			name: "Swaps",
+			version: "1.0.0",
+			bundleSource: "// none",
+			bundleHash: "hub-swaps",
+			enabled: true,
+			manifest: {
+				swaps: [
+					{
+						spec: "core:spec/chat-turn-order",
+						node: "strategy",
+						definition: "acme.swaps-hub:task/dice@1"
+					}
+				]
+			} as any
+		})
+		const swap = {
+			pluginId,
+			spec: "core:spec/chat-turn-order",
+			node: "strategy",
+			definition: "acme.swaps-hub:task/dice@1"
+		}
+		const off = await sessionGenresSetSwapEnabled.handler(
+			admin(),
+			{ ...swap, enabled: false },
+			noopEmit
+		)
+		expect(off.ok).toBe(true)
+		const read = async () =>
+			(
+				await testDb
+					.select({ d: schema.plugins.disabledSwaps })
+					.from(schema.plugins)
+					.where(eq(schema.plugins.pluginId, pluginId))
+			)[0].d
+		expect(await read()).toEqual([
+			"core:spec/chat-turn-order#strategy#acme.swaps-hub:task/dice@1"
+		])
+		await sessionGenresSetSwapEnabled.handler(admin(), { ...swap, enabled: true }, noopEmit)
+		expect(await read()).toEqual([])
+		const bogus = await sessionGenresSetSwapEnabled.handler(
+			admin(),
+			{ ...swap, definition: "acme.swaps-hub:task/other@1", enabled: false },
+			noopEmit
+		)
+		expect(bogus.ok).toBe(false)
+		expect(await read()).toEqual([])
+	})
+})

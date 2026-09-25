@@ -26,6 +26,7 @@ import { registerSamplingConfigHandlers } from "./samplingConfigs"
 import { registerCompletionTemplateHandlers } from "./completionTemplates"
 import { registerCharacterHandlers } from "./characters"
 import { registerCharacterFolderHandlers } from "./characterFolders"
+import { registerSpriteHandlers } from "./sprites"
 import { registerContextConfigHandlers } from "./contextConfigs"
 import { registerSessionHandlers } from "./sessions"
 import { registerPromptConfigHandlers } from "./promptConfigs"
@@ -36,6 +37,7 @@ import { registerUserSettingsHandlers } from "./userSettings"
 import { registerLanguageHandlers } from "./language"
 import { registerLorebookHandlers } from "./lorebooks"
 import { registerEntryHandlers } from "./entries"
+import { registerAmendmentHandlers } from "./amendments"
 import { registerBindingSuggestionHandlers } from "./bindingSuggestions"
 import { registerMediaHandlers } from "./media"
 import { registerTagHandlers } from "./tags"
@@ -250,6 +252,7 @@ export function connectSockets(io: {
 		registerSystemSettingsHandlers(socket, emitToUser, register)
 		registerCharacterHandlers(socket, emitToUser, register)
 		registerCharacterFolderHandlers(socket, emitToUser, register)
+		registerSpriteHandlers(socket, emitToUser, register)
 		registerCardSourceHandlers(socket, emitToUser, register)
 		registerContextConfigHandlers(socket, emitToUser, register)
 		registerPromptConfigHandlers(socket, emitToUser, register)
@@ -259,6 +262,7 @@ export function connectSockets(io: {
 		registerSessionHandlers(socket, emitToUser, register)
 		registerLorebookHandlers(socket, emitToUser, register)
 		registerEntryHandlers(socket, emitToUser, register)
+		registerAmendmentHandlers(socket, emitToUser, register)
 		registerBindingSuggestionHandlers(socket, emitToUser, register)
 		registerTagHandlers(socket, emitToUser, register)
 		registerMediaHandlers(socket, emitToUser, register)

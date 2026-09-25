@@ -4,7 +4,7 @@
  * a *view onto channels*; the grid is *placement by CSS var only*; the tier is
  * chosen by the **content box** width, not the viewport.
  */
-import type { PanelDecl, SettingsSchema } from "@serene-pub/sdk"
+import type { PanelDecl, SettingsSchema, WidgetSurface } from "@serene-pub/sdk"
 
 export type { PanelDecl }
 
@@ -49,9 +49,12 @@ export interface PanelInstance {
 	title: string
 	icon?: string
 	role: "primary" | "secondary"
-	surface: PanelDecl["surface"]
+	/** What renders inside, resolved by the server from the declaration (R25). */
+	surface: WidgetSurface
 	/** Resolved frame document URL (frame surfaces only). */
 	src?: string
+	/** The scoped data a remote was granted (`ModePanel.grants`). */
+	grants?: Array<"persona" | "characters" | "lore" | "session:full">
 	channels: string[]
 	/** The per-instance settings this panel declares (shared/widgets/settings). */
 	settings?: SettingsSchema

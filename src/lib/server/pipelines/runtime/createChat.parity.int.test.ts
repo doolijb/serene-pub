@@ -167,16 +167,19 @@ describe("creation as a run (24 §12)", () => {
 		expect(dispatched).toBeNull()
 	}, 120_000)
 
-	test("member events resolve to nothing today — the seam, not a subscriber", async () => {
+	test("member events route to the genre's turn-order spec (PLAN-turn-order §4.5)", async () => {
 		const { resolveSessionEventSpec } = await import(
 			"$lib/server/pipelines/runtime/sessionEvents"
 		)
+		// Chat binds its turn-order spec on every one of the nine events a
+		// cast genre recomputes on (§4.5), including a row landing — the
+		// create floor never answers one, and this is the seam that says so.
 		expect(
 			await resolveSessionEventSpec(
 				db,
 				"core:genre/chat",
 				"core:event/member-added@1"
 			)
-		).toBeNull()
+		).toBe("core:spec/chat-turn-order")
 	}, 120_000)
 })

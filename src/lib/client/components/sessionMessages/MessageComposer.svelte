@@ -1,8 +1,6 @@
 <script lang="ts">
-	import { Tabs, Popover, Portal } from "@skeletonlabs/skeleton-svelte"
-	import * as Icons from "@lucide/svelte"
-	import { onMount, type Snippet } from "svelte"
-	import { renderMarkdownWithQuotedText } from "$lib/client/utils/markdownToHTML"
+	import type { Snippet } from "svelte"
+	import { useWidgetContext } from "$lib/shared/widgets/context"
 
 	interface Props {
 		markdown: string
@@ -94,20 +92,14 @@
 	// other textarea. There is deliberately no on-screen hint for this — it was
 	// permanent noise under every session, and gating it on "only while typing"
 	// just traded that for a layout jump on the first keystroke.
-	let submitOnEnter = $state(true)
+	// The widget's box, not the window: a remote has no window to ask.
+	const widget = useWidgetContext()
+	const submitOnEnter = $derived(widget?.current.layout?.v1?.tier !== "compact")
 
 	function handleSend(e: KeyboardEvent | MouseEvent | undefined = undefined) {
 		if (e) e.preventDefault()
 		onSend()
 	}
-
-	onMount(() => {
-		const mq = window.matchMedia("(min-width: 1024px)")
-		const update = () => (submitOnEnter = mq.matches)
-		update()
-		mq.addEventListener("change", update)
-		return () => mq.removeEventListener("change", update)
-	})
 
 	function handleKeyDown(e: KeyboardEvent) {
 		if (e.key === "Escape" && onCancel) {
@@ -137,8 +129,10 @@
 	 * text, so a select-all means the first keystroke destroys the message. */
 	function focusAtEnd(node: HTMLTextAreaElement) {
 		if (!autofocus) return
-		node.focus({ preventScroll: true })
-		node.setSelectionRange(node.value.length, node.value.length)
+		// Natively, here; in a worker the page does it (`autofocus`, which the
+		// receiver honours as the field lands).
+		node.focus?.({ preventScroll: true })
+		node.setSelectionRange?.(node.value.length, node.value.length)
 	}
 
 	$effect(() => {
@@ -150,57 +144,61 @@
 	})
 </script>
 
-<Tabs
+<!-- `sp-tabs` (§3.5): the list is drawn from the `sp-tab`s; the panels may sit
+     anywhere below, each finding its tabs. The list's own look is set from
+     here through its part (`.sp-tabs-list`). A panel's field raises `change`
+     too, so only the element's own counts as a tab change. -->
+<sp-tabs
 	value={tabGroup}
-	class={classes}
-	onValueChange={(e) => (tabGroup = e.value)}
-	role="region"
-	aria-label="Message composer"
+	label="Message composer"
+	class="{classes} [&_.sp-tabs-list]:flex [&_.sp-tabs-list]:flex-wrap [&_.sp-tabs-list]:items-center [&_.sp-tabs-list]:gap-1 [&_.sp-tabs-list]:border-none [&_.sp-tabs-list]:pt-[0.2em] [&_.sp-tabs-list]:pb-0"
+	onchange={(e: CustomEvent<{ value: string }>) => {
+		if (e.target === e.currentTarget) tabGroup = e.detail.value
+	}}
 >
 	<!-- Every trigger carries its own `title` and `aria-label`. A tab strip that
 	     shows icons only while inactive has no text to name it, and a name put
 	     on a generic element inside the button is not exposed at all — it has to
 	     be on the button. -->
-	<Tabs.List
-		class="flex flex-wrap items-center gap-1 border-none pt-[0.2em] pb-[0]"
-	>
+		<!-- One block per tab: an sp element seats each tab's content in its
+		     own trigger, and Svelte removes a block by walking its nodes as
+		     siblings — two tabs in one block would leave one behind. -->
 		{#if !hideCompose}
-			<Tabs.Trigger
+			<sp-tab
 				value="compose"
+				label="Compose"
 				class="flex min-h-[2em] items-center justify-center"
-				title="Compose"
-				aria-label="Compose"
 			>
 				<span class="flex items-center gap-1">
-					<Icons.Pen size="0.75em" aria-hidden="true" />
+					<sp-icon name="pen" size="0.75em"></sp-icon>
 					{#if tabGroup === "compose"}<span class="text-xs">
 							Compose
 						</span>{/if}
 				</span>
-			</Tabs.Trigger>
-			<Tabs.Trigger
+			</sp-tab>
+		{/if}
+		{#if !hideCompose}
+			<sp-tab
 				value="preview"
+				label="Preview"
 				class="flex min-h-[2em] items-center justify-center"
-				title="Preview"
-				aria-label="Preview"
 			>
 				<span class="flex items-center gap-1">
-					<Icons.Eye size="0.75em" aria-hidden="true" />
+					<sp-icon name="eye" size="0.75em"></sp-icon>
 					{#if tabGroup === "preview"}<span class="text-xs">
 							Preview
 						</span>{/if}
 				</span>
-			</Tabs.Trigger>
+			</sp-tab>
 		{/if}
 		{#if extraTabs}
 			{#each extraTabs as tab}
-				<Tabs.Trigger
+				<sp-tab
 					value={tab.value}
+					label={tab.title}
 					class="flex min-h-[2em] items-center justify-center {tab.alwaysVisible
 						? ''
 						: 'max-lg:hidden'}"
-					title={tab.title}
-					aria-label={tab.title}
 				>
 					<span class="flex items-center gap-1">
 						{@render tab.control?.()}
@@ -208,7 +206,7 @@
 								{tab.title}
 							</span>{/if}
 					</span>
-				</Tabs.Trigger>
+				</sp-tab>
 			{/each}
 			{#if collapsibleExtraTabs.length > 0}
 				<!-- `self-stretch` rather than any stated height: it makes this
@@ -222,18 +220,17 @@
 				     out 29.9px against the tabs' 34.1px — and `pt-[0.7em]` was a
 				     hand-tuned patch for the difference that still left the icon
 				     2px below centre. -->
-				<div class="flex self-stretch lg:hidden">
-					<Popover
+				<div slot="list-end" class="flex self-stretch lg:hidden">
+					<!-- `sp-popover` (§3.5): our button is the trigger, the card the panel. -->
+					<sp-popover
+						placement="top"
 						open={showMoreMenu}
-						onOpenChange={(e) => (showMoreMenu = e.open)}
-						positioning={{ placement: "top" }}
+						onopen-change={(e: CustomEvent<{ open: boolean }>) => (showMoreMenu = e.detail.open)}
 					>
-						<Popover.Trigger
-							class="btn flex items-center justify-center px-2 {activeExtraTab
+						<button slot="trigger" type="button" class="btn flex items-center justify-center px-2 {activeExtraTab
 								? 'preset-tonal-primary'
 								: ''}"
-							aria-label="More composer tabs"
-						>
+							aria-label="More composer tabs">
 							<span
 								class="flex w-full items-center justify-center gap-1"
 							>
@@ -243,24 +240,13 @@
 										{activeExtraTab.title}
 									</span>
 								{:else}
-									<Icons.EllipsisVertical
-										size="0.9em"
-										class="block"
-										aria-hidden="true"
-									/>
+									<sp-icon name="ellipsis-vertical" size="0.9em" class="block"></sp-icon>
 								{/if}
 							</span>
-						</Popover.Trigger>
-						<Portal>
-							<Popover.Positioner class="z-[1000]!">
-								<Popover.Content
-									class="card bg-surface-200-800 w-[min(90vw,240px)] space-y-4 p-4 shadow-xl"
-								>
+						</button>
+						<div class="card bg-surface-200-800 w-[min(90vw,240px)] space-y-4 p-4 shadow-xl">
 									<header class="popover-menu-title">
-										<Icons.EllipsisVertical
-											size={18}
-											aria-hidden="true"
-										/>
+										<sp-icon name="ellipsis-vertical" size="18"></sp-icon>
 										<p>More</p>
 									</header>
 									<article class="flex flex-col gap-2">
@@ -281,19 +267,11 @@
 											</button>
 										{/each}
 									</article>
-									<Popover.Arrow>
-										<Popover.ArrowTip
-											class="!bg-surface-200 dark:!bg-surface-800"
-										/>
-									</Popover.Arrow>
-								</Popover.Content>
-							</Popover.Positioner>
-						</Portal>
-					</Popover>
+						</div>
+					</sp-popover>
 				</div>
 			{/if}
 		{/if}
-	</Tabs.List>
 	<!-- Spacing lives on the side groups as padding rather than as a `gap` on
 	     this row, and each group only renders when it actually has something in
 	     it. With a gap, the wrapper was always a flex item even when its
@@ -313,7 +291,7 @@
 		{/if}
 		<div class="w-full">
 			{#if !hideCompose}
-				<Tabs.Content value="compose">
+				<sp-tab-panel value="compose">
 					<label class="sr-only" for={inputId}>
 						Type your message here
 					</label>
@@ -328,15 +306,16 @@
 						spellcheck="true"
 						onkeydown={handleKeyDown}
 						use:focusAtEnd
+						autofocus={autofocus || undefined}
 						aria-describedby={contextExceeded
 							? warningId
 							: undefined}
 						aria-invalid={contextExceeded}
 					></textarea>
-				</Tabs.Content>
+				</sp-tab-panel>
 			{/if}
 			{#if !hideCompose}
-				<Tabs.Content value="preview">
+				<sp-tab-panel value="preview">
 					<!-- Sized to land on the same row height as the compose tab so
 				     switching between them doesn't resize the bar. On mobile the
 				     compose row is set by the 48px send button (taller than the
@@ -350,18 +329,18 @@
 						aria-label="Message preview"
 					>
 						<div class="rendered-session-message-content">
-							{@html renderMarkdownWithQuotedText(markdown)}
+							<sp-message-body text={markdown}></sp-message-body>
 						</div>
 					</div>
-				</Tabs.Content>
+				</sp-tab-panel>
 			{/if}
 			{#if extraTabs}
 				{#each extraTabs as tab}
-					<Tabs.Content value={tab.value}>
+					<sp-tab-panel value={tab.value}>
 						<div role="region" aria-label="{tab.title} content">
 							{@render tab.content?.()}
 						</div>
-					</Tabs.Content>
+					</sp-tab-panel>
 				{/each}
 			{/if}
 		</div>
@@ -394,4 +373,4 @@
 			</div>
 		</div>
 	{/if}
-</Tabs>
+</sp-tabs>

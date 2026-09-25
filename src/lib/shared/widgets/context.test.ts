@@ -183,6 +183,7 @@ describe("buildNativeContext", () => {
 			{
 				action: (fn) => calls.push(fn),
 				request: (async () => undefined) as WidgetVerbs["request"],
+				t: (source) => source,
 				menu: async () => null,
 				on: () => () => {}
 			}
@@ -460,6 +461,7 @@ describe("actions.v1 and invoke", () => {
 		request: async () => {
 			throw new Error("no")
 		},
+		t: (source) => source,
 		menu: async () => null,
 		on: () => () => {}
 	})

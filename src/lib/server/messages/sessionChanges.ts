@@ -1,22 +1,31 @@
 /**
- * Session changes — what the built-ins did, for the next reply to read
- * (R-15, ruled 2026-09-15, built 2026-09-16).
+ * Session changes — the ledger of session events, for the next reply to read
+ * (R-15, ruled 2026-09-15, built 2026-09-16; every session event since
+ * PLAN-turn-order A2, 2026-09-22).
  *
  * *Anything that alters message state is a built-in*: core performs the
  * write and it always emits an event carrying what changed and what was
  * lost. That event lands in two places — on the run's receipt as `emitted`,
  * which the executor records from the outlet's `causesEvent` — and HERE, so
  * the next reply's inlet can publish it on `sessionChanges` and a pipeline
- * knows the history it is about to read has moved. Plugin event listeners
- * (30 §U6) will read the same rows.
+ * knows the history it is about to read has moved. Since A2 the same rows
+ * hold every session event core emits — a row that landed
+ * (`message-completed`), a setting that moved (`session-updated`), a seat
+ * that changed (`cast-changed`) — each with the `cause` §4.1 names, so one
+ * ledger answers "what happened in this session, and why".
  *
- * ## One writer per write, at the write
+ * ## One writer per write, at the write — through one emitter
  *
- * `recordSessionChange` is called by the host's commit for each built-in
- * outlet, by `update-message`'s finishing branch when a verb re-drove the row,
- * and by whichever release finalised a stopped reply — never reconstructed
- * afterwards from a receipt. A write that failed records nothing, because
- * nothing changed.
+ * `recordSessionChange` is called by `emitSessionEvent`
+ * (`pipelines/runtime/sessionEvents.ts`), which is the emitter for every
+ * session event: the host's commit for each built-in outlet, the finishing
+ * branch of `update-message`, whichever release finalised a stopped reply,
+ * the socket handlers for a send, a settings save and a cast toggle. Never
+ * reconstructed afterwards from a receipt. A write that failed records
+ * nothing, because nothing changed. The one direct caller is
+ * `recordFormSuperseded` (`messages/blocks.ts`), whose once-guarantee is a
+ * transaction around check-and-insert that the emitter's fan-out must not
+ * sit inside.
  *
  * ## Read once — and marked read only once the run has read them
  *
@@ -54,7 +63,11 @@
 
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import type { SessionChangePayload } from "@serene-pub/sdk"
+import type {
+	CastChangePayload,
+	SessionChangePayload,
+	TurnOrderChangedPayload
+} from "@serene-pub/sdk"
 
 /** The most changes one run is handed. Said so on the inlet's port. */
 export const SESSION_CHANGES_CAP = 50
@@ -65,10 +78,24 @@ export const SESSION_CHANGES_TRUNCATED_EVENT =
 
 export type SessionChange = SessionChangePayload
 
+/**
+ * What a ledger row holds: any session event's payload (PLAN-turn-order
+ * §4.1). `SessionChangePayload` is the message-shaped one the reply road's
+ * port publishes; a cast change and a turn-order change are the same row
+ * with their own shape.
+ */
+export type SessionEventPayload =
+	| SessionChangePayload
+	| CastChangePayload
+	| TurnOrderChangedPayload
+
+/** `Omit` over each member of a union, rather than over their intersection. */
+type EachWithout<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
+
 /** Write one change, at the write. Never throws into the write that made it. */
 export async function recordSessionChange(
 	db: Db,
-	change: Omit<SessionChangePayload, "at"> & {
+	change: EachWithout<SessionEventPayload, "at"> & {
 		at?: number
 		/** The run performing the write, when one is. */
 		runId?: string | null
@@ -76,12 +103,15 @@ export async function recordSessionChange(
 ): Promise<void> {
 	const { runId, ...rest } = change
 	const at = rest.at ?? Date.now()
-	const payload: SessionChangePayload = { ...rest, at }
+	const payload = { ...rest, at } as SessionEventPayload
 	try {
 		await db.insert(schema.sessionChanges).values({
 			sessionId: change.sessionId,
 			event: change.event,
-			messageId: change.messageId ?? null,
+			messageId:
+				"messageId" in change && typeof change.messageId === "number"
+					? change.messageId
+					: null,
 			payload: payload as unknown as Record<string, unknown>,
 			runId: runId ?? null,
 			at: new Date(at)

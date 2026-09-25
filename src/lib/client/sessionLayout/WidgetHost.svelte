@@ -30,13 +30,17 @@
 	 * the identical events over its port; the bus is the in-document analog.
 	 */
 	import type { Snippet } from "svelte"
-	import { setContext } from "svelte"
+	import { getContext, setContext } from "svelte"
 	import {
 		buildNativeContext,
 		createWidgetEventBus,
 		eventInScope,
+		SESSION_VIEWER_KEY,
+		SESSION_TURN_ORDER_KEY,
 		WIDGET_CONTEXT_KEY,
+		WIDGET_REQUESTS_KEY,
 		WidgetMessageFeed,
+		type WidgetRequestHandler,
 		type ActionsV1,
 		type Payload,
 		type PlacementInput,
@@ -55,6 +59,8 @@
 		widgetStylesStore
 	} from "$lib/client/stores/widgetStyles.svelte"
 	import WidgetStyleOverlay from "./WidgetStyleOverlay.svelte"
+	import { t } from "$lib/client/i18n/state.svelte"
+	import type { TurnOrderV1, ViewerV1 } from "@serene-pub/sdk"
 
 	interface Props {
 		widget: WidgetContext["widget"]
@@ -164,6 +170,15 @@
 	// contributed action to the host's OWN fire (`makeInvoke`, inside
 	// `buildNativeContext`) — and `on` is the bus. A mount given no `actions`
 	// keeps an `invoke` that refuses by name.
+	// The viewer's annex view (R57), from the session page — `annex.v1`.
+	const annexCtx = getContext<
+		{ current: Record<string, Record<string, unknown>> } | undefined
+	>("sessionAnnex")
+	const localeCtx = getContext<{ current: string } | undefined>("sessionLocale")
+	const viewerCtx = getContext<{ current: ViewerV1 } | undefined>(SESSION_VIEWER_KEY)
+	const turnOrderCtx = getContext<{ current: TurnOrderV1 } | undefined>(SESSION_TURN_ORDER_KEY)
+	const requests = getContext<WidgetRequestHandler | undefined>(WIDGET_REQUESTS_KEY)
+
 	let ctx = $derived<WidgetContext>(
 		buildNativeContext(
 			{
@@ -173,6 +188,10 @@
 				props,
 				settings,
 				actions,
+				annex: annexCtx?.current,
+				locale: localeCtx?.current,
+				viewer: viewerCtx?.current,
+				turnOrder: turnOrderCtx?.current,
 				placement: placement ?? UNPLACED,
 				grants,
 				scoped
@@ -198,11 +217,15 @@
 					// rather than reading every widget press as legacy.
 					onAction(fn, messageId, payload, action, blockId)
 				},
-				request: async (kind) => {
-					throw new Error(
-						`widget.request("${kind}") is not available yet`
-					)
-				},
+				// The page's answer to what a widget may ask for (C0b): one
+				// handler for a native widget, a frame and a remote alike.
+				request: ((kind, params) =>
+					requests
+						? requests(kind, params, { widgetId: widget.id, owner: "core" })
+						: Promise.reject(
+								new Error(`widget.request("${kind}") — this page answers no requests`)
+							)) as WidgetContext["request"],
+				t,
 				menu: async () => null,
 				on: (kind, cb) => bus.on(kind, cb)
 			}

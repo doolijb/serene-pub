@@ -171,7 +171,13 @@
 		presets = res.presets
 		loading = false
 	}
+	/**
+	 * `sessionGenres:detail` is not scoped, and the genre hub's writes
+	 * re-send it for whichever genre they touched (R66): only this
+	 * preset's genre is this editor's.
+	 */
 	const onDetail = (res: Sockets.SessionAdmin.GenreDetail.Response) => {
+		if (res.genre && row && res.genre.genreId !== row.genreId) return
 		slots = res.slots
 	}
 	const onConfigs = (res: Sockets.Pipelines.ConfigsIndex.Response) => {

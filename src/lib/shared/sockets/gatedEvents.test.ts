@@ -61,6 +61,9 @@ const MIGRATED_FAMILIES = [
 	"cardSources:",
 	// slice 5 (2026-09-15): the content group.
 	"lorebooks:",
+	// 2026-09-23: amendments arrive gated — the family was born after the
+	// sweep, and its one consumer (LorebooksWorkspace) declares interest.
+	"amendments:",
 	"entries:",
 	"bindingSuggestions:",
 	"bindingCheck:",
@@ -196,7 +199,10 @@ describe("scopeOfPayload", () => {
 			scopeOfPayload("sessions:runStatus", {
 				sessionId: 7,
 				runId: "r1",
-				status: { i18n: { en: "{speaker} is typing" }, vars: { speaker: "Ann" } }
+				status: {
+					i18n: { en: "{speaker} is typing" },
+					vars: { speaker: "Ann" }
+				}
 			})
 		).toBe("7")
 		expect(

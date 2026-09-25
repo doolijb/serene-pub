@@ -441,10 +441,10 @@ button.sp-msg-name:hover {
 [data-mode="dark"] .sp-disclosure-toggle:hover {
 	color: var(--color-surface-300);
 }
-.sp-disclosure-toggle svg:last-child {
+.sp-disclosure-toggle > :where(svg, sp-icon):last-child {
 	transition: transform 150ms ease-out;
 }
-.sp-disclosure-toggle[aria-expanded="true"] svg:last-child {
+.sp-disclosure-toggle[aria-expanded="true"] > :where(svg, sp-icon):last-child {
 	transform: rotate(180deg);
 }
 /* 0fr -> 1fr is the only way to transition to and from an auto height in pure
@@ -586,7 +586,7 @@ button.sp-scene-title:hover {
 	.sp-dot::after,
 	.sp-msg-actions,
 	.sp-disclosure-track,
-	.sp-disclosure-toggle svg:last-child {
+	.sp-disclosure-toggle > :where(svg, sp-icon):last-child {
 		animation: none;
 		transition: none;
 	}

@@ -1,15 +1,13 @@
 <script lang="ts">
-	import * as Icons from "@lucide/svelte"
-	import { embeddingsStarred } from "$lib/shared/constants/embeddings"
-	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
-	import Avatar from "$lib/client/components/Avatar.svelte"
-	import RagNotice from "$lib/client/components/sessionMessages/RagNotice.svelte"
-	import RunProgressCard from "$lib/client/components/pipelines/RunProgressCard.svelte"
-	import { renderMarkdownWithQuotedText } from "$lib/client/utils/markdownToHTML"
-	import { getContext, onMount, type Snippet } from "svelte"
-	import { Menu } from "@skeletonlabs/skeleton-svelte"
-	import { actionIcon } from "$lib/client/components/sessionMessages/actionIcon"
-	import { shouldCloseActions } from "$lib/client/components/sessionMessages/actionsDisclosure"
+	/**
+	 * Core's composer (C0b): the field you write into, the persona you write
+	 * as, the lane, the session's action chips and its More panel. It reads
+	 * the conversation (`useConversation`) and the dossier's composer part;
+	 * sending, the draft and a persona switch are requests core's own widget
+	 * may make, a press of an action is `invoke`, and the page's own parts —
+	 * the chips, the turn controls, the panels, the run card, the retrieval
+	 * notice — are host views it places (`sp-host-view`).
+	 */
 	import {
 		exactPaletteMatch,
 		filterPaletteActions,
@@ -20,144 +18,93 @@
 	} from "$lib/client/components/sessionMessages/slashPalette"
 	import { actionIdentity } from "$lib/shared/actions/identity"
 	import type { ItemValues } from "$lib/shared/actions/itemValues"
-	import { statusText } from "$lib/client/i18n/state.svelte"
+	import { i18nText } from "@serene-pub/sdk"
+	import { untrack } from "svelte"
+	import { useConversation } from "./conversation.svelte"
 
-	let systemSettingsCtx: SystemSettingsCtx = $state(
-		getContext("systemSettingsCtx")
-	)
-
-	/**
-	 * The `extraTabs` entry carrying the session's own turn controls (Continue,
-	 * the character picker, Regenerate). Its buttons belong beside the genre's
-	 * contributed actions in the Actions disclosure, so the composer matches it
-	 * by value and keeps it out of the More menu.
-	 */
-	const TURN_CONTROLS_VALUE = "extraControls"
-
-	/** Remembers across reloads that the Enter/Shift+Enter hint has been shown. */
-	const HINT_STORAGE_KEY = "serene-pub:composer-hint-seen"
+	/** The More panel's tab that is not a pane: the turn controls, in the actions row. */
+	const TURN_CONTROLS_VIEW = "session-controls"
 
 	interface Props {
-		newMessage: string
-		onSend: () => void
-		draftCompiledPrompt?: Sockets.Sessions.PromptTokenCount.Response
-		currentUserPersona?: SelectSessionPersona & {
-			persona?: SelectCharacter
-		}
-		userPersonasInSession?: Array<
-			SelectSessionPersona & { persona?: SelectCharacter }
-		>
-		onSwitchPersona?: (personaId: number) => void
-		session?: Sockets.Sessions.Get.Response["session"] & {
-			sessionPersonas?: Array<
-				SelectSessionPersona & { persona?: SelectCharacter }
-			>
-		}
-		lastMessage?: SelectSessionMessage
-		editSessionMessage?: SelectSessionMessage
-		isGuest: boolean
-		showAddPersonaCTA: boolean
-		onAddPersonaClick: () => void
-		onAbortLastMessage: (e: Event) => void
-		/**
-		 * The panels the More menu offers (Lore, Pinned images, Statistics), plus
-		 * the turn-controls entry the Actions disclosure claims by value.
-		 */
-		extraTabs?: Array<{
-			value: string
-			title: string
-			control: any
-			content: any
-		}>
-		/**
-		 * The genre's contributed session actions (19 §4), as a row of buttons.
-		 *
-		 * An action the genre contributes IS how that genre is played, so it sits
-		 * one click from the field in the Actions disclosure. Passed only when the
-		 * genre contributes at least one.
-		 */
-		actions?: Snippet
-		/**
-		 * The composer venue's overflow (R-15 `quick`, U5c): every enabled
-		 * action the primary row does not show, in a menu beside the chips.
-		 * A newcomer wears its mark until the menu has been opened once.
-		 */
-		overflowActions?: Sockets.Sessions.Actions.Action[]
-		/**
-		 * What `/` offers: the composer's and the extra tab's actions, by slash
-		 * name and label. Empty hides the palette entirely.
-		 */
-		paletteActions?: PaletteAction[]
-		/**
-		 * The newest row's `item` document, or `null` with no row (U5e): what
-		 * a palette row with `item.*` predicates — `/retry`, `/continue` —
-		 * is judged against, so a session with nothing to regenerate greys
-		 * them with the newest-row reason as the turn controls are grey.
-		 */
-		newestItem?: ItemValues | null
-		/** Fire one action, from the overflow or the palette. */
-		onInvokeAction?: (action: PaletteAction) => void
-		/** The person opened a list showing these newcomers (`sessions:actionsSeen`). */
-		onActionsSeen?: (keys: string[]) => void
-		/** A `composer: 'none'` mode (19 §2): triggers only, no text input. */
-		hideCompose?: boolean
-		/**
-		 * Which composer skin the session's style pack resolves to. `classic`
-		 * grows to about six lines; `minimal` is a single-line pill with the
-		 * persona name and the retrieval notice dropped; `writer` opens eight
-		 * lines in the prose face.
-		 */
+		/** How the composer is drawn (a widget setting). */
 		composerSkin?: "classic" | "minimal" | "writer"
-		/**
-		 * Renders Send tonal instead of filled, so the filled treatment belongs
-		 * to whatever the page is nudging towards (the ready-to-continue line).
-		 */
-		sendTonal?: boolean
 		/** Hides the Actions label and its row outright. */
 		showActions?: boolean
-		/**
-		 * The session's channels (20 §7; R-C), `main` first — off
-		 * `sessions:view`. One channel (every session whose genre declares
-		 * none) draws no control at all, which is why nothing moves for the
-		 * sessions that exist today.
-		 */
-		channels?: string[]
-		/**
-		 * Which of them the next line is written on. Bound, because the page
-		 * puts it on the send and the log reads it to decide what to show —
-		 * one answer, held where both halves can see it.
-		 */
-		channel?: string
 	}
 
-	let {
-		newMessage = $bindable(),
-		onSend,
-		draftCompiledPrompt,
-		currentUserPersona,
-		userPersonasInSession = [],
-		onSwitchPersona,
-		session,
-		lastMessage,
-		editSessionMessage,
-		isGuest,
-		showAddPersonaCTA,
-		onAddPersonaClick,
-		onAbortLastMessage,
-		extraTabs = [],
-		actions,
-		overflowActions = [],
-		paletteActions = [],
-		newestItem = null,
-		onInvokeAction,
-		onActionsSeen,
-		hideCompose = false,
-		composerSkin = "classic",
-		sendTonal = false,
-		showActions = true,
-		channels = [],
-		channel = $bindable("main")
-	}: Props = $props()
+	let { composerSkin = "classic", showActions = true }: Props = $props()
+
+	const conv = useConversation()
+	const c = $derived(conv.dossier?.composer)
+	const hideCompose = $derived(!!c?.hidden)
+	const channels = $derived(c?.channels ?? [])
+	const overflowActions = $derived((c?.overflow ?? []) as Sockets.Sessions.Actions.Action[])
+	const paletteActions = $derived((c?.palette ?? []) as PaletteAction[])
+	const newestItem = $derived((c?.newest ?? null) as ItemValues | null)
+	const sendTonal = $derived(!!c?.sendTonal)
+	const actionsListed = $derived(!!c?.actions)
+
+	/** The draft: the composer's own, seeded from the host's when the session opens. */
+	let draft = $state("")
+	let seeded: string | null = null
+	let seededFor: number | null = null
+	$effect(() => {
+		const seed = c?.draft ?? ""
+		const session = conv.dossier?.sessionId ?? null
+		// Another session: its own draft, never the last one's.
+		if (session !== seededFor) {
+			seededFor = session
+			seeded = seed
+			setField(seed)
+			return
+		}
+		if (seed === seeded) return
+		seeded = seed
+		if (!untrack(() => draft)) setField(seed)
+	})
+	// The host keeps the draft (and counts its tokens): told as it changes.
+	$effect(() => {
+		const content = draft
+		const t = setTimeout(() => void conv.request("draft", { content }), 150)
+		return () => clearTimeout(t)
+	})
+
+	/**
+	 * What the field is told to show. The field is the host's between writes
+	 * (the caret stays on the page), so a write is a reset — and every reset
+	 * must arrive, the same text included: the attachment removes the
+	 * attribute first, since both Svelte and the renderer skip a write of the
+	 * value they last wrote.
+	 */
+	let fieldValue = $state("")
+	let fieldWrites = $state(0)
+	function setField(text: string) {
+		draft = text
+		fieldValue = text
+		fieldWrites++
+	}
+	const writeField = (el: HTMLElement) => {
+		void fieldWrites
+		const v = fieldValue
+		el.removeAttribute("value")
+		el.setAttribute("value", v)
+	}
+
+	function send() {
+		const content = draft
+		if (!content.trim()) return
+		// Cleared once the host took it: a refused line (no persona) stays put.
+		conv.ctx
+			.request("send", { content, personaId: c?.personaId ?? null, channel: conv.lane.current })
+			.then(
+				() => {
+					if (draft === content) setField("")
+				},
+				(e: Error) => console.warn(`Send: ${e.message}`)
+			)
+		paletteDismissed = null
+		paletteHighlight = -1
+	}
 
 	/**
 	 * What a channel is CALLED.
@@ -192,32 +139,34 @@
 	let previewOpen = $state(false)
 	/** The More panel currently filling the field area, or null for the field. */
 	let activePaneValue: string | null = $state(null)
-	let actionsRegion: HTMLDivElement | undefined = $state()
-	let actionsToggle: HTMLButtonElement | undefined = $state()
 
 	// Enter submits at desktop widths only; on a touch keyboard it inserts a
 	// newline like any other textarea.
-	let submitOnEnter = $state(true)
+	// Enter sends where there is a keyboard to press it on; a narrow box (a
+	// phone's) keeps Enter for a new line, as a touch keyboard does.
+	const submitOnEnter = $derived(conv.ctx.layout?.v1?.tier !== "compact")
+	/** The Enter/Shift+Enter hint: shown once, remembered in the widget's saved state. */
 	let hintSeen = $state(true)
+	// ⏳ A native widget has no saved state yet: the hint is remembered per
+	// mount until it does (a remote's `state` carries it).
+	const saved = $derived(
+		(conv.ctx as unknown as { state?: { hintSeen?: boolean } }).state
+	)
+	$effect(() => {
+		hintSeen = !!saved?.hintSeen
+	})
 	let hintVisible = $state(false)
 
-	let activePersona = $derived(
-		currentUserPersona?.persona ??
-			(!isGuest ? session?.sessionPersonas?.[0]?.persona : undefined)
+	const activePersona = $derived(
+		c?.personas.find((p) => p.personaId === c?.personaId) ?? null
 	)
+	const personaCount = $derived(c?.personas.length ?? 0)
 
-	let turnControls = $derived(
-		extraTabs.find((t) => t.value === TURN_CONTROLS_VALUE)
-	)
-	let morePanes = $derived(
-		extraTabs.filter((t) => t.value !== TURN_CONTROLS_VALUE)
-	)
-	let activePane = $derived(
-		morePanes.find((t) => t.value === activePaneValue)
-	)
-	let hasActionsRow = $derived(
-		!!actions || !!turnControls || overflowActions.length > 0
-	)
+	const tabs = $derived(c?.tabs ?? [])
+	let turnControls = $derived(tabs.find((t) => t.view === TURN_CONTROLS_VIEW))
+	let morePanes = $derived(tabs.filter((t) => t.view !== TURN_CONTROLS_VIEW))
+	let activePane = $derived(morePanes.find((t) => t.view === activePaneValue))
+	let hasActionsRow = $derived(actionsListed || !!turnControls || overflowActions.length > 0)
 	let overflowNew = $derived(overflowActions.filter((a) => a.isNew))
 	let overflowOpen = $state(false)
 	/**
@@ -231,7 +180,7 @@
 		canAct: a.canAct,
 		enabled: a.enabled,
 		venue: a.venue,
-		...(a.reason ? { reason: statusText(a.reason) || a.reason.i18n.en } : {}),
+		...(a.reason ? { reason: i18nText(a.reason.i18n, conv.ctx.locale.v1) ?? a.reason.i18n.en } : {}),
 		...(a.itemPredicates?.length ? { itemPredicates: a.itemPredicates } : {})
 	})
 
@@ -244,7 +193,7 @@
 	/** The query Escape was pressed on; the palette stays closed while the draft still says it. */
 	let paletteDismissed = $state<string | null>(null)
 	let paletteHighlight = $state(-1)
-	const paletteQuery = $derived(slashQueryOf(newMessage))
+	const paletteQuery = $derived(slashQueryOf(draft))
 	const paletteRows = $derived(
 		paletteQuery === null || !paletteActions.length
 			? []
@@ -272,15 +221,14 @@
 			? undefined
 			: paletteHighlight >= 0
 				? paletteRows[paletteHighlight]
-				: (exactPaletteMatch(paletteActions, newMessage) ??
+				: (exactPaletteMatch(paletteActions, draft) ??
 					(paletteQuery ? paletteRows[0] : undefined))
 	)
 	// Opening the palette is meeting its newcomers.
 	$effect(() => {
-		if (!paletteOpen || !onActionsSeen) return
+		if (!paletteOpen) return
 		const fresh = paletteRows.filter((a) => a.isNew)
-		if (fresh.length)
-			onActionsSeen(fresh.map(actionIdentity))
+		if (fresh.length) void conv.request("actions-seen", { keys: fresh.map(actionIdentity) })
 	})
 
 	function invokePalette(action: PaletteAction) {
@@ -288,14 +236,27 @@
 		// audience, and nothing while a reply streams.
 		if (paletteRowState(action, { generating: isGenerating, newest: newestItem }).disabled)
 			return
-		newMessage = ""
+		setField("")
 		paletteDismissed = null
 		paletteHighlight = -1
-		onInvokeAction?.(action)
+		conv.invoke(actionIdentity(action))
 	}
 
+	/**
+	 * The keys the palette handles, which the field keeps from itself and
+	 * raises as `key`: all four while it is open, Enter alone while the draft
+	 * names an action exactly.
+	 */
+	const capturedKeys = $derived(
+		paletteOpen
+			? "ArrowUp ArrowDown Escape Enter Tab"
+			: exactPaletteMatch(paletteActions, draft)
+				? "Enter"
+				: ""
+	)
+
 	/** True when the key was the palette's to handle. */
-	function handlePaletteKey(e: KeyboardEvent): boolean {
+	function handlePaletteKey(e: { key: string; shiftKey: boolean; preventDefault: () => void }): boolean {
 		if (paletteOpen) {
 			if (e.key === "ArrowDown" || e.key === "ArrowUp") {
 				e.preventDefault()
@@ -323,7 +284,7 @@
 				e.preventDefault()
 				const pick =
 					paletteRows[paletteHighlight >= 0 ? paletteHighlight : 0]!
-				newMessage = `/${pick.slash}`
+				setField(`/${pick.slash}`)
 				return true
 			}
 			return false
@@ -331,7 +292,7 @@
 		// Closed: `/name` + Enter still invokes an exact match, so a name
 		// typed in full never needs the list.
 		if (e.key === "Enter" && !e.shiftKey) {
-			const exact = exactPaletteMatch(paletteActions, newMessage)
+			const exact = exactPaletteMatch(paletteActions, draft)
 			if (exact) {
 				e.preventDefault()
 				invokePalette(exact)
@@ -344,11 +305,11 @@
 	function handleOverflowOpen(open: boolean) {
 		overflowOpen = open
 		if (open && overflowNew.length)
-			onActionsSeen?.(overflowNew.map(actionIdentity))
+			void conv.request("actions-seen", { keys: overflowNew.map(actionIdentity) })
 	}
 	let actionsLabelShown = $derived(showActions && hasActionsRow)
 
-	let tokenCounts = $derived(draftCompiledPrompt?.meta?.tokenCounts)
+	let tokenCounts = $derived(c?.usage ?? null)
 	let usageRatio = $derived(
 		tokenCounts && tokenCounts.limit > 0
 			? Math.min(tokenCounts.total / tokenCounts.limit, 1)
@@ -358,12 +319,9 @@
 		tokenCounts ? tokenCounts.total > tokenCounts.limit : false
 	)
 
-	let isGenerating = $derived(!!lastMessage?.isGenerating)
-	let ragVisible = $derived(
-		!!session?.id &&
-			composerSkin !== "minimal" &&
-			embeddingsStarred(systemSettingsCtx.capabilityDefaults)
-	)
+	const messages = $derived(conv.ctx.messages.v1 as Array<{ isGenerating?: boolean }>)
+	let isGenerating = $derived(!!messages[messages.length - 1]?.isGenerating)
+	let ragVisible = $derived(!!c?.notice && composerSkin !== "minimal")
 	let placeholder = $derived(
 		activePersona ? `Write as ${activePersona.name}…` : "Write a message…"
 	)
@@ -372,7 +330,7 @@
 	// hands the field area back. A mode with no field opens on its first panel,
 	// because there is nothing else for the area to show.
 	$effect(() => {
-		const values = morePanes.map((p) => p.value)
+		const values = morePanes.map((p) => p.view)
 		if (activePaneValue && !values.includes(activePaneValue)) {
 			activePaneValue = null
 		}
@@ -381,49 +339,19 @@
 		}
 	})
 
-	onMount(() => {
-		try {
-			hintSeen = localStorage.getItem(HINT_STORAGE_KEY) === "1"
-		} catch {
-			// Storage blocked or full: treat the hint as spent rather than
-			// showing it on every visit.
-			hintSeen = true
-		}
-		const mq = window.matchMedia("(min-width: 1024px)")
-		const update = () => (submitOnEnter = mq.matches)
-		update()
-		mq.addEventListener("change", update)
-		return () => mq.removeEventListener("change", update)
-	})
-
-	function handleSendButton(e: Event) {
-		e.stopPropagation()
-		onSend()
-	}
-
-	function handleAbortLastMessage(e: Event) {
-		e.stopPropagation()
-		onAbortLastMessage(e)
-	}
-
-	function handleKeyDown(e: KeyboardEvent) {
-		if (handlePaletteKey(e)) return
-		if (e.key !== "Enter") return
-		if (!e.shiftKey && submitOnEnter) {
-			e.preventDefault()
-			onSend()
-		}
+	/** The field raised a key the palette keeps (`keys`). */
+	function handleFieldKey(e: CustomEvent<{ key: string; shift: boolean }>) {
+		const ev = { key: e.detail.key, shiftKey: e.detail.shift, preventDefault() {} }
+		if (handlePaletteKey(ev)) return
+		// Enter reached here only as a captured key: the send key, then.
+		if (ev.key === "Enter" && !ev.shiftKey && submitOnEnter) send()
 	}
 
 	function handleFieldFocus() {
 		if (hintSeen || !submitOnEnter) return
 		hintVisible = true
 		hintSeen = true
-		try {
-			localStorage.setItem(HINT_STORAGE_KEY, "1")
-		} catch {
-			// The hint still shows for this visit; only the memory of it is lost.
-		}
+		;(conv.ctx as unknown as { saveState?: (s: object) => void }).saveState?.({ ...(saved ?? {}), hintSeen: true })
 	}
 
 	function openPane(value: string) {
@@ -444,44 +372,28 @@
 	// The row is a disclosure, not a menu: it closes on its toggle and on
 	// Escape, never because focus left it — `actionsDisclosure.ts` has the
 	// table and the reason. There is deliberately no `onfocusout` here.
-	function closeActions(returnFocus: boolean) {
-		if (!actionsOpen) return
-		actionsOpen = false
-		if (returnFocus) actionsToggle?.focus()
-	}
-
-	// Escape is read at the window rather than on the region: the chips are
-	// buttons the page renders through a snippet, so the composer cannot put a
-	// handler on them, and a handler on the wrapper would make a static element
-	// interactive.
-	function handleWindowKeyDown(e: KeyboardEvent) {
-		if (e.key !== "Escape") return
-		if (!actionsOpen) return
-		const active = document.activeElement
-		const verdict = shouldCloseActions({
-			reason: "escape",
-			focusInside: active instanceof Node && !!actionsRegion?.contains(active),
-			overflowOpen
-		})
-		if (verdict.close) closeActions(verdict.returnFocus)
+	/** Escape closes the actions row (natively; a remote hears no keys). */
+	function handleKeyDown(e: KeyboardEvent) {
+		if (e.key === "Escape" && actionsOpen && !overflowOpen) actionsOpen = false
 	}
 </script>
 
-<svelte:window onkeydown={handleWindowKeyDown} />
-
+<!-- Escape closes the actions row: a keyboard shortcut over the whole group,
+     not an interaction of its own (natively; a remote hears no keys). -->
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div
 	class="sp-composer px-3 pb-2 lg:pb-4"
 	data-composer-skin={composerSkin}
-	class:hidden={!!editSessionMessage}
+	class:hidden={conv.edit.id !== null}
+	onkeydown={handleKeyDown}
+	role="group"
+	aria-label="Compose"
 >
-	{#if showAddPersonaCTA}
+	{#if c?.addPersona}
 		<!-- Guests without a persona get the one thing they can do here. -->
 		<div class="flex flex-col items-center justify-center gap-4 py-8">
 			<div class="text-center">
-				<Icons.UserPlus
-					size={48}
-					class="text-surface-700-300 mx-auto mb-2"
-				/>
+				<sp-icon name="user-plus" size="48" class="text-surface-700-300 mx-auto mb-2"></sp-icon>
 				<h3 class="h3 mb-2">Join the conversation</h3>
 				<p class="text-surface-600-400">
 					Add a persona to this session to send messages.
@@ -489,9 +401,9 @@
 			</div>
 			<button
 				class="btn preset-filled-primary-500"
-				onclick={onAddPersonaClick}
+				onclick={() => void conv.request("add-persona", {})}
 			>
-				<Icons.UserPlus size={20} />
+				<sp-icon name="user-plus" size="20"></sp-icon>
 				Add your persona
 			</button>
 		</div>
@@ -499,35 +411,25 @@
 		<!-- Above the composer, because a run in flight is about the message you
 		     are about to get rather than the ones already there — and because it
 		     has to stay visible while the transcript scrolls. -->
-		{#if session?.id}
-			<RunProgressCard sessionId={session.id} />
-		{/if}
+		<sp-host-view name="run-progress"></sp-host-view>
 
-		<div class="composer-disclosure" bind:this={actionsRegion}>
+		<div class="composer-disclosure">
 			<div class="flex flex-wrap items-center gap-x-3 gap-y-1">
 				{#if actionsLabelShown}
 					<button
 						type="button"
 						class="composer-actions-toggle"
-						bind:this={actionsToggle}
 						aria-expanded={actionsOpen}
 						aria-controls={actionsId}
 						onclick={() => (actionsOpen = !actionsOpen)}
 					>
 						<span>Actions</span>
-						<Icons.ChevronDown
-							size={12}
-							class={actionsOpen ? "rotate-180" : ""}
-							aria-hidden="true"
-						/>
+						<sp-icon name="chevron-down" size="12" class={actionsOpen ? "rotate-180" : ""}></sp-icon>
 					</button>
 				{/if}
-				{#if ragVisible && session?.id}
+				{#if ragVisible}
 					<div class="rag-notice ml-auto min-w-0">
-						<RagNotice
-							sessionId={session.id}
-							totalMessages={session.sessionMessages?.length ?? 0}
-						/>
+						<sp-host-view name="retrieval-notice"></sp-host-view>
 					</div>
 				{/if}
 			</div>
@@ -539,10 +441,10 @@
 					role="group"
 					aria-label="Session actions"
 				>
-					{#if actions || overflowActions.length}
+					{#if actionsListed || overflowActions.length}
 						<div class="composer-chips composer-chips-tonal">
-							{#if actions}
-								{@render actions()}
+							{#if actionsListed}
+								<sp-host-view name="session-actions"></sp-host-view>
 							{/if}
 							{#if overflowActions.length}
 								<!-- The overflow (R-15, F38): every enabled action
@@ -550,79 +452,72 @@
 								     prominence. A Menu — these are actions, not a
 								     field. A newcomer marks the trigger until the
 								     menu has been opened once. -->
-								<Menu
+								<!-- `sp-menu` (§3.5): each `sp-menu-item`'s own content is its row. -->
+								<sp-menu
+									placement="top-start"
+									label="More actions"
 									open={overflowOpen}
-									onOpenChange={(d) => handleOverflowOpen(d.open)}
-									onSelect={(d) => {
+									onopen-change={(e: CustomEvent<{ open: boolean }>) =>
+										handleOverflowOpen(e.detail.open)}
+									onselect={(e: CustomEvent<{ value: string }>) => {
 										const a = overflowActions.find(
-											(x) => actionIdentity(x) === d.value
+											(x) => actionIdentity(x) === e.detail.value
 										)
 										// The wire's reason is a locale map; the palette's
 										// shape carries a sentence, and the fire needs neither.
-										if (a) {
-											const { reason: _reason, ...rest } = a
-											onInvokeAction?.(rest)
-										}
+										if (a) conv.invoke(actionIdentity(a))
 									}}
-									positioning={{ placement: "top-start" }}
 								>
-									<Menu.Trigger
+									<button
+										slot="trigger"
+										type="button"
 										class="btn btn-sm preset-tonal-surface relative"
 										title="More actions"
 										aria-label={overflowNew.length
 											? `More actions (${overflowNew.length} new)`
 											: "More actions"}
 									>
-										<Icons.Ellipsis size={14} aria-hidden="true" />
+										<sp-icon name="ellipsis" size="14"></sp-icon>
 										More
 										{#if overflowNew.length}
 											<span class="sp-action-new-dot" aria-hidden="true"></span>
 										{/if}
-									</Menu.Trigger>
-									<Portal>
-										<Menu.Positioner class="z-[1000]!">
-											<Menu.Content
-												class="card preset-filled-surface-100-900 max-w-[90vw] min-w-52 overflow-y-auto p-1 shadow-xl"
-											>
-												{#each overflowActions as a (actionIdentity(a))}
-													{@const Icon = actionIcon(a.icon)}
-													{@const row = paletteRowState(overflowRow(a), {
-														generating: isGenerating,
-														newest: newestItem
-													})}
-													<!-- Grey, listed, with its reason (R-15, U5e): the
-													     audience's word, the declared enabled-when's, or
-													     the busy rule — as a second line and to a screen
-													     reader, never dropped from the list. -->
-													<Menu.Item
-														value={actionIdentity(a)}
-														class="hover:preset-tonal-primary data-[highlighted]:preset-tonal-primary flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-50"
-														disabled={row.disabled}
-														title={row.reason ? `${a.name} — ${row.reason}` : undefined}
-													>
-														<Icon size={12} aria-hidden="true" />
-														<Menu.ItemText>
-															{a.name}
-															<span class="text-surface-500 ml-1 font-mono text-[0.85em]">/{a.slash}</span>
-															{#if row.reason}
-																<span class="composer-palette-note block">{row.reason}</span>
-															{/if}
-														</Menu.ItemText>
-														{#if a.isNew}
-															<span class="sp-action-new">New</span>
-														{/if}
-													</Menu.Item>
-												{/each}
-											</Menu.Content>
-										</Menu.Positioner>
-									</Portal>
-								</Menu>
+									</button>
+									{#each overflowActions as a (actionIdentity(a))}
+										{@const iconName = a.icon || "play"}
+										{@const row = paletteRowState(overflowRow(a), {
+											generating: isGenerating,
+											newest: newestItem
+										})}
+										<!-- Grey, listed, with its reason (R-15, U5e): the
+										     audience's word, the declared enabled-when's, or
+										     the busy rule — as a second line and to a screen
+										     reader, never dropped from the list. -->
+										<sp-menu-item
+											value={actionIdentity(a)}
+											disabled={row.disabled}
+											class="flex items-center gap-2 text-xs"
+										>
+											<sp-icon name={iconName} size="12"></sp-icon>
+											<span>
+												{a.name}
+												<span class="text-surface-500 ml-1 font-mono text-[0.85em]">/{a.slash}</span>
+												{#if row.reason}
+													<span class="composer-palette-note block">{row.reason}</span>
+												{/if}
+											</span>
+											{#if a.isNew}
+												<span class="sp-action-new">New</span>
+											{/if}
+										</sp-menu-item>
+									{/each}
+								</sp-menu>
 							{/if}
 						</div>
 					{/if}
 					{#if turnControls}
 						<div class="composer-chips composer-chips-outlined">
-							{@render turnControls.content?.()}
+							<sp-host-view name="session-controls"></sp-host-view>
 						</div>
 					{/if}
 				</div>
@@ -642,9 +537,9 @@
 					aria-valuenow={Math.round(usageRatio * 100)}
 				>
 					<div
-						class="composer-meter-fill"
+						class="composer-meter-fill sp-meter-fill"
 						class:is-high={usageRatio > 0.9}
-						style="inline-size: {(usageRatio * 100).toFixed(1)}%"
+						style="--sp-fill: {(usageRatio * 100).toFixed(1)}%"
 					></div>
 				</div>
 			{/if}
@@ -661,13 +556,13 @@
 								class="composer-quiet-btn"
 								onclick={backToCompose}
 							>
-								<Icons.ArrowLeft size={14} aria-hidden="true" />
+								<sp-icon name="arrow-left" size="14"></sp-icon>
 								Back to compose
 							</button>
 						{/if}
 					</div>
 					<div role="region" aria-label="{activePane.title} panel">
-						{@render activePane.content?.()}
+						<sp-host-view name={activePane.view}></sp-host-view>
 					</div>
 				{:else if previewOpen}
 					<div
@@ -675,7 +570,7 @@
 						role="region"
 						aria-label="Message preview"
 					>
-						{@html renderMarkdownWithQuotedText(newMessage)}
+						<sp-message-body text={draft}></sp-message-body>
 					</div>
 				{:else if !hideCompose}
 					{#if paletteOpen}
@@ -690,7 +585,7 @@
 							aria-label="Slash commands"
 						>
 							{#each paletteRows as a, i (a.slash)}
-								{@const Icon = actionIcon(a.icon)}
+								{@const iconName = a.icon || "play"}
 								{@const rowState = paletteRowState(a, {
 									generating: isGenerating,
 									newest: newestItem
@@ -713,7 +608,7 @@
 										onmouseenter={() => (paletteHighlight = i)}
 										onclick={() => invokePalette(a)}
 									>
-										<Icon size={14} aria-hidden="true" />
+										<sp-icon name={iconName} size="14"></sp-icon>
 										<span class="composer-palette-slash">/{a.slash}</span>
 										<span class="composer-palette-label">{a.name}</span>
 										{#if a.isNew}
@@ -727,27 +622,33 @@
 							{/each}
 						</ul>
 					{/if}
-					<label class="sr-only" for={inputId}>Write a message</label>
-					<textarea
-						id={inputId}
-						class="composer-field field-sizing-content focus:outline-none focus:ring-0 focus:border-transparent"
+					<!-- The field inside takes focus and carries the ARIA: this is its host element. -->
+					<!-- svelte-ignore a11y_aria_activedescendant_has_tabindex -->
+					<sp-composer-field
+						class="block"
+						field-class="composer-field field-sizing-content focus:outline-none focus:ring-0 focus:border-transparent"
 						rows="1"
+						label="Write a message"
 						{placeholder}
-						bind:value={newMessage}
-						autocomplete="off"
+						submit-on={submitOnEnter ? "enter" : "none"}
+						keys={capturedKeys}
 						spellcheck="true"
-						onkeydown={handleKeyDown}
-						onfocus={handleFieldFocus}
-						aria-describedby={contextExceeded
-							? warningId
-							: undefined}
-						aria-invalid={contextExceeded}
+						aria-describedby={contextExceeded ? warningId : undefined}
+						aria-invalid={contextExceeded ? "true" : undefined}
 						aria-autocomplete={paletteActions.length ? "list" : undefined}
 						aria-controls={paletteOpen ? paletteId : undefined}
 						aria-activedescendant={paletteOpen && paletteHighlight >= 0
 							? paletteOptionId(paletteHighlight)
 							: undefined}
-					></textarea>
+						oninput={(e: CustomEvent<{ value: string }>) => (draft = e.detail.value)}
+						onsubmit={(e: CustomEvent<{ value: string }>) => {
+							draft = e.detail.value
+							send()
+						}}
+						onkey={handleFieldKey}
+						onfocus={handleFieldFocus}
+						{@attach writeField}
+					></sp-composer-field>
 				{/if}
 			</div>
 
@@ -766,11 +667,11 @@
 							<button
 								type="button"
 								class="composer-channel-btn"
-								class:preset-tonal-primary={slug === channel}
-								class:is-active={slug === channel}
-								aria-pressed={slug === channel}
+								class:preset-tonal-primary={slug === conv.lane.current}
+								class:is-active={slug === conv.lane.current}
+								aria-pressed={slug === conv.lane.current}
 								title="Write on {channelLabel(slug)}"
-								onclick={() => (channel = slug)}
+								onclick={() => conv.lane.set(slug)}
 							>
 								{channelLabel(slug)}
 							</button>
@@ -778,72 +679,47 @@
 					</div>
 				{/if}
 				{#if activePersona}
-					{#if userPersonasInSession.length > 1}
-						<Popover
+					{#if personaCount > 1}
+						<!-- `sp-popover` (§3.5): our button is the trigger, the card the panel. -->
+						<sp-popover
+							placement="top-start"
 							open={personaSwitcherOpen}
-							onOpenChange={(e) => (personaSwitcherOpen = e.open)}
-							positioning={{ placement: "top-start" }}
+							onopen-change={(e: CustomEvent<{ open: boolean }>) => (personaSwitcherOpen = e.detail.open)}
 						>
-							<Popover.Trigger
-								class="composer-persona-chip is-button"
+							<button slot="trigger" type="button" class="composer-persona-chip is-button"
 								title="Switch persona"
-								aria-label="Switch persona (currently {activePersona.name})"
-							>
-								<Avatar char={activePersona} size="w-6 h-6" />
+								aria-label="Switch persona (currently {activePersona.name})">
+								<sp-avatar ref={`character:${activePersona.personaId}`} size="sm"></sp-avatar>
 								<span class="composer-persona-name">
 									{activePersona.name}
 								</span>
-								<Icons.ChevronDown
-									size={14}
-									aria-hidden="true"
-								/>
-							</Popover.Trigger>
-							<Portal>
-								<Popover.Positioner class="z-[1000]!">
-									<Popover.Content
-										class="card preset-filled-surface-100-900-surface min-w-[200px] space-y-1 p-2"
+								<sp-icon name="chevron-down" size="14"></sp-icon>
+							</button>
+							<div class="card preset-filled-surface-100-900-surface min-w-[200px] space-y-1 p-2">
+								<p class="text-surface-600 dark:text-surface-400 px-2 pb-1 text-xs">
+									Write as
+								</p>
+								{#each c?.personas ?? [] as p (p.personaId)}
+									<button
+										type="button"
+										class="btn btn-sm popover-menu-btn rounded-lg {p.personaId === c?.personaId
+											? 'preset-tonal-primary'
+											: 'hover:preset-tonal'}"
+										aria-current={p.personaId === c?.personaId ? "true" : undefined}
+										onclick={() => {
+											void conv.request("switch-persona", { personaId: p.personaId })
+											personaSwitcherOpen = false
+										}}
 									>
-										<p
-											class="text-surface-600 dark:text-surface-400 px-2 pb-1 text-xs"
-										>
-											Write as
-										</p>
-										{#each userPersonasInSession as cp (cp.personaId)}
-											{#if cp.persona && cp.personaId != null}
-												<button
-													type="button"
-													class="btn btn-sm popover-menu-btn rounded-lg {cp.personaId ===
-													currentUserPersona?.personaId
-														? 'preset-tonal-primary'
-														: 'hover:preset-tonal'}"
-													aria-current={cp.personaId ===
-													currentUserPersona?.personaId
-														? "true"
-														: undefined}
-													onclick={() => {
-														onSwitchPersona?.(
-															cp.personaId!
-														)
-														personaSwitcherOpen = false
-													}}
-												>
-													<Avatar
-														char={cp.persona}
-														size="w-5 h-5"
-													/>
-													<span class="truncate">
-														{cp.persona.name}
-													</span>
-												</button>
-											{/if}
-										{/each}
-									</Popover.Content>
-								</Popover.Positioner>
-							</Portal>
-						</Popover>
+										<sp-avatar ref={`character:${p.personaId}`} size="sm"></sp-avatar>
+										<span class="truncate">{p.name}</span>
+									</button>
+								{/each}
+							</div>
+						</sp-popover>
 					{:else}
 						<span class="composer-persona-chip">
-							<Avatar char={activePersona} size="w-6 h-6" />
+							<sp-avatar ref={`character:${activePersona.personaId}`} size="sm"></sp-avatar>
 							<span class="composer-persona-name">
 								{activePersona.name}
 							</span>
@@ -863,67 +739,49 @@
 							aria-label="Preview the formatted draft"
 							onclick={togglePreview}
 						>
-							<Icons.Eye size={16} aria-hidden="true" />
+							<sp-icon name="eye" size="16"></sp-icon>
 						</button>
 					{/if}
 
 					{#if morePanes.length > 0}
-						<Popover
+						<!-- `sp-popover` (§3.5): our button is the trigger, the card the panel. -->
+						<sp-popover
+							placement="top-end"
 							open={moreMenuOpen}
-							onOpenChange={(e) => (moreMenuOpen = e.open)}
-							positioning={{ placement: "top-end" }}
+							onopen-change={(e: CustomEvent<{ open: boolean }>) => (moreMenuOpen = e.detail.open)}
 						>
-							<Popover.Trigger
-								class="composer-icon-btn {activePane
+							<button slot="trigger" type="button" class="composer-icon-btn {activePane
 									? 'preset-tonal-primary is-active'
 									: ''}"
 								title="More"
-								aria-label="More composer panels"
-							>
-								<Icons.EllipsisVertical
-									size={16}
-									aria-hidden="true"
-								/>
-							</Popover.Trigger>
-							<Portal>
-								<Popover.Positioner class="z-[1000]!">
-									<Popover.Content
-										class="card bg-surface-100-900 w-[min(90vw,240px)] space-y-3 p-3 shadow-xl"
-									>
+								aria-label="More composer panels">
+								<sp-icon name="ellipsis-vertical" size="16"></sp-icon>
+							</button>
+							<div class="card bg-surface-100-900 w-[min(90vw,240px)] space-y-3 p-3 shadow-xl">
 										<header
 											class="popover-menu-title text-sm"
 										>
-											<Icons.EllipsisVertical
-												size={16}
-												aria-hidden="true"
-											/>
+											<sp-icon name="ellipsis-vertical" size="16"></sp-icon>
 											<p>More</p>
 										</header>
 										<div class="flex flex-col gap-1">
-											{#each morePanes as pane (pane.value)}
+											{#each morePanes as pane (pane.view)}
 												<button
 													type="button"
 													class="btn btn-sm popover-menu-btn rounded-lg {activePaneValue ===
-													pane.value
+													pane.view
 														? 'preset-tonal-primary'
 														: 'hover:preset-tonal'}"
 													onclick={() =>
-														openPane(pane.value)}
+														openPane(pane.view)}
 												>
-													{@render pane.control?.()}
+													<sp-icon name={pane.icon} size="12"></sp-icon>
 													<span>{pane.title}</span>
 												</button>
 											{/each}
 										</div>
-										<Popover.Arrow>
-											<Popover.ArrowTip
-												class="!bg-surface-100 dark:!bg-surface-900"
-											/>
-										</Popover.Arrow>
-									</Popover.Content>
-								</Popover.Positioner>
-							</Portal>
-						</Popover>
+							</div>
+						</sp-popover>
 					{/if}
 
 					{#if !hideCompose}
@@ -933,9 +791,9 @@
 								class="btn composer-send preset-tonal-error"
 								title="Stop"
 								aria-label="Stop generating"
-								onclick={handleAbortLastMessage}
+								onclick={() => conv.invoke("stop")}
 							>
-								<Icons.Square aria-hidden="true" />
+								<sp-icon name="square"></sp-icon>
 								<span>Stop</span>
 							</button>
 						{:else}
@@ -944,12 +802,12 @@
 								class="btn composer-send {sendTonal
 									? 'preset-tonal-primary'
 									: 'preset-filled-primary-500'}"
-								disabled={!newMessage.trim()}
+								disabled={!draft.trim()}
 								title="Send"
 								aria-label="Send message"
-								onclick={handleSendButton}
+								onclick={send}
 							>
-								<Icons.Send aria-hidden="true" />
+								<sp-icon name="send"></sp-icon>
 								<span>Send</span>
 							</button>
 						{/if}

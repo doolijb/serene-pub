@@ -2,7 +2,7 @@
 	import * as Icons from "@lucide/svelte"
 	import type { Snippet } from "svelte"
 	import LensRow from "./LensRow.svelte"
-	import BranchChip from "./time/BranchChip.svelte"
+	import ReadingInto from "./ReadingInto.svelte"
 	import { readingLine, type ScopeFacet, type SavedScopeId } from "./scopes"
 	import { SAVED_SCOPES } from "./scopes"
 	import type { LoreLens, LoreScope } from "./loreRoute"
@@ -19,8 +19,25 @@
 	 * reader the capability does not exist.
 	 */
 	interface Props {
-		/** The branch being read. Only `main` exists yet. */
-		branch: string
+		/**
+		 * The lines and where the reader stands — for the session block alone.
+		 *
+		 * ⚠ The rail does not SWITCH lines — the World bar above the workspace
+		 * is the one control that does. These are read so the session block can
+		 * say whether the reader has parted from the session, which is a question
+		 * about the session and belongs beside it.
+		 */
+		branches: readonly Sockets.Amendments.Branch[]
+		branchId: number | null
+		moment?: string
+		/** The session reading this book, when one is. */
+		session: {
+			id: number
+			name: string
+			branchId: number | null
+		} | null
+		/** Put the reader on the session's line, at now. */
+		onMatchSession: () => void
 		scopes: ScopeFacet[]
 		scope: LoreScope
 		lens: LoreLens
@@ -42,7 +59,11 @@
 	}
 
 	let {
-		branch,
+		branches,
+		branchId,
+		moment,
+		session,
+		onMatchSession,
 		scopes,
 		scope,
 		lens,
@@ -66,10 +87,26 @@
 	aria-label="Lorebook"
 	data-lore-rail
 >
+	<!-- The line moved to the World bar above the workspace (2026-09-24):
+	     line and moment are one question and were answered in two corners. -->
 	<div class="flex min-w-0 items-center gap-1">
 		{@render bookMenu()}
-		<BranchChip {branch} />
 	</div>
+
+	<!-- The session first, because the book is only half the picture and the
+	     other half can now disagree with what is on screen. -->
+	{#if session}
+		<ReadingInto
+			sessionId={session.id}
+			sessionName={session.name}
+			{reached}
+			sessionBranchId={session.branchId}
+			{branchId}
+			{moment}
+			{branches}
+			onMatch={onMatchSession}
+		/>
+	{/if}
 
 	<input
 		class="input input-sm"
@@ -173,7 +210,11 @@
 		</ul>
 	{/if}
 
-	<p class="text-surface-700-300 mt-auto text-xs" data-lore-reading>
-		{readingLine(readingInto, reached)}
-	</p>
+	<!-- With a session, the block at the top says all of this and more; this
+	     line is what an UNREAD book has to say, which is worth saying once. -->
+	{#if !session}
+		<p class="text-surface-700-300 mt-auto text-xs" data-lore-reading>
+			{readingLine(readingInto, reached)}
+		</p>
+	{/if}
 </nav>

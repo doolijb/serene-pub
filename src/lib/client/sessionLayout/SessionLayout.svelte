@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { ConversationDossierV1 } from "$lib/shared/widgets/conversation"
 	/**
 	 * The modular session layout (mockup: serene-pub-chat-layout.html, ruled
 	 * 2026-08-28). The chat core (the page-supplied primary snippet) sits in
@@ -219,6 +220,11 @@
 		 */
 		conversationChildren?: Snippet
 		/**
+		 * 🚧 What core's conversation widget is told about the session (C0b):
+		 * its `session_full.v1`, granted to that one widget.
+		 */
+		conversationDossier?: ConversationDossierV1 | null
+		/**
 		 * The layout presets this user may pick for the session's genre (PLAN
 		 * 25 redesign): the shipped default first, then their own saved ones.
 		 * Read-only here — the page owns the socket round trips.
@@ -286,6 +292,7 @@
 		sessionId,
 		session,
 		conversationChildren,
+		conversationDossier = null,
 		presets = [],
 		activePresetId = null,
 		onApplyPreset,
@@ -306,7 +313,15 @@
 	// what the editor changes about the middle is its ARRANGEMENT, which
 	// commits through `manager.setArrangedGrid` on Done.
 	let chatGrid = $derived<GridLayout>(
-		loadChatLayout(manager.effectiveWidgetGrid)
+		loadChatLayout(
+			manager.effectiveWidgetGrid,
+			// A genre that withholds the conversation (R71) puts its own
+			// primary widget in the middle — Battleship's board.
+			manager.omitted.has("messages")
+				? (manager.instances.find((p) => p.role === "primary")?.id ?? "messages")
+				: "messages",
+			manager.omitted
+		)
 	)
 	/**
 	 * The ids the middle widget grid places. The zone template covers the sides
@@ -844,7 +859,8 @@
 	$effect(() => {
 		const out: Record<string, WidgetSettingsDecl> = {}
 		for (const w of CORE_WIDGETS)
-			out[w.id] = {
+			if (!manager.omitted.has(w.id))
+				out[w.id] = {
 				id: w.id,
 				title: w.title,
 				channels: w.channels,
@@ -2500,6 +2516,8 @@
 				{actions}
 				{actionDispatch}
 				onAction={onFrameAction}
+				grants={conversationDossier ? ["session:full"] : []}
+				scoped={conversationDossier ? { sessionFull: conversationDossier } : undefined}
 			>
 				{@render conversationChildren?.()}
 			</WidgetHost>
@@ -2508,7 +2526,9 @@
 		{/if}
 	{:else}
 		{@const p = inst(id)}
-		{#if p && p.role !== "primary"}
+		<!-- A primary here is a genre's own middle (R71: it withheld the
+		     conversation — Battleship's board), drawn bare like the log is. -->
+		{#if p && (p.role !== "primary" || manager.omitted.has("messages"))}
 			<Panel
 				instance={p}
 				{manager}
@@ -2516,7 +2536,7 @@
 				{session}
 				{placement}
 				chrome="zone"
-				hideHeader={bare}
+				hideHeader={bare || p.role === "primary"}
 				{actions}
 				{actionDispatch}
 				{onFrameAction}
@@ -3298,6 +3318,7 @@
 			{sessionId}
 			{session}
 			{conversationChildren}
+			{conversationDossier}
 			{actions}
 			{actionDispatch}
 			{onFrameAction}

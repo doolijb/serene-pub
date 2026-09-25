@@ -515,15 +515,17 @@ const REDACTING_EMITTERS: Deliberate[] = [
 	},
 	{
 		subject:
-			"src/lib/server/sockets/pipelines.ts :: registerPipelineHandlers → socket.io.to(…).emit(<computed>)",
+			"src/lib/server/sockets/pipelines.ts :: registerPipelineHandlers.push → socket.io.to(…).emit(<computed>)",
 		reason:
-			"Hole 1, closed. The review gate's push transport, bound once per " +
+			"Hole 1, closed. The review gate's push transport — shared with " +
+			"the cap pause (E1c), which parks the same way — bound once per " +
 			"process — a review can park from any trigger, so it pushes by user " +
 			"rather than through the handler that started the run, and the " +
 			"socket it was installed from belongs to whoever connected last. " +
 			"The subject is therefore a fresh `users.isAdmin` read for the " +
-			"RECIPIENT, not `socket.user`. Affordable because a review is " +
-			"human-paced: one push per gated node, per person, per run."
+			"RECIPIENT, not `socket.user`. Affordable because a review and a " +
+			"cap pause are human-paced: one push per gated node or parked run, " +
+			"per person."
 	},
 	{
 		subject:

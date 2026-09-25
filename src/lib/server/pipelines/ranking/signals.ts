@@ -49,6 +49,21 @@ export interface KeyedEntry {
 export interface ScanWindow {
 	raw: string
 	lower: string
+	/**
+	 * Where each message starts in `raw`, and its id — so a key's hit can say
+	 * which message it was in (L1: match facts at the source). Absent when
+	 * the window was built from text with no message ids.
+	 */
+	starts?: number[]
+	ids?: Array<number | null>
+}
+
+/** The message a window offset falls in, or null. */
+export function messageAt(window: ScanWindow, index: number): number | null {
+	if (!window.starts || !window.ids || index < 0) return null
+	let at = -1
+	for (let i = 0; i < window.starts.length && window.starts[i]! <= index; i++) at = i
+	return at >= 0 ? (window.ids[at] ?? null) : null
 }
 
 /**
@@ -60,13 +75,24 @@ export interface ScanWindow {
  * can match, and changing the separator would silently change results.
  */
 export function buildScanWindow(
-	messages: ReadonlyArray<{ content?: string | null }>,
+	messages: ReadonlyArray<{ content?: string | null; id?: number | null }>,
 	scanDepth: number
 ): ScanWindow {
 	const slice =
 		scanDepth >= messages.length ? messages : messages.slice(-scanDepth)
 	const raw = slice.map((m) => m.content ?? "").join(" ")
-	return { raw, lower: raw.toLowerCase() }
+	const starts: number[] = []
+	let at = 0
+	for (const m of slice) {
+		starts.push(at)
+		at += (m.content ?? "").length + 1
+	}
+	return {
+		raw,
+		lower: raw.toLowerCase(),
+		starts,
+		ids: slice.map((m) => (typeof m.id === "number" ? m.id : null))
+	}
 }
 
 /** Comma-split, trimmed, empties dropped. `:1569`. */
@@ -291,6 +317,8 @@ export interface KeywordMatch {
 	 * distance, and a fuzzy hit has no single offset to measure from.
 	 */
 	proximity: number
+	/** The keys that matched and the window offset of each (-1 for a fuzzy hit). */
+	hits: Array<{ key: string; index: number }>
 }
 
 /**
@@ -317,14 +345,18 @@ export function keywordMatch(
 	folding: TrigramFolding | null = null
 ): KeywordMatch {
 	const keys = splitKeys(entry.keys)
-	if (keys.length === 0) return { signal: 0, proximity: 0 }
+	if (keys.length === 0) return { signal: 0, proximity: 0, hits: [] }
 
 	let matched = 0
 	const offsets: number[] = []
+	const hits: Array<{ key: string; index: number }> = []
 	for (const key of keys) {
 		const { score, index } = keyScore(key, entry, window, folding)
 		matched += score
 		if (index >= 0) offsets.push(index)
+		// Which keys matched, and where (L1): kept rather than folded into
+		// the fraction, so a readout never names a key that did not match.
+		if (score > 0) hits.push({ key, index })
 	}
 
 	let proximity = 0
@@ -336,7 +368,7 @@ export function keywordMatch(
 		proximity = Math.exp(-gap / PROXIMITY_SPAN)
 	}
 
-	return { signal: matched / keys.length, proximity }
+	return { signal: matched / keys.length, proximity, hits }
 }
 
 /** Fraction of an entry's keys present in the window. `:1559`. */

@@ -170,11 +170,20 @@ vi.mock("$lib/server/connections/capabilityTarget", async (importOriginal) => {
 	return {
 		...real,
 		resolveCapabilityTarget: async (_db: any, req: any) => {
-			resolveArgs = {
-				pipelineConnectionId: req.pipelineConfig?.connectionId ?? null,
-				pipelineConnectionModelId:
-					req.pipelineConfig?.connectionModelId ?? null,
-				pipelineSamplingId: req.pipelineConfig?.samplingConfigId ?? null
+			// Capture only the step's own dispatch. Since the turn-order
+			// spec was bound to `message-completed` (PLAN-turn-order §4.5),
+			// the finishing write of this very run dispatches the turn-order
+			// spec as a child, and its run asks `capabilityDefault` through
+			// `connectionStopsFor` for the INSTANCE default — a capability
+			// lookup that carries no `pipelineConfig` and must not overwrite
+			// what this file is spying on.
+			if (req.pipelineConfig !== undefined) {
+				resolveArgs = {
+					pipelineConnectionId: req.pipelineConfig?.connectionId ?? null,
+					pipelineConnectionModelId:
+						req.pipelineConfig?.connectionModelId ?? null,
+					pipelineSamplingId: req.pipelineConfig?.samplingConfigId ?? null
+				}
 			}
 			return await real.resolveCapabilityTarget(db, req)
 		}

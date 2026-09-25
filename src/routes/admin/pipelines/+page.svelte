@@ -763,6 +763,9 @@
 				their own admin sections.
 			</p>
 		</div>
+		<a class="btn btn-sm preset-tonal-surface" href="/admin/pipelines/events">
+			<Icons.Zap size={16} /> Events
+		</a>
 		<a class="btn btn-sm preset-tonal-surface" href="/pipelines/library">
 			<Icons.Library size={16} /> Library
 		</a>

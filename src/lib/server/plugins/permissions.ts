@@ -78,6 +78,65 @@ export interface PluginManifest {
 	 * show everything a manifest declared, or a denial cannot target it.
 	 */
 	permissions?: DeclaredPermissions | string[]
+	/** Its genres, whose panels may declare `scopes` (read for `widget:<scope>`). */
+	genres?: unknown
+}
+
+/**
+ * The data a plugin's widget may ask for beyond the base sections
+ * (`WidgetDecl.scopes`) — each a permission of its own, `widget:<scope>`,
+ * reviewed and deniable like any other. Only `session:full` is supplied by
+ * this build (the conversation dossier); the rest are declared-but-absent,
+ * and a widget reads their absence.
+ */
+export const WIDGET_SCOPE_LABELS: Record<string, string> = {
+	"session:full": "Its widgets see the whole conversation as you do — the cast, your personas, your unsent draft and the session's state",
+	persona: "Its widgets see your persona",
+	characters: "Its widgets see the session's characters",
+	lore: "Its widgets see the session's lore"
+}
+
+/**
+ * The scopes a manifest's widgets declare, read off the declarations
+ * themselves — never trusted to a compiled list, so a package cannot ask
+ * for data through a panel and leave the request off its permissions.
+ */
+export function declaredWidgetScopes(manifest: PluginManifest | null | undefined): string[] {
+	const out = new Set<string>()
+	const genres = Array.isArray(manifest?.genres) ? (manifest!.genres as unknown[]) : []
+	for (const g of genres) {
+		const panels = (g as { shape?: { panels?: unknown } } | null)?.shape?.panels
+		for (const panel of Array.isArray(panels) ? panels : [])
+			for (const scope of Array.isArray((panel as { scopes?: unknown })?.scopes)
+				? ((panel as { scopes: unknown[] }).scopes)
+				: [])
+				if (typeof scope === "string" && Object.hasOwn(WIDGET_SCOPE_LABELS, scope)) out.add(scope)
+	}
+	return [...out].sort()
+}
+
+/**
+ * What one panel may read: the scopes it asked for that its plugin was
+ * granted. A panel can narrow its plugin's grant, never widen it.
+ */
+export function panelGrants(
+	asked: unknown,
+	manifest: PluginManifest | null | undefined,
+	adminDenied: string[] | null | undefined
+): string[] {
+	if (!Array.isArray(asked) || !asked.length) return []
+	const granted = new Set(grantedWidgetScopes(manifest, adminDenied))
+	return [...new Set(asked.filter((s): s is string => typeof s === "string" && granted.has(s)))]
+}
+
+/** The widget scopes an admin has granted this plugin (declared − denied − unreviewed). */
+export function grantedWidgetScopes(
+	manifest: PluginManifest | null | undefined,
+	adminDenied: string[] | null | undefined
+): string[] {
+	return effectivePermissions(declaredPermissions(manifest), adminDenied)
+		.filter((p) => p.key.startsWith("widget:"))
+		.map((p) => p.key.slice("widget:".length))
 }
 
 const DEFAULT_STORAGE_QUOTA = 5 * 1024 * 1024
@@ -170,6 +229,9 @@ function toDeclared(
 			resources.push(raw.slice("resource:".length))
 		else if (raw.startsWith("event:"))
 			events.push(raw.slice("event:".length))
+		// Read off the panels themselves (`declaredWidgetScopes`); the compiled
+		// key is the CLI's echo of the same declaration.
+		else if (raw.startsWith("widget:") && Object.hasOwn(WIDGET_SCOPE_LABELS, raw.slice("widget:".length))) continue
 		else unknown.push(raw)
 	}
 	if (storage && !declared.storage) declared.storage = {}
@@ -236,6 +298,13 @@ export function declaredPermissions(
 			key: `event:${e}`,
 			kind: "event",
 			label: `Event: ${e}`,
+			accountAffecting: true
+		})
+	for (const scope of declaredWidgetScopes(manifest))
+		out.push({
+			key: `widget:${scope}`,
+			kind: "resource",
+			label: WIDGET_SCOPE_LABELS[scope]!,
 			accountAffecting: true
 		})
 	// Keys the compiled form declared but this build does not recognise. Shown

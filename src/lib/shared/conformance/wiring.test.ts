@@ -259,6 +259,26 @@ const UNPRODUCED_IN_SHAPES: Deliberate[] = []
 const UNCONSUMED_OUT_SHAPES: Deliberate[] = [
 	{
 		subject: shapeSubject(
+			"core:shape/turn-order@1",
+			OUT_PORTS.filter((p) => p.shape === "core:shape/turn-order@1")
+		),
+		reason:
+			"What was written, published back for a receipt to carry " +
+			"(PLAN-turn-order §4.4). `core:outlet/set-turn-order@1.turnOrder` " +
+			"is the document as stored — or the stored one when the write was " +
+			"stale — so a person reading the run can see the order it produced " +
+			"without a second read. Nothing consumes it, and nothing should: " +
+			"the order is STATE, read from `sessions.metadata` by whoever " +
+			"needs it, not passed down a graph. Delete this entry if a spec " +
+			"ever wires a second write from the first.\n\n" +
+			"⏳ Replaces the `speaker-selection@1` entry, which excused the " +
+			"same thing one vocabulary earlier: a shape that was a membership " +
+			"test rather than a wire. `turn-entries@1` is that test now — a " +
+			"task publishing it IS a turn strategy — and it IS consumed, by " +
+			"`set-turn-order@1.order`, so it needs no excusing."
+	},
+	{
+		subject: shapeSubject(
 			"core:shape/form-addressed@1",
 			OUT_PORTS.filter((p) => p.shape === "core:shape/form-addressed@1")
 		),
@@ -273,33 +293,18 @@ const UNCONSUMED_OUT_SHAPES: Deliberate[] = [
 	},
 	{
 		subject: shapeSubject(
-			"core:shape/speaker-selection@1",
-			OUT_PORTS.filter(
-				(p) => p.shape === "core:shape/speaker-selection@1"
-			)
+			"core:shape/session-settings@1",
+			OUT_PORTS.filter((p) => p.shape === "core:shape/session-settings@1")
 		),
 		reason:
-			"A membership test, not a wire. A task whose `main` publishes this " +
-			"shape IS a next-speaker strategy, and the picker is a SELECT over " +
-			"such rows — an extension's strategy appears beside core's by " +
-			"existing. What a downstream node actually consumes is the bare " +
-			"`characterId` port beside it, which respond's `speaker` node wires."
+			"The settings document, whole (PLAN-turn-order §4.12, R13; A3). " +
+			"Every session inlet publishes it as `session` and " +
+			"`core:query/session-settings@1` re-reads it, and a spec reads " +
+			"INTO it — `$.input.session.fields.tone`, `$.event.session.cast` " +
+			"into `turn-pool@1`'s `cast: sessionCast` (A6) — path by path. " +
+			"Nothing wants the envelope as one value: the shape exists so the " +
+			"port is typed and the document has a name, not as a wire."
 	},
-	{
-		subject: shapeSubject(
-			"core:shape/vector@1",
-			OUT_PORTS.filter((p) => p.shape === "core:shape/vector@1")
-		),
-		reason:
-			"One embedding, on `embed-text@1`'s `main` and `vector` — what a " +
-			"single-text call publishes beside its `vectors` list. The one " +
-			"consumer, `vector-search@1`, takes the LIST (`json@1`, U5d review " +
-			"W9: several query vectors, one ranked list each — what `vectors` " +
-			"publishes and the host reads); a lone vector wired into it is " +
-			"accepted as anything into `json` is. The singular ports stay for " +
-			"a node that wants one embedding — an entity write, a similarity — " +
-			"which no shipped spec pins yet."
-	}
 ]
 
 /**

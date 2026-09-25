@@ -1,0 +1,1 @@
+ALTER TABLE "sessions" ADD COLUMN "annex" jsonb DEFAULT '{}'::jsonb NOT NULL;

@@ -144,6 +144,25 @@ const bindingsOf = (preset: PresetRow) =>
 	(preset.bindings ?? {}) as Record<string, { spec: string; config?: number }>
 
 /**
+ * Does this version's inlet lock answer `event` (PLAN-turn-order §4.1)?
+ *
+ * Two spellings, one question: the ordinary one-event lock stores
+ * `input_event`, and a lock over several stores `input_events` and leaves
+ * the singular null. Asked in one place so read-time resolution and the
+ * boot reconcile cannot come to disagree — the same reason
+ * `presetBindingRefusal` exists.
+ */
+export function answersEvent(
+	version: { inputEvent?: string | null; inputEvents?: string[] | null },
+	event: string
+): boolean {
+	if (version.inputEvent === event) return true
+	return Array.isArray(version.inputEvents)
+		? version.inputEvents.includes(event)
+		: false
+}
+
+/**
  * The one published spec whose active version declares (genre, event).
  *
  * The genre's own answer — what a session on no preset runs, and therefore what
@@ -175,7 +194,8 @@ export async function lockedEventSpec(
 			versionId: schema.pipelineSpecVersions.id,
 			status: schema.pipelineSpecVersions.status,
 			inputGenre: schema.pipelineSpecVersions.inputGenre,
-			inputEvent: schema.pipelineSpecVersions.inputEvent
+			inputEvent: schema.pipelineSpecVersions.inputEvent,
+			inputEvents: schema.pipelineSpecVersions.inputEvents
 		})
 		.from(schema.pipelineSpecs)
 		.innerJoin(
@@ -188,7 +208,7 @@ export async function lockedEventSpec(
 			r.activeVersionId === r.versionId &&
 			r.status === "published" &&
 			r.inputGenre === genreId &&
-			r.inputEvent === event
+			answersEvent(r, event)
 	)
 	return (hit?.slug as string | undefined) ?? null
 }
@@ -211,7 +231,8 @@ export async function bindingRefusal(
 			versionId: schema.pipelineSpecVersions.id,
 			status: schema.pipelineSpecVersions.status,
 			inputGenre: schema.pipelineSpecVersions.inputGenre,
-			inputEvent: schema.pipelineSpecVersions.inputEvent
+			inputEvent: schema.pipelineSpecVersions.inputEvent,
+			inputEvents: schema.pipelineSpecVersions.inputEvents
 		})
 		.from(schema.pipelineSpecs)
 		.innerJoin(
@@ -224,7 +245,7 @@ export async function bindingRefusal(
 	)
 	if (!hit)
 		return `'${opts.slug}' is not published on this instance — it was removed, retired, or never installed here.`
-	if (hit.inputGenre !== opts.genreId || hit.inputEvent !== opts.event)
+	if (hit.inputGenre !== opts.genreId || !answersEvent(hit, opts.event))
 		return (
 			`'${opts.slug}' now answers '${hit.inputEvent ?? "nothing"}' for ` +
 			`'${hit.inputGenre ?? "no genre"}', not '${opts.event}' of '${opts.genreId}' (24 §4).`

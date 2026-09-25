@@ -10,6 +10,7 @@
  *   active      — instance.active (seeded from decl + layout row + intents)
  *   placed      — pack(tier, active) — derived, never stored
  */
+import { CONVERSATION_WIDGET_ID } from "@serene-pub/sdk"
 import { formatChannel, parseChannel } from "@serene-pub/sdk"
 import type {
 	WidgetEvent,
@@ -71,6 +72,7 @@ function toInstance(p: ModePanel, layout?: LayoutBlob): PanelInstance {
 		role,
 		surface: p.surface,
 		src: p.src,
+		...(p.grants?.length ? { grants: p.grants } : {}),
 		channels: p.channels ?? [],
 		...(p.settings
 			? { settings: p.settings as PanelInstance["settings"] }
@@ -87,6 +89,8 @@ function toInstance(p: ModePanel, layout?: LayoutBlob): PanelInstance {
 
 export class SurfaceManager implements WidgetEventSource {
 	instances = $state<PanelInstance[]>([])
+	/** The widgets this session's genre withholds (R71), core's included. */
+	omitted = $state<ReadonlySet<string>>(new Set())
 	tier = $state<Tier>("roomy")
 	/** Which drawered panel is currently slid open (null = rail closed). */
 	drawerOpenId = $state<string | null>(null)
@@ -142,12 +146,16 @@ export class SurfaceManager implements WidgetEventSource {
 		modePanels: ModePanel[],
 		layout: LayoutBlob | undefined,
 		save: (blob: LayoutBlob) => void,
-		baseLayout?: Record<string, unknown>
+		baseLayout?: Record<string, unknown>,
+		omit: ReadonlySet<string> = new Set()
 	) {
 		this.sessionId = sessionId
 		this.#save = save
+		this.omitted = new Set(omit)
 		const hasPrimary = modePanels.some((p) => p.role === "primary")
-		const decls = hasPrimary
+		// A genre that withholds the conversation (R71) places its own middle;
+		// the synthetic log is never put back.
+		const decls = hasPrimary || omit.has(CONVERSATION_WIDGET_ID)
 			? modePanels
 			: [DEFAULT_PRIMARY, ...modePanels]
 		this.#decls = decls
@@ -324,6 +332,15 @@ export class SurfaceManager implements WidgetEventSource {
 				slug: ref.slug,
 				lane: ref.lane
 			})
+	}
+
+	/**
+	 * A package's event, recorded in this session (R56): every widget hears
+	 * it as `event:recorded`. The page hands over the server's push; the
+	 * manager is the one fan-out both widget lanes already share.
+	 */
+	announceRecordedEvent(e: { event: string; payload: unknown; at: number }) {
+		this.#emit({ kind: "event:recorded", event: e.event, payload: e.payload, at: e.at })
 	}
 
 	/* ── the session-level widget event source (PLAN 25) ──────────────────

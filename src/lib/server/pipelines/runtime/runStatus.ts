@@ -199,13 +199,29 @@ export function createStatusRelay(opts: StatusRelayOptions): StatusRelay {
 	 * resolves per viewer from its locale map, only the name inside it is
 	 * fixed at the owner's.
 	 */
-	const speakerName = () =>
-		(speaker ??= speakerDisplayName(db, {
+	/**
+	 * Who speaks, named from the **trigger** again (PLAN-turn-order §4.6,
+	 * §7; A7).
+	 *
+	 * The run does not decide any more: the entry being fired names the
+	 * speaker, and it arrives on the request — so `opts.speaker` is known
+	 * before the first node, and the `onOpened` relay that waited for the
+	 * placeholder to say who has gone with the node that made it necessary.
+	 * A run that names nobody is a narrator turn or a run with no speaker
+	 * at all (a summary, a scene); both are unfilled throughout, without a
+	 * read, exactly as before.
+	 */
+	const speakerName = (): Promise<string | undefined> => {
+		if (speaker) return speaker
+		if (opts.speaker == null && !opts.sideCharacterName?.trim())
+			return Promise.resolve(undefined)
+		return (speaker = speakerDisplayName(db, {
 			sessionId,
 			speaker: opts.speaker,
 			sideCharacterName: opts.sideCharacterName,
 			userId: opts.userId
 		}).catch(() => undefined))
+	}
 
 	const fill = async (text: StatusText): Promise<StatusText> => {
 		// Only a text that mentions the variable pays for the read — read
@@ -257,6 +273,23 @@ export function createStatusRelay(opts: StatusRelayOptions): StatusRelay {
 		},
 		set(nodeKey, text) {
 			enqueue(async () => {
+				/**
+				 * A status that says *{speaker} is thinking* with nobody to
+				 * put in it is withheld rather than shown mangled.
+				 *
+				 * Since A7 this is only ever a run with no speaker at all —
+				 * a narrator turn, a summary, a scene — because the entry
+				 * being fired names the speaker before the first node, so
+				 * there is no window in which a character's turn has nobody
+				 * to name.
+				 */
+				if (
+					statusVarsMentioned(text).includes("speaker") &&
+					text.vars?.speaker === undefined &&
+					opts.speaker == null &&
+					!opts.sideCharacterName?.trim()
+				)
+					return
 				const filled = await fill(text)
 				current = filled
 				await show(nodeKey, filled)

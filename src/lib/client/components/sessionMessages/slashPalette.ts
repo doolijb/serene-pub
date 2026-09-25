@@ -17,7 +17,7 @@
 import { enablementVerdict, i18nText, type EnabledWhen } from "@serene-pub/sdk"
 import { CORE_ACTION_SPEC } from "$lib/shared/actions/identity"
 import type { ItemValues } from "$lib/shared/actions/itemValues"
-import { statusText } from "$lib/client/i18n/state.svelte"
+import { statusText } from "./text"
 import { notYoursToUse, VERB_REASONS } from "./messageVerbState"
 
 export interface PaletteAction {

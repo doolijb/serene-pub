@@ -1,0 +1,1 @@
+ALTER TABLE "pipeline_definition_registry" ADD COLUMN "causes_event_from" text;

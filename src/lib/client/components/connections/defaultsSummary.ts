@@ -30,6 +30,7 @@ import {
 	outputKindLabel
 } from "$lib/shared/constants/outputKinds"
 import type { CapabilityDefaultRef } from "./modelSystemDefaults"
+import type { ModelFacts } from "$lib/shared/connections/modelFacts"
 
 /**
  * A local ONNX row's disk state, structurally — the fields this module reads
@@ -47,6 +48,17 @@ export interface SummaryModel {
 	enabled: boolean
 	missingSince: string | null
 	local?: SummaryLocalState
+	/**
+	 * What the host said about this model, where it said anything.
+	 *
+	 * Carried so the capability view — which is a CHOOSER — can put context,
+	 * price and size on its rows. Without it every row read
+	 * `Anthropic (Claude) · listed`, which is true of all eight of them and so
+	 * distinguishes none. Nothing in this module reads it; it passes through.
+	 */
+	facts?: ModelFacts | null
+	/** The admin's context override, which wins over `facts.contextWindow`. */
+	contextWindow?: number | null
 }
 
 export interface SummaryConnection {

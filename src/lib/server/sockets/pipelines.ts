@@ -19,7 +19,7 @@
 
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { and, asc, desc, eq, inArray, or, sql } from "drizzle-orm"
+import { and, asc, desc, eq, inArray, or, sql, type SQL } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import {
 	clearOption,
@@ -55,12 +55,11 @@ import { interestedSockets } from "./interest"
 // on top of it, so access to the session never becomes access to somebody
 // else's receipts.
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
-// The two things a preview turn needs that this file has never needed before:
-// who is due to speak, and which lane counts as the conversation. Imported
-// rather than re-derived — `getNextCharacterTurn` is the rotation rule, and a
-// second copy of it here would answer a different question from the one the
+// What a preview turn needs that this file never needed before: which lane
+// counts as the conversation. Who is due to speak is the run's decision,
+// previewed through `entities/speaker.ts` where it is needed — a second copy
+// of the rotation here would answer a different question from the one the
 // send answers.
-import { getNextCharacterTurn } from "$lib/server/utils/getNextCharacterTurn"
 import { DEFAULT_CHANNEL, channelWhere } from "$lib/server/messages/channels"
 import { MAX_CHAT_MESSAGE_LENGTH } from "$lib/shared/constants/MessageLimits"
 // The budget band a declared entry type's rows compete in — the declaration's
@@ -492,6 +491,25 @@ const adminOnly = (
 	const res = {
 		error: "Access denied. Only admin users can manage pipelines."
 	}
+	emitToUser(`${event}:error`, res)
+	return res
+}
+
+/**
+ * Receipts are an administrator's (R55): a receipt carries everything a run
+ * touched — every step's inputs and outputs, a pipeline's server-only state
+ * included — so the runs list, the run inspector and the run and message
+ * explanations answer admins alone, for every user's runs. What a person is
+ * told about their own turn — a halt's sentence on the progress card — is
+ * not a receipt and still reaches them.
+ */
+const receiptsAdminOnly = (
+	socket: any,
+	emitToUser: any,
+	event: string
+): { error: string } | null => {
+	if (socket.user?.isAdmin) return null
+	const res = { error: "Only administrators can see run reports." }
 	emitToUser(`${event}:error`, res)
 	return res
 }
@@ -1032,10 +1050,8 @@ export const pipelinesClonePrompt: Handler<
 	handler: async (socket, params, emitToUser) => {
 		let promptId: number
 		try {
-			const { nodeDefinitionId, slot, specId, row } = await promptForOption(
-				socket,
-				params
-			)
+			const { nodeDefinitionId, slot, specId, row } =
+				await promptForOption(socket, params)
 			const { duplicatePrompt } = await import(
 				"$lib/server/pipelines/entities/prompts"
 			)
@@ -1494,7 +1510,12 @@ async function contextTemplateCopyName(
 	const rows = await db
 		.select({ name: schema.pipelineContextTemplates.name })
 		.from(schema.pipelineContextTemplates)
-		.where(eq(schema.pipelineContextTemplates.nodeDefinitionId, nodeDefinitionId))
+		.where(
+			eq(
+				schema.pipelineContextTemplates.nodeDefinitionId,
+				nodeDefinitionId
+			)
+		)
 	const taken = new Set((rows as any[]).map((r) => r.name))
 	let candidate = `${base} (copy)`
 	for (let n = 2; taken.has(candidate); n++) candidate = `${base} (copy ${n})`
@@ -1598,10 +1619,8 @@ export const pipelinesCloneContextTemplate: Handler<
 	handler: async (socket, params, emitToUser) => {
 		let templateId: number
 		try {
-			const { nodeDefinitionId, specId, row } = await contextTemplateForOption(
-				socket,
-				params
-			)
+			const { nodeDefinitionId, specId, row } =
+				await contextTemplateForOption(socket, params)
 			const { duplicateContextTemplate } = await import(
 				"$lib/server/pipelines/entities/contextTemplates"
 			)
@@ -1955,7 +1974,10 @@ async function libraryCopyName(
 					.select({ name: schema.pipelineContextTemplates.name })
 					.from(schema.pipelineContextTemplates)
 					.where(
-						eq(schema.pipelineContextTemplates.nodeDefinitionId, poolId)
+						eq(
+							schema.pipelineContextTemplates.nodeDefinitionId,
+							poolId
+						)
 					)
 			: await db
 					.select({ name: schema.pipelineVariableTemplates.name })
@@ -2718,7 +2740,8 @@ export const pipelinesDetail: Handler<
 			 */
 			const registryRows = await db
 				.select({
-					definitionId: schema.pipelineDefinitionRegistry.definitionId,
+					definitionId:
+						schema.pipelineDefinitionRegistry.definitionId,
 					version: schema.pipelineDefinitionRegistry.version,
 					i18n: schema.pipelineDefinitionRegistry.i18n
 				})
@@ -2985,7 +3008,8 @@ async function portrayalLinesOf(
 	if (
 		sessionId != null &&
 		entries.some(
-			([ref, p]) => p.by !== "none" && parseParticipantRef(ref).kind === "envoy"
+			([ref, p]) =>
+				p.by !== "none" && parseParticipantRef(ref).kind === "envoy"
 		)
 	) {
 		const { sessionDeclaredEnvoys } = await import(
@@ -3123,10 +3147,9 @@ function specPinOf(
 /**
  * Recent runs — the honest answer to "did that use the new path".
  *
- * Scoped to sessions the asker can reach — owner **or** guest, via
- * `checkSessionAccess` — and, on top of that and independently of it, to their
- * own runs. A run receipt records what a pipeline decided about somebody's
- * conversation; it is not instance trivia an admin browses by default.
+ * An administrator's (R55): every user's runs, optionally one session's or
+ * one pipeline's, each row naming whose run it was. Anyone else gets an
+ * empty list and the refusal.
  */
 export const pipelinesRuns: Handler<
 	Sockets.Pipelines.Runs.Params,
@@ -3134,21 +3157,15 @@ export const pipelinesRuns: Handler<
 > = {
 	event: "pipelines:runs",
 	handler: async (socket, params, emitToUser) => {
-		const userId = socket.user!.id
+		if (receiptsAdminOnly(socket, emitToUser, "pipelines:runs")) {
+			const res = { runs: [] }
+			emitToUser("pipelines:runs", res)
+			return res
+		}
 		const limit = Math.min(Math.max(params.limit ?? 25, 1), 100)
 
-		let where = eq(schema.pipelineRuns.userId, userId)
+		let where: SQL | undefined = undefined
 		if (params.sessionId != null) {
-			// Reaching the session is owner-OR-guest, decided in the one place
-			// that decides it. The `user_id` clause below is the separate gate
-			// and the one that keeps this honest: a guest passes the first and
-			// still reads only their own receipts, never the owner's.
-			const access = await checkSessionAccess(params.sessionId, userId)
-			if (!access.hasAccess) {
-				const res = { runs: [] }
-				emitToUser("pipelines:runs", res)
-				return res
-			}
 			/**
 			 * A branched session's creation run belongs to it too (U5b
 			 * review S5). The run row sits on the SOURCE session — that is
@@ -3165,7 +3182,10 @@ export const pipelinesRuns: Handler<
 					.from(schema.sessionChanges)
 					.where(
 						and(
-							eq(schema.sessionChanges.sessionId, params.sessionId),
+							eq(
+								schema.sessionChanges.sessionId,
+								params.sessionId
+							),
 							eq(
 								schema.sessionChanges.event,
 								"core:event/session-branched@1"
@@ -3181,10 +3201,13 @@ export const pipelinesRuns: Handler<
 							eq(schema.pipelineRuns.sessionId, params.sessionId),
 							inArray(schema.pipelineRuns.runId, branchedBy)
 						)
-					: eq(schema.pipelineRuns.sessionId, params.sessionId),
-				eq(schema.pipelineRuns.userId, userId)
+					: eq(schema.pipelineRuns.sessionId, params.sessionId)
 			)!
 		}
+		// Filtered here, not by the client: the list covers every user, and
+		// the newest `limit` of the whole instance can miss a pipeline's runs.
+		if (typeof params.specSlug === "string")
+			where = and(where, eq(schema.pipelineRuns.specSlug, params.specSlug))
 
 		const rows = await db
 			.select()
@@ -3200,12 +3223,27 @@ export const pipelinesRuns: Handler<
 			rows.map((r: any) => r.specSlug)
 		)
 		const renamed = await renamedAtByHash(rows.map((r: any) => r.specHash))
+		const userIds = [
+			...new Set(rows.map((r: any) => r.userId).filter((id: unknown) => typeof id === "number"))
+		] as number[]
+		const names = new Map(
+			userIds.length
+				? (
+						await db
+							.select({ id: schema.users.id, username: schema.users.username })
+							.from(schema.users)
+							.where(inArray(schema.users.id, userIds))
+					).map((u) => [u.id, u.username] as const)
+				: []
+		)
 
 		const res: Sockets.Pipelines.Runs.Response = {
 			runs: rows.map((r: any) => ({
 				id: r.id,
 				runId: r.runId,
 				specSlug: r.specSlug,
+				userId: r.userId ?? null,
+				username: r.userId != null ? (names.get(r.userId) ?? null) : null,
 				...specPinOf(r, current, renamed),
 				outcome: r.outcome,
 				haltNodeKey: r.haltNodeKey,
@@ -3226,9 +3264,8 @@ export const pipelinesRuns: Handler<
 /**
  * One run's full receipt (22 §3) — the node-by-node record the summary row
  * compresses: per-node outcomes, timings, tokens, script applications, halt
- * reasons. Gated the same way the list is: your runs, nobody else's. The
- * receipt names node keys, which the admin surface may (05 §0a binds the
- * sidebar, not this page).
+ * reasons. Gated the same way the list is: administrators, any user's run
+ * (R55).
  */
 export const pipelinesRun: Handler<
 	Sockets.Pipelines.Run.Params,
@@ -3236,16 +3273,13 @@ export const pipelinesRun: Handler<
 > = {
 	event: "pipelines:run",
 	handler: async (socket, params, emitToUser) => {
+		const denied = receiptsAdminOnly(socket, emitToUser, "pipelines:run")
+		if (denied) return denied
 		const userId = socket.user!.id
 		const [r] = await db
 			.select()
 			.from(schema.pipelineRuns)
-			.where(
-				and(
-					eq(schema.pipelineRuns.runId, params.runId),
-					eq(schema.pipelineRuns.userId, userId)
-				)
-			)
+			.where(eq(schema.pipelineRuns.runId, params.runId))
 			.limit(1)
 		if (!r) {
 			const res = { error: "No such run." }
@@ -3257,6 +3291,7 @@ export const pipelinesRun: Handler<
 				id: (r as any).id,
 				runId: (r as any).runId,
 				specSlug: (r as any).specSlug,
+				userId: (r as any).userId ?? null,
 				...specPinOf(
 					r as any,
 					await currentHashBySlug([(r as any).specSlug]),
@@ -4790,7 +4825,9 @@ interface RetrievalEntryRead {
 
 export async function retrievalEntriesFor(
 	sessionId: number | null,
-	userId: number
+	userId: number,
+	/** An administrator reading a receipt (R55) reads the session owner's book. */
+	opts: { asAdmin?: boolean } = {}
 ): Promise<RetrievalEntryRead> {
 	const entries = new Map<string, RetrievalEntryFacts>()
 	if (sessionId == null) return { entries, read: false }
@@ -4802,7 +4839,11 @@ export async function retrievalEntriesFor(
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
-	if (!session || session.userId !== userId || !session.lorebookId)
+	if (
+		!session ||
+		(!opts.asAdmin && session.userId !== userId) ||
+		!session.lorebookId
+	)
 		return { entries, read: false }
 
 	const rows = await db
@@ -4848,11 +4889,8 @@ export async function retrievalEntriesFor(
 /**
  * One run's retrieval, explained.
  *
- * Owner-scoped on exactly the terms `pipelines:run` is, and deliberately not
- * `adminOnly`: this explains a receipt the asker already owns and may already
- * read whole, so an admin gate here would refuse people their own evidence
- * while changing nothing about what is reachable. The config verbs are
- * admin-only because they *write instance configuration*; this reads one run.
+ * Admin-only on exactly the terms `pipelines:run` is (R55): it explains a
+ * receipt, and a receipt is an administrator's.
  */
 export const pipelinesRunExplain: Handler<
 	Sockets.Pipelines.RunExplain.Params,
@@ -4860,16 +4898,13 @@ export const pipelinesRunExplain: Handler<
 > = {
 	event: "pipelines:runExplain",
 	handler: async (socket, params, emitToUser) => {
+		const denied = receiptsAdminOnly(socket, emitToUser, "pipelines:runExplain")
+		if (denied) return denied
 		const userId = socket.user!.id
 		const [r] = await db
 			.select()
 			.from(schema.pipelineRuns)
-			.where(
-				and(
-					eq(schema.pipelineRuns.runId, params.runId),
-					eq(schema.pipelineRuns.userId, userId)
-				)
-			)
+			.where(eq(schema.pipelineRuns.runId, params.runId))
 			.limit(1)
 		if (!r) {
 			const res = { error: "No such run." }
@@ -4878,7 +4913,8 @@ export const pipelinesRunExplain: Handler<
 		}
 		const { entries, read } = await retrievalEntriesFor(
 			(r as any).sessionId ?? null,
-			userId
+			userId,
+			{ asAdmin: true }
 		)
 		const res: Sockets.Pipelines.RunExplain.Response = {
 			runId: (r as any).runId,
@@ -4961,13 +4997,11 @@ async function previewCastFor(sessionId: number) {
  * `sessions:promptTokenCount` learned this; the synthetic row below is its
  * recipe, id `-1` and all.
  *
- * Two gates, and the second is not decoration: the session must be reachable
- * (owner **or** guest, the one rule `checkSessionAccess` owns) and it must
- * have a lorebook, because retrieval reads the session's own book and a
- * session without one has nothing that could fire. The lore titles come
- * through `retrievalEntriesFor`, which is owner-scoped by its own rule — so a
- * guest gets rows without levers, which is what `pipelines:runExplain`
- * already gives them.
+ * Two gates, and the second is not decoration: the asker must be the
+ * session's owner or an administrator — the preview quotes the session's
+ * lorebook, which is the owner's, and a guest plays without reading it — and
+ * the session must have a lorebook, because retrieval reads the session's own
+ * book and a session without one has nothing that could fire.
  */
 export const pipelinesPreviewRetrieval: Handler<
 	Sockets.Pipelines.PreviewRetrieval.Params,
@@ -4995,6 +5029,10 @@ export const pipelinesPreviewRetrieval: Handler<
 		if (!Number.isInteger(sessionId)) return refuse("No such conversation.")
 		const access = await checkSessionAccess(sessionId, userId)
 		if (!access.hasAccess) return refuse("No such conversation.")
+		// The preview quotes the session's lorebook, which is its owner's: a
+		// guest may play in the session without reading the owner's lore.
+		if (!access.isOwner && !socket.user?.isAdmin)
+			return refuse("Only the conversation's owner can preview its lore.")
 
 		const session = await previewCastFor(sessionId)
 		if (!session) return refuse("No such conversation.")
@@ -5048,8 +5086,9 @@ export const pipelinesPreviewRetrieval: Handler<
 			: session.sessionMessages
 
 		/**
-		 * Whose turn it would be — and, when nobody is due, whoever the app
-		 * would pick for a plain reply.
+		 * Whose turn it would be — the run's own strategy, previewed — and,
+		 * when nobody is due or only a run could say, whoever the app would
+		 * pick for a plain reply.
 		 *
 		 * The fallback is `entries:testRetrieval`'s and is stated there: a
 		 * test has to pick somebody, and refusing because the rotation says
@@ -5058,20 +5097,31 @@ export const pipelinesPreviewRetrieval: Handler<
 		 * is scoped by the speaker, and the row below is the same one a send
 		 * from this position would reach.
 		 */
+		/**
+		 * Whose turn the preview compiles for: the **stored** order's head
+		 * (PLAN-turn-order §4.7, A7), else the first active character.
+		 *
+		 * Read rather than previewed. The rotation preview this replaced
+		 * could not answer for a random or scripted strategy and re-ran the
+		 * rules to answer for the others; the order is written down now, so
+		 * this is the same answer a send from this position would reach, for
+		 * every strategy. The draft is not spliced in any more either — the
+		 * order answers the session as it stands, and a retrieval test that
+		 * needs a speaker needs one that exists, not one a hypothetical send
+		 * would produce.
+		 */
+		const { headTurnEntry } = await import("$lib/server/sessions/fireTurn")
+		const head = await headTurnEntry(db, sessionId)
+		const headRef = typeof head?.ref === "string" ? head.ref : null
+		const headCharacterId =
+			headRef && headRef.startsWith("character:")
+				? Number(headRef.slice("character:".length))
+				: null
 		const currentCharacterId =
-			getNextCharacterTurn(
-				{
-					sessionMessages:
-						messagesWithDraft as SelectSessionMessage[],
-					sessionCharacters: activeCharacters.sort(
-						(a, b) => (a.position ?? 0) - (b.position ?? 0)
-					),
-					sessionPersonas: session.sessionPersonas.filter(
-						(cp) => cp.persona !== null
-					)
-				},
-				session.groupReplyStrategy
-			) ?? activeCharacters[0].characterId
+			(Number.isInteger(headCharacterId) ? headCharacterId : null) ??
+			[...activeCharacters].sort(
+				(a, b) => (a.position ?? 0) - (b.position ?? 0)
+			)[0]!.characterId
 
 		const { runTurn } = await import(
 			"$lib/server/pipelines/runtime/runTurn"
@@ -5138,15 +5188,9 @@ export const pipelinesPreviewRetrieval: Handler<
  * report needs no run id of its own — a `pipeline_run_artifacts` row of kind
  * `message` is the link, and that relation exists for exactly this lookup.
  *
- * ⚠ **Gated on the session, owner OR guest — deliberately wider than
- * `runExplain`.** That handler scopes to the asker's own runs because it is
- * reachable by run id from the admin workspace, where the only thing naming a
- * run is a person browsing their own receipts. This is reachable only from a
- * message in a conversation the asker is in, and a guest reading a reply
- * addressed to them is reading their own evidence: an owner-only gate here
- * would refuse a participant the account of a turn they took part in. The run
- * is not filtered by `user_id` for the same reason — in a shared session the
- * turn belongs to whoever triggered it, which is frequently not the reader.
+ * ⚠ **Administrators only (R55)**, like `runExplain`: the explanation is
+ * read off the run's receipt. The run is not filtered by `user_id` — in a
+ * shared session the turn belongs to whoever triggered it.
  *
  * Ordered non-preview first: a message's run is whichever one recorded the
  * send, and a preview linked to the same row (a re-generation that was stopped
@@ -5160,6 +5204,15 @@ export const pipelinesMessageExplain: Handler<
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
 		const messageId = Number(params.messageId)
+		// A receipt's explanation is an administrator's (R55).
+		if (!socket.user?.isAdmin) {
+			const res: Sockets.Pipelines.MessageExplain.Response = {
+				messageId: Number.isInteger(messageId) ? messageId : undefined,
+				error: "Only administrators can see run reports."
+			}
+			emitToUser("pipelines:messageExplain:error", res)
+			return res
+		}
 		const refuse = (error: string) => {
 			const res: Sockets.Pipelines.MessageExplain.Response = {
 				messageId: Number.isInteger(messageId) ? messageId : undefined,
@@ -5178,8 +5231,6 @@ export const pipelinesMessageExplain: Handler<
 			.where(eq(schema.sessionMessages.id, messageId))
 			.limit(1)
 		if (!message) return refuse("No such message.")
-		const access = await checkSessionAccess(message.sessionId, userId)
-		if (!access.hasAccess) return refuse("No such message.")
 
 		// Through the artifact relation: a message can be the artifact of more
 		// than one run (regenerated, continued), and the non-preview newest is
@@ -5213,11 +5264,11 @@ export const pipelinesMessageExplain: Handler<
 		// Through the message's session rather than the run's `session_id`,
 		// which is a column somebody could have written — the same reason
 		// `runExplain` re-checks it. `retrievalEntriesFor` is owner-scoped on
-		// top of that, so a guest reads the names their receipts recorded
-		// rather than a live read of the owner's lorebook.
+		// top of that; the admin reading it (R55) reads the owner's book.
 		const { entries, read } = await retrievalEntriesFor(
 			message.sessionId,
-			userId
+			userId,
+			{ asAdmin: true }
 		)
 		const res: Sockets.Pipelines.MessageExplain.Response = {
 			messageId,
@@ -5331,20 +5382,12 @@ export const pipelinesArtifactRuns: Handler<
  * was answered by opening runs one at a time and holding the tally in your
  * head. This is that tally.
  *
- * ## The aggregation runs in the database
+ * ## Read from the rollup
  *
- * A long session has hundreds of receipts and each receipt is large — the
- * decisions carry every candidate whole, payload included, because assemble
- * allocates from them. Loading all of that into this process to count ids
- * would be tens of megabytes of JSON parsed to produce a few hundred integers.
- * So the grouping is a query: the receipt column is walked by Postgres, and
- * what comes back is one row per entry.
- *
- * The read is bounded anyway — the newest `runLimit` runs — and the bound is
- * **stated**, in `runsRead`/`runsTotal` and in a sentence. A tally that
- * silently stopped counting at some depth is not a partial answer; it is a
- * wrong one, and an author acting on "this never fires" would be acting on an
- * artefact of the limit.
+ * The ranking store keeps one row per entry per session with its running
+ * counts (`ranking_subject_stats`, §3.9), so this is one indexed read however
+ * long the session — and complete: retention prunes the per-turn decisions,
+ * never the rollup. There is no window, so there is no bound to state.
  *
  * ## Sorted by how often, not by how recently
  *
@@ -5356,17 +5399,6 @@ export const pipelinesArtifactRuns: Handler<
  * so equally-used entries still read newest-first.
  * ------------------------------------------------------------------ */
 
-/**
- * The index vocabulary's fold, as SQL.
- *
- * ⚠ Generated from `RETRIEVAL_SOURCE_ALIASES` rather than restated beside it.
- * The fold has to happen *before* the grouping — an entry the vector mechanism
- * recorded as `historyEntry` and the ranker as `history` would otherwise come
- * back as two rows for one entry — and a second hand-written copy of that map
- * in a SQL string is exactly the drift the constant's own note warns about.
- */
-const RETRIEVAL_SOURCE_ALIAS_JSON = JSON.stringify(RETRIEVAL_SOURCE_ALIASES)
-
 /** "3 of the 12 turns" reads wrong for one; this is the only plural rule needed. */
 const plural = (n: number, one: string, many = `${one}s`) =>
 	n === 1 ? one : many
@@ -5374,20 +5406,16 @@ const plural = (n: number, one: string, many = `${one}s`) =>
 /**
  * Everything that has ever fired in this session.
  *
- * ⚠ **Two gates, and both are load-bearing.** The session must be one the
- * asker can reach — `checkSessionAccess`, owner **or** guest, because session
- * access has never been ownership and a local re-check here would be the
- * fourth copy of a rule that has already locked guests out once. And the runs
- * aggregated are the asker's own (`user_id`), exactly as `pipelines:runs` and
- * `pipelines:run` scope them — so reaching a shared session never becomes
- * reading somebody else's receipts. Neither gate implies the other: a guest
- * passes the first and is still confined by the second, and a person who owns
- * a run whose `session_id` names a session they cannot reach fails the first.
+ * ⚠ **Two gates for everyone but an administrator.** The session must be one
+ * the asker can reach — `checkSessionAccess`, owner **or** guest — and the
+ * runs aggregated are the asker's own (`user_id`), so reaching a shared
+ * session never becomes reading somebody else's turns. An administrator
+ * passes both (R55): this fills the usage panel beside a receipt, for any
+ * user's session.
  *
- * The titles come through `retrievalEntriesFor`, which re-reads the session
- * and is owner-scoped by its own rule. A guest therefore gets the names their
- * own receipts recorded rather than a live read of the owner's lorebook, which
- * is the same answer `pipelines:runExplain` already gives them.
+ * The titles come through `retrievalEntriesFor`, owner-scoped by its own rule
+ * (an administrator reads the owner's book). A guest gets the names their own
+ * turns recorded rather than a live read of the owner's lorebook.
  */
 export const pipelinesSessionEntryUsage: Handler<
 	Sockets.Pipelines.SessionEntryUsage.Params,
@@ -5405,170 +5433,103 @@ export const pipelinesSessionEntryUsage: Handler<
 		// One sentence for "no such session" and "not yours", because telling
 		// the two apart is how a session id becomes something worth guessing.
 		if (!Number.isInteger(sessionId)) return refuse("No such session.")
-		const access = await checkSessionAccess(sessionId, userId)
-		if (!access.hasAccess) return refuse("No such session.")
+		/**
+		 * Readers (R58): the session's book's owner — every turn in the
+		 * session, guests' included — and administrators. A guest gets
+		 * nothing: the usage of a book is its owner's to read.
+		 */
+		const asAdmin = !!socket.user?.isAdmin
+		const [sess] = await db
+			.select({ lorebookId: schema.sessions.lorebookId })
+			.from(schema.sessions)
+			.where(eq(schema.sessions.id, sessionId))
+			.limit(1)
+		if (!sess) return refuse("No such session.")
+		if (!asAdmin) {
+			const access = await checkSessionAccess(sessionId, userId)
+			if (!access.hasAccess) return refuse("No such session.")
+			const [book] = sess.lorebookId
+				? await db
+						.select({ userId: schema.lorebooks.userId })
+						.from(schema.lorebooks)
+						.where(eq(schema.lorebooks.id, sess.lorebookId))
+						.limit(1)
+				: []
+			if (!book || book.userId !== userId)
+				return refuse("What this session's lorebook has fired is its owner's to read.")
+		}
 
 		const limit = Math.min(Math.max(params.limit ?? 100, 1), 500)
-		const runLimit = Math.min(Math.max(params.runLimit ?? 200, 1), 1000)
 
-		const mine = and(
-			eq(schema.pipelineRuns.sessionId, sessionId),
-			eq(schema.pipelineRuns.userId, userId)
-		)!
-		// Both counts in one pass: how many turns there are to read, and
-		// whether any previews were left out of them.
+		// How many turns the session has had, and whether any previews were
+		// left out of them — context for the list, never its denominator.
 		const [tally] = await db
 			.select({
 				turns: sql<number>`count(*) FILTER (WHERE ${schema.pipelineRuns.isPreview} = false)`,
 				previews: sql<number>`count(*) FILTER (WHERE ${schema.pipelineRuns.isPreview})`
 			})
 			.from(schema.pipelineRuns)
-			.where(mine)
+			.where(eq(schema.pipelineRuns.sessionId, sessionId))
 		const runsTotal = Number(tally?.turns ?? 0)
 		const previews = Number(tally?.previews ?? 0)
-		const runsRead = Math.min(runsTotal, runLimit)
+		const runsRead = runsTotal
 
 		/**
-		 * One row per entry, grouped by Postgres.
-		 *
-		 * `CASE WHEN jsonb_typeof(…) = 'array'` guards both unnests: a
-		 * compacted receipt has no `nodes` at all and a node's output may be a
-		 * scalar, and `jsonb_array_elements` of a non-array raises rather than
-		 * returning nothing. A `CASE` with no `ELSE` yields NULL, and a
-		 * set-returning function given NULL contributes no rows — so a
-		 * malformed or compacted receipt drops out of the tally instead of
-		 * failing the whole read.
-		 *
-		 * `count(DISTINCT run_pk)` rather than `count(*)`: "how many times"
-		 * means how many turns, and two gather branches deciding the same row
-		 * in one turn is one appearance in one prompt.
-		 *
-		 * `count(*) OVER ()` carries the number of entries *before* the LIMIT,
-		 * so the tail can be reported rather than silently dropped.
+		 * One row per entry, from the ranking store's ROLLUP (§3.9, R64) —
+		 * never a receipt, and never the append-only decisions, which retention
+		 * prunes: the rollup keeps every turn's count however old. Each
+		 * entry's counts are turns (the writer folds a run's rankings), so an
+		 * entry's own "of" is the turns it was weighed in. The last-used run
+		 * and its cost are kept on the rollup too, since the round prune (R68)
+		 * drops that run's ranking.
+		 * `count(*) OVER ()` carries the entries before the LIMIT.
 		 */
-		const result: any = await db.execute(sql`
-			WITH considered AS (
-				SELECT
-					r.id AS run_pk,
-					r.run_id AS run_id,
-					r.started_at AS started_at,
-					r.receipt::jsonb AS receipt
-				FROM ${schema.pipelineRuns} r
-				WHERE r.session_id = ${sessionId}
-					AND r.user_id = ${userId}
-					AND r.is_preview = false
-				ORDER BY r.id DESC
-				LIMIT ${runLimit}
-			),
-			judged AS (
-				SELECT
-					c.run_pk,
-					c.run_id,
-					c.started_at,
-					COALESCE(
-						${RETRIEVAL_SOURCE_ALIAS_JSON}::jsonb ->> (d->'candidate'->>'source'),
-						d->'candidate'->>'source'
-					) AS source,
-					d->'candidate'->>'id' AS entry_id,
-					-- Compared as jsonb rather than cast from text. A node
-					-- outside core can publish a decision with anything at
-					-- all under \`included\`, and \`'1'::boolean\` raises — which
-					-- would fail this whole read on one malformed row rather
-					-- than dropping it. Equality against \`true\` never raises.
-					(d->'included') = 'true'::jsonb AS included,
-					CASE
-						WHEN jsonb_typeof(d->'candidate'->'tokens') = 'number'
-						-- \`numeric\`, not \`int\`: a JSON number is not
-						-- necessarily a whole one, and \`'1.5'::int\` raises.
-						THEN (d->'candidate'->>'tokens')::numeric
-					END AS tokens,
-					jsonb_strip_nulls(jsonb_build_object(
-						'name', d->'candidate'->'payload'->'name',
-						'year', d->'candidate'->'payload'->'year',
-						'month', d->'candidate'->'payload'->'month',
-						'day', d->'candidate'->'payload'->'day'
-					)) AS heading
-				FROM considered c
-				CROSS JOIN LATERAL jsonb_array_elements(
-					CASE WHEN jsonb_typeof(c.receipt->'nodes') = 'array'
-						THEN c.receipt->'nodes' END
-				) AS n
-				CROSS JOIN LATERAL jsonb_array_elements(
-					CASE WHEN jsonb_typeof(n->'output'->'decisions') = 'array'
-						THEN n->'output'->'decisions' END
-				) AS d
-			),
-			grouped AS (
-				SELECT
-					source,
-					entry_id,
-					count(DISTINCT run_pk) FILTER (WHERE included) AS used_runs,
-					count(DISTINCT run_pk) AS judged_runs,
-					-- ⚠ Formatted as UTC here rather than handed back as a
-					-- driver-parsed Date. \`started_at\` is a timestamp WITHOUT
-					-- time zone holding a UTC wall clock (drizzle writes
-					-- \`toISOString()\` and reads it back as UTC), and a raw
-					-- query bypasses that column mapping — so on any server not
-					-- running in UTC the same instant would come back here
-					-- offset from the \`startedAt\` the run list shows for the
-					-- very same run.
-					to_char(
-						max(started_at) FILTER (WHERE included),
-						'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
-					) AS last_used_at,
-					(array_agg(run_id ORDER BY run_pk DESC)
-						FILTER (WHERE included))[1] AS last_run_id,
-					(array_agg(tokens ORDER BY run_pk DESC)
-						FILTER (WHERE included AND tokens IS NOT NULL))[1] AS tokens,
-					(array_agg(heading ORDER BY run_pk DESC)
-						FILTER (WHERE heading <> '{}'::jsonb))[1] AS heading
-				FROM judged
-				WHERE entry_id IS NOT NULL AND source IS NOT NULL
-				GROUP BY source, entry_id
-				HAVING count(*) FILTER (WHERE included) > 0
+		const st = schema.rankingSubjectStats
+		const raw = await db
+			.select({
+				entryId: st.subjectId,
+				usedRuns: st.timesIncluded,
+				judgedRuns: st.timesJudged,
+				lastUsedAt: st.lastIncludedAt,
+				lastRunId: schema.pipelineRuns.runId,
+				tokens: st.lastIncludedTokens,
+				groupTotal: sql<number>`count(*) OVER ()`.mapWith(Number)
+			})
+			.from(st)
+			.leftJoin(schema.pipelineRuns, eq(schema.pipelineRuns.id, st.lastIncludedRunId))
+			.where(
+				and(
+					eq(st.sessionId, sessionId),
+					eq(st.subjectKind, "lore-entry"),
+					sql`${st.timesIncluded} > 0`
+				)
 			)
-			SELECT g.*, count(*) OVER () AS group_total
-			FROM grouped g
-			-- Frequency first, recency to break its ties; \`last_used_at\` is a
-			-- fixed-width UTC ISO string, which orders lexicographically
-			-- exactly as it orders chronologically. The id is the last tiebreak
-			-- so the same session always answers in the same order.
-			ORDER BY g.used_runs DESC, g.last_used_at DESC NULLS LAST, g.entry_id
-			LIMIT ${limit}
-		`)
-		const raw: any[] = result?.rows ?? result ?? []
+			.orderBy(desc(st.timesIncluded), sql`${st.lastIncludedAt} DESC NULLS LAST`, asc(st.subjectId))
+			.limit(limit)
 
-		// The live rows, for names and for the two levers — the same read the
-		// single-run explanation does, and owner-scoped by the same rule.
-		const { entries } = await retrievalEntriesFor(sessionId, userId)
+		// The live rows, for names, the band and the two levers.
+		const { entries } = await retrievalEntriesFor(sessionId, userId, { asAdmin: true })
+		const byId = new Map<string, { key: string; entry: any }>()
+		for (const [key, entry] of entries) byId.set(String(key.split(":").pop()), { key, entry })
 
 		const rows: Sockets.Pipelines.SessionEntryUsageRow[] = raw.map((r) => {
-			const source = String(r.source)
-			const rawId = String(r.entry_id)
+			const rawId = String(r.entryId)
 			const asNumber = Number(rawId)
-			const key = `${source}:${rawId}`
-			const entry = entries.get(key)
-			// The heading the last run recorded, for an entry the lorebook no
-			// longer has: a name where the type carries one, and history's date
-			// where it does not — the same two rules the run's own rows use.
-			const heading = (r.heading ?? {}) as Record<string, unknown>
-			const recorded =
-				(typeof heading.name === "string" && heading.name.trim()) ||
-				datedTitle(heading) ||
-				""
+			const live = byId.get(rawId)
+			const entry = live?.entry
+			const source = live ? live.key.slice(0, live.key.lastIndexOf(":")) : "worldLore"
 			return {
-				key,
-				id:
-					Number.isInteger(asNumber) && String(asNumber) === rawId
-						? asNumber
-						: rawId,
+				key: live?.key ?? `lore-entry:${rawId}`,
+				id: Number.isInteger(asNumber) && String(asNumber) === rawId ? asNumber : rawId,
 				source,
 				sourceLabel: retrievalSourceLabel(source),
-				title: entry?.title?.trim() || recorded || `#${rawId}`,
-				usedInRuns: Number(r.used_runs) || 0,
-				judgedInRuns: Number(r.judged_runs) || 0,
-				lastUsedAt: new Date(r.last_used_at).toISOString(),
-				lastRunId: String(r.last_run_id),
+				// An entry the book no longer has keeps only its id: the store
+				// records decisions, never the text they were about.
+				title: entry?.title?.trim() || `#${rawId}`,
+				usedInRuns: Number(r.usedRuns) || 0,
+				judgedInRuns: Number(r.judgedRuns) || 0,
+				lastUsedAt: r.lastUsedAt ? new Date(r.lastUsedAt).toISOString() : "",
+				lastRunId: String(r.lastRunId ?? ""),
 				...(r.tokens != null ? { tokens: Number(r.tokens) } : {}),
 				...(entry
 					? {
@@ -5585,16 +5546,10 @@ export const pipelinesSessionEntryUsage: Handler<
 			}
 		})
 
-		const found = raw.length ? Number(raw[0].group_total) || rows.length : 0
+		const found = raw.length ? Number(raw[0].groupTotal) || rows.length : 0
 		const omitted = Math.max(0, found - rows.length)
 
 		const notes: string[] = []
-		if (runsTotal > runsRead)
-			notes.push(
-				`Counted across the newest ${runsRead} of this session's ` +
-					`${runsTotal} turns — an entry that only fired before those ` +
-					`is not in this list.`
-			)
 		if (previews)
 			notes.push(
 				`${previews} ${plural(previews, "preview")} ${plural(previews, "is", "are")} ` +
@@ -5607,18 +5562,20 @@ export const pipelinesSessionEntryUsage: Handler<
 			)
 
 		const top = rows[0]
+		// Each entry's own denominator: the turns it was weighed in. A turn
+		// that never reached for lore is no turn it could have fired in.
 		const summary = !runsTotal
 			? "This session has no recorded turns yet, so nothing has fired in it."
 			: !top
-				? `Nothing has reached a prompt across the ${runsRead} ` +
-					`${plural(runsRead, "turn")} counted here.`
+				? `Nothing has reached a prompt across this session's ${runsTotal} ` +
+					`${plural(runsTotal, "turn")}.`
 				: found === 1
 					? `“${top.title}” is the only entry this session has put in a ` +
-						`prompt — in ${top.usedInRuns} of the ${runsRead} ` +
-						`${plural(runsRead, "turn")} counted here.`
+						`prompt — in ${top.usedInRuns} of the ${top.judgedInRuns} ` +
+						`${plural(top.judgedInRuns, "turn")} it was weighed in.`
 					: `“${top.title}” is what this session reaches for most — it has ` +
-						`gone into ${top.usedInRuns} of the ${runsRead} ` +
-						`${plural(runsRead, "turn")} counted here, alongside ` +
+						`gone into ${top.usedInRuns} of the ${top.judgedInRuns} ` +
+						`${plural(top.judgedInRuns, "turn")} it was weighed in, alongside ` +
 						`${found - 1} other ${plural(found - 1, "entry", "entries")}.`
 
 		const res: Sockets.Pipelines.SessionEntryUsage.Response = {
@@ -5706,6 +5663,113 @@ export const pipelinesResolveReview: Handler<
 }
 
 /**
+ * The events admin page (PLAN-turn-order §B2): the registry of every event
+ * and the event map for the asked scope, in one reply. Admin-only — the map
+ * names every installed plugin's listeners and every published pipeline.
+ */
+export const pipelinesEventMap: Handler<
+	Sockets.Pipelines.EventMap.Params,
+	Sockets.Pipelines.EventMap.Response
+> = {
+	event: "pipelines:eventMap",
+	handler: async (socket, params, emitToUser) => {
+		if (!socket.user?.isAdmin) {
+			const res = { error: "Only administrators can see the event map." }
+			emitToUser("pipelines:eventMap:error", res)
+			return res
+		}
+		const scope: Sockets.Pipelines.EventMap.Params = {
+			...(typeof params?.genreId === "string" && params.genreId
+				? { genreId: params.genreId }
+				: {}),
+			...(Number.isInteger(params?.presetId) ? { presetId: params.presetId } : {}),
+			...(Number.isInteger(params?.sessionId) ? { sessionId: params.sessionId } : {})
+		}
+		// A session that does not exist has no genre to draw; drawing every
+		// genre under its chip would claim a scope the map does not have.
+		if (scope.sessionId != null) {
+			const [row] = await db
+				.select({ id: schema.sessions.id })
+				.from(schema.sessions)
+				.where(eq(schema.sessions.id, scope.sessionId))
+				.limit(1)
+			if (!row) {
+				const res = { error: `There is no session ${scope.sessionId}.`, scope }
+				emitToUser("pipelines:eventMap:error", res)
+				return res
+			}
+		}
+		const [{ eventRegistry }, { eventMap }] = await Promise.all([
+			import("$lib/server/pipelines/entities/eventRegistry"),
+			import("$lib/server/pipelines/entities/eventMap")
+		])
+		const [registry, drawn] = await Promise.all([
+			eventRegistry(db),
+			eventMap(db, scope)
+		])
+		const res = { ...registry, eventMap: drawn, scope }
+		emitToUser("pipelines:eventMap", res)
+		return res
+	}
+}
+
+/**
+ * The cap pauses waiting on this person (E1c) — the catch-up list for a
+ * client that missed `pipelines:capPauseRequested`, like `pipelines:reviews`.
+ */
+export const pipelinesCapPauses: Handler<
+	Sockets.Pipelines.CapPauses.Params,
+	Sockets.Pipelines.CapPauses.Response
+> = {
+	event: "pipelines:capPauses",
+	handler: async (socket, _params, emitToUser) => {
+		const { pendingCapPausesFor } = await import(
+			"$lib/server/pipelines/runtime/capPause"
+		)
+		const res = { pauses: pendingCapPausesFor(socket.user!.id) }
+		emitToUser("pipelines:capPauses", res)
+		return res
+	}
+}
+
+/** The session owner's Continue or Cancel on a cap pause (E1c). */
+export const pipelinesResolveCapPause: Handler<
+	Sockets.Pipelines.ResolveCapPause.Params,
+	Sockets.Pipelines.ResolveCapPause.Response
+> = {
+	event: "pipelines:resolveCapPause",
+	handler: async (socket, params, emitToUser) => {
+		const { resolveCapPause } = await import(
+			"$lib/server/pipelines/runtime/capPause"
+		)
+		if (params.action !== "continue" && params.action !== "cancel") {
+			const res = {
+				error: "The answer is Continue or Cancel.",
+				id: params.id
+			}
+			emitToUser("pipelines:resolveCapPause:error", res)
+			return res
+		}
+		try {
+			await resolveCapPause(db, params.id, socket.user!.id, params.action)
+		} catch (err) {
+			const res = {
+				error:
+					err instanceof Error
+						? err.message
+						: "That answer could not be recorded.",
+				id: params.id
+			}
+			emitToUser("pipelines:resolveCapPause:error", res)
+			return res
+		}
+		const res = { ok: true }
+		emitToUser("pipelines:resolveCapPause", res)
+		return res
+	}
+}
+
+/**
  * The configurations inventory (admin IA 2026-08-28): every named config
  * across every spec, with its dependents — the reverse edges no workspace can
  * show. An index, deliberately not an editor: editing stays in the owning
@@ -5752,8 +5816,16 @@ export const pipelinesConfigsIndex: Handler<
 					(sessionCount.get(sel.configId) ?? 0) + 1
 				)
 
+		// A disabled plugin's pipelines' configurations are not listed (R67).
+		const { disabledPlugins } = await import("$lib/server/plugins/disabledPlugins")
+		const off = await disabledPlugins(db)
+		const hiddenSpecs = new Set(
+			(specs as any[]).filter((s) => off.owns(s.sourcePluginId)).map((s) => s.id)
+		)
 		const res: Sockets.Pipelines.ConfigsIndex.Response = {
-			configs: (configs as any[]).map((c) => ({
+			configs: (configs as any[])
+				.filter((c) => !hiddenSpecs.has(c.specId))
+				.map((c) => ({
 				id: c.id,
 				name: c.name,
 				specSlug: specById.get(c.specId)?.slug ?? String(c.specId),
@@ -5848,64 +5920,67 @@ export function registerPipelineHandlers(
 	// `emitToUser` either: a gated event is delivered per SOCKET (plan ruling
 	// 5) to the ones that declared it, and an ungated event keeps the room emit
 	// it has always had — so this is not a second door the gate cannot see.
-	import("$lib/server/pipelines/runtime/reviewGate").then(
-		({ setReviewTransport }) =>
-			setReviewTransport((userId, event, data) => {
-				// Queued, not awaited by the caller: the gate pushes
-				// `reviewRequested` and — if the run is cancelled — a
-				// `reviewClosed` for the same card, and a client that received
-				// them out of order would keep a card nothing can decide. The
-				// chain makes delivery order the CALL order rather than
-				// whichever row read finished first.
-				reviewPushes = reviewPushes
-					.then(async () => {
-						// Bare interest, no scope: neither push carries a
-						// session or a run to key off — a card names itself
-						// (`id`, `specId`, `nodeKey`) — so a client declares
-						// the event and hears every card meant for it.
-						const gated = isGatedEvent(event)
-						// Asked BEFORE the row read (plan ruling 4): with no
-						// review surface open anywhere for this person, the
-						// `users.isAdmin` read is not paid either.
-						if (
-							gated &&
-							interestedSockets(socket.io, userId, event)
-								.length === 0
-						)
-							return
-						const [row] = await db
-							.select({ isAdmin: schema.users.isAdmin })
-							.from(schema.users)
-							.where(eq(schema.users.id, userId))
-							.limit(1)
-						// One redaction decision per recipient USER, which is
-						// what the row above answers for; every socket of that
-						// user is then handed the same payload.
-						const payload = redactConnections(data, row)
-						if (!gated) {
-							socket.io
-								.to(`user_${userId}`)
-								.emit(event, payload)
-							return
-						}
-						// Walked again rather than snapshotted, like
-						// `emitToUser`'s thunk path: a socket that arrived or
-						// left while the row was read is treated as it is now.
-						for (const target of interestedSockets(
-							socket.io,
-							userId,
-							event
-						))
-							socket.io.to(target.id).emit(event, payload)
-					})
-					.catch((err) => {
-						console.warn(
-							"[pipelines] could not deliver a review push:",
-							err
-						)
-					})
-			})
-	)
+	// The cap pause (E1c) pushes through the same transport: it too is
+	// addressed to a person from wherever a run parked.
+	{
+		const push = (userId: number, event: string, data: unknown) => {
+			// Queued, not awaited by the caller: the gate pushes
+			// `reviewRequested` and — if the run is cancelled — a
+			// `reviewClosed` for the same card, and a client that received
+			// them out of order would keep a card nothing can decide. The
+			// chain makes delivery order the CALL order rather than
+			// whichever row read finished first.
+			reviewPushes = reviewPushes
+				.then(async () => {
+					// Bare interest, no scope: neither push carries a
+					// session or a run to key off — a card names itself
+					// (`id`, `specId`, `nodeKey`) — so a client declares
+					// the event and hears every card meant for it.
+					const gated = isGatedEvent(event)
+					// Asked BEFORE the row read (plan ruling 4): with no
+					// review surface open anywhere for this person, the
+					// `users.isAdmin` read is not paid either.
+					if (
+						gated &&
+						interestedSockets(socket.io, userId, event).length === 0
+					)
+						return
+					const [row] = await db
+						.select({ isAdmin: schema.users.isAdmin })
+						.from(schema.users)
+						.where(eq(schema.users.id, userId))
+						.limit(1)
+					// One redaction decision per recipient USER, which is
+					// what the row above answers for; every socket of that
+					// user is then handed the same payload.
+					const payload = redactConnections(data, row)
+					if (!gated) {
+						socket.io.to(`user_${userId}`).emit(event, payload)
+						return
+					}
+					// Walked again rather than snapshotted, like
+					// `emitToUser`'s thunk path: a socket that arrived or
+					// left while the row was read is treated as it is now.
+					for (const target of interestedSockets(
+						socket.io,
+						userId,
+						event
+					))
+						socket.io.to(target.id).emit(event, payload)
+				})
+				.catch((err) => {
+					console.warn(`[pipelines] could not deliver ${event}:`, err)
+				})
+		}
+		// Each installed on its own: one module failing to load must never
+		// leave the other with no way to reach a person.
+		void import("$lib/server/pipelines/runtime/reviewGate").then(({ setReviewTransport }) =>
+			setReviewTransport(push)
+		)
+		void import("$lib/server/pipelines/runtime/capPause").then(({ setCapPauseTransport }) =>
+			setCapPauseTransport(push)
+		)
+	}
 
 	register(socket, pipelinesList, emitToUser)
 	register(socket, pipelinesConfigsIndex, emitToUser)
@@ -5921,6 +5996,9 @@ export function registerPipelineHandlers(
 	register(socket, pipelinesArtifactRuns, emitToUser)
 	register(socket, pipelinesSessionEntryUsage, emitToUser)
 	register(socket, pipelinesCancelRun, emitToUser)
+	register(socket, pipelinesCapPauses, emitToUser)
+	register(socket, pipelinesEventMap, emitToUser)
+	register(socket, pipelinesResolveCapPause, emitToUser)
 	register(socket, pipelinesSelectConfig, emitToUser)
 	register(socket, pipelinesCreateConfig, emitToUser)
 	register(socket, pipelinesSetPresetActions, emitToUser)

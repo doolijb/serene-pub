@@ -13,8 +13,8 @@
  * ## Why the assertions are about rows and not about prose
  *
  * "Not in the round-robin" is not a rule anybody enforces at the trigger — it is
- * a property of the row the trigger writes. `getNextCharacterTurn` drops every
- * `isNarratorResponse` message *before* it matches a character id, so the flag
+ * a property of the row the trigger writes. The rotation (`rotationTurns`) drops
+ * every `isNarratorResponse` message *before* it matches a character id, so the flag
  * is what excludes the turn, and `characterId: null` is what keeps a
  * side-character row from meaning "they spoke" to the other readers of that
  * column. Asserting the rotation's answer before and after is the only check
@@ -156,28 +156,24 @@ async function makeSession(tag: string) {
 	return { user, session, alice, bram, vell, persona, lorebook }
 }
 
-/** The rotation's answer, computed from the rows exactly as the app does. */
+/** The rotation's answer, computed from the rows exactly as the run does. */
 async function whoIsNext(sessionId: number) {
-	const { getNextCharacterTurn } = await import(
-		"$lib/server/utils/getNextCharacterTurn"
+	const { rotationSeats, roundRobinSpeaker } = await import(
+		"$lib/server/pipelines/runtime/speakerRotation"
 	)
 	const sessionMessages = await testDb
 		.select()
 		.from(schema.sessionMessages)
 		.where(eq(schema.sessionMessages.sessionId, sessionId))
+		.orderBy(schema.sessionMessages.id)
 	const sessionCharacters = await testDb.query.sessionCharacters.findMany({
 		where: (c, { eq: e }) => e(c.sessionId, sessionId),
 		with: { character: true }
 	})
-	const sessionPersonas = await testDb.query.sessionPersonas.findMany({
-		where: (c, { eq: e }) => e(c.sessionId, sessionId),
-		with: { persona: true }
-	})
-	return getNextCharacterTurn({
-		sessionMessages,
-		sessionCharacters,
-		sessionPersonas
-	} as any)
+	return roundRobinSpeaker(
+		rotationSeats({ sessionCharacters: sessionCharacters as any }),
+		sessionMessages
+	)
 }
 
 const messagesOf = async (sessionId: number) =>

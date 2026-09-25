@@ -17,6 +17,8 @@ import type {
 	NewLorebookEntry
 } from "$lib/shared/entries/types"
 import type { MediaFrame } from "$lib/shared/media/frame"
+import type { ModelFacts } from "$lib/shared/connections/modelFacts"
+import type { SpriteSetView } from "$lib/shared/sprites"
 
 declare global {
 	namespace Sockets {
@@ -267,7 +269,8 @@ declare global {
 			namespace ExportCard {
 				interface Params {
 					id: number
-					format?: "json" | "png"
+					/** `charx` is the one format that carries sprites (DESIGN-sprites §4). */
+					format?: "json" | "png" | "charx"
 					/** Optional — embeds the whole shared lorebook (must be bound to this character) into the export. */
 					lorebookId?: number | null
 				}
@@ -375,6 +378,116 @@ declare global {
 				interface Response {
 					images: Media[]
 				}
+			}
+			/*
+			 * Sprites (DESIGN-sprites §7). Every reply and cascade carries
+			 * `characterId` top-level — errors included — because the family is
+			 * SCOPED on it (`SCOPED_EVENTS`). Every mutation answers with the
+			 * character's whole sprite list, so one handler shape serves them all.
+			 */
+			namespace ListSprites {
+				interface Params {
+					characterId: number
+				}
+				interface Response {
+					characterId: number
+					/** Default set first. */
+					sets: SpriteSetView[]
+				}
+			}
+			namespace CreateSpriteSet {
+				interface Params {
+					characterId: number
+					name: string
+				}
+				type Response = ListSprites.Response
+			}
+			namespace UpdateSpriteSet {
+				interface Params {
+					characterId: number
+					setId: number
+					/** A new name. ⚠ Strands cast amendments naming the old one. */
+					name?: string
+					/** Make this the character's default set. */
+					makeDefault?: boolean
+				}
+				type Response = ListSprites.Response
+			}
+			namespace DeleteSpriteSet {
+				interface Params {
+					characterId: number
+					setId: number
+				}
+				type Response = ListSprites.Response
+			}
+			namespace UploadSprite {
+				interface Params {
+					characterId: number
+					/** Omitted = the default set (created when missing). */
+					setId?: number
+					label: string
+					imageFile: Buffer | Uint8Array
+					filename?: string
+				}
+				type Response = ListSprites.Response
+			}
+			namespace AddStandardSprites {
+				interface Params {
+					characterId: number
+					setId?: number
+				}
+				type Response = ListSprites.Response & { added: number }
+			}
+			namespace UpdateSprite {
+				interface Params {
+					characterId: number
+					spriteId: number
+					/** Move to another sprite label. */
+					label?: string
+					/** Move to another set of the same character. */
+					setId?: number
+				}
+				type Response = ListSprites.Response
+			}
+			namespace DeleteSprite {
+				interface Params {
+					characterId: number
+					spriteId: number
+				}
+				type Response = ListSprites.Response
+			}
+			/**
+			 * The Sprites tab's test box: which sprite the default picker would
+			 * choose for a line, in one set, with its score and runner-up.
+			 * `reason` says why there is no pick (no embedding model, no sprites).
+			 */
+			namespace TestSprite {
+				interface Params {
+					characterId: number
+					setId?: number
+					text: string
+				}
+				interface Response {
+					characterId: number
+					text: string
+					pick: {
+						set: string
+						label: string
+						score: number
+						runnerUp?: { label: string; score: number }
+					} | null
+					reason?: string
+				}
+			}
+			namespace ReorderSprites {
+				interface Params {
+					characterId: number
+					setId: number
+					label: string
+					/** That label's variants in the new order. */
+					spriteIds: number[]
+				}
+				type Response = ListSprites.Response
 			}
 			/**
 			 * Make this the persona a new session starts with.
@@ -687,6 +800,11 @@ declare global {
 				 * false when the runtime gate is off: nothing is ever loaded.
 				 */
 				warm?: boolean
+				/**
+				 * Its swap contributions (R66), read-only here: the switches
+				 * live on the genre hub `genreId` names.
+				 */
+				swaps?: { total: number; off: number; genreId: string | null }
 			}
 			/**
 			 * A plugin's settings surface (12 §6): the manifest's schema, the
@@ -1006,6 +1124,17 @@ declare global {
 				interface Row extends Partial<SelectConnection> {
 					models: Models.ModelRow[]
 					modelsSync: ModelsSync
+					/**
+					 * Whether a credential is stored — never the credential.
+					 *
+					 * The one bit that lets the index say "needs a key" (gold,
+					 * unfinished) instead of "couldn't list models" (red,
+					 * broken) for a connection nobody has finished. The
+					 * encrypted envelope stays in `extra_json`, which this
+					 * projection deliberately omits. See
+					 * `$lib/shared/connections/credentials.ts`.
+					 */
+					hasCredential?: boolean
 				}
 				interface Response {
 					connectionsList: Row[]
@@ -1340,6 +1469,18 @@ declare global {
 					missingSince: string | null
 					/** NULL means "the sampling config decides". */
 					contextWindow: number | null
+					/**
+					 * What the HOST said about this model on the last successful
+					 * listing — context window, price per million tokens,
+					 * parameter size, quantisation, size on disk. Sparse; an
+					 * absent field means unknown and renders as `—`.
+					 *
+					 * ⚠ Never `contextWindow` above, which is the admin's
+					 * override and the one the resolver reads. These two agree
+					 * only by coincidence and the UI shows the override when one
+					 * is set. See `$lib/shared/connections/modelFacts.ts`.
+					 */
+					facts?: ModelFacts
 					/** NULL means "the endpoint's". A `completion_templates.key`. */
 					promptFormat: string | null
 					/** NULL means "the endpoint's". */
@@ -1808,10 +1949,52 @@ declare global {
 						family: string
 						shape: Record<string, unknown>
 						createSpecSlug: string | null
+						/** The app-wide switch (R66): off stops new sessions only. */
+						enabled: boolean
+						defaultPresetId: number | null
 					}
 					slots: Slot[]
 					presets: PresetRow[]
 					sessionCount: number
+					/** Plugins' swap contributions to this genre's pipelines, with the admin's switch (R66). */
+					swaps?: SwapRow[]
+					error?: string
+				}
+				interface SwapRow {
+					pluginId: string
+					pluginName: string
+					spec: string
+					specName: string
+					node: string
+					definition: string
+					name: string
+					/** Not in the plugin's `disabled_swaps`. */
+					enabled: boolean
+				}
+			}
+			namespace SetPresetsEnabled {
+				interface Params {
+					genreId: string
+					enabled: boolean
+				}
+				interface Response {
+					genreId: string
+					changed: number
+					refused: Array<{ id: number; name: string; reason: string }>
+				}
+			}
+			namespace SetSwapEnabled {
+				interface Params {
+					pluginId: string
+					spec: string
+					node: string
+					definition: string
+					enabled: boolean
+					/** The hub to re-send, when the switch was thrown from one. */
+					genreId?: string
+				}
+				interface Response {
+					ok: boolean
 					error?: string
 				}
 			}
@@ -1824,7 +2007,8 @@ declare global {
 			interface PresetDefaults {
 				name?: string
 				scenario?: string
-				groupReplyStrategy?: string
+				/** Swaps to seat the session with (R40); see the SDK's `PresetDefaults`. */
+				swaps?: import("@serene-pub/sdk").StoredSwapContribution[]
 				lorebookId?: number | null
 				tags?: string[]
 				genreFields?: Record<string, unknown>
@@ -1974,6 +2158,25 @@ declare global {
 
 		// Sessions namespace
 		namespace Sessions {
+			/**
+			 * Show a character in another sprite set FOR THIS SESSION ONLY
+			 * (DESIGN-sprites §2.3) — "she changed clothes in this scene".
+			 * `set: null` clears it. Pushed to every member as
+			 * `sessions:spriteSetChanged`.
+			 */
+			namespace SetSpriteSet {
+				interface Params {
+					sessionId: number
+					characterId: number
+					set: string | null
+				}
+				interface Response {
+					sessionId: number
+					characterId: number
+					set: string | null
+					error?: string
+				}
+			}
 			namespace List {
 				interface Params {
 					sessionType?: string
@@ -2180,7 +2383,15 @@ declare global {
 					// socket and computes isGroup from characterIds.length itself
 					// (see sessionsCreateHandler in sessions.ts) — the client must not,
 					// and structurally can't reliably, supply either.
-					session: Omit<InsertSession, "userId" | "isGroup">
+					session: Omit<InsertSession, "userId" | "isGroup"> & {
+						/**
+						 * The swaps to seat the session with (R40) — each a
+						 * definition the named node offers, written as the
+						 * session's rebind after the row exists. Absent: the
+						 * preset's `defaults.swaps`; none: every node's pin.
+						 */
+						swaps?: import("@serene-pub/sdk").StoredSwapContribution[]
+					}
 					characterIds: number[]
 					personaIds: number[]
 					characterPositions: Record<number, number>
@@ -2188,6 +2399,17 @@ declare global {
 				}
 				interface Response {
 					session?: SelectSession
+					/**
+					 * Swaps the session could not be seated with (A8): each
+					 * named with the setter's sentence. The session starts on
+					 * those nodes' pins; nothing else about the create failed.
+					 */
+					refusedSwaps?: Array<{
+						spec: string
+						node: string
+						definition: string
+						reason: string
+					}>
 					/**
 					 * A refusal, in a sentence the person can act on — the
 					 * genre's shape not met, a genre this build does not
@@ -2284,26 +2506,67 @@ declare global {
 						error?: string
 					}
 				}
-				/** The strategy dropdown for a session's next-speaker node. */
-				namespace SpeakerStrategies {
+				/**
+				 * What one exposed node may be swapped to (PLAN-turn-order
+				 * §4.7) — the generic replacement for the next-speaker pair.
+				 *
+				 * A spec marks a node `expose: { session: true }` (§4.11) and
+				 * this answers what that node may become for this session.
+				 * The Turn order control is the first caller: the turn-order
+				 * spec's `strategy` node, whose options are the genre's
+				 * declared list rather than a shape match.
+				 */
+				namespace NodeSwapOptions {
 					interface Params {
 						sessionId: number
+						/** The spec the node belongs to. */
+						spec: string
+						nodeKey: string
 					}
 					interface Response {
 						sessionId: number
-						strategies: { definitionId: string; name: string }[]
-						/** The session's rebound choice, or null when inheriting the pin. */
+						spec: string
+						nodeKey: string
+						options: { definitionId: string; name: string }[]
+						/** The session's rebind, or null when it inherits. */
 						selected: string | null
+						/** The node's own pin — what `selected: null` means. */
+						default: string | null
 					}
 				}
-				namespace SetSpeakerStrategy {
+				/** The session form's pipeline cards (PLAN-turn-order §4.11). */
+				namespace PipelineCards {
 					interface Params {
 						sessionId: number
-						/** A strategy definition pin, or null to inherit the spec's. */
+					}
+					interface Card {
+						spec: string
+						specName: string
+						nodeKey: string
+						options: { definitionId: string; name: string }[]
+						/** The session's rebind, or null when it inherits `default`. */
+						selected: string | null
+						/** The node's own pin. */
+						default: string | null
+					}
+					interface Response {
+						sessionId: number
+						cards: Card[]
+					}
+				}
+				namespace SetNodeRebind {
+					interface Params {
+						sessionId: number
+						spec: string
+						nodeKey: string
+						/** A definition from the offered list, or null to inherit. */
 						definitionId: string | null
 					}
 					interface Response {
 						sessionId: number
+						spec: string
+						nodeKey: string
+						definitionId?: string | null
 						error?: string
 					}
 				}
@@ -2566,8 +2829,18 @@ declare global {
 					surface:
 						| { kind: "native"; component: string }
 						| { kind: "frame"; pluginId: string; entry: string }
-					/** Resolved frame document URL; frame surfaces only. */
+						| { kind: "remote"; owner: string; component: string }
+					/**
+					 * Resolved URL: a frame's document, or a remote component's
+					 * module (`/plugin-ui/<owner>/<entry>`, run in the UI worker).
+					 */
 					src?: string
+					/**
+					 * The scoped data a remote may read — what it declared
+					 * (`WidgetDecl.scopes`) that an admin granted its plugin
+					 * (`widget:<scope>`). Absent = none.
+					 */
+					grants?: Array<"persona" | "characters" | "lore" | "session:full">
 					channels?: string[]
 					layout?: {
 						span?: { ideal?: number; min?: number; max?: number }
@@ -2604,6 +2877,19 @@ declare global {
 					panels: Frame[]
 					/** The mode's declared surface-grid panels (21). */
 					modePanels: ModePanel[]
+					/**
+					 * The widgets this session's genre withholds (R71), by the id
+					 * the page knows them by — core's included, so the page drops
+					 * them from its own list too. Absent when it omits none.
+					 */
+					omitWidgets?: string[]
+					/**
+					 * The viewer's language code (`en`, `fr`, …) — every widget's
+					 * envelope `locale.v1`, so a widget renders a locale map in
+					 * the language the rest of the page speaks. Absent without
+					 * access.
+					 */
+					language?: string
 					/**
 					 * The session's channels (20 §7), `main` first.
 					 *
@@ -3001,7 +3287,10 @@ declare global {
 					 * predicate's reason, a locale map with `{vars}` the
 					 * client resolves with `statusText()`.
 					 */
-					reason?: { i18n: { en: string } & Record<string, string>; vars?: Record<string, string | number> }
+					reason?: {
+						i18n: { en: string } & Record<string, string>
+						vars?: Record<string, string | number>
+					}
 					/**
 					 * The predicates over `item.*` — the message the action is
 					 * pressed on — which the client evaluates per row with the
@@ -3169,7 +3458,6 @@ declare global {
 							voice?: "character" | "narrator"
 							/** SettingsSchema — the one field language. */
 							fields?: Record<string, any>
-							nextSpeaker?: string
 						}
 					}[]
 				}
@@ -3235,15 +3523,84 @@ declare global {
 					filename: string
 				}
 			}
-			namespace GetResponseOrder {
+			/**
+			 * The session's turn order, pushed (PLAN-turn-order §4.7).
+			 *
+			 * Server → client, interest-gated like `sessions:view`: on every
+			 * `turn-order-changed`, and beside `sessions:view` so a client
+			 * that has just joined renders the same state as one that was
+			 * already there. There is no request form — page load is not an
+			 * event (§3), and the UI renders state rather than asking for a
+			 * decision.
+			 *
+			 * ⏳ Replaces `sessions:getResponseOrder`, which asked the server
+			 * to *preview* a decision a run would make. There is no decision
+			 * to preview any more: the order is written down.
+			 */
+			/**
+			 * The asker's view of the session annex (R57): per owner, the
+			 * values whose audience holds for them. Requested on open and
+			 * pushed to each member, their own, when the annex changes.
+			 */
+			namespace Annex {
 				interface Params {
 					sessionId: number
 				}
 				interface Response {
 					sessionId: number
-					characterId?: number | null // Legacy field for backward compatibility
-					nextCharacterId: number | null // Actually used field
-					characterIds: number[] // Array of character IDs in order
+					annex: Record<string, Record<string, unknown>>
+					error?: string
+				}
+			}
+			/**
+			 * A package's event, recorded in this session (R56, E1d): pushed
+			 * to everyone watching the session, and forwarded to its widgets
+			 * as `event:recorded`. Core's own events never ride this push.
+			 */
+			namespace RecordedEvent {
+				interface Push {
+					sessionId: number
+					event: string
+					payload: unknown
+					at: number
+				}
+			}
+			namespace TurnOrder {
+				interface Push {
+					sessionId: number
+					/** `TurnOrderV1` — the document as written. */
+					turnOrder: unknown
+				}
+			}
+			/**
+			 * Take a prepared turn (§4.7) — Continue, and the picker.
+			 *
+			 * `entry` absent is the stored head. An entry given is a pick,
+			 * and must be one of the prepared turns: firing is over the
+			 * order, never over the cast.
+			 */
+			namespace FireTurn {
+				interface Params {
+					sessionId: number
+					/** A `TurnEntryV1` from the order. Absent = the head. */
+					entry?: {
+						ref: string | null
+						channel?: string
+						subject?: string
+						via?: string
+					}
+				}
+				interface Response {
+					sessionId: number
+					ok: boolean
+					runId?: string
+					/**
+					 * Why it did not fire, when it did not — `person` for
+					 * somebody's own turn, which is not an error and carries
+					 * no `error` string.
+					 */
+					reason?: string
+					error?: string
 				}
 			}
 			namespace ToggleSessionCharacterActive {
@@ -3366,6 +3723,12 @@ declare global {
 				interface Response {
 					success?: boolean
 					error?: string
+					/**
+					 * The loop ended because nobody was due — the cast has all
+					 * spoken since the person did, or the session's strategy
+					 * waits to be told. Not an error; nothing was generated.
+					 */
+					nobodyDue?: boolean
 				}
 			}
 			namespace TriggerNarratorResponse {
@@ -3607,6 +3970,22 @@ declare global {
 			namespace Continue {
 				interface Params {
 					id: number
+				}
+				interface Response {
+					sessionMessage?: SelectSessionMessage
+					error?: string
+				}
+			}
+			/**
+			 * A person's pick of a line's sprite (DESIGN-sprites §6) — the
+			 * message menu's **Change sprite**. `sprite: null` clears it.
+			 * Runs `core:spec/show-sprite`: receipted, emits `sprite-shown`,
+			 * and a picker never overwrites it afterwards.
+			 */
+			namespace SetSprite {
+				interface Params {
+					id: number
+					sprite: { set: string; label: string } | null
 				}
 				interface Response {
 					sessionMessage?: SelectSessionMessage
@@ -4059,6 +4438,14 @@ declare global {
 			namespace Counts {
 				interface Params {
 					lorebookId: number
+					/**
+					 * The line being read. Absent = main.
+					 *
+					 * ⚠ A count is of what the reader can SEE. Counting every
+					 * row would put a fork's entries in main's figures, where
+					 * the list beside them shows nothing of the kind.
+					 */
+					branchId?: number | null
 				}
 				interface Response {
 					lorebookId: number
@@ -4082,6 +4469,22 @@ declare global {
 					sessionId: number
 				}
 				interface Response {
+					/**
+					 * Each entry's figures in that turn, off the ranking store
+					 * (L1, R58) — what the Read-in line says for the book's
+					 * owner without a receipt: rank among the entries judged,
+					 * tokens, the key that matched, the budget.
+					 */
+					facts?: Record<
+						number,
+						{
+							rank?: number
+							of?: number
+							tokens?: number
+							matched?: string
+							budget?: number
+						}
+					>
 					lorebookId: number
 					sessionId: number
 					/** Which run answered, absent when none had a ranking. */
@@ -4144,6 +4547,60 @@ declare global {
 			 * retrieval panel renders (`Pipelines.RetrievalRow`) rather than a
 			 * second vocabulary for the same decision: one shape, two readers.
 			 */
+			/** An entry's Off and Pin marks, and nothing else (L1). Owner or admin. */
+			/** The entry-management widget's read (L1, R58): the session's book, with this session's rankings. */
+			namespace SessionEntries {
+				interface Params {
+					sessionId: number
+					query?: string
+					sort?: "name" | "lastRead" | "timesRead" | "rank"
+					filter?: "all" | "fired" | "pinned" | "off"
+					offset?: number
+					limit?: number
+					/** Echoed on the answer, so a panel can drop replies to superseded asks. */
+					request?: string
+				}
+				interface Row {
+					id: number
+					typeId: string
+					title: string
+					keys: string[]
+					off: boolean
+					pinned: boolean
+					timesJudged: number
+					timesIncluded: number
+					lastJudgedAt: string | null
+					lastIncluded: boolean | null
+					lastReason: string | null
+					lastRank: number | null
+				}
+				interface Response {
+					sessionId: number
+					lorebookId?: number | null
+					bookName?: string
+					/** The reader is not the book's owner: nothing is shown but whose it is. */
+					ownerOnly?: boolean
+					rows: Row[]
+					total: number
+					/** The page actually served — pulled back when the asked one ran past the end. */
+					offset?: number
+					request?: string
+					error?: string
+				}
+			}
+			namespace SetMarks {
+				interface Params {
+					entryId: number
+					off?: boolean
+					pinned?: boolean
+				}
+				interface Response {
+					entryId: number
+					off?: boolean
+					pinned?: boolean
+					error?: string
+				}
+			}
 			namespace TestRetrieval {
 				interface Params {
 					id: number
@@ -4167,6 +4624,20 @@ declare global {
 					/** False when the turn ranked nothing at all. */
 					ranked?: boolean
 					/**
+					 * This entry's decision as the ranking store would keep it
+					 * (L1, the same projection), never stored: whether it went
+					 * in, why, its rank among the `of` let in, what it cost,
+					 * and the keys that matched.
+					 */
+					decision?: {
+						included: boolean
+						reason: string
+						rank: number | null
+						of: number
+						tokens: number | null
+						matched: string[]
+					}
+					/**
 					 * The mechanism-level half of the trail — how deep the scan
 					 * went, whether an embedding model was there. This is what
 					 * answers a missing `row`.
@@ -4176,6 +4647,230 @@ declare global {
 					warnings?: string[]
 					error?: string
 				}
+			}
+		}
+
+		/**
+		 * Dated overlays on an entry or a character card, and the lines of the
+		 * story they belong to.
+		 *
+		 * Ruled 2026-09-23; design of record
+		 * `~/.claude/plans/DESIGN-lore-amendments-branches.md`. An amendment says
+		 * "from this date, these fields read differently"; resolution is
+		 * `$lib/shared/lorebooks/amendments.ts`, which the server and the
+		 * workspace both call so the two cannot disagree.
+		 *
+		 * ⚠ Its OWN namespace rather than `entries:*`, because an amendment
+		 * hangs off an entry **or** a character card and neither owns the other.
+		 */
+		namespace Amendments {
+			/** One dated overlay, as the wire carries it. */
+			interface Row {
+				id: number
+				/** NULL = main, the shared line. */
+				branchId: number | null
+				year: number
+				month: number | null
+				day: number | null
+				/** A partial of the subject's writable columns. */
+				fields: Record<string, unknown>
+				/** The event that made it true, where there is one. */
+				historyEntryId: number | null
+				createdAt: string
+				updatedAt: string
+			}
+			interface EntryRow extends Row {
+				entryId: number
+			}
+			/**
+			 * An overlay on a CAST MEMBER — the person in this story — not on a
+			 * character card, which is a reusable asset several books may
+			 * share. Ruled 2026-09-23.
+			 *
+			 * ⚠ `fields` may carry `characterId`: which card represents this
+			 * person is itself a thing that changes over a life, so it is
+			 * amendable like any other column.
+			 */
+			interface CastRow extends Row {
+				/** The `lorebook_bindings` row, as the route spells it. */
+				castId: number
+				lorebookId: number
+			}
+			/**
+			 * Where in their own life a member stands, and when.
+			 *
+			 * ⚠ Two overlapping presences of one member are TWO of them in the
+			 * room. That is the shape's whole purpose; a member with none has
+			 * one implicit appearance and reads exactly as they do today.
+			 */
+			interface Presence {
+				id: number
+				/** The cast member (`lorebook_bindings` row). */
+				castId: number
+				branchId: number | null
+				/** An age, a chapter — whatever the author counts in. */
+				personalPosition: number
+				fromYear: number
+				fromMonth: number | null
+				fromDay: number | null
+				/** Absent = it never ends. **Exclusive** when present. */
+				untilYear: number | null
+				untilMonth: number | null
+				untilDay: number | null
+				note: string | null
+			}
+			/** One line of the story that diverged. `main` is never a row. */
+			interface Branch {
+				id: number
+				lorebookId: number
+				name: string
+				forkedFromBranchId: number | null
+				forkYear: number | null
+				forkMonth: number | null
+				forkDay: number | null
+			}
+
+			/**
+			 * Every overlay in one book, in ONE message.
+			 *
+			 * ⚠ Not per entry. The pool resolves every row it draws, so a call
+			 * per entry would be a call per row in a list.
+			 */
+			namespace List {
+				interface Params {
+					lorebookId: number
+				}
+				interface Response {
+					lorebookId: number
+					entries: EntryRow[]
+					cast: CastRow[]
+					presences: Presence[]
+					branches: Branch[]
+				}
+			}
+
+			namespace Create {
+				interface Params {
+					lorebookId: number
+					/** Exactly one of these two. */
+					entryId?: number
+					/** A cast member (`lorebook_bindings` row). */
+					castId?: number
+					/**
+					 * Where in their own life this begins, for a change to a
+					 * member. Absent means the world date is the anchor, which
+					 * is how every amendment read before appearances existed.
+					 */
+					personalPosition?: number | null
+					branchId?: number | null
+					year: number
+					month?: number | null
+					day?: number | null
+					fields: Record<string, unknown>
+					historyEntryId?: number | null
+				}
+				type Response = List.Response
+			}
+
+			namespace Update {
+				interface Params {
+					lorebookId: number
+					id: number
+					subject: "entry" | "cast"
+					year?: number
+					month?: number | null
+					day?: number | null
+					fields?: Record<string, unknown>
+				}
+				type Response = List.Response
+			}
+
+			namespace Delete {
+				interface Params {
+					lorebookId: number
+					id: number
+					subject: "entry" | "cast"
+				}
+				type Response = List.Response
+			}
+
+			/**
+			 * Forking, switching and deleting a line.
+			 *
+			 * ⚠ There is no `main` here and never will be. Main is the absence
+			 * of a branch id, so "switch to main" is a switch to `null` and
+			 * "delete main" is not a sentence.
+			 *
+			 * ⚠ These answer with the same whole-book list as `list`, for the
+			 * same reason the amendment writes do: a branch appearing changes
+			 * which amendments a reader can see.
+			 */
+			/**
+			 * Placing a member: from when, at what point of their life, until
+			 * when. The same whole-book list comes back, as every write here
+			 * does.
+			 */
+			namespace Place {
+				interface Params {
+					lorebookId: number
+					castId: number
+					personalPosition: number
+					branchId?: number | null
+					fromYear: number
+					fromMonth?: number | null
+					fromDay?: number | null
+					untilYear?: number | null
+					untilMonth?: number | null
+					untilDay?: number | null
+					note?: string | null
+				}
+				type Response = List.Response
+			}
+
+			namespace Unplace {
+				interface Params {
+					lorebookId: number
+					/** A `cast_presences` row. */
+					id: number
+				}
+				type Response = List.Response
+			}
+
+			namespace Fork {
+				interface Params {
+					lorebookId: number
+					name: string
+					/** The line being left. NULL = main. */
+					forkedFromBranchId?: number | null
+					/** Where it left. Absent = at the start, sharing nothing later. */
+					forkYear?: number | null
+					forkMonth?: number | null
+					forkDay?: number | null
+				}
+				type Response = List.Response
+			}
+
+			namespace RenameBranch {
+				interface Params {
+					lorebookId: number
+					id: number
+					name: string
+				}
+				type Response = List.Response
+			}
+
+			/**
+			 * ⚠ Removes the line's OWN rows — its amendments, its entries, its
+			 * scenes, its edges — by cascade. Shared rows are untouched, and
+			 * branches forked FROM it become children of main rather than
+			 * disappearing with it.
+			 */
+			namespace DeleteBranch {
+				interface Params {
+					lorebookId: number
+					id: number
+				}
+				type Response = List.Response
 			}
 		}
 
@@ -5501,7 +6196,12 @@ declare global {
 					 * producers but no reader asking this, and a gate written
 					 * for a caller that does not exist is a gate nothing tests.
 					 */
-					kind: "message" | "file" | "variant" | "lore_entry" | "session"
+					kind:
+						| "message"
+						| "file"
+						| "variant"
+						| "lore_entry"
+						| "session"
 					entityId: number
 				}
 				interface Run {
@@ -5541,13 +6241,9 @@ declare global {
 			 * in your head. This is the aggregate across a session's runs:
 			 * which entries reached a prompt, how often, and when last.
 			 *
-			 * ⚠ **Aggregated in the database, not in this process.** A long
-			 * session holds hundreds of receipts and each one is large, so this
-			 * is a grouped query over the receipt column rather than every blob
-			 * loaded and reduced in memory. The read is still bounded, and the
-			 * bound is *stated*: `runsRead` against `runsTotal`, and a sentence
-			 * in `notes`. A bound nobody is told about turns a partial answer
-			 * into a wrong one.
+			 * Read from the ranking store's rollup (§3.9): complete however long
+			 * the session, because retention prunes the per-turn decisions and
+			 * never the rollup. `judgedInRuns` is each entry's own denominator.
 			 */
 			interface SessionEntryUsageRow {
 				/** `source:id` — the same key the run explanation rows use. */
@@ -5589,8 +6285,6 @@ declare global {
 					sessionId: number
 					/** How many rows to answer with. */
 					limit?: number
-					/** How many of the session's newest runs to read. */
-					runLimit?: number
 				}
 				interface Response {
 					sessionId?: number
@@ -5607,7 +6301,7 @@ declare global {
 					notes?: string[]
 					/** Most-used first; see the handler on why frequency. */
 					entries?: SessionEntryUsageRow[]
-					/** How many runs this answer actually read. */
+					/** ⏳ Equal to `runsTotal` since the rollup read; kept for the client. */
 					runsRead?: number
 					/** How many non-preview runs the session has in total. */
 					runsTotal?: number
@@ -5656,6 +6350,97 @@ declare global {
 					 * every tab this person has open, which ones to ignore.
 					 */
 					id?: string
+				}
+			}
+			/**
+			 * The cap pause (E1c): a run tree held at a cycle cap for the
+			 * session owner. `pipelines:capPauseRequested` pushes one;
+			 * `continue` grants the tree one more window of each cap and
+			 * runs the parked pipeline, `cancel` ends the tree there.
+			 * `pipelines:capPauseClosed` retires the card in every tab.
+			 */
+			interface CapPause {
+				id: string
+				sessionId: number
+				/** The event whose bound pipeline would run next. */
+				event: string
+				specSlug: string
+				/** The runs so far, root first, then the one that would run. */
+				chain: string[]
+				/** The cap's sentence. */
+				cap: string
+				depth: number
+				/** How many of the tree's runs are parked on this pause. */
+				waiting: number
+				requestedAt: number
+			}
+			namespace CapPauses {
+				interface Params {}
+				interface Response {
+					pauses: CapPause[]
+				}
+			}
+			namespace ResolveCapPause {
+				interface Params {
+					id: string
+					action: "continue" | "cancel"
+				}
+				interface Response {
+					ok?: boolean
+					error?: string
+					/** Which pause the error is about. */
+					id?: string
+				}
+			}
+			/**
+			 * The events admin page (PLAN-turn-order §B2): the registry of every
+			 * event, and the event map for a scope. Admin-only.
+			 */
+			namespace EventMap {
+				interface Params {
+					genreId?: string
+					presetId?: number
+					sessionId?: number
+				}
+				interface RegistryRow {
+					id: string
+					label: string
+					description: string
+					family: "data" | "action"
+					affectsUser: boolean
+					payload: string | null
+					causedBy: string[]
+					owner: string
+					genres: Array<{ genreId: string; required: boolean }>
+					presets: number
+					recordedBy?: Array<{
+						genreId: string
+						recordedBy: string[] | "any"
+					}>
+				}
+				interface MapNode {
+					id: string
+					kind: "event" | "spec" | "listener"
+					label: string
+					root: boolean
+				}
+				interface MapEdge {
+					from: string
+					to: string
+					kind: "binds" | "causes" | "listens"
+				}
+				interface Response {
+					events?: RegistryRow[]
+					genres?: Array<{ genreId: string; name: string }>
+					presets?: Array<{
+						id: number
+						name: string
+						genreId: string
+					}>
+					eventMap?: { nodes: MapNode[]; edges: MapEdge[] }
+					/** The scope the map was drawn for, echoed so a late reply can be told apart. */
+					scope?: Params
+					error?: string
 				}
 			}
 			/**
@@ -6468,6 +7253,8 @@ declare global {
 			namespace Runs {
 				interface Params {
 					sessionId?: number
+					/** Only this pipeline's runs — filtered on the server, before `limit`. */
+					specSlug?: string
 					limit?: number
 				}
 				interface Response {
@@ -6475,6 +7262,9 @@ declare global {
 						id: number
 						runId: string
 						specSlug: string
+						/** Whose run it is: the list is an administrator's, of every user's runs (R55). */
+						userId: number | null
+						username?: string | null
 						/** The authored semver the slug resolved to. */
 						specVersion: string
 						/**
@@ -8821,6 +9611,18 @@ declare global {
 					lorebookId: number
 				}
 				interface Response {
+					/**
+					 * The book these nodes belong to.
+					 *
+					 * ⚠ **Load-bearing, not informational.** `SCOPED_EVENTS`
+					 * scopes this event on `payload.lorebookId`; without it the
+					 * server's gate resolves the scope to null, matches no
+					 * socket — every subscriber holds a SCOPED key — and drops
+					 * the reply without a word. Added 2026-09-23 after exactly
+					 * that: the Graph lens spun forever and Cast, Book settings
+					 * and the workspace's own graph data were all starved.
+					 */
+					lorebookId: number
 					nodes: NarrativeNode[]
 					relationships: NarrativeRelationship[]
 					/** Scenes with a summary not yet processed into the graph (ready to extend) */
@@ -10004,7 +10806,13 @@ declare global {
 				qualifiedKey: string
 				label: string
 				description?: string
-				type: "integer" | "enum" | "text" | "boolean" | "list" | "derived"
+				type:
+					| "integer"
+					| "enum"
+					| "text"
+					| "boolean"
+					| "list"
+					| "derived"
 				appliesTo: ("cast" | "world")[]
 				/**
 				 * A sheet entry said a session of this shape must have a value

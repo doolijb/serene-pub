@@ -362,7 +362,13 @@ async function listResponse(
 				: usableBy(userId)
 		)
 		.orderBy(asc(schema.widgetStyles.id))
-	return { styles: rows.map(toRow) }
+	// Styles for a disabled plugin's widgets are not listed (R67): the widget
+	// itself is not shown, and its styles come back with it.
+	const { disabledPlugins } = await import("$lib/server/plugins/disabledPlugins")
+	const off = await disabledPlugins(db)
+	return {
+		styles: rows.filter((r) => !off.ownsId(r.widgetSlug)).map(toRow)
+	}
 }
 
 /**

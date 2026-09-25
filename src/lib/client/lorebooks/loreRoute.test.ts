@@ -512,3 +512,54 @@ describe("compactStep — one column, three steps", () => {
 		).toBe("editor")
 	})
 })
+
+describe("comparing a line with main", () => {
+	it("rides in the hash and comes back", () => {
+		const route = reduce(
+			reduce(
+				{ lorebookId: 4, scope: "all" as const },
+				{ type: "setBranch", branch: 7 }
+			),
+			{ type: "setCompare", compare: true }
+		)
+		expect(toHash(route)).toContain("compare=1")
+		expect(fromHash(toHash(route))).toEqual(route)
+	})
+
+	it("is dropped without a branch — main has nothing to compare against", () => {
+		const route = reduce(
+			{ lorebookId: 4, scope: "all" as const },
+			{ type: "setCompare", compare: true }
+		)
+		expect(route.compare).toBeUndefined()
+		expect(toHash(route)).not.toContain("compare")
+	})
+
+	it("leaving the line leaves the comparison with it", () => {
+		const onLine = reduce(
+			reduce(
+				{ lorebookId: 4, scope: "all" as const },
+				{ type: "setBranch", branch: 7 }
+			),
+			{ type: "setCompare", compare: true }
+		)
+		const backToMain = reduce(onLine, {
+			type: "setBranch",
+			branch: undefined
+		})
+		expect(backToMain.compare).toBeUndefined()
+		expect(backToMain.branch).toBeUndefined()
+	})
+
+	it("switching to ANOTHER line keeps the comparison open", () => {
+		const onSeven = reduce(
+			reduce(
+				{ lorebookId: 4, scope: "all" as const },
+				{ type: "setBranch", branch: 7 }
+			),
+			{ type: "setCompare", compare: true }
+		)
+		const onEight = reduce(onSeven, { type: "setBranch", branch: 8 })
+		expect(onEight).toMatchObject({ branch: 8, compare: true })
+	})
+})

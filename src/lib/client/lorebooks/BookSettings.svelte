@@ -139,6 +139,9 @@
 	// One book is open at a time, and the interest key already names it, so
 	// there is nothing left here to filter on.
 	function handleGraph(msg: Sockets.NarrativeGraph.List.Response) {
+		// The scope the gate reads; checked here too, so a stale book's
+		// reply arriving after a switch cannot paint this one.
+		if (msg.lorebookId !== lorebookId) return
 		relationships = msg.relationships.length
 	}
 

@@ -28,7 +28,8 @@ import * as schema from "$lib/server/db/schema"
 import type {
 	ScriptChainApplier,
 	ScriptHookSite,
-	ScriptApplicationRecord
+	ScriptApplicationRecord,
+	SessionSettingsV1
 } from "@serene-pub/sdk"
 import { splitCandidates, withBandIntents } from "@serene-pub/sdk"
 import {
@@ -618,9 +619,16 @@ export async function scriptExtras(
 			characterId: number | null
 			known: boolean
 		} | null
+		/**
+		 * The settings document (PLAN-turn-order §4.12, way 3): every
+		 * script point declares `session` as an extra, and this is its
+		 * value — resolved once by `runSpec`, never re-read here.
+		 */
+		session?: SessionSettingsV1 | null
 	}
 ): Promise<Record<string, unknown>> {
 	const out: Record<string, unknown> = {}
+	if (scope.session) out.session = scope.session
 	if (scope.speaker) {
 		out.speakerName = scope.speaker.name
 		out.speakerCharacterId = scope.speaker.characterId

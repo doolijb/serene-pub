@@ -32,6 +32,15 @@ export interface CastRow {
 	summary?: string | null
 	nodeState?: string | null
 	nodeVisibility?: string | null
+	/**
+	 * Which of the card's sprite sets they are drawn with. Null = its default.
+	 *
+	 * ⚠ A NAME, not an id: sets belong to the card, and which card represents
+	 * this member is itself amendable, so an id would dangle the moment a
+	 * card-swap amendment lands. A name the new card has no set by falls back
+	 * to that card's default and is kept as written.
+	 */
+	spriteSet?: string | null
 	characterId?: number | null
 	character?: {
 		nickname?: string | null

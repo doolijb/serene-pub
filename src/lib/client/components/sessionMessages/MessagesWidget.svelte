@@ -8,6 +8,12 @@
 	export type ComposerPosition = "bottom" | "top"
 
 	/**
+	 * Who is due next (PLAN-turn-order §4.9): the order's head with Continue,
+	 * the head and who follows it, or nothing.
+	 */
+	export type NextUp = "head" | "list" | "hidden"
+
+	/**
 	 * The `messages` widget's settings, complete: every value the widget reads,
 	 * with the declared default wherever the instance has no deviation. The
 	 * page receives this object too (as the snippet parameter and through
@@ -23,7 +29,7 @@
 		showAvatars: boolean
 		showTimestamps: boolean
 		showSceneMarkers: boolean
-		showNudge: boolean
+		nextUp: NextUp
 		showActions: boolean
 	}
 
@@ -41,7 +47,7 @@
 		showAvatars: true,
 		showTimestamps: true,
 		showSceneMarkers: true,
-		showNudge: true,
+		nextUp: "head",
 		showActions: true
 	}
 
@@ -83,7 +89,12 @@
 			showAvatars: pickBool(v.showAvatars, d.showAvatars),
 			showTimestamps: pickBool(v.showTimestamps, d.showTimestamps),
 			showSceneMarkers: pickBool(v.showSceneMarkers, d.showSceneMarkers),
-			showNudge: pickBool(v.showNudge, d.showNudge),
+			// ⏳ `showNudge: false` was this setting before `nextUp` (A8).
+			nextUp: pickEnum(
+				v.nextUp,
+				["head", "list", "hidden"],
+				v.showNudge === false ? "hidden" : d.nextUp
+			),
 			showActions: pickBool(v.showActions, d.showActions)
 		}
 	}
@@ -94,24 +105,20 @@
 	 * The native surface of the `messages` widget: the log you read and the
 	 * field you write into, as ONE widget.
 	 *
-	 * It owns the arrangement and nothing else. The page passes the log, the
+	 * It owns the conversation (C0b): the model its parts read
+	 * (`conversation.svelte.ts`) and the log. The page still passes the
 	 * composer, the ready-to-continue line and the banners as snippets; this
 	 * component reads the widget's settings off `useWidgetContext()`, hands
 	 * them back to those snippets, writes them onto the root as data
 	 * attributes, and decides which end the composer sits at.
 	 */
-	import { getContext, type Snippet } from "svelte"
 	import { useWidgetContext } from "$lib/shared/widgets/context"
+	import SessionContainer from "./SessionContainer.svelte"
+	import SessionComposer from "./SessionComposer.svelte"
+	import NextCharacterBlock from "./NextCharacterBlock.svelte"
+	import { createConversation, setConversation } from "./conversation.svelte"
 
 	interface Props {
-		/** The message log (`SessionContainer`), given the live settings. */
-		log: Snippet<[ConversationSettings]>
-		/** The field you write into, given the same settings. */
-		composer: Snippet<[ConversationSettings]>
-		/** The line naming who is due next, beside the composer. */
-		nudge?: Snippet
-		/** Status strips that belong beside the composer, above it. */
-		banners?: Snippet
 		/**
 		 * Called with the effective settings whenever they change, for the
 		 * page's imperative half — the scroll handling, which runs outside the
@@ -120,12 +127,29 @@
 		onSettings?: (settings: ConversationSettings) => void
 	}
 
-	let { log, composer, nudge, banners, onSettings }: Props = $props()
+	let { onSettings }: Props = $props()
 
 	const ctx = useWidgetContext()
-	const userSettingsCtx: UserSettingsCtx | undefined =
-		getContext("userSettingsCtx")
+	// The conversation's own model (C0b): the log and its lines read it, and
+	// act through its verbs. Absent a host there is nothing to converse with.
+	const conversation = ctx ? setConversation(createConversation(ctx)) : null
 
+	// A host view asked for a selection (the workflow tab): start one.
+	let askedToSelect: number | null = null
+	$effect(() => {
+		const n = conversation?.dossier?.selectForSummary ?? 0
+		if (askedToSelect !== null && n !== askedToSelect) conversation?.select.start()
+		askedToSelect = n
+	})
+	const selecting = $derived(!!conversation?.select.active)
+	const selectedCount = $derived(conversation?.select.ids.size ?? 0)
+	/** Every line a scene has not already captured. */
+	const selectable = $derived.by(() => {
+		const taken = new Set(conversation?.dossier?.scened ?? [])
+		return ((ctx?.current.messages.v1 ?? []) as Array<{ id: number }>)
+			.map((m) => m.id)
+			.filter((id) => !taken.has(id))
+	})
 	let settings = $derived(
 		readConversationSettings(
 			ctx?.current.settings.v1 as Record<string, unknown> | undefined
@@ -137,7 +161,7 @@
 	 * behind the shell, the conversation gets a glass panel so the text keeps
 	 * its contrast against whatever the picture is doing underneath.
 	 */
-	let hasBackdrop = $derived(!!userSettingsCtx?.settings?.backgroundImagePath)
+	let hasBackdrop = $derived(!!conversation?.dossier?.backdrop)
 
 	// Compared by value, the way `WidgetHost` compares its layout: the widget
 	// context re-projects on every message that lands, and the settings on it
@@ -168,130 +192,125 @@
 		     at: the reading order a screen reader and the tab sequence follow is
 		     the conversation's, and `order` moves the box on screen. -->
 		{#if settings.showMessages}
-			<div class="sp-log">{@render log(settings)}</div>
+			<div class="sp-log">
+				{#if conversation}
+					<SessionContainer order={settings.order} showSceneMarkers={settings.showSceneMarkers} />
+				{/if}
+			</div>
 		{/if}
-		{#if settings.showComposer}
+		{#if selecting && conversation}
+			<!-- Selecting lines for a summary: the composer steps aside for the
+			     selection's own bar, and committing hands it to the host. -->
 			<div class="sp-compose">
-				{@render banners?.()}
-				{#if settings.showNudge && nudge}
+				<div class="sp-field">
+					<div class="preset-tonal-secondary flex flex-wrap items-center gap-2 p-3 lg:rounded-t-lg">
+						<span class="text-sm font-semibold">
+							{selectedCount}
+							{selectedCount === 1 ? "message" : "messages"} selected
+						</span>
+						<div class="flex gap-2">
+							<button
+								class="btn btn-sm preset-filled-surface-400-600"
+								title="Select all"
+								onclick={() => conversation.select.set(selectable)}
+							>
+								<sp-icon name="check-square" size="16"></sp-icon>
+								<span class="hidden sm:inline">Select all</span>
+							</button>
+							<button
+								class="btn btn-sm preset-filled-surface-400-600"
+								title="Select none"
+								onclick={() => conversation.select.set([])}
+							>
+								<sp-icon name="square" size="16"></sp-icon>
+								<span class="hidden sm:inline">Select none</span>
+							</button>
+						</div>
+						<div class="ml-auto flex flex-wrap gap-2">
+							<button
+								class="btn btn-sm preset-filled-surface-500"
+								title="Cancel"
+								onclick={() => conversation.select.stop()}
+							>
+								<sp-icon name="x" size="16"></sp-icon>
+								<span class="hidden sm:inline">Cancel</span>
+							</button>
+							<!-- A scene summary opens a scene, which is its own declared
+							     write (R-B): a genre that opens none does not offer it. -->
+							{#if conversation.dossier?.writes.scenes}
+								<button
+									class="btn btn-sm preset-filled-secondary-500"
+									title="Scene"
+									disabled={selectedCount === 0}
+									onclick={() => conversation.select.commit("scene")}
+								>
+									<sp-icon name="film" size="16"></sp-icon>
+									<span class="hidden sm:inline">Scene</span>
+								</button>
+							{/if}
+							<button
+								class="btn btn-sm preset-filled-primary-500"
+								title="World lore"
+								disabled={selectedCount === 0}
+								onclick={() => conversation.select.commit("world")}
+							>
+								<sp-icon name="globe" size="16"></sp-icon>
+								<span class="hidden sm:inline">World lore</span>
+							</button>
+							<button
+								class="btn btn-sm preset-filled-tertiary-500"
+								title="Character lore"
+								disabled={selectedCount === 0}
+								onclick={() => conversation.select.commit("character")}
+							>
+								<sp-icon name="user" size="16"></sp-icon>
+								<span class="hidden sm:inline">Character lore</span>
+							</button>
+						</div>
+					</div>
+				</div>
+			</div>
+		{:else if settings.showComposer && conversation}
+			{@const dossier = conversation.dossier}
+			<div class="sp-compose">
+				<!-- The page's status strips (who is typing, a stale preset). -->
+				<sp-host-view name="session-banners"></sp-host-view>
+				{#if settings.nextUp !== "hidden" && dossier && !dossier.readOnly}
 					<div class="sp-nudge">
-						{@render nudge()}
+						<NextCharacterBlock
+							order={dossier.turn.order}
+							candidates={dossier.turn.candidates}
+							mode={settings.nextUp}
+							shouldShow={dossier.turn.show && conversation.edit.id === null}
+							avatarFor={(ref) => (ref.startsWith("character:") ? ref : undefined)}
+							canChooseSomeoneElse={dossier.turn.canChoose}
+							viewerUserId={conversation.ctx.viewer.v1.userId}
+							onContinue={() => void conversation.request("fire-turn", {})}
+							onSomeoneElse={() => void conversation.request("pick-turn", {})}
+						/>
 					</div>
 				{/if}
-				<div class="sp-field">{@render composer(settings)}</div>
+				<div class="sp-field">
+					{#if dossier?.readOnly}
+						<!-- Read-only (19 §6, ruled): the mode disappeared, the history
+						     stays, nothing starts a new turn — and the server refuses
+						     independently at every generation choke, so this banner is
+						     honesty, not the lock. -->
+						<div class="preset-tonal-warning flex items-start gap-3 rounded-t-lg p-4" role="status">
+							<sp-icon name="lock" size="20" class="mt-0.5 shrink-0"></sp-icon>
+							<div class="text-sm">
+								<p class="font-semibold">This session is read-only.</p>
+								<p>
+									Its mode ({dossier.readOnly.genreId}) is not installed. Messages are safe to
+									read; new turns resume when the mode returns.
+								</p>
+							</div>
+						</div>
+					{:else}
+						<SessionComposer composerSkin={settings.composerSkin} showActions={settings.showActions} />
+					{/if}
+				</div>
 			</div>
 		{/if}
 	</div>
 </div>
-
-<style>
-	/* The widget's box: one column, the log taking what is left of it. */
-	.sp-conversation {
-		display: flex;
-		flex-direction: column;
-		min-inline-size: 0;
-		min-block-size: 0;
-		block-size: 100%;
-		/* The glass panel's colours, light first and paired below — a message
-		   sits on the page's ground, and the panel is one step off it. */
-		--sp-glass-bg: color-mix(
-			in oklab,
-			var(--color-surface-50) 78%,
-			transparent
-		);
-		--sp-glass-bd: color-mix(
-			in oklab,
-			var(--color-surface-300) 70%,
-			transparent
-		);
-	}
-	:global([data-mode="dark"]) .sp-conversation {
-		--sp-glass-bg: color-mix(
-			in oklab,
-			var(--color-surface-950) 78%,
-			transparent
-		);
-		--sp-glass-bd: color-mix(
-			in oklab,
-			var(--color-surface-800) 70%,
-			transparent
-		);
-	}
-
-	/* The measure: about 640px of prose plus the gutter the avatar column
-	   needs, centred in however wide the widget's box is (STYLE-GUIDE 3.4). A
-	   widget style can move it by setting `--sp-measure`. */
-	.sp-column {
-		display: flex;
-		flex-direction: column;
-		inline-size: 100%;
-		max-inline-size: calc(var(--sp-measure, 40rem) + 3.5rem);
-		margin-inline: auto;
-		min-inline-size: 0;
-		min-block-size: 0;
-		flex: 1;
-	}
-
-	/* The log grows; the composer is as tall as it needs to be. `overflow`
-	   stays visible so the composer's panes grow their box instead of being
-	   clipped — the scroll region is the log's own, inside it. */
-	.sp-log {
-		flex: 1;
-		min-block-size: 0;
-		min-inline-size: 0;
-		display: flex;
-		flex-direction: column;
-	}
-	.sp-log > :global(*) {
-		flex: 1;
-		min-block-size: 0;
-	}
-	.sp-compose {
-		flex: 0 0 auto;
-		min-inline-size: 0;
-		display: flex;
-		flex-direction: column;
-	}
-	.sp-nudge {
-		list-style: none;
-		margin: 0;
-		padding: 0;
-	}
-
-	/* With the log hidden the widget is its composer, and the field keeps the
-	   end of the box it was drawn at. */
-	.sp-conversation[data-show-messages="false"][data-composer-position="bottom"]
-		.sp-column {
-		justify-content: flex-end;
-	}
-
-	/* Composer at the top: the field moves above the banners and the nudge,
-	   and the whole compose block above the log, so the two strips stay
-	   between the field and the conversation at either end. */
-	.sp-conversation[data-composer-position="top"] .sp-compose {
-		order: -1;
-	}
-	.sp-conversation[data-composer-position="top"] .sp-field {
-		order: -1;
-	}
-
-	/* The glass panel, painted only where a backdrop image is behind it. */
-	.sp-conversation[data-backdrop] .sp-column {
-		background: var(--sp-glass-bg);
-		backdrop-filter: blur(14px);
-		border: 1px solid var(--sp-glass-bd);
-		border-radius: 14px;
-		padding: 8px 24px 16px;
-		margin-block: 8px 16px;
-	}
-
-	/* Avatars off: the cell goes, and the custom properties a style sizes its
-	   avatar column with go to zero so the gutter does not stand empty. */
-	.sp-conversation[data-show-avatars="false"] :global(.sp-msg-avatar) {
-		display: none;
-	}
-	.sp-conversation[data-show-avatars="false"] :global(.sp-msg) {
-		--sp-av: 0;
-		--sp-portrait: 0;
-	}
-</style>

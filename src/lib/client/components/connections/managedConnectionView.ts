@@ -86,9 +86,12 @@ export interface ManagedTab {
 export function managedTabs(stage: ManagedStage): ManagedTab[] {
 	if (stage !== "tabs") return []
 	return [
+		// ⚠ One word each. Four labelled tabs share 400px in the dock, and
+		// "Get models" / "Downloads" rendered as "Get mo…" / "Downlo…" — a tab
+		// strip nobody can read the end of. The icon carries the rest.
 		{ value: "models", label: "Models", icon: "Package" },
-		{ value: "get", label: "Get models", icon: "Search" },
-		{ value: "downloads", label: "Downloads", icon: "Download" },
+		{ value: "get", label: "Get", icon: "Search" },
+		{ value: "downloads", label: "Arriving", icon: "Download" },
 		{ value: "settings", label: "Settings", icon: "Settings" }
 	]
 }

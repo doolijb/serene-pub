@@ -17,7 +17,7 @@
  * the slug.
  */
 
-import { and, asc, eq } from "drizzle-orm"
+import { and, asc, eq, isNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
 	actionsOf,
@@ -211,13 +211,15 @@ export async function seatedEnvoys(
  * Seat an envoy in a session — a cast row with `envoy_slug` set. Idempotent:
  * a live seat is left alone; a departed one is revived. Refuses a slug the
  * session's genre and installed actions do not declare, with a sentence.
+ * Answers whether the seat changed (it was not live before), so a caller
+ * emits `member-added` only for a real change (M3 review).
  */
 export async function seatEnvoy(
 	db: Db,
 	sessionId: number,
 	slug: string,
 	position = 0
-): Promise<void> {
+): Promise<boolean> {
 	const declared = await sessionDeclaredEnvoys(db, sessionId)
 	if (!declared.some((d) => d.slug === slug))
 		throw new Error(
@@ -226,6 +228,17 @@ export async function seatEnvoy(
 					? ` — it declares ${declared.map((d) => `'${d.slug}'`).join(", ")}`
 					: " — it declares none")
 		)
+	const [before] = await db
+		.select({ removedAt: schema.sessionCharacters.removedAt })
+		.from(schema.sessionCharacters)
+		.where(
+			and(
+				eq(schema.sessionCharacters.sessionId, sessionId),
+				eq(schema.sessionCharacters.envoySlug, slug)
+			)
+		)
+		.limit(1)
+	const wasLive = !!before && before.removedAt == null
 	await db
 		.insert(schema.sessionCharacters)
 		.values({ sessionId, characterId: null, envoySlug: slug, position })
@@ -236,16 +249,20 @@ export async function seatEnvoy(
 			],
 			set: { removedAt: null, removedName: null, isActive: true, position }
 		})
+	return !wasLive
 }
 
-/** Unseat an envoy: the same soft-remove a character's seat gets. */
+/**
+ * Unseat an envoy: the same soft-remove a character's seat gets. Answers
+ * whether a live seat was actually removed (M3 review).
+ */
 export async function unseatEnvoy(
 	db: Db,
 	sessionId: number,
 	slug: string,
 	removedName?: string | null
-): Promise<void> {
-	await db
+): Promise<boolean> {
+	const removed = await db
 		.update(schema.sessionCharacters)
 		.set({
 			removedAt: new Date(),
@@ -255,9 +272,12 @@ export async function unseatEnvoy(
 		.where(
 			and(
 				eq(schema.sessionCharacters.sessionId, sessionId),
-				eq(schema.sessionCharacters.envoySlug, slug)
+				eq(schema.sessionCharacters.envoySlug, slug),
+				isNull(schema.sessionCharacters.removedAt)
 			)
 		)
+		.returning({ envoySlug: schema.sessionCharacters.envoySlug })
+	return removed.length > 0
 }
 
 /**

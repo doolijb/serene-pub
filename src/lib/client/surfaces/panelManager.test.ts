@@ -410,3 +410,25 @@ describe("SurfaceManager — what a message arrival announces", () => {
 		])
 	})
 })
+
+describe("a genre that withholds the conversation (R71)", () => {
+	it("gets no synthetic conversation, and keeps what it withholds", () => {
+		const board: ModePanel = {
+			id: "acme.game:board",
+			title: "Board",
+			role: "primary",
+			surface: { kind: "remote", owner: "acme.game", component: "board" },
+			defaultActive: true
+		}
+		const m = new SurfaceManager()
+		m.init(1, [board, ...PANELS], {}, () => {}, undefined, new Set(["messages"]))
+		expect(m.instances.filter((p) => p.role === "primary").map((p) => p.id)).toEqual(["acme.game:board"])
+		expect(m.omitted.has("messages")).toBe(true)
+	})
+
+	it("a genre that withholds nothing still gets the conversation", () => {
+		const m = make()
+		expect(m.instances.some((p) => p.role === "primary")).toBe(true)
+		expect(m.omitted.size).toBe(0)
+	})
+})

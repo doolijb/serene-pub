@@ -15,6 +15,7 @@ import NotesPanel from "$lib/client/components/surfaces/panels/NotesPanel.svelte
 import StatsPanel from "$lib/client/components/surfaces/panels/StatsPanel.svelte"
 import InventoryPanel from "$lib/client/components/surfaces/panels/InventoryPanel.svelte"
 import WorldStatePanel from "$lib/client/components/surfaces/panels/WorldStatePanel.svelte"
+import LoreEntriesPanel from "$lib/client/components/surfaces/panels/LoreEntriesPanel.svelte"
 
 /** Props every native panel component receives. */
 export interface NativePanelProps {
@@ -32,6 +33,8 @@ export const NATIVE_SURFACES: Record<string, Component<NativePanelProps>> = {
 	stats: StatsPanel as Component<NativePanelProps>,
 	inventory: InventoryPanel as Component<NativePanelProps>,
 	"world-state": WorldStatePanel as Component<NativePanelProps>,
+	// The session's lorebook with this session's rankings, and Off / Pin (L1).
+	"lore-entries": LoreEntriesPanel as Component<NativePanelProps>,
 	// Temporary test artifacts (plan 21) — demonstrate the framework end to end.
 	"sample-map": MapPanel as Component<NativePanelProps>,
 	"sample-notes": NotesPanel as Component<NativePanelProps>

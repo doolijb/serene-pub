@@ -12,6 +12,7 @@
 	import { loreRoute } from "../loreRoute.svelte"
 	import { descriptorForKind, draftStale } from "../sections"
 	import {
+		compareDates,
 		dateValue,
 		formatDate,
 		type StoryDate
@@ -163,9 +164,7 @@
 
 	/** The dated entries newest first, which is the order a run reaches them in. */
 	let byRecency = $derived(
-		[...dated].sort(
-			(a, b) => dateValue(b as StoryDate) - dateValue(a as StoryDate)
-		)
+		[...dated].sort((a, b) => compareDates(b as StoryDate, a as StoryDate))
 	)
 
 	function readInOf(id: number): { rank: number; total: number } | null {

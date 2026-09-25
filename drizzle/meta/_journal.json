@@ -1065,6 +1065,132 @@
       "when": 1789715292591,
       "tag": "0151_pipeline_bindings_subject",
       "breakpoints": true
+    },
+    {
+      "idx": 152,
+      "version": "7",
+      "when": 1790028766396,
+      "tag": "0152_speaker_strategy_rebinds",
+      "breakpoints": true
+    },
+    {
+      "idx": 153,
+      "version": "7",
+      "when": 1790086835367,
+      "tag": "0153_sessions_annex",
+      "breakpoints": true
+    },
+    {
+      "idx": 154,
+      "version": "7",
+      "when": 1790096259814,
+      "tag": "0154_spec_input_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 155,
+      "version": "7",
+      "when": 1790176206929,
+      "tag": "0155_modder_pass_expose_payloads",
+      "breakpoints": true
+    },
+    {
+      "idx": 156,
+      "version": "7",
+      "when": 1790185457791,
+      "tag": "0156_connection_model_facts",
+      "breakpoints": true
+    },
+    {
+      "idx": 157,
+      "version": "7",
+      "when": 1790207626094,
+      "tag": "0157_record_event_causes_from",
+      "breakpoints": true
+    },
+    {
+      "idx": 158,
+      "version": "7",
+      "when": 1790210409727,
+      "tag": "0158_amendments_and_branches",
+      "breakpoints": true
+    },
+    {
+      "idx": 159,
+      "version": "7",
+      "when": 1790218833860,
+      "tag": "0159_branch_columns",
+      "breakpoints": true
+    },
+    {
+      "idx": 160,
+      "version": "7",
+      "when": 1790221263352,
+      "tag": "0160_data_audiences",
+      "breakpoints": true
+    },
+    {
+      "idx": 161,
+      "version": "7",
+      "when": 1790228735531,
+      "tag": "0161_drop_character_amendments",
+      "breakpoints": true
+    },
+    {
+      "idx": 162,
+      "version": "7",
+      "when": 1790228746601,
+      "tag": "0162_cast_amendments",
+      "breakpoints": true
+    },
+    {
+      "idx": 163,
+      "version": "7",
+      "when": 1790243534084,
+      "tag": "0163_ranking_store",
+      "breakpoints": true
+    },
+    {
+      "idx": 164,
+      "version": "7",
+      "when": 1790246634452,
+      "tag": "0164_ranking_session_fks",
+      "breakpoints": true
+    },
+    {
+      "idx": 165,
+      "version": "7",
+      "when": 1790274851682,
+      "tag": "0165_ranking_one_turn_loop",
+      "breakpoints": true
+    },
+    {
+      "idx": 166,
+      "version": "7",
+      "when": 1790296553940,
+      "tag": "0166_cast_presences",
+      "breakpoints": true
+    },
+    {
+      "idx": 167,
+      "version": "7",
+      "when": 1790299287193,
+      "tag": "0167_sprites",
+      "breakpoints": true
+    },
+    {
+      "idx": 168,
+      "version": "7",
+      "when": 1790300830093,
+      "tag": "0168_cast_member_sprite_set",
+      "breakpoints": true
+    },
+    {
+      "idx": 169,
+      "version": "7",
+      "when": 1790300868415,
+      "tag": "0169_sprite_tail_reprojection",
+      "breakpoints": true
     }
   ]
 }

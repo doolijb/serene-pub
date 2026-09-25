@@ -495,8 +495,8 @@
 					>
 						<li>
 							<strong>What's imported:</strong>
-							Characters, personas, sessions (including group sessions),
-							and lorebooks
+							Characters and their expression sprites, personas, sessions
+							(including group sessions), and lorebooks
 						</li>
 						<li>
 							<strong>What's NOT imported:</strong>

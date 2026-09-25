@@ -296,6 +296,14 @@ declare global {
 		/** The genre's display name, as the header prints it. */
 		genreName: string | null
 		lorebookId: number | null
+		/**
+		 * The line of that book the session runs on. NULL = main.
+		 *
+		 * Carried here so the lorebook workspace can say "this session is on
+		 * marrow-stays" without a fetch of its own — the same reason
+		 * `lorebookId` is here.
+		 */
+		lorebookBranchId: number | null
 		isOwner: boolean
 	}
 

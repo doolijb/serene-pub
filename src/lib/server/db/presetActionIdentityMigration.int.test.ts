@@ -66,23 +66,22 @@ async function publishActionSpec(
 	genreId: string,
 	actions: Array<{ key: string; function: string }>
 ) {
-	const { spec, compile } = await import("@serene-pub/sdk")
+	const { spec, compile, use } = await import("@serene-pub/sdk")
 	const C = await import("@serene-pub/contracts")
 	const doc: SpecDocument = compile(
 		spec(id, {
 			version: "1.0.0",
-			taxonomy: { role: "action", genre: genreId },
+			taxonomy: { role: "action"},
 			contributes: {
 				actions: actions.map((a) => ({
 					...a,
-					genre: genreId,
 					venue: { kind: "composer" },
 					label: { en: a.key }
 				}))
 			}
 		})
 			.inlet("input", C.userMessage.v1(), {
-				genre: genreId,
+				genre: use(genreId),
 				event: "core:event/session-action@1"
 			})
 			.outlet("save", ($) => C.createMessage.v1({ text: $.input.text }))

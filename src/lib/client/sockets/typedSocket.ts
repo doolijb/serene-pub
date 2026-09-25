@@ -256,6 +256,80 @@ export type SocketEventMap = {
 		params: Sockets.Characters.SetAvatar.Params
 		response: Sockets.Characters.SetAvatar.Response
 	}
+	// Sprites (DESIGN-sprites §7). Replies are scoped on characterId; the
+	// `:error` twins are never gated and carry characterId too.
+	"characters:listSprites": {
+		params: Sockets.Characters.ListSprites.Params
+		response: Sockets.Characters.ListSprites.Response
+	}
+	"characters:listSprites:error": {
+		params: Sockets.Characters.ListSprites.Params
+		response: Sockets.ErrorResponse & { characterId: number }
+	}
+	"characters:createSpriteSet": {
+		params: Sockets.Characters.CreateSpriteSet.Params
+		response: Sockets.Characters.CreateSpriteSet.Response
+	}
+	"characters:createSpriteSet:error": {
+		params: Sockets.Characters.CreateSpriteSet.Params
+		response: Sockets.ErrorResponse & { characterId: number }
+	}
+	"characters:updateSpriteSet": {
+		params: Sockets.Characters.UpdateSpriteSet.Params
+		response: Sockets.Characters.UpdateSpriteSet.Response
+	}
+	"characters:updateSpriteSet:error": {
+		params: Sockets.Characters.UpdateSpriteSet.Params
+		response: Sockets.ErrorResponse & { characterId: number }
+	}
+	"characters:deleteSpriteSet": {
+		params: Sockets.Characters.DeleteSpriteSet.Params
+		response: Sockets.Characters.DeleteSpriteSet.Response
+	}
+	"characters:deleteSpriteSet:error": {
+		params: Sockets.Characters.DeleteSpriteSet.Params
+		response: Sockets.ErrorResponse & { characterId: number }
+	}
+	"characters:uploadSprite": {
+		params: Sockets.Characters.UploadSprite.Params
+		response: Sockets.Characters.UploadSprite.Response
+	}
+	"characters:uploadSprite:error": {
+		params: Sockets.Characters.UploadSprite.Params
+		response: Sockets.ErrorResponse & { characterId: number }
+	}
+	"characters:addStandardSprites": {
+		params: Sockets.Characters.AddStandardSprites.Params
+		response: Sockets.Characters.AddStandardSprites.Response
+	}
+	"characters:addStandardSprites:error": {
+		params: Sockets.Characters.AddStandardSprites.Params
+		response: Sockets.ErrorResponse & { characterId: number }
+	}
+	"characters:updateSprite": {
+		params: Sockets.Characters.UpdateSprite.Params
+		response: Sockets.Characters.UpdateSprite.Response
+	}
+	"characters:updateSprite:error": {
+		params: Sockets.Characters.UpdateSprite.Params
+		response: Sockets.ErrorResponse & { characterId: number }
+	}
+	"characters:deleteSprite": {
+		params: Sockets.Characters.DeleteSprite.Params
+		response: Sockets.Characters.DeleteSprite.Response
+	}
+	"characters:deleteSprite:error": {
+		params: Sockets.Characters.DeleteSprite.Params
+		response: Sockets.ErrorResponse & { characterId: number }
+	}
+	"characters:reorderSprites": {
+		params: Sockets.Characters.ReorderSprites.Params
+		response: Sockets.Characters.ReorderSprites.Response
+	}
+	"characters:reorderSprites:error": {
+		params: Sockets.Characters.ReorderSprites.Params
+		response: Sockets.ErrorResponse & { characterId: number }
+	}
 	"characters:reorderGallery": {
 		params: Sockets.Characters.ReorderGallery.Params
 		response: Sockets.Characters.ReorderGallery.Response
@@ -716,6 +790,22 @@ export type SocketEventMap = {
 		params: Sockets.Sessions.View.Params
 		response: Sockets.Sessions.View.Response
 	}
+	// Server → client only (§4.7): the order, on every write and beside
+	// `sessions:view`. There is no request form — the UI renders state.
+	"sessions:turnOrder": {
+		params: never
+		response: Sockets.Sessions.TurnOrder.Push
+	}
+	// The asker's view of the session annex (R57): a request and a push.
+	"sessions:annex": {
+		params: Sockets.Sessions.Annex.Params
+		response: Sockets.Sessions.Annex.Response
+	}
+	// Server → client only (R56): a package's event, recorded in the session.
+	"sessions:recordedEvent": {
+		params: never
+		response: Sockets.Sessions.RecordedEvent.Push
+	}
 	"sessionGenres:list": {
 		params: Sockets.SessionAdmin.Genres.Params
 		response: Sockets.SessionAdmin.Genres.Response
@@ -731,6 +821,18 @@ export type SocketEventMap = {
 	"sessionGenres:detail:error": {
 		params: never
 		response: Sockets.SessionAdmin.GenreDetail.Response
+	}
+	"sessionGenres:setPresetsEnabled": {
+		params: Sockets.SessionAdmin.SetPresetsEnabled.Params
+		response: Sockets.SessionAdmin.SetPresetsEnabled.Response
+	}
+	"sessionGenres:setSwapEnabled": {
+		params: Sockets.SessionAdmin.SetSwapEnabled.Params
+		response: Sockets.SessionAdmin.SetSwapEnabled.Response
+	}
+	"sessionGenres:setSwapEnabled:error": {
+		params: never
+		response: Sockets.SessionAdmin.SetSwapEnabled.Response
 	}
 	"pipelines:configsIndex": {
 		params: Sockets.Pipelines.ConfigsIndex.Params
@@ -859,13 +961,19 @@ export type SocketEventMap = {
 		params: Sockets.Sessions.Bindings.BindFunction.Params
 		response: Sockets.Sessions.Bindings.BindFunction.Response
 	}
-	"sessions:speakerStrategies": {
-		params: Sockets.Sessions.Bindings.SpeakerStrategies.Params
-		response: Sockets.Sessions.Bindings.SpeakerStrategies.Response
+	// The generic session-scope rebind (PLAN-turn-order §4.7), replacing
+	// the next-speaker pair: what a node may become, and setting it.
+	"sessions:nodeSwapOptions": {
+		params: Sockets.Sessions.Bindings.NodeSwapOptions.Params
+		response: Sockets.Sessions.Bindings.NodeSwapOptions.Response
 	}
-	"sessions:setSpeakerStrategy": {
-		params: Sockets.Sessions.Bindings.SetSpeakerStrategy.Params
-		response: Sockets.Sessions.Bindings.SetSpeakerStrategy.Response
+	"sessions:pipelineCards": {
+		params: Sockets.Sessions.Bindings.PipelineCards.Params
+		response: Sockets.Sessions.Bindings.PipelineCards.Response
+	}
+	"sessions:setNodeRebind": {
+		params: Sockets.Sessions.Bindings.SetNodeRebind.Params
+		response: Sockets.Sessions.Bindings.SetNodeRebind.Response
 	}
 	"sessions:accountVisibility": {
 		params: Sockets.Sessions.AccountVisibility.Params
@@ -979,9 +1087,14 @@ export type SocketEventMap = {
 		params: never
 		response: Sockets.ErrorResponse
 	}
-	"sessions:getResponseOrder": {
-		params: Sockets.Sessions.GetResponseOrder.Params
-		response: Sockets.Sessions.GetResponseOrder.Response
+	// Take a prepared turn (§4.7) — Continue, and the picker.
+	"sessions:fireTurn": {
+		params: Sockets.Sessions.FireTurn.Params
+		response: Sockets.Sessions.FireTurn.Response
+	}
+	"sessions:fireTurn:error": {
+		params: never
+		response: Sockets.Sessions.FireTurn.Response
 	}
 	"sessions:promptTokenCount": {
 		params: Sockets.Sessions.PromptTokenCount.Params
@@ -1032,6 +1145,22 @@ export type SocketEventMap = {
 	"sessionMessages:continue": {
 		params: Sockets.SessionMessages.Continue.Params
 		response: Sockets.SessionMessages.Continue.Response
+	}
+	"sessions:setSpriteSet": {
+		params: Sockets.Sessions.SetSpriteSet.Params
+		response: Sockets.Sessions.SetSpriteSet.Response
+	}
+	"sessions:spriteSetChanged": {
+		params: Sockets.Sessions.SetSpriteSet.Params
+		response: Sockets.Sessions.SetSpriteSet.Response
+	}
+	"characters:testSprite": {
+		params: Sockets.Characters.TestSprite.Params
+		response: Sockets.Characters.TestSprite.Response
+	}
+	"sessionMessages:setSprite": {
+		params: Sockets.SessionMessages.SetSprite.Params
+		response: Sockets.SessionMessages.SetSprite.Response
 	}
 	"sessionMessages:swipeLeft": {
 		params: Sockets.SessionMessages.SwipeLeft.Params
@@ -1736,6 +1865,34 @@ export type SocketEventMap = {
 		response: Sockets.Pipelines.PendingReview
 	}
 	"pipelines:reviewClosed": {
+		params: never
+		response: { id: string }
+	}
+	"pipelines:capPauses": {
+		params: Sockets.Pipelines.CapPauses.Params
+		response: Sockets.Pipelines.CapPauses.Response
+	}
+	"pipelines:resolveCapPause": {
+		params: Sockets.Pipelines.ResolveCapPause.Params
+		response: Sockets.Pipelines.ResolveCapPause.Response
+	}
+	"pipelines:resolveCapPause:error": {
+		params: never
+		response: { error?: string; id?: string }
+	}
+	"pipelines:eventMap": {
+		params: Sockets.Pipelines.EventMap.Params
+		response: Sockets.Pipelines.EventMap.Response
+	}
+	"pipelines:eventMap:error": {
+		params: never
+		response: Sockets.Pipelines.EventMap.Response
+	}
+	"pipelines:capPauseRequested": {
+		params: never
+		response: Sockets.Pipelines.CapPause
+	}
+	"pipelines:capPauseClosed": {
 		params: never
 		response: { id: string }
 	}
@@ -2613,6 +2770,77 @@ export type SocketEventMap = {
 	}
 
 	// Lorebook entry events — one namespace, every declared type
+	// ── Amendments: dated overlays on an entry or a character card ──────────
+	// Its own namespace, not `entries:*` — an amendment hangs off either and
+	// neither owns the other. Every write answers with the list shape.
+	"amendments:list": {
+		params: Sockets.Amendments.List.Params
+		response: Sockets.Amendments.List.Response
+	}
+	"amendments:create": {
+		params: Sockets.Amendments.Create.Params
+		response: Sockets.Amendments.Create.Response
+	}
+	"amendments:create:error": {
+		params: never
+		response: { error?: string }
+	}
+	"amendments:update": {
+		params: Sockets.Amendments.Update.Params
+		response: Sockets.Amendments.Update.Response
+	}
+	"amendments:update:error": {
+		params: never
+		response: { error?: string }
+	}
+	"amendments:delete": {
+		params: Sockets.Amendments.Delete.Params
+		response: Sockets.Amendments.Delete.Response
+	}
+	"amendments:delete:error": {
+		params: never
+		response: { error?: string }
+	}
+	"amendments:fork": {
+		params: Sockets.Amendments.Fork.Params
+		response: Sockets.Amendments.Fork.Response
+	}
+	"amendments:fork:error": {
+		params: never
+		response: { error?: string }
+	}
+	"amendments:renameBranch": {
+		params: Sockets.Amendments.RenameBranch.Params
+		response: Sockets.Amendments.RenameBranch.Response
+	}
+	"amendments:renameBranch:error": {
+		params: never
+		response: { error?: string }
+	}
+	"amendments:deleteBranch": {
+		params: Sockets.Amendments.DeleteBranch.Params
+		response: Sockets.Amendments.DeleteBranch.Response
+	}
+	"amendments:deleteBranch:error": {
+		params: never
+		response: { error?: string }
+	}
+	"amendments:place": {
+		params: Sockets.Amendments.Place.Params
+		response: Sockets.Amendments.Place.Response
+	}
+	"amendments:place:error": {
+		params: never
+		response: { error?: string }
+	}
+	"amendments:unplace": {
+		params: Sockets.Amendments.Unplace.Params
+		response: Sockets.Amendments.Unplace.Response
+	}
+	"amendments:unplace:error": {
+		params: never
+		response: { error?: string }
+	}
 	"entries:list": {
 		params: Sockets.Entries.List.Params
 		response: Sockets.Entries.List.Response
@@ -2625,6 +2853,18 @@ export type SocketEventMap = {
 	"entries:create:error": {
 		params: never
 		response: { error?: string }
+	}
+	"entries:sessionEntries": {
+		params: Sockets.Entries.SessionEntries.Params
+		response: Sockets.Entries.SessionEntries.Response
+	}
+	"entries:setMarks": {
+		params: Sockets.Entries.SetMarks.Params
+		response: Sockets.Entries.SetMarks.Response
+	}
+	"entries:setMarks:error": {
+		params: never
+		response: Sockets.Entries.SetMarks.Response
 	}
 	"entries:update": {
 		params: Sockets.Entries.Update.Params
@@ -2872,6 +3112,10 @@ export type SocketEventMap = {
 	"narrativeGraph:list": {
 		params: Sockets.NarrativeGraph.List.Params
 		response: Sockets.NarrativeGraph.List.Response
+	}
+	"narrativeGraph:list:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
 	}
 	"narrativeGraph:build": {
 		params: Sockets.NarrativeGraph.Build.Params

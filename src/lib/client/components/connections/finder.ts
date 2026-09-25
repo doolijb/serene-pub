@@ -347,9 +347,38 @@ export interface FinderRow {
 
 /** "1.4 GB · 7B · A small instruct model" — absent clauses simply drop. */
 export function secondLine(row: FinderRow): string {
-	return [row.sizeLabel, row.facts, row.description]
+	return [repoOwner(row.name), row.sizeLabel, row.facts, row.description]
 		.filter((part): part is string => !!part && part.length > 0)
 		.join(" · ")
+}
+
+/**
+ * A repo id split so the row's TITLE is the part that identifies the model.
+ *
+ * `unsloth/Qwen3.5-4B-GGUF` renders as **Qwen3.5-4B-GGUF** with `unsloth` on
+ * the second line. The owner is real information here — people choose a
+ * finetuner deliberately, which is not true once a model is installed — so it
+ * moves rather than going away. What it stops doing is eating the width: with
+ * the owner in the title every row read `bartowski/MN-12B-Lyra-...`,
+ * `TheDrummer/Snowpiercer-...`, `mradermacher/Peach-2.0...`, cut in the middle
+ * of the only part that differs.
+ *
+ * ⚠ **Not `nameFromIdentifier`.** That strips the format, the quantisation and
+ * the parameter count, which is right for a list of models you already chose
+ * and wrong here: the finder lists four sizes of one model at once, and
+ * `Qwen3.5-4B-GGUF` and `Qwen3.5-9B-GGUF` would both render as "Qwen3.5".
+ */
+export function repoTitle(name: string): string {
+	const raw = name?.trim() ?? ""
+	if (!raw.includes("/")) return raw
+	return raw.slice(raw.lastIndexOf("/") + 1) || raw
+}
+
+/** The owner of a `owner/repo` id, or empty for a bare name (an Ollama tag). */
+export function repoOwner(name: string): string {
+	const raw = name?.trim() ?? ""
+	const cut = raw.lastIndexOf("/")
+	return cut > 0 ? raw.slice(0, cut) : ""
 }
 
 /** The index of the first row that outright fits, or -1. */

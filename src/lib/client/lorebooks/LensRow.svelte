@@ -25,16 +25,18 @@
 		tree: Icons.ListTree,
 		graph: Icons.Network,
 		time: Icons.History,
+		lives: Icons.Footprints,
 		places: Icons.Map
 	}
 </script>
 
-<!-- Six cells that always sit 3x2 in the rail: a row that reflows with the
-     rail's width puts a lens somewhere different at every width, and a control
-     that moves is a control nobody learns the position of. The compact layout
-     is one icon row along the bottom instead. -->
+<!-- A FIXED grid in the rail — 4x2 since Lives joined, seven filled and one
+     empty. A row that reflows with the rail's width puts a lens somewhere
+     different at every width, and a control that moves is a control nobody
+     learns the position of. An empty cell costs less than a moving one. The
+     compact layout is one icon row along the bottom instead. -->
 <div
-	class={compact ? "flex justify-between gap-1" : "grid grid-cols-3 gap-1"}
+	class={compact ? "flex justify-between gap-1" : "grid grid-cols-4 gap-1"}
 	role="group"
 	aria-label="Lens"
 	data-lore-lens-row

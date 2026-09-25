@@ -578,7 +578,7 @@
 						oninput={handleInput}
 					/>
 					<kbd
-						class="border-surface-800 text-surface-500 shrink-0 rounded border px-1 py-px font-mono text-[11px]"
+						class="border-surface-300-700 text-surface-600-400 shrink-0 rounded border px-1 py-px font-mono text-[11px]"
 					>
 						Esc
 					</kbd>

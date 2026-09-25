@@ -1,0 +1,21 @@
+-- SUPERSEDED — a deliberate no-op. Kept, never deleted, so the journal's
+-- index stays taken and no database that already applied the first version
+-- of this file meets a second migration under the same index.
+--
+-- ## What it was
+--
+-- A re-projection: it deleted the `pipeline_spec_versions` rows of the five
+-- reply specs the sprite tail (DESIGN-sprites §5) edited in place, so boot
+-- would republish them.
+--
+-- ## Why it is empty
+--
+-- That was the pre-2026-09-10 recipe. Since the content-addressing ruling a
+-- version is (spec, semver, canonical hash): an edited document publishes as a
+-- NEW row at the next boot and the slug's active version moves to it
+-- (`boot/specHashes.test.ts`, header — "No migration is involved any more").
+-- Deleting the rows was therefore unnecessary, and it destroyed what the 0134
+-- rename test holds up as evidence (the stored, rewritten documents and their
+-- `renamed_at` stamps). A database that already ran the first version lost
+-- only rows boot republished anyway.
+SELECT 1;

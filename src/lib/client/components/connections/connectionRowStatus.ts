@@ -1,24 +1,62 @@
 /**
- * ONE sentence per connection, and the one button that goes beside it.
+ * What one connection's row says, in SLOTS rather than a sentence.
  *
- * Lifted out of `ConnectionCard`, which said the same things in five slots
- * spread down a card. The index is a list now (2026-09-17 concept ruling R1),
- * and a list row is one dot, one line and at most one button (R7) — so the
- * five slots have to collapse into a single sentence per kind, which is what
- * this module is. The row renders what it gets and branches on nothing.
+ * ## Why this stopped being a sentence
  *
- * ⚠ **A silent fact is left out of the sentence, never guessed.** Every one of
- * these comes from an event the server may not answer: a manager switched
- * off, a host that is down, a build whose handler is not written yet. Where
- * the answer has not come the clause is simply absent, and the row falls back
- * to what the list row itself says — how many models, checked when. A row
- * that claimed "Stopped" because nothing had answered yet would be a row
- * offering to Start something that is already running.
+ * It used to answer `{ dot, sentence, action }`, and the sentence was facts
+ * joined with " · ": `9 models · api.anthropic.com · checked 2 minutes ago`,
+ * `Couldn't list models · Missing credentials`, `Running · Nemo 12B loaded · 3
+ * on disk`. In a 400px column every one of those truncated, and they truncated
+ * from the right — which is exactly where the fact lives. The shipped panel read
+ * `9 models · api.anthropic.com · checked 2 min…` and `Couldn't list models ·
+ * Missing credentia…`, four rows deep, with nothing aligned to anything.
+ *
+ * A sentence is the wrong shape for a list. So the row now has four slots the
+ * component places and never composes:
+ *
+ * - `label` — one or two words, beside the dot. The chip.
+ * - `detail` — under the NAME: the host normally, the failure when there is one.
+ * - `metric` — the right-hand column: `9 models`, `7.0 GB`, `idle 4 min`.
+ * - `action` — at most one button, and only where there is exactly one obvious
+ *   thing to do.
+ *
+ * Nothing truncates, because nothing is free-form; and the eye scans a column
+ * of states instead of reading four sentences.
+ *
+ * ## Five states, and only ONE of them is red
+ *
+ * The old module had a `warning` dot doing two unrelated jobs, so a connection
+ * created ten seconds ago with no API key yet rendered exactly like one whose
+ * key had been rejected. On a fresh install that meant two red rows and two
+ * **Fix** buttons out of four — the app reporting as broken the two things the
+ * person simply had not got to. That is the single loudest piece of false alarm
+ * in the panel and this split is what removes it.
+ *
+ * | state | colour | means |
+ * |---|---|---|
+ * | `ready` | success | it works right now |
+ * | `idle` | quiet | set up, nothing wrong, not currently running |
+ * | `unfinished` | primary | it is waiting on YOU — a key, a binary, a model, a refresh |
+ * | `busy` | warning | something is in flight; ask again shortly |
+ * | `broken` | error | it was finished and it still failed |
+ *
+ * ⚠ `unfinished` is gold, not red, and it is never an alarm. It covers both "you
+ * have not typed the key yet" and "three models the host used to list are gone"
+ * — different sentences, one colour, because in both the next move is the
+ * person's and nothing is on fire.
+ *
+ * ⚠ **A silent fact is left out of the row, never guessed.** Every fact here
+ * comes from an event the server may not answer: a manager switched off, a host
+ * that is down, a build whose handler is not written yet. Where the answer has
+ * not come the slot is empty and the state falls back to `idle`, which claims
+ * nothing. A row that said "Stopped" because nothing had answered would be a row
+ * offering to Start something already running.
  *
  * ⚠ Pure, and injected with its formatters. `timeAgo` and `now` come in as
- * arguments so a sentence with "checked 3 minutes ago" in it can be asserted
- * in a test rather than described in a comment.
+ * arguments so "checked 3 minutes ago" can be asserted in a test rather than
+ * described in a comment.
  */
+import { needsCredential } from "$lib/shared/connections/credentials"
 import {
 	idleMinutes,
 	type KcppStatus,
@@ -27,11 +65,20 @@ import {
 } from "./endpointStatus"
 import type { EndpointKind } from "./modelManagement"
 
-export type RowDot = "ok" | "pending" | "warning" | "error" | "quiet"
+/**
+ * How a connection is doing. See the table above; the component maps these to
+ * colour roles and nothing else in the app invents a sixth.
+ */
+export type ConnectionState =
+	| "ready"
+	| "idle"
+	| "unfinished"
+	| "busy"
+	| "broken"
 
 /** The one action a row may offer. The row itself is what opens the connection. */
 export interface RowStatusAction {
-	verb: "stop" | "start" | "fix" | "refresh"
+	verb: "stop" | "start" | "fix" | "refresh" | "setup"
 	label: string
 	/** A `@lucide/svelte` export name, resolved by the component. */
 	icon: string
@@ -39,8 +86,13 @@ export interface RowStatusAction {
 }
 
 export interface RowStatus {
-	dot: RowDot
-	sentence: string
+	state: ConnectionState
+	/** One or two words, beside the dot. Never a sentence. */
+	label: string
+	/** Line two under the NAME — the host, or what went wrong. */
+	detail: string | null
+	/** The right-hand column — a count, a size, an idle time. */
+	metric: string | null
 	action: RowStatusAction | null
 }
 
@@ -58,7 +110,10 @@ export interface RowConnection {
 	id: number
 	name?: string | null
 	type?: string | null
+	preset?: string | null
 	baseUrl?: string | null
+	/** Whether a credential is stored. Absent means the server did not say. */
+	hasCredential?: boolean
 	models: readonly RowModel[]
 	modelsSync: { at: string | null; error: string | null }
 }
@@ -79,7 +134,7 @@ export interface RowStatusFacts {
 	kcppSetUp?: boolean
 	/** A forced listing is in flight for this connection. */
 	syncing?: boolean
-	/** "3 minutes ago". Injected so the sentence is testable. */
+	/** "3 minutes ago". Injected so the row is testable. */
 	timeAgo?: (iso: string) => string
 	now?: number
 }
@@ -111,7 +166,7 @@ const START: RowStatusAction = {
 	verb: "start",
 	label: "Start",
 	icon: "Play",
-	emphasis: "ghost"
+	emphasis: "tonal"
 }
 const FIX: RowStatusAction = {
 	verb: "fix",
@@ -125,6 +180,12 @@ const REFRESH: RowStatusAction = {
 	icon: "RefreshCw",
 	emphasis: "ghost"
 }
+const SET_UP: RowStatusAction = {
+	verb: "setup",
+	label: "Set up",
+	icon: "ArrowRight",
+	emphasis: "tonal"
+}
 
 export function connectionRowStatus(
 	connection: RowConnection,
@@ -135,7 +196,13 @@ export function connectionRowStatus(
 	).length
 
 	if (facts.syncing)
-		return { dot: "pending", sentence: "Checking models…", action: null }
+		return {
+			state: "busy",
+			label: "Checking",
+			detail: hostOf(connection.baseUrl) || null,
+			metric: null,
+			action: null
+		}
 
 	switch (facts.kind) {
 		case "koboldcpp-managed":
@@ -153,9 +220,9 @@ export function connectionRowStatus(
 /**
  * The managed KoboldCPP: a process this pub started, and the files it has.
  *
- * "Stopped" is not a fault and carries no ember — the manager starts the
- * process on the first request, which is the whole point of it being managed.
- * A CRASHED process is a fault, and it is the one that gets Start.
+ * "Stopped" is `idle`, not a fault and not an alarm — the manager starts the
+ * process on the first request, which is the whole point of it being managed. A
+ * CRASHED process is the fault, and it is the one that is red.
  */
 function managedStatus(
 	connection: RowConnection,
@@ -167,58 +234,76 @@ function managedStatus(
 	// a managed row with the flag off is one nobody has finished installing.
 	if (facts.managerEnabled === false)
 		return {
-			dot: "quiet",
-			sentence: "Not installed · one tap to set up",
-			action: null
+			state: "unfinished",
+			label: "Not installed",
+			detail: "On this machine",
+			metric: null,
+			action: SET_UP
 		}
 	// The flag on but no mode or binary chosen: the view is on a setup stage
 	// and the process status, whatever it says, is about nothing yet.
 	if (facts.kcppSetUp === false)
 		return {
-			dot: "quiet",
-			sentence: "Not set up · choose how to run it",
-			action: null
+			state: "unfinished",
+			label: "Not set up",
+			detail: "Choose how to run it",
+			metric: null,
+			action: SET_UP
 		}
 	const run = facts.kcpp?.run ?? null
-	const loaded = facts.kcpp?.loadedFiles?.[0]
+	const loaded = facts.kcpp?.loadedFiles?.[0] ?? null
 	switch (run) {
 		case "running":
 			return {
-				dot: "ok",
-				sentence: ["Running", loaded, onDisk]
-					.filter(Boolean)
-					.join(" · "),
+				state: "ready",
+				label: "Running",
+				// The loaded file is the most useful thing a running process can
+				// say, and it goes where the host would: under the name.
+				detail: loaded ?? "On this machine",
+				metric: onDisk,
 				action: STOP
 			}
 		case "starting":
 			return {
-				dot: "pending",
-				sentence: `Starting · ${onDisk}`,
+				state: "busy",
+				label: "Starting",
+				detail: "On this machine",
+				metric: onDisk,
 				action: null
 			}
 		case "stopping":
 			return {
-				dot: "pending",
-				sentence: `Stopping · ${onDisk}`,
+				state: "busy",
+				label: "Stopping",
+				detail: "On this machine",
+				metric: onDisk,
 				action: null
 			}
 		case "crashed":
 			return {
-				dot: "error",
-				sentence: `Crashed · ${onDisk}`,
+				state: "broken",
+				label: "Crashed",
+				detail: "It stopped on its own",
+				metric: onDisk,
 				action: START
 			}
 		case "stopped":
 			return {
-				dot: "quiet",
-				sentence: `Stopped · starts on first use · ${onDisk}`,
+				state: "idle",
+				label: "Stopped",
+				detail: "Starts on first use",
+				metric: onDisk,
 				action: START
 			}
 		default:
 			// Nothing has answered. Say only what the list row knows.
 			return {
-				dot: missing ? "warning" : "quiet",
-				sentence: onDisk,
+				state: missing ? "unfinished" : "idle",
+				label: missing
+					? plural(missing, "file") + " gone"
+					: "Installed",
+				detail: "On this machine",
+				metric: onDisk,
 				action: missing ? REFRESH : null
 			}
 	}
@@ -229,23 +314,31 @@ function ollamaStatus(
 	facts: RowStatusFacts,
 	missing: number
 ): RowStatus {
-	const host = hostOf(connection.baseUrl)
+	const host = hostOf(connection.baseUrl) || null
 	const models = plural(connection.models.length, "model")
+	// Configured and not answering. Red is right: nothing routed here will run,
+	// and unlike a missing key there is nothing half-done about it.
 	if (facts.ollama?.reachable === false)
 		return {
-			dot: "warning",
-			sentence: ["Not reachable", host].filter(Boolean).join(" · "),
+			state: "broken",
+			label: "Not reachable",
+			detail: host,
+			metric: null,
 			action: FIX
 		}
 	if (facts.ollama?.reachable)
 		return {
-			dot: "ok",
-			sentence: ["Running", models, host].filter(Boolean).join(" · "),
+			state: "ready",
+			label: "Running",
+			detail: host,
+			metric: models,
 			action: missing ? REFRESH : null
 		}
 	return {
-		dot: missing ? "warning" : "quiet",
-		sentence: [models, host].filter(Boolean).join(" · "),
+		state: missing ? "unfinished" : "idle",
+		label: missing ? plural(missing, "model") + " gone" : "Not checked",
+		detail: host,
+		metric: models,
 		action: missing ? REFRESH : null
 	}
 }
@@ -253,8 +346,8 @@ function ollamaStatus(
 /**
  * A local ONNX endpoint: one model active app-wide, and files on this disk.
  *
- * The downloading clause comes off the ROW rather than the lane, because a
- * file can be arriving for a model that is not the active one.
+ * The downloading clause comes off the ROW rather than the lane, because a file
+ * can be arriving for a model that is not the active one.
  */
 function onnxStatus(
 	connection: RowConnection,
@@ -266,11 +359,10 @@ function onnxStatus(
 	if (downloading) {
 		const percent = downloading.local?.percent
 		return {
-			dot: "pending",
-			sentence:
-				percent == null
-					? `Downloading ${downloading.name}`
-					: `Downloading ${downloading.name} · ${Math.round(percent)}%`,
+			state: "busy",
+			label: "Downloading",
+			detail: downloading.name,
+			metric: percent == null ? null : `${Math.round(percent)}%`,
 			action: null
 		}
 	}
@@ -280,9 +372,13 @@ function onnxStatus(
 	const lane = facts.lane
 	if (!lane?.modelId)
 		return {
-			dot: "quiet",
-			sentence: `Nothing active · ${onDisk} on disk`,
-			action: null
+			state: "unfinished",
+			label: "Nothing active",
+			detail: onDisk
+				? plural(onDisk, "model") + " on disk"
+				: "On this machine",
+			metric: null,
+			action: SET_UP
 		}
 	const active =
 		connection.models.find((m) => m.model === lane.modelId)?.name ??
@@ -290,54 +386,126 @@ function onnxStatus(
 	if (lane.loaded) {
 		const minutes = idleMinutes(lane.lastUsedAt, facts.now)
 		return {
-			dot: "ok",
-			sentence:
-				minutes == null
-					? `${active} active · loaded`
-					: `${active} active · loaded, idle ${minutes} min`,
+			state: "ready",
+			label: "Active",
+			detail: active,
+			metric: minutes == null ? "loaded" : `idle ${minutes} min`,
 			action: null
 		}
 	}
 	const row = connection.models.find((m) => m.model === lane.modelId)
+	if (row?.local?.state === "on_disk")
+		return {
+			state: "ready",
+			label: "Active",
+			detail: active,
+			metric: "on disk",
+			action: null
+		}
 	return {
-		dot: row?.local?.state === "on_disk" ? "ok" : "warning",
-		sentence:
-			row?.local?.state === "on_disk"
-				? `${active} active · on disk, not loaded`
-				: `${active} active · not downloaded`,
-		action: row?.local?.state === "on_disk" ? null : FIX
+		state: "unfinished",
+		label: "Not downloaded",
+		detail: active,
+		metric: null,
+		action: FIX
 	}
 }
 
+/**
+ * Everything this pub merely talks to: a cloud API, a llama.cpp of your own, an
+ * OpenAI-compatible host.
+ *
+ * ⚠ The credential check comes FIRST, before the listing error, and that
+ * ordering is the point. A connection with no key has a listing error too — of
+ * course it does, nobody can list anything without one — and reporting that
+ * error is reporting a symptom of a thing the person has not done yet. Ask
+ * whether it is finished before asking whether it works.
+ */
 function apiStatus(
 	connection: RowConnection,
 	facts: RowStatusFacts,
 	missing: number
 ): RowStatus {
-	const host = hostOf(connection.baseUrl)
+	const host = hostOf(connection.baseUrl) || null
+
+	if (needsCredential(connection))
+		return {
+			state: "unfinished",
+			label: "Needs a key",
+			detail: host,
+			metric: null,
+			action: SET_UP
+		}
+
 	if (connection.modelsSync.error)
 		return {
-			dot: "warning",
-			sentence: `Couldn't list models · ${connection.modelsSync.error}`,
+			state: "broken",
+			label: "Not working",
+			// The host's own words, not a rewrite of them: the raw line is what
+			// somebody searches for when they are stuck.
+			detail: connection.modelsSync.error,
+			metric: null,
 			action: FIX
 		}
+
 	if (missing)
 		return {
-			dot: "warning",
-			sentence: `${missing} of ${connection.models.length} no longer listed`,
+			state: "unfinished",
+			label: `${missing} no longer listed`,
+			detail: host,
+			metric: plural(connection.models.length, "model"),
 			action: REFRESH
 		}
-	const checked =
-		connection.modelsSync.at && facts.timeAgo
-			? `checked ${facts.timeAgo(connection.modelsSync.at)}`
-			: connection.modelsSync.at
-				? null
-				: "not checked yet"
+
+	if (!connection.modelsSync.at)
+		return {
+			state: "idle",
+			label: "Not tested",
+			detail: host,
+			metric: connection.models.length
+				? plural(connection.models.length, "model")
+				: null,
+			action: null
+		}
+
+	if (!connection.models.length)
+		return {
+			state: "unfinished",
+			label: "No models",
+			detail: host,
+			metric: null,
+			action: REFRESH
+		}
+
 	return {
-		dot: connection.models.length ? "ok" : "quiet",
-		sentence: [plural(connection.models.length, "model"), host, checked]
-			.filter(Boolean)
-			.join(" · "),
+		state: "ready",
+		label: "Ready",
+		detail: host,
+		metric: plural(connection.models.length, "model"),
 		action: null
+	}
+}
+
+/**
+ * The colour role a state wears. One place, so the index row, the connection
+ * view and the overview cannot drift apart.
+ *
+ * ⚠ `idle` is `quiet`, never `success`. A stopped managed runtime is not
+ * unhealthy and a green dot beside it would be a claim that it is answering.
+ */
+export function stateTone(
+	state: ConnectionState
+): "ok" | "quiet" | "primary" | "warning" | "error" {
+	switch (state) {
+		case "ready":
+			return "ok"
+		case "idle":
+			return "quiet"
+		case "unfinished":
+			return "primary"
+		case "busy":
+			return "warning"
+		case "broken":
+			return "error"
 	}
 }

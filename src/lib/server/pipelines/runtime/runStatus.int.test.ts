@@ -268,13 +268,28 @@ async function makeChatSession(tag: string, withLorebook = false) {
 	return session.id
 }
 
-const trigger = async (sessionId: number) => {
+/**
+ * Take a turn, naming who takes it.
+ *
+ * ⚠ The pick is not incidental since PLAN-turn-order A7. Firing is over the
+ * session's **prepared order**, and these sessions are built by inserting
+ * rows rather than by sending — so no event has ever recomputed their
+ * order and there is nothing prepared. Naming the speaker is what
+ * "Trigger Character" does, it is what the alias carries, and it is what
+ * these tests are actually about: the status relay, which now fills
+ * `{speaker}` from the trigger's word again (§4.6).
+ */
+const trigger = async (sessionId: number, speaker?: string) => {
 	const { triggerGenerateMessageHandler } = await import(
 		"$lib/server/sockets/sessions"
 	)
 	return triggerGenerateMessageHandler.handler(
 		fakeSocket(userId),
-		{ sessionId, once: true },
+		{
+			sessionId,
+			once: true,
+			...(speaker ? { speaker } : { characterId })
+		},
 		emit
 	)
 }
@@ -407,7 +422,17 @@ describe("the live row and the session list", () => {
 		const res: any = await running
 		expect(res?.error, res?.error).toBeUndefined()
 
-		// The row's statuses, in order, `{speaker}` filled by the host.
+		/**
+		 * The row's statuses, in order, `{speaker}` filled by the host —
+		 * **including the reads'** since PLAN-turn-order A7.
+		 *
+		 * *Thinking* used to be withheld: the reads ran before the speaker
+		 * node decided and before the row it opened existed, so there was
+		 * nobody to name and nowhere to say it. Both facts are there from
+		 * the first node now — the fired entry names the speaker, and
+		 * `placeholder` is the second node — so the reads' status reaches
+		 * the row like every other.
+		 */
 		expect(rowStatuses(sessionId).map(rendered)).toEqual([
 			"Jasmine is thinking",
 			"Jasmine is composing",
@@ -456,6 +481,9 @@ describe("the live row and the session list", () => {
 		const statuses = events
 			.filter((e) => e.event === "pipelines:progress" && e.data?.status)
 			.map((e) => rendered(e.data.status))
+		// *Thinking* included since A7: the speaker is known from the first
+		// node, so the reads' status is no longer withheld — see the first
+		// case.
 		expect(statuses).toEqual([
 			"Jasmine is thinking",
 			"Jasmine is composing",
@@ -683,7 +711,21 @@ describe("an envoy's turn", () => {
 			content: "where are my characters?"
 		} as any)
 		broadcasts.length = 0
-		const res: any = await trigger(sessionId)
+		// Held mid-stream, as the chat case is: the envoy's name is resolved
+		// once the placeholder says who (the run decides the speaker since
+		// 2026-09-21, not the trigger), and an unheld fake finishes the whole
+		// reply inside that lookup — a race no model is fast enough to win.
+		armHold()
+		const running = trigger(sessionId, "envoy:mascot")
+		await untilFirstChunk()
+		// The envoy's name is three reads (the session's genre, the declared
+		// envoys, the owner's language) and the fake streams its first chunk
+		// before they land: the hold is what lets the status reach the row.
+		await expect
+			.poll(() => rowStatuses(sessionId).map(rendered), { timeout: 5000 })
+			.toContain("Guide is typing")
+		releaseStream!()
+		const res: any = await running
 		expect(res?.error, res?.error).toBeUndefined()
 		const statuses = rowStatuses(sessionId).map(rendered)
 		expect(statuses).toContain("Guide is typing")

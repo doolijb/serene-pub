@@ -79,6 +79,12 @@ export interface InvokeOptions {
 	 * and behaves exactly as it would for a plugin with none.
 	 */
 	rows?: PluginRowSnapshotEntry[]
+	/**
+	 * The secret values this call may use, for the fetch bridge alone (R63):
+	 * it fills a secret handle in at the network boundary. Never part of the
+	 * guest's input; never reaches the guest.
+	 */
+	secrets?: { nonce: string; values: Record<string, string> }
 }
 
 export interface HookRunSuccess {

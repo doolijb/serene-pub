@@ -19,6 +19,7 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import * as schema from "$lib/server/db/schema"
+import { eq } from "drizzle-orm"
 import type { TestDb } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
@@ -102,6 +103,8 @@ function receiptWith(
 		nodes: [
 			{
 				nodeKey: "rank",
+				kind: "task",
+				definitionId: "core:task/rank-hybrid@1",
 				output: {
 					decisions: decisions.map((d) => ({
 						included: d.included,
@@ -132,6 +135,8 @@ function receiptWithRelationships(
 		nodes: [
 			{
 				nodeKey: "rank",
+				kind: "task",
+				definitionId: "core:task/rank-hybrid@1",
 				output: {
 					decisions: [],
 					main: [],
@@ -182,6 +187,18 @@ async function makeRun(
 			...over
 		} as any)
 		.returning()
+	// What `saveReceipt` does next (L1): the rankings the receipt holds go
+	// into the store the readers use.
+	if (!(over.isPreview === true)) {
+		const { recordRankings } = await import(
+			"$lib/server/pipelines/runtime/rankingStore"
+		)
+		await recordRankings(testDb as any, receipt as any, {
+			runRowId: run.id,
+			sessionId,
+			userId
+		})
+	}
 	return run
 }
 
@@ -567,4 +584,102 @@ describe("entries:recentDecisions", () => {
 			)
 		).rejects.toThrow("Session not found or access denied.")
 	}, 60_000)
+})
+
+describe("entries:setMarks — Off and Pin, and nothing else (L1)", () => {
+	test("the owner sets both marks; the vectors are left alone; a stranger is refused", async () => {
+		const { entrySetMarksHandler } = await import("./entries")
+		const owner = await makeUser("marks-owner")
+		const stranger = await makeUser("marks-stranger")
+		const lorebook = await makeLorebook(owner.id, "Marks Book")
+		const entry = await makeEntry(lorebook.id, { title: "The Gate" })
+		await testDb.insert(schema.lorebookEntryVectors).values({
+			entryId: entry.id,
+			vectorName: "core:vec/default@1",
+			chunkIndex: 0,
+			model: "test-model",
+			dims: 2,
+			vector: [0.1, 0.2]
+		} as any)
+
+		const res: any = await entrySetMarksHandler.handler(
+			fakeSocket(owner.id),
+			{ entryId: entry.id, off: true, pinned: true },
+			noopEmit
+		)
+		expect(res).toMatchObject({ off: true, pinned: true })
+		const [row] = await testDb
+			.select()
+			.from(schema.lorebookEntries)
+			.where(eq(schema.lorebookEntries.id, entry.id))
+		expect(row).toMatchObject({ enabled: false, constant: true })
+		const vectors = await testDb
+			.select()
+			.from(schema.lorebookEntryVectors)
+			.where(eq(schema.lorebookEntryVectors.entryId, entry.id))
+		expect(vectors).toHaveLength(1)
+
+		const refused: any = await entrySetMarksHandler.handler(
+			fakeSocket(stranger.id),
+			{ entryId: entry.id, off: false },
+			noopEmit
+		)
+		expect(refused.error).toMatch(/access denied/)
+	})
+})
+
+describe("entries:sessionEntries — the lore entries widget's read (L1)", () => {
+	test("lists the book with this session's rollup, filters and pages; a guest is told whose it is", async () => {
+		const { entrySessionEntriesHandler } = await import("./entries")
+		const owner = await makeUser("widget-owner")
+		const guest = await makeUser("widget-guest")
+		const lorebook = await makeLorebook(owner.id, "Widget Book")
+		const gate = await makeEntry(lorebook.id, { title: "The Gate" })
+		const road = await makeEntry(lorebook.id, { title: "The Road" })
+		const gone = await makeEntry(lorebook.id, { title: "Old Tower" })
+		await testDb.update(schema.lorebookEntries).set({ archived: true }).where(eq(schema.lorebookEntries.id, gone.id))
+		await testDb.update(schema.lorebookEntries).set({ constant: true }).where(eq(schema.lorebookEntries.id, road.id))
+		const session = await makeSession(owner.id, lorebook.id)
+		await testDb.insert(schema.sessionGuests).values({ sessionId: session.id, userId: guest.id })
+		await makeRun(
+			session.id,
+			owner.id,
+			receiptWith([
+				{ source: "worldLore", id: gate.id, included: true },
+				{ source: "worldLore", id: road.id, included: false }
+			])
+		)
+
+		const all: any = await entrySessionEntriesHandler.handler(fakeSocket(owner.id), { sessionId: session.id, sort: "name" }, noopEmit)
+		expect(all.rows.map((r: any) => r.title)).toEqual(["The Gate", "The Road"])
+		expect(all.rows[0]).toMatchObject({ timesJudged: 1, timesIncluded: 1, lastIncluded: true, lastRank: 1 })
+		expect(all.rows[1]).toMatchObject({ pinned: true, lastIncluded: false })
+
+		const fired: any = await entrySessionEntriesHandler.handler(fakeSocket(owner.id), { sessionId: session.id, filter: "fired" }, noopEmit)
+		expect(fired.rows.map((r: any) => r.id)).toEqual([gate.id])
+		const searched: any = await entrySessionEntriesHandler.handler(fakeSocket(owner.id), { sessionId: session.id, query: "road" }, noopEmit)
+		expect(searched.rows.map((r: any) => r.id)).toEqual([road.id])
+		const paged: any = await entrySessionEntriesHandler.handler(fakeSocket(owner.id), { sessionId: session.id, sort: "name", limit: 1, offset: 1 }, noopEmit)
+		expect(paged).toMatchObject({ total: 2 })
+		expect(paged.rows.map((r: any) => r.title)).toEqual(["The Road"])
+
+		const asGuest: any = await entrySessionEntriesHandler.handler(fakeSocket(guest.id), { sessionId: session.id }, noopEmit)
+		expect(asGuest).toMatchObject({ ownerOnly: true, rows: [] })
+
+		// A page past the end is pulled back to the last real page — never
+		// "this lorebook has no entries" — and says which page it served.
+		const past: any = await entrySessionEntriesHandler.handler(fakeSocket(owner.id), { sessionId: session.id, sort: "name", limit: 1, offset: 5 }, noopEmit)
+		expect(past).toMatchObject({ total: 2, offset: 1 })
+		expect(past.rows.map((r: any) => r.title)).toEqual(["The Road"])
+
+		// The search is a substring: `%` and `_` match themselves.
+		const wild: any = await entrySessionEntriesHandler.handler(fakeSocket(owner.id), { sessionId: session.id, query: "%" }, noopEmit)
+		expect(wild.rows).toEqual([])
+		const under: any = await entrySessionEntriesHandler.handler(fakeSocket(owner.id), { sessionId: session.id, query: "The_Road" }, noopEmit)
+		expect(under.rows).toEqual([])
+
+		// The ask's token rides back, so a panel can drop a superseded reply.
+		const tagged: any = await entrySessionEntriesHandler.handler(fakeSocket(owner.id), { sessionId: session.id, request: "p:7" }, noopEmit)
+		expect(tagged.request).toBe("p:7")
+	})
 })

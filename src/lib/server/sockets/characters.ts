@@ -15,9 +15,11 @@ import {
 } from "../utils"
 import { CharacterCard, type SpecV3 } from "@lenml/char-card-reader"
 import { fileTypeFromBuffer } from "file-type"
+import type { CardSprite } from "$lib/server/utils/cardSprites"
 import type { Handler } from "$lib/shared/events"
 import {
 	parseCharacterCardFromBase64,
+	describeUnimportedAssets,
 	buildCharacterCardV3,
 	embedCharacterCardInPng,
 	getRobustSpecV3Data
@@ -841,6 +843,45 @@ async function refreshCharacterList(
 	})
 }
 
+/**
+ * Store the sprites a card carried (DESIGN-sprites §4) and say, as import
+ * warnings, which were left behind — an image that is not an image, one past
+ * a ceiling. The character is already committed, so nothing here fails the
+ * import: a failure is a sentence in the toast.
+ */
+async function importCardSprites(
+	userId: number,
+	characterId: number,
+	sprites: CardSprite[] | undefined,
+	warnings: ImportWarning[],
+	defaultSetName?: unknown
+): Promise<void> {
+	if (!sprites?.length) return
+	try {
+		const { importSprites, ensureDefaultSpriteSet, renameSpriteSet } =
+			await import("$lib/server/sprites")
+		const result = await importSprites(db, userId, characterId, sprites, "card")
+		// A Serene Pub CHARX names its default set; keep the name.
+		if (typeof defaultSetName === "string" && defaultSetName.trim()) {
+			const def = await ensureDefaultSpriteSet(db, characterId)
+			await renameSpriteSet(db, characterId, def.id, defaultSetName).catch(
+				() => undefined
+			)
+		}
+		if (result.skipped.length > 0) {
+			const n = result.skipped.length
+			warnings.push(
+				`${n} of the card's sprites ${n === 1 ? "was" : "were"} not imported (${result.skipped
+					.slice(0, 3)
+					.map((s) => `${s.label}: ${s.reason}`)
+					.join("; ")}${n > 3 ? "; …" : ""}).`
+			)
+		}
+	} catch (e: any) {
+		warnings.push(`The card's sprites could not be imported: ${e?.message || e}`)
+	}
+}
+
 export const charactersImportCard: Handler<
 	Sockets.Characters.ImportCard.Params,
 	Sockets.Characters.ImportCard.Response
@@ -851,7 +892,7 @@ export const charactersImportCard: Handler<
 			const userId = socket.user!.id
 
 			// Parse character card using shared utility
-			const { card, avatarBuffer, lorebook } =
+			const { card, avatarBuffer, lorebook, unimportedAssets, sprites } =
 				await parseCharacterCardFromBase64(params.file)
 
 			// getRobustSpecV3Data (not a bare card.toSpecV3()) so older/V1
@@ -907,12 +948,23 @@ export const charactersImportCard: Handler<
 			}
 
 			const warnings: ImportWarning[] = []
+			// The V3 spec requires telling the user when a card's assets are
+			// not kept, since a re-export will leave them out.
+			const assetNote = describeUnimportedAssets(unimportedAssets)
+			if (assetNote) warnings.push(assetNote)
 			const character = await createCharacterFromParsedData(
 				data,
 				avatarBuffer,
 				userId,
 				db,
 				warnings
+			)
+			await importCardSprites(
+				userId,
+				character.id,
+				sprites,
+				warnings,
+				(data.extensions as any)?.serenepub?.defaultSpriteSet
 			)
 
 			// Refreshed inside its own try/catch: the character is already
@@ -955,11 +1007,13 @@ export const charactersImportResolve: Handler<
 	handler: async (socket, params, emitToUser) => {
 		try {
 			const userId = socket.user!.id
-			const { card, avatarBuffer, lorebook } =
+			const { card, avatarBuffer, lorebook, unimportedAssets, sprites } =
 				await parseCharacterCardFromBase64(params.file)
 			const data = getRobustSpecV3Data(card)
 
 			const warnings: ImportWarning[] = []
+			const assetNote = describeUnimportedAssets(unimportedAssets)
+			if (assetNote) warnings.push(assetNote)
 			let character
 			if (params.action === "overwrite") {
 				const existing = await db.query.characters.findFirst({
@@ -988,6 +1042,13 @@ export const charactersImportResolve: Handler<
 				)
 			}
 
+			await importCardSprites(
+				userId,
+				character.id,
+				sprites,
+				warnings,
+				(data.extensions as any)?.serenepub?.defaultSpriteSet
+			)
 			await refreshCharacterList(socket, emitToUser, warnings)
 
 			const res: Sockets.Characters.ImportResolve.Response = {
@@ -1235,6 +1296,21 @@ export const charactersExportCard: Handler<
 				tags: character.characterTags?.map((ct) => ct.tag.name) || [],
 				lorebook
 			})
+
+			if (format === "charx") {
+				// CHARX (DESIGN-sprites §4): the one container that carries the
+				// character's sprites — and its avatar, as the main icon.
+				const { buildCharx } = await import("$lib/server/sprites/charx")
+				const blob = await buildCharx(db, {
+					characterId: character.id,
+					avatarMediaId: character.avatarMediaId ?? null,
+					card: charCardData
+				})
+				const filename = `${character.name.replace(/[^a-z0-9]/gi, "_").toLowerCase()}.charx`
+				const res: Sockets.Characters.ExportCard.Response = { blob, filename }
+				emitToUser("characters:exportCard", res)
+				return res
+			}
 
 			if (format === "json") {
 				// Export as JSON

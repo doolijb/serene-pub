@@ -121,9 +121,13 @@ export async function listNamespaces(db: Db): Promise<NamespaceSummary[]> {
 		.from(schema.pipelineSpecs)
 		.orderBy(asc(schema.pipelineSpecs.id))
 
+	// A disabled plugin's pipelines are not listed (R67).
+	const { disabledPlugins } = await import("$lib/server/plugins/disabledPlugins")
+	const off = await disabledPlugins(db)
 	const out: NamespaceSummary[] = []
 	for (const spec of specs as any[]) {
 		if (!spec.activeVersionId) continue
+		if (off.owns(spec.sourcePluginId)) continue
 		const [version] = await db
 			.select()
 			.from(schema.pipelineSpecVersions)
@@ -786,7 +790,12 @@ export async function namespaceView(
 			)
 			const genreId = await genreOfSpec(db, at.slug)
 			if (!genreId) return []
-			return (await listGenreTriggers(db, genreId)).map((t) => ({
+			// A disabled plugin's actions are not offered to include (R67).
+			const { disabledPlugins } = await import("$lib/server/plugins/disabledPlugins")
+			const off = await disabledPlugins(db)
+			return (await listGenreTriggers(db, genreId))
+				.filter((t) => !off.ownsId(t.specSlug))
+				.map((t) => ({
 				key: t.key,
 				name: t.name,
 				specSlug: t.specSlug,

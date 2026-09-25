@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest"
 import { createTestDb, createTestUser, type TestDb } from "$lib/server/utils/testDb"
+import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
 import { pluginNodeBindings, nodeDefinitionsOf } from "./pluginBindings"
@@ -118,7 +119,9 @@ async function execute(seed: string) {
 		...coreBindings(),
 		...(await pluginNodeBindings(db, mgr, {
 			seed,
-			nowMs: 1_000_000
+			nowMs: 1_000_000,
+			// The running pipeline is the plugin's own (R62).
+			specOwner: "acme/tools"
 		}))
 	}
 	const { buildWorld } = await import(
@@ -176,6 +179,7 @@ describe("a process-transport node runs through the executor", () => {
 			ports: { in: {}, out: { main: {} } }
 		} as any)
 		const bindings = await pluginNodeBindings(db, mgr, {
+			specOwner: "acme/tools",
 			seed: "s",
 			nowMs: 0
 		})
@@ -213,6 +217,7 @@ describe("a hook's Result is unwrapped, never read as ports", () => {
 			})
 		}
 		const bindings = await pluginNodeBindings(db, fake as any, {
+			specOwner: "acme/tools",
 			seed: "seed:unwrap",
 			nowMs: 1_000_000
 		})
@@ -278,4 +283,87 @@ describe("a hook's Result is unwrapped, never read as ports", () => {
 			expect(() => JSON.stringify(r)).not.toThrow()
 		}
 	})
+})
+
+describe("R62 · a private node runs only in its own package's pipelines", () => {
+	it("another package's pipeline, or a person's, gets a refusal naming the owner; a public node runs for anyone", async () => {
+		const pin = "acme.tools:task/lookup@1"
+		for (const specOwner of [undefined, "other/pkg"]) {
+			const bindings = await pluginNodeBindings(db, mgr, { seed: "s", nowMs: 1, specOwner })
+			const out: any = await (bindings[pin] as any)({ q: "x" }, {})
+			expect(out.kind ?? out.status ?? JSON.stringify(out)).toMatch(/err/)
+			expect(JSON.stringify(out)).toContain("private to 'acme/tools'")
+		}
+		await db
+			.update(schema.pipelineDefinitionRegistry)
+			.set({ isPublic: true } as any)
+			.where(eq(schema.pipelineDefinitionRegistry.definitionId, "acme.tools:task/lookup"))
+		try {
+			const bindings = await pluginNodeBindings(db, mgr, { seed: "s", nowMs: 1, specOwner: "other/pkg" })
+			expect(JSON.stringify(await (bindings[pin] as any)({ q: "x" }, {}))).not.toContain("private to")
+		} finally {
+			await db
+				.update(schema.pipelineDefinitionRegistry)
+				.set({ isPublic: false } as any)
+				.where(eq(schema.pipelineDefinitionRegistry.definitionId, "acme.tools:task/lookup"))
+		}
+	}, 60_000)
+})
+
+describe("R62 · the publish door refuses another package's private node", () => {
+	it("saves the plugin's own pipeline, refuses a person's or another package's", async () => {
+		const { saveDocument } = await import("$lib/server/pipelines/boot/store")
+		const [owner] = await db
+			.select({ id: schema.plugins.id })
+			.from(schema.plugins)
+			.where(eq(schema.plugins.pluginId, "acme/tools"))
+		// A person's pipeline (no owning package) may not build on it…
+		await expect(saveDocument(db as any, doc(), { publish: false })).rejects.toThrow(
+			/private to 'acme\/tools'.*visibility: 'public'/
+		)
+		// …and its own package's may.
+		const saved = await saveDocument(db as any, doc(), { publish: false, sourcePluginId: owner!.id })
+		expect(saved.specId).toBeGreaterThan(0)
+	}, 60_000)
+})
+
+describe("R62 · every door judges a private node the same way", () => {
+	it("refuses another package's pipeline at publish; a re-save keeps the stored owner", async () => {
+		const { saveDocument } = await import("$lib/server/pipelines/boot/store")
+		const [other] = await db
+			.insert(schema.plugins)
+			.values({ pluginId: "other/pkg", name: "Other", bundleSource: "//", bundleHash: "h-other", enabled: true, manifest: {} })
+			.returning()
+		const foreign = compile(
+			spec("other.pkg:spec/borrow", { version: "1.0.0" })
+				.inlet("input", C.userMessage.v1())
+				.task("look", ($) => lookup.v1({ q: $.input.text }))
+				.build()
+		)
+		await expect(
+			saveDocument(db as any, foreign, { publish: false, sourcePluginId: other.id })
+		).rejects.toThrow(/private to 'acme\/tools'/)
+		// The plugin's own spec, re-saved with no owner named, is judged as its stored owner's.
+		const saved = await saveDocument(db as any, doc(), { publish: false })
+		expect(saved.specId).toBeGreaterThan(0)
+	}, 60_000)
+
+	it("mayStandIn: a private node stands in only in its own package's spec; public anywhere", async () => {
+		const { mayStandIn } = await import("$lib/server/pipelines/entities/bindings")
+		const candidate = "acme.tools:task/lookup@1"
+		expect(await mayStandIn(db as any, "core:spec/respond", "core:task/concat-candidates@1", candidate)).toBe(false)
+		expect(await mayStandIn(db as any, "acme.tools:spec/lookup-turn", "core:task/concat-candidates@1", candidate)).toBe(true)
+		await db
+			.update(schema.pipelineDefinitionRegistry)
+			.set({ isPublic: true } as any)
+			.where(eq(schema.pipelineDefinitionRegistry.definitionId, "acme.tools:task/lookup"))
+		try {
+			expect(await mayStandIn(db as any, "core:spec/respond", "core:task/concat-candidates@1", candidate)).toBe(true)
+		} finally {
+			await db
+				.update(schema.pipelineDefinitionRegistry)
+				.set({ isPublic: false } as any)
+				.where(eq(schema.pipelineDefinitionRegistry.definitionId, "acme.tools:task/lookup"))
+		}
+	}, 60_000)
 })

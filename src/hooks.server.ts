@@ -172,6 +172,12 @@ export const handle: Handle = async ({ event, resolve }) => {
 	for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
 		response.headers.set(name, value)
 	}
+	// A plugin's documents exist to be framed — by this app's own pages, in a
+	// sandboxed iframe (frameHost). DENY refuses even that, so every frame
+	// panel and every `sp-frame` showed a broken document; they may be framed
+	// by this origin and nothing else.
+	if (event.url.pathname.startsWith("/plugin-ui/"))
+		response.headers.set("X-Frame-Options", "SAMEORIGIN")
 
 	// Extend — never replace — the CSP SvelteKit generated, so its own
 	// nonce/hash survives. This is what makes CSP_EXTRA_* actually work on a

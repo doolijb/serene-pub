@@ -29,12 +29,11 @@ async function publishTwoDeclarers() {
 		const doc = compile(
 			spec(id, {
 				version: "1.0.0",
-				taxonomy: { role: "action", genre: CHAT },
+				taxonomy: { role: "action"},
 				contributes: {
 					actions: [
 						{
 							key: "sum",
-							genre: CHAT,
 							venue: { kind: "composer" },
 							label: { en: "Sum" },
 							...(slash ? { slash } : {})

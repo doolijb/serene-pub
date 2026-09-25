@@ -7,8 +7,9 @@
  * story: a dated row is in it when its date has arrived, and an undated row is
  * in it always, because a row with no date makes no claim about when.
  *
- * ⚠ **A reader, not an editor.** Editing while reading as of a date saves to
- * the entry itself: a dated amendment is a shape the book does not hold yet.
+ * ⚠ **A reader first.** Editing while reading as of a date presents a choice
+ * (ruled 2026-09-23): file the change as an amendment dated at this moment, or
+ * change the base entry everywhere. The moment itself still edits nothing.
  */
 
 import {
@@ -147,16 +148,37 @@ export function castMomentSentence(notYet: number, total: number): string {
 	return `${notYet} of ${total} cast not in the story yet`
 }
 
+/**
+ * How much of an entry's own history is still ahead of the moment.
+ *
+ * The design's sentence, pluralised: one amendment "has not happened yet", two
+ * "have". Said only while a moment is set — at now nothing dated is ahead.
+ */
+export function amendmentsAheadSentence(notYet: number, total: number): string {
+	return (
+		`${notYet} of ${total} ${notYet === 1 ? "has" : "have"} not ` +
+		`happened yet at this moment`
+	)
+}
+
 /** The bar's own chip. */
 export function momentChipLabel(key: string | null | undefined): string {
 	return `Moment · ${momentLabel(key)}`
 }
 
-/** What the banner over the editor says an edit made here is saved as. */
+/**
+ * What the banner over the editor says an edit made here is saved as.
+ *
+ * ⚠ The sentence names the CHOICE, never one outcome: at a moment a save is
+ * either an amendment or a change to the base, and neither is the default.
+ * The Save control is where it is made.
+ */
 export function momentBannerSentence(key: string): string {
+	// ⚠ "it", not "the entry": this banner stands over the Cast board too,
+	// where the subject is a member, and over any scope added later.
 	return (
-		`Reading as of ${momentLabel(key)}. Changes made here are saved to ` +
-		`the entry itself; dated amendments are not built yet.`
+		`Reading as of ${momentLabel(key)}. A change saved here can begin at ` +
+		`this date, or change it everywhere.`
 	)
 }
 

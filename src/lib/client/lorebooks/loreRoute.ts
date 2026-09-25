@@ -39,6 +39,7 @@ export const LORE_LENSES = [
 	"tree",
 	"graph",
 	"time",
+	"lives",
 	"places"
 ] as const
 
@@ -86,6 +87,13 @@ export interface LoreRoute {
 	/** A story-date key. Absent is now, which is the default reading. */
 	moment?: string
 	branch?: number
+	/**
+	 * Drawing this line beside main, rather than reading it.
+	 *
+	 * ⚠ Only meaningful with a `branch`: main has nothing to compare against
+	 * itself, so leaving a branch drops it (see `setBranch`).
+	 */
+	compare?: boolean
 }
 
 export const SCOPE_LABELS: Record<LoreScope, string> = {
@@ -103,6 +111,7 @@ export const LENS_LABELS: Record<LoreLens, string> = {
 	tree: "Tree",
 	graph: "Graph",
 	time: "Time",
+	lives: "Lives",
 	places: "Places"
 }
 
@@ -126,6 +135,12 @@ export type LoreAction =
 	| { type: "setLens"; lens: LoreLens }
 	/** An absent moment is now, which is what clears the cursor. */
 	| { type: "setMoment"; moment?: string }
+	/**
+	 * Which line is being read. Absent is `main`, which is the absence of a
+	 * branch and not a branch called main.
+	 */
+	| { type: "setBranch"; branch?: number }
+	| { type: "setCompare"; compare: boolean }
 
 export function emptyRoute(): LoreRoute {
 	return { lorebookId: null, scope: DEFAULT_SCOPE }
@@ -156,6 +171,8 @@ function normalize(route: LoreRoute): LoreRoute {
 	if (route.lens) next.lens = route.lens
 	if (route.moment) next.moment = route.moment
 	if (route.branch != null) next.branch = route.branch
+	// Only ever set alongside a branch: comparing main with main is nothing.
+	if (route.compare && route.branch != null) next.compare = true
 	return next
 }
 
@@ -171,7 +188,8 @@ export function sameRoute(a: LoreRoute, b: LoreRoute): boolean {
 		x.inspector === y.inspector &&
 		x.lens === y.lens &&
 		x.moment === y.moment &&
-		x.branch === y.branch
+		x.branch === y.branch &&
+		x.compare === y.compare
 	)
 }
 
@@ -252,6 +270,16 @@ export function reduce(route: LoreRoute, action: LoreAction): LoreRoute {
 			return normalize({ ...route, lens: action.lens })
 		case "setMoment":
 			return normalize({ ...route, moment: action.moment })
+		case "setBranch":
+			// Leaving a line leaves its comparison with it; `normalize` drops
+			// the flag anyway, and saying so here is what makes that deliberate.
+			return normalize({
+				...route,
+				branch: action.branch,
+				compare: action.branch == null ? false : route.compare
+			})
+		case "setCompare":
+			return normalize({ ...route, compare: action.compare })
 	}
 }
 
@@ -290,6 +318,7 @@ export function toHash(route: LoreRoute): string {
 	if (r.lens) query.set("lens", r.lens)
 	if (r.moment) query.set("as", r.moment)
 	if (r.branch != null) query.set("branch", String(r.branch))
+	if (r.compare) query.set("compare", "1")
 	if (r.inspector) query.set("inspector", r.inspector)
 	if (r.castId != null) query.set("cast", String(r.castId))
 	if (r.sceneId != null) query.set("scene", String(r.sceneId))
@@ -351,6 +380,7 @@ export function fromHash(hash: string): LoreRoute | null {
 		inspector: query.get("inspector") ?? undefined,
 		lens: lensFromQuery(scopePart, query),
 		moment: query.get("as") ?? undefined,
+		compare: query.get("compare") === "1",
 		branch: branch ? Number(branch) : undefined
 	})
 }

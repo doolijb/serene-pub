@@ -13,15 +13,14 @@
 	 * yet installed) renders as a collapsed labeled section rather than
 	 * breaking: uninstalling strands nothing.
 	 */
-	import * as Icons from "@lucide/svelte"
 	import MessageBlocksView from "./MessageBlocksView.svelte"
-	import { renderMarkdownWithQuotedText } from "$lib/client/utils/markdownToHTML"
 
 	interface Props {
 		messageId: number
 		parts: SelectMessagePart[]
 		activeRevisions: Record<string, number>
-		onContentClick?: (e: MouseEvent) => void
+		/** An image in the message was clicked — its address. */
+		onOpenImage?: (src: string) => void
 		/** Declared block actions (20 §6) — fn + payload up to the page; a form's `blockId` rides along (U5d). */
 		onAction?: (
 			fn: string,
@@ -41,7 +40,7 @@
 		messageId,
 		parts,
 		activeRevisions,
-		onContentClick,
+		onOpenImage,
 		onAction,
 		bodyText,
 		canAnswer,
@@ -94,36 +93,31 @@
 			aria-controls="part-{messageId}-{part.id}"
 		>
 			{#if icon === "brain"}
-				<Icons.BrainCircuit size={16} aria-hidden="true" />
+				<sp-icon name="brain-circuit" size="16"></sp-icon>
 			{:else if icon === "notebook"}
-				<Icons.NotebookPen size={16} aria-hidden="true" />
+				<sp-icon name="notebook-pen" size="16"></sp-icon>
 			{:else if icon === "wrench"}
-				<Icons.Wrench size={16} aria-hidden="true" />
+				<sp-icon name="wrench" size="16"></sp-icon>
 			{:else}
-				<Icons.Puzzle size={16} aria-hidden="true" />
+				<sp-icon name="puzzle" size="16"></sp-icon>
 			{/if}
 			<span>{title}</span>
-			<Icons.ChevronDown
-				size={16}
-				aria-hidden="true"
-				class={`transition-transform ${expanded[part.id] ? "rotate-180" : ""}`}
-			/>
+			<sp-icon name="chevron-down" size="16" class={`transition-transform ${expanded[part.id] ? "rotate-180" : ""}`}></sp-icon>
 		</button>
 		<!-- grid 0fr -> 1fr transitions to/from auto height in pure CSS; the
 		     overflow-hidden wrapper keeps collapsed content from spilling, and
-		     `inert` keeps the 0fr track's focusables out of the tab order.
-		     (Same construction as the blocks this component retires.) -->
+		     the skin's `visibility` keeps the 0fr track's focusables out of the
+		     tab order (`.sp-part-body`, conversation.css). -->
 		<div
 			id="part-{messageId}-{part.id}"
-			class="grid transition-[grid-template-rows] duration-200 ease-out"
-			style:grid-template-rows={expanded[part.id] ? "1fr" : "0fr"}
-			inert={!expanded[part.id]}
+			class="sp-part-body grid transition-[grid-template-rows] duration-200 ease-out"
+			data-expanded={expanded[part.id] ? "" : undefined}
 		>
 			<div class="overflow-hidden">
 				<div
 					class="rendered-session-message-content pb-2 text-sm opacity-80"
 				>
-					{@html renderMarkdownWithQuotedText(body)}
+					<sp-message-body text={body}></sp-message-body>
 				</div>
 			</div>
 		</div>
@@ -138,13 +132,11 @@
 	{/if}
 	{#each visibleParts(step) as part (part.id)}
 		{#if part.type === "core:markdown"}
-			<!-- svelte-ignore a11y_click_events_have_key_events -->
-			<!-- svelte-ignore a11y_no_static_element_interactions -->
-			<div
-				class="rendered-session-message-content"
-				onclick={onContentClick}
-			>
-				{@html renderMarkdownWithQuotedText(part.content ?? "")}
+			<div class="rendered-session-message-content">
+				<sp-message-body
+					text={part.content ?? ""}
+					onopen-image={(e: CustomEvent<{ src: string }>) => onOpenImage?.(e.detail.src)}
+				></sp-message-body>
 			</div>
 		{:else if part.type === "core:thinking"}
 			{@render collapsible(part, "Thinking", "brain", part.content ?? "")}
@@ -177,7 +169,7 @@
 			<button
 				type="button"
 				class="mt-2 block w-fit cursor-pointer border-0 bg-transparent p-0"
-				onclick={onContentClick}
+				onclick={() => onOpenImage?.(`/session-assets/${(part.data as any).assetId}`)}
 				aria-label="Open image attachment"
 			>
 				<img
@@ -192,7 +184,7 @@
 				href="/session-assets/{(part.data as any).assetId}"
 				download={(part.data as any)?.name ?? true}
 			>
-				<Icons.Paperclip size={14} aria-hidden="true" />
+				<sp-icon name="paperclip" size="14"></sp-icon>
 				{(part.data as any)?.name ?? "attachment"}
 			</a>
 		{:else if Array.isArray((part.data as any)?.blocks)}

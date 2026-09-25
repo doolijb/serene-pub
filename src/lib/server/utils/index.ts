@@ -1,3 +1,4 @@
+import { spriteFileIds } from "$lib/server/sprites"
 import os from "os"
 import path from "path"
 import { db } from "$lib/server/db"
@@ -232,7 +233,13 @@ export async function listCharacterGallery({
 	characterId: number
 	userId?: number
 }) {
-	return clientMediaFor(db, { characterId })
+	// Sprites are character files too (their provenance), so the gallery
+	// leaves out every file a sprite row points at — the ROLE is what says
+	// "this is a face, not a gallery picture". The avatar stays even when the
+	// same bytes are also a sprite (DESIGN-sprites §3.1).
+	const sprites = await spriteFileIds(db, characterId)
+	const all = await clientMediaFor(db, { characterId })
+	return sprites.size === 0 ? all : all.filter((m) => !sprites.has(m.id))
 }
 
 export async function deleteCharacterGalleryImage({

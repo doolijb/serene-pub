@@ -337,6 +337,23 @@
 											</button>
 										{/if}
 									</div>
+									{#if p.swaps}
+										<div class="text-surface-600-400 text-xs">
+											{p.swaps.total}
+											{p.swaps.total === 1 ? "swap contribution" : "swap contributions"}{p.swaps.off
+												? `, ${p.swaps.off} switched off`
+												: ""}
+											{#if p.swaps.genreId}
+												·
+												<a
+													class="anchor"
+													href="/admin/session-genres/{encodeURIComponent(p.swaps.genreId)}#swaps"
+												>
+													manage on the genre page
+												</a>
+											{/if}
+										</div>
+									{/if}
 									<div class="text-surface-600-400 text-xs">
 										{p.pluginId} · v{p.version}
 										{#if sandboxEnabled && p.enabled}

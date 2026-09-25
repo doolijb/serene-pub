@@ -310,8 +310,8 @@ describe("the management view is admin-only", () => {
 	})
 })
 
-describe("run receipts belong to the person whose session they describe", () => {
-	test("a stranger asking about someone else's session gets nothing", async () => {
+describe("run receipts are an administrator's (R55)", () => {
+	test("nobody but an admin gets the runs list — not the session's owner, not a stranger", async () => {
 		await testDb.insert(schema.pipelineRuns).values({
 			runId: "run-scoping-1",
 			specSlug: RESPOND_SPEC_ID,
@@ -327,33 +327,32 @@ describe("run receipts belong to the person whose session they describe", () => 
 			receipt: {}
 		})
 
-		const { pipelinesRuns } = await import("./pipelines")
-		const mine: any = await pipelinesRuns.handler(
+		const { pipelinesRuns, pipelinesRun } = await import("./pipelines")
+		for (const who of [owner.id, stranger.id]) {
+			const rec = recordingEmit()
+			const res: any = await pipelinesRuns.handler(
+				socketFor(who),
+				{ sessionId: ownersSessionId },
+				rec.emit
+			)
+			expect(res.runs).toHaveLength(0)
+			expect(rec.seen.map(([k]) => k)).toContain("pipelines:runs:error")
+		}
+		// …nor a single receipt, even one of their own runs.
+		const own: any = await pipelinesRun.handler(
 			socketFor(owner.id),
-			{ sessionId: ownersSessionId },
+			{ runId: "run-scoping-1" },
 			noopEmit
 		)
-		expect(mine.runs).toHaveLength(1)
-
-		const theirs: any = await pipelinesRuns.handler(
-			socketFor(stranger.id),
-			{ sessionId: ownersSessionId },
-			noopEmit
-		)
-		expect(theirs.runs).toHaveLength(0)
+		expect(own.error).toMatch(/Only administrators/)
+		expect(own.run).toBeUndefined()
 	})
 
 	/**
-	 * Two gates, and the guest proves they are separate.
-	 *
-	 * Reaching the session is `checkSessionAccess` — owner **or** guest, since
-	 * session access has never been ownership; a local `eq(sessions.userId, …)`
-	 * here silently handed a guest `{ runs: [] }` for receipts that were their
-	 * own. What they may read is still `user_id`: passing the first gate must
-	 * not hand them the owner's receipts, which is the leak the first gate's
-	 * looseness would otherwise become.
+	 * An admin reads every user's runs: a receipt is instance-level
+	 * evidence, and the person debugging the instance is the admin.
 	 */
-	test("a guest sees their own runs in a shared session, not the owner's", async () => {
+	test("an admin sees every user's runs in a session, the guest's and the owner's", async () => {
 		const { pipelinesRuns } = await import("./pipelines")
 		const { createTestUser } = await import("$lib/server/utils/testDb")
 		const guest = await createTestUser(testDb, "pipe-guest")
@@ -388,9 +387,15 @@ describe("run receipts belong to the person whose session they describe", () => 
 			{ sessionId: ownersSessionId },
 			noopEmit
 		)
-		expect(theirs.runs.map((r: any) => r.runId)).toEqual([
-			"run-scoping-guest"
-		])
+		expect(theirs.runs).toEqual([])
+		const all: any = await pipelinesRuns.handler(
+			socketFor(admin.id, true),
+			{ sessionId: ownersSessionId },
+			noopEmit
+		)
+		expect(all.runs.map((r: any) => r.runId)).toEqual(
+			expect.arrayContaining(["run-scoping-guest", "run-scoping-owner-2"])
+		)
 	}, 60_000)
 
 	/**
@@ -437,7 +442,7 @@ describe("run receipts belong to the person whose session they describe", () => 
 			receipt: { nodes: [] }
 		})
 		const list: any = await pipelinesRuns.handler(
-			socketFor(owner.id),
+			socketFor(admin.id, true),
 			{ sessionId: ownersSessionId },
 			noopEmit
 		)
@@ -461,7 +466,7 @@ describe("run receipts belong to the person whose session they describe", () => 
 			receipt: { nodes: [] }
 		})
 		const again: any = await pipelinesRuns.handler(
-			socketFor(owner.id),
+			socketFor(admin.id, true),
 			{ sessionId: ownersSessionId },
 			noopEmit
 		)
@@ -470,7 +475,7 @@ describe("run receipts belong to the person whose session they describe", () => 
 		expect(plain.specHashRenamedAt).toBeNull()
 		// The single-run door carries the same fact.
 		const one: any = await pipelinesRun.handler(
-			socketFor(owner.id),
+			socketFor(admin.id, true),
 			{ runId: "run-scoping-renamed" },
 			noopEmit
 		)

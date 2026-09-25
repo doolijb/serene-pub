@@ -33,6 +33,14 @@ class RetrievalReadout {
 	#runId: string | null = null
 	#explanation = $state<Explanation | null>(null)
 	/**
+	 * The turn's figures off the ranking store (L1, R58), for a reader with
+	 * no run account — the book's owner. An admin's explanation, when there
+	 * is one, is the richer source and wins.
+	 */
+	#storeFacts = $state<
+		NonNullable<Sockets.Entries.RecentDecisions.Response["facts"]>
+	>({})
+	/**
 	 * The interest releases held while any editor is mounted — one per declared
 	 * key, dropped together by the last `close`.
 	 *
@@ -45,6 +53,8 @@ class RetrievalReadout {
 	 * opening another one has to release the old key as it takes the new.
 	 */
 	#decisionsRelease: (() => void) | null = null
+	/** Whether the reader may ask for a run's account at all (R55: admins). */
+	#canExplain = false
 
 	#onDecisions = (msg: Sockets.Entries.RecentDecisions.Response) => {
 		if (
@@ -52,6 +62,7 @@ class RetrievalReadout {
 			msg.sessionId !== this.#sessionId
 		)
 			return
+		this.#storeFacts = msg.facts ?? {}
 		if (!msg.runId) {
 			this.#runId = null
 			this.#explanation = null
@@ -60,7 +71,10 @@ class RetrievalReadout {
 		if (msg.runId === this.#runId) return
 		this.#runId = msg.runId
 		this.#explanation = null
-		this.#socket?.emit("pipelines:runExplain", { runId: msg.runId })
+		// The run's own account reads its receipt, an administrator's (R55);
+		// anyone else's line says what the decision says.
+		if (this.#canExplain)
+			this.#socket?.emit("pipelines:runExplain", { runId: msg.runId })
 	}
 
 	#onExplain = (msg: Sockets.Pipelines.RunExplain.Response) => {
@@ -100,8 +114,9 @@ class RetrievalReadout {
 	 * filters on the run id it asked about. The refcount is what decides the
 	 * declare: one editor's worth of interest, however many are mounted on it.
 	 */
-	open(socket: TypedSocket): void {
+	open(socket: TypedSocket, opts: { isAdmin?: boolean } = {}): void {
 		this.#socket = socket
+		this.#canExplain = !!opts.isAdmin
 		if (this.#users++ > 0) return
 		this.#declareDecisions()
 		this.#releases = [
@@ -131,6 +146,7 @@ class RetrievalReadout {
 		this.#sessionId = null
 		this.#runId = null
 		this.#explanation = null
+		this.#storeFacts = {}
 	}
 
 	/** Name the pair being read. A pair already asked about is not re-asked. */
@@ -141,6 +157,7 @@ class RetrievalReadout {
 		this.#sessionId = sessionId
 		this.#runId = null
 		this.#explanation = null
+		this.#storeFacts = {}
 		// Before the emit, never after: the request flushes the interest sync
 		// that declares the key its own reply needs.
 		this.#declareDecisions()
@@ -163,13 +180,10 @@ class RetrievalReadout {
 		sessionId: number | null,
 		entryId: number
 	): RunFacts {
-		if (
-			!this.#explanation ||
-			lorebookId !== this.#lorebookId ||
-			sessionId !== this.#sessionId
-		)
+		if (lorebookId !== this.#lorebookId || sessionId !== this.#sessionId)
 			return NO_FACTS
-		return readInFacts(entryId, this.#explanation)
+		if (this.#explanation) return readInFacts(entryId, this.#explanation)
+		return this.#storeFacts[entryId] ?? NO_FACTS
 	}
 }
 

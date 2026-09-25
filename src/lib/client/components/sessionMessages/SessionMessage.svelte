@@ -1,11 +1,7 @@
 <script lang="ts">
-	import { avatarSrc } from "$lib/client/utils/media"
 	import { messageEnvoySlug } from "$lib/client/utils/messageSpeaker"
-	import type { Snippet } from "svelte"
-	import * as Icons from "@lucide/svelte"
 	import MessageComposer from "$lib/client/components/sessionMessages/MessageComposer.svelte"
 	import MessageControls from "$lib/client/components/sessionMessages/MessageControls.svelte"
-	import { actionIcon } from "$lib/client/components/sessionMessages/actionIcon"
 	import {
 		enabledWhenState,
 		quickRowActions,
@@ -14,181 +10,39 @@
 	import { actionIdentity } from "$lib/shared/actions/identity"
 	import MessagePartsView from "$lib/client/components/sessionMessages/MessagePartsView.svelte"
 	import MessageStateLedger from "$lib/client/components/sessionMessages/MessageStateLedger.svelte"
-	import { renderMarkdownWithQuotedText } from "$lib/client/utils/markdownToHTML"
-	import EmbeddingStatusIcon from "$lib/client/components/EmbeddingStatusIcon.svelte"
-	import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
-	import { animateHeight } from "$lib/client/utils/motion"
 	import { useWidgetContext } from "$lib/shared/widgets/context"
-	import { statusText, t } from "$lib/client/i18n/state.svelte"
 	import { staleOf } from "$lib/client/utils/formAnswer"
+	import { untrack } from "svelte"
+	import { useConversation } from "./conversation.svelte"
 
+	/**
+	 * One line of the conversation (C0b). It is handed its row and where it
+	 * sits; everything else is the conversation's (`useConversation`) — who
+	 * spoke, what the viewer controls, what is being edited or selected — and
+	 * every press is one of its verbs.
+	 */
 	interface Props {
 		msg: SelectSessionMessage
 		index: number
-		session: Sockets.Sessions.Get.Response["session"] & {
-			sessionMessages: SelectSessionMessage[]
-		}
 		isLastMessage: boolean
 		/**
-		 * The scene this message belongs to, when it belongs to one —
-		 * SessionContainer reads it off its own scene map and passes it with
-		 * the rest of the row's arguments. The row also carries the scene's
-		 * colour as `--sp-scene`, which the badge below inherits.
+		 * The scene this message belongs to, when it belongs to one — the log
+		 * reads it off its scene map. The row also carries the scene's colour
+		 * as `--sp-scene`, which the badge below inherits.
 		 */
 		sceneName?: string | null
-		// Functions
-		getMessageCharacter: (
-			msg: SelectSessionMessage
-		) => SelectCharacter | undefined
-		canControlMessage: (msg: SelectSessionMessage) => boolean
-		showSwipeControls: (
-			msg: SelectSessionMessage,
-			isGreeting: boolean
-		) => boolean
-		canSwipeRight: (
-			msg: SelectSessionMessage,
-			isGreeting: boolean
-		) => boolean
-		// Event handlers
-		onSwipeLeft: (msg: SelectSessionMessage) => void
-		onSwipeRight: (msg: SelectSessionMessage) => void
-		onEditMessage: (event: Event, msg: SelectSessionMessage) => void
-		onDeleteMessage: (event: Event, msg: SelectSessionMessage) => void
-		onHideMessage: (event: Event, msg: SelectSessionMessage) => void
-		onRegenerateMessage: (event: Event, msg: SelectSessionMessage) => void
-		onContinueMessage?: (event: Event, msg: SelectSessionMessage) => void
-		onAbortMessage: (event: Event, msg: SelectSessionMessage) => void
-		onBranchMessage?: (event: Event, msg: SelectSessionMessage) => void
-		onCharacterNameClick: (msg: SelectSessionMessage) => void
-		onAvatarClick: (char: SelectCharacter | undefined) => void
-		// Fired when an inline `![alt](url)` image rendered inside the
-		// message content is clicked — opens it in a lightbox.
-		onImageClick?: (src: string) => void
-		// Method-shorthand (not arrow-type) syntax deliberately: these are wired
-		// directly as `onclick={onCancelEditMessage}` below (invoked with the
-		// click MouseEvent) but also invoked with zero args internally via
-		// handleMessageUpdate()/MessageComposer's onSend. Real implementations
-		// (eg. +page.svelte's handleCancelEditMessage/handleSaveEditMessage)
-		// take the event to call stopPropagation(). Method-shorthand gives this
-		// property bivariant parameter checking, which is what lets both a
-		// zero-arg and an Event-taking callback satisfy it — an arrow-type
-		// property (even with `e?: Event`) is checked strictly/contravariantly
-		// and rejects one side or the other.
-		onCancelEditMessage(e?: Event): void
-		// Takes the edited content rather than reading it off `editSessionMessage`
-		// itself — this component only owns a local edit buffer, not
-		// `editSessionMessage` (a prop passed down from +page.svelte), so the
-		// actual `editSessionMessage.content` write happens in the real
-		// implementation (+page.svelte's handleSaveEditMessage), which does
-		// own that state.
-		onSaveEditMessage(content: string, e?: Event): void
-		// Tracks which message's "more actions" popover is open, so only one
-		// is ever open at a time in a message list.
-		openMsgControlsMenu: number | undefined
-		// Edit state
-		editSessionMessage: SelectSessionMessage | undefined
-		/**
-		 * ⏳ Unread since U5e: the verb table judges retry by the declared
-		 * `item.isNewest` / `item.greeting` / `item.hidden` predicates the
-		 * list carries. Kept on the prop chain one release so the container
-		 * and the page (which still read it for the turn controls) need no
-		 * edit; drop it here when the extra tab's Regenerate reads the list.
-		 */
-		canRegenerateLastMessage?: boolean
-		hasGeneratingMessage: boolean
-		/**
-		 * Why Continue is unavailable in this session, when it is — the
-		 * connection cannot resume a partial reply, or the mode does not offer
-		 * the verb. The quick Continue button is withheld while it is set;
-		 * MessageControls keeps the explained, disabled row.
-		 */
-		continueRefusal?: string
-		// Summarization mode
-		isSummarizationMode?: boolean
-		isSelected?: boolean
-		onStartSummarization?: (msg: SelectSessionMessage) => void
-		/**
-		 * The `message` venue of `sessions:actions` (R-15, U5c) — passed
-		 * through to MessageControls, and read here for the quick row: the
-		 * primary set, one click away on the row itself. Off the widget
-		 * envelope (`ctx.actions.v1.message`) when a host provides one, the
-		 * prop otherwise.
-		 */
-		messageActions?: {
-			primary: Sockets.Sessions.Actions.Action[]
-			overflow: Sockets.Sessions.Actions.Action[]
-		}
-		/** The person opened a list showing newcomers (`sessions:actionsSeen`). */
-		onActionsSeen?: (keys: string[]) => void
-		// ⚠ The first below is a FALLBACK: when a `WidgetHost` provides a ctx
-		// the press goes through `ctx.invoke`, which reaches the very same page
-		// function one hop later. The second is still the primary route — a
-		// form's press is not an offered action (see `fireBlockAction`). Both
-		// stay for mounts with no host, and are the first two of the ~16
-		// callbacks the PLAN 25 migration collapses onto the envelope.
-		onFireTrigger?: (
-			action: Sockets.Sessions.Actions.Action,
-			msg: SelectSessionMessage
-		) => void
-		// Declared block actions inside a parts-native body (20 §6), with the
-		// block's stamped identity when it carries one (W-E).
-		onBlockAction?: (
-			fn: string,
-			msg: SelectSessionMessage,
-			payload?: Record<string, unknown>,
-			action?: string,
-			blockId?: string
-		) => void
-		/**
-		 * May this viewer answer a form put to the addressee (U5d review,
-		 * W7)? The page's verdict — the resolver's rules over what the client
-		 * holds (`utils/formAnswer.ts`); a form the viewer cannot answer shows
-		 * no buttons. Absent, every form shows them and the server judges.
-		 */
-		canAnswerForm?: (addressee: string | undefined) => boolean
-		// Snippets
-		messageControls?: Snippet<[SelectSessionMessage]>
 	}
 
-	let {
-		msg,
-		index,
-		session,
-		isLastMessage,
-		sceneName = null,
-		getMessageCharacter,
-		canControlMessage,
-		showSwipeControls,
-		canSwipeRight: _canSwipeRight,
-		onSwipeLeft,
-		onSwipeRight,
-		onEditMessage,
-		onDeleteMessage,
-		onHideMessage,
-		onRegenerateMessage,
-		onContinueMessage,
-		onAbortMessage,
-		onBranchMessage,
-		onCharacterNameClick,
-		onAvatarClick,
-		onImageClick,
-		onCancelEditMessage,
-		onSaveEditMessage,
-		openMsgControlsMenu = $bindable(),
-		editSessionMessage,
-		canRegenerateLastMessage: _canRegenerateLastMessage = undefined,
-		hasGeneratingMessage,
-		continueRefusal = undefined,
-		isSummarizationMode = false,
-		isSelected = false,
-		onStartSummarization,
-		messageActions = undefined,
-		onActionsSeen = undefined,
-		onFireTrigger = undefined,
-		onBlockAction = undefined,
-		canAnswerForm = undefined,
-		messageControls
-	}: Props = $props()
+	let { msg, index, isLastMessage, sceneName = null }: Props = $props()
+
+	const conv = useConversation()
+	const line = $derived(conv.line(msg.id))
+	const allMessages = $derived(conv.ctx.messages.v1 as unknown as SelectSessionMessage[])
+	const hasGeneratingMessage = $derived(allMessages.some((m) => m.isGenerating))
+	const continueRefusal = $derived(conv.dossier?.continueRefusal)
+	const isSummarizationMode = $derived(conv.select.active)
+	const isSelected = $derived(conv.select.ids.has(msg.id))
+	const scened = $derived(conv.dossier?.scened.includes(msg.id) ?? false)
 
 	/**
 	 * The unified widget envelope (PLAN 25, ruled 2026-08-30). Present at the
@@ -221,20 +75,8 @@
 	 * (19 §4), its identity riding along (W1) so the server checks THAT
 	 * declaration and runs THAT spec.
 	 */
-	function fireTrigger(
-		action: Sockets.Sessions.Actions.Action,
-		m: SelectSessionMessage
-	) {
-		// The envelope FIRST, because it is the superset: `invoke` resolves
-		// the identity against `ctx.actions.v1` — the same table this row drew
-		// the press from — and routes it through the host's
-		// `actionDispatch`, which sends a contributed action to +page's own
-		// `fireTrigger` (the run named, the narrator's modal opened) and one of
-		// core's verbs to its real handler rather than to a function
-		// `sessions:triggerFunction` refuses by name. The prop is the fallback
-		// for a mount with no host, and reaches that same page function.
-		if (ctx) ctx.invoke(actionIdentity(action), { messageId: m.id })
-		else onFireTrigger?.(action, m)
+	function fireTrigger(action: Sockets.Sessions.Actions.Action, m: SelectSessionMessage) {
+		conv.invoke(actionIdentity(action), m)
 	}
 
 	/**
@@ -250,62 +92,38 @@
 		action?: string,
 		blockId?: string
 	) {
-		// The prop FIRST here, on a rule the ordering above does not share: a
-		// form's press is not an offered action. The page keeps a separate fire
-		// for it (`fireBlockAction`), which sends the block's stamped identity
-		// verbatim and takes none of the action fire's bespoke client flows —
-		// a block whose function happens to be one of the narrator's must
-		// answer the form, not open the modal.
-		//
-		// The fallback stays on ⏳ `ctx.action` and not `invoke` for the same
-		// reason it always has: a block's `action` is the identity the OUTLET
-		// stamped it with (W-E), which need not be listed in any venue of this
-		// session, and `invoke` refuses a reference no venue lists. `WidgetHost`
-		// forwards all five arguments, so the identity and the block survive
-		// the hop and the server holds the press to the block's addressee.
-		if (onBlockAction) onBlockAction(fn, m, payload, action, blockId)
-		else if (ctx) ctx.action(fn, m.id, payload, action, blockId)
+		// ⏳ `action`, not `invoke`: a block's `action` is the identity the
+		// OUTLET stamped it with (W-E), which need not be listed in any venue of
+		// this session, and `invoke` refuses a reference no venue lists. The
+		// host forwards all five arguments, so the identity and the block
+		// survive the hop and the server holds the press to the block's
+		// addressee.
+		conv.ctx.action(fn, m.id, payload, action, blockId)
 	}
 
-	// Whether a menu trigger has a route at all: the gate MessageControls
-	// applies to the contributed section, restated here now that either
-	// source can supply one. The real mount passes the prop AND sits inside a
-	// host.
-	const canFireTrigger = $derived(!!ctx || !!onFireTrigger)
+	const messageCount = $derived(allMessages.length)
 
 	/**
-	 * The one value this component reads off a prop that the envelope already
-	 * carries: `session` is touched for exactly one thing — the message count in
-	 * the aria-label below — and at the messages widget's host `ctx.messages.v1`
-	 * IS `session.sessionMessages`, the same array by reference (the host passes
-	 * it verbatim, declares no `channels`, and `scopeMessages` returns its input
-	 * untouched when none are declared). Byte-identical, so this is a swap and
-	 * not a re-definition.
-	 *
-	 * ⚠ It stops being identical the day a host mounts this list WITH declared
-	 * channels: ctx would then hold the scoped subset while SessionContainer
-	 * still renders `session.sessionMessages`, and this count has to describe
-	 * what is rendered. Revisit here, not at the host, if that arrives.
-	 *
-	 * `session.name`/`session.id` (the rest of `session.v1`) are read nowhere in
-	 * this component, and the scoped `persona`/`characters` sections are not
-	 * projected at this host at all — no grants are passed — so nothing else
-	 * here has a ctx counterpart yet.
+	 * The face beside this line (DESIGN-sprites §7). With the messages widget's
+	 * `avatarFace` setting at `sprite`, a line shows the sprite it was SHOWN —
+	 * set and label recorded on the line itself, so scrolling back past an
+	 * outfit change keeps the old outfit on the old lines. The default is the
+	 * avatar, because a face per line is busy in the bubble skins. The message
+	 * id picks among a label's variants, so one line always shows one image.
 	 */
-	const messageCount = $derived(
-		ctx?.messages.v1.length ?? session.sessionMessages.length
+	let showLineSprite = $derived(
+		(ctx?.settings?.v1 as { avatarFace?: string } | undefined)?.avatarFace ===
+			"sprite"
 	)
-
-	// Derived values
-	const character = $derived(getMessageCharacter(msg))
+	let faceSrc = $derived(
+		showLineSprite ? (line.speaker.sprite ?? line.speaker.face) : line.speaker.face
+	)
 	const narratorDisplayName = $derived(
 		msg.metadata?.narratorName || "Narrator"
 	)
 	/** Who this message is from, as the header prints it. */
 	const displayName = $derived(
-		msg.isNarratorResponse
-			? narratorDisplayName
-			: resolveCharacterName(character, "Unknown")
+		msg.isNarratorResponse ? narratorDisplayName : line.speaker.name
 	)
 	/** The disc a speaker with no picture gets: their initial. */
 	const avatarInitial = $derived(
@@ -341,8 +159,8 @@
 						? "envoy"
 						: "unknown"
 	)
-	const canControl = $derived(canControlMessage(msg))
-	const showSwipes = $derived(showSwipeControls(msg, isGreeting))
+	const canControl = $derived(line.controllable)
+	const showSwipes = $derived(line.swipes.show)
 	/**
 	 * The swipe arrow's gate is the swipe verb's own enabled-when (U5e,
 	 * review W3): the list's verdict, then the `item.*` predicates — the
@@ -387,20 +205,13 @@
 	let isThinkingExpanded = $state(false)
 	let isNarratorInstructionsExpanded = $state(false)
 
-	// Local edit buffer: bound to MessageComposer instead of binding directly
-	// into `editSessionMessage.content` (a prop this component doesn't own) —
-	// mutating it, even via plain assignment, trips Svelte's
-	// ownership_invalid_mutation check. Handed to onSaveEditMessage at save
-	// time so the actual write happens in the component that owns
-	// editSessionMessage (+page.svelte).
+	// The edit buffer: the widget owns edit mode (`conv.edit`); the row's text
+	// is copied in when editing starts, and saving is the `edit` verb.
+	const isEditing = $derived(conv.edit.id === msg.id)
 	let editContent = $state("")
 	$effect(() => {
-		if (editSessionMessage) editContent = editSessionMessage.content
+		if (isEditing) editContent = untrack(() => msg.content)
 	})
-
-	const isEditing = $derived(
-		!!editSessionMessage && editSessionMessage.id === msg.id
-	)
 	// Parts-native rendering (20 §13 phase 2): when the server attached the
 	// message's typed parts and the message is settled, the body — thinking
 	// and section collapsibles included — renders from them. Streaming,
@@ -410,9 +221,7 @@
 		!!msg.parts?.length && !msg.isGenerating && !msg.error && !isEditing
 	)
 
-	const isEditDirty = $derived(
-		isEditing && editContent !== (editSessionMessage?.content ?? "")
-	)
+	const isEditDirty = $derived(isEditing && editContent !== msg.content)
 	// Empty is blocked as well as unchanged: clearing a message to nothing
 	// leaves an unreadable stub in the thread, and Delete is the control that
 	// actually expresses that intent.
@@ -451,14 +260,14 @@
 	 * until its run's first status lands.
 	 */
 	const generatingStatus = $derived(
-		statusText(msg.generationStatus) ||
+		conv.statusText(msg.generationStatus) ||
 			(msg.generationStage === "queued"
-				? t("queued")
+				? conv.t("queued")
 				: msg.generationStage === "loading"
-					? t("loading model")
+					? conv.t("loading model")
 					: msg.generationStage === "generating"
-						? t("writing")
-						: t("working"))
+						? conv.t("writing")
+						: conv.t("working"))
 	)
 
 	// ── the quick actions ────────────────────────────────────────────────
@@ -473,14 +282,15 @@
 	// The list arrives on the widget envelope when a host provides one, the
 	// prop otherwise; with neither, the floors alone.
 	const venueActions = $derived(
-		(ctx?.actions?.v1?.message as typeof messageActions | undefined) ??
-			messageActions
+		ctx?.actions?.v1?.message as
+			| { primary: Sockets.Sessions.Actions.Action[]; overflow: Sockets.Sessions.Actions.Action[] }
+			| undefined
 	)
 	const quickActions = $derived(
 		quickRowActions(venueActions?.primary ?? [], {
 			msg,
 			isLastMessage,
-			editing: !!editSessionMessage,
+			editing: conv.edit.id !== null,
 			hasGeneratingMessage,
 			canControl,
 			continueRefusal
@@ -495,24 +305,11 @@
 	 * to the page's handlers, a contributed action through `fireTrigger`
 	 * with this message as the subject.
 	 */
-	function fireQuick(e: Event, action: Sockets.Sessions.Actions.Action) {
+	function fireQuick(_e: Event, action: Sockets.Sessions.Actions.Action) {
 		if (action.specSlug !== "core") return fireTrigger(action, msg)
-		switch (action.key) {
-			case "retry":
-				return onRegenerateMessage(e, msg)
-			case "continue":
-				return onContinueMessage?.(e, msg)
-			case "edit":
-				return onEditMessage(e, msg)
-			case "branch":
-				return onBranchMessage?.(e, msg)
-			case "swipe":
-				return onSwipeRight(msg)
-			case "hide":
-				return onHideMessage(e, msg)
-			case "delete":
-				return onDeleteMessage(e, msg)
-		}
+		if (action.key === "edit") return conv.edit.start(msg)
+		if (action.key === "swipe") return conv.swipe(msg, "right")
+		conv.invoke(action.key, msg)
 	}
 
 	/** The swipe counter is drawn only where there is a history to count. */
@@ -524,9 +321,9 @@
 			swipes.history.length > 1
 	)
 
-	function handleMessageUpdate(e?: Event) {
+	function handleMessageUpdate() {
 		if (!canSaveEdit) return
-		onSaveEditMessage(editContent, e)
+		conv.edit.save(msg, editContent)
 	}
 
 	function toggleThinking() {
@@ -537,15 +334,10 @@
 		isNarratorInstructionsExpanded = !isNarratorInstructionsExpanded
 	}
 
-	// The rendered content below is raw injected HTML ({@html}), so inline
-	// `![alt](url)` images can't get their own Svelte click handler —
-	// delegate from the container instead.
-	function handleContentClick(e: MouseEvent) {
-		const target = e.target as HTMLElement
-		if (target.tagName === "IMG") {
-			onImageClick?.((target as HTMLImageElement).src)
-		}
-	}
+	// An image inside the rendered text is the host's markup; `sp-message-body`
+	// raises `open-image` with its address.
+	const openImage = (e: CustomEvent<{ src: string }>) =>
+		void conv.request("view-image", { src: e.detail.src })
 </script>
 
 <!-- A <div>, not an <li>: SessionContainer already wraps each message in its own
@@ -586,7 +378,7 @@
 				title={narratorDisplayName}
 				aria-hidden="true"
 			>
-				<Icons.CloudSun size="1.25em" />
+				<sp-icon name="cloud-sun" size="1.25em"></sp-icon>
 			</span>
 		{:else}
 			<!-- Avatar rendered directly (not the reusable Avatar component):
@@ -594,13 +386,13 @@
 			     CSS. A plain img/glyph lets each style pack own size and shape. -->
 			<button
 				class="sp-msg-avatar-btn"
-				onclick={() => onAvatarClick(character)}
+				onclick={() => line.speaker.ref && void conv.request("view-avatar", { ref: line.speaker.ref })}
 				aria-label="View {displayName}'s avatar"
 			>
-				{#if avatarSrc(character)}
+				{#if faceSrc}
 					<img
 						class="sp-msg-avatar-img"
-						src={avatarSrc(character)}
+						src={faceSrc}
 						alt={displayName}
 					/>
 				{:else}
@@ -625,7 +417,10 @@
 		{:else}
 			<button
 				class="sp-msg-name"
-				onclick={() => onCharacterNameClick(msg)}
+				onclick={() => {
+					const id = msg.characterId ?? msg.personaId
+					if (id) void conv.request("open-character", { characterId: id })
+				}}
 				title={displayName}
 			>
 				{displayName}
@@ -639,7 +434,7 @@
 					role="img"
 					aria-label="Greeting message"
 				>
-					<Icons.Handshake size={14} aria-hidden="true" />
+					<sp-icon name="handshake" size="14"></sp-icon>
 				</span>
 			{/if}
 			{#if msg.isHidden}
@@ -648,7 +443,7 @@
 					role="img"
 					aria-label="Hidden from the model"
 				>
-					<Icons.Ghost size={14} aria-hidden="true" />
+					<sp-icon name="ghost" size="14"></sp-icon>
 				</span>
 			{/if}
 			{#if sceneName}
@@ -656,7 +451,7 @@
 				     sits in, so the badge and the pack's scene bar are the
 				     same colour by construction. -->
 				<span class="sp-msg-badge sp-msg-badge-scene">
-					<Icons.Film size={14} aria-hidden="true" />
+					<sp-icon name="film" size="14"></sp-icon>
 					<span class="sr-only">In scene:</span>
 					<span class="sp-msg-badge-text">{sceneName}</span>
 				</span>
@@ -664,7 +459,15 @@
 			<!-- No wrapper element: EmbeddingStatusIcon renders nothing at
 			     all when status is hidden/none (the common case). Its own root
 			     already carries inline-flex/items-center/shrink-0. -->
-			<EmbeddingStatusIcon embeddingModel={msg.embeddingModel} />
+			{#if line.embedding === "current"}
+				<span class="text-success-500 inline-flex shrink-0 items-center" title="Vectors up to date" aria-label="Vectors up to date">
+					<sp-icon name="zap" size="12"></sp-icon>
+				</span>
+			{:else if line.embedding === "stale"}
+				<span class="text-warning-500 inline-flex shrink-0 items-center" title="Vectors stale — model changed" aria-label="Vectors stale — model changed">
+					<sp-icon name="refresh-cw" size="12"></sp-icon>
+				</span>
+			{/if}
 		</span>
 
 		{#if msg.isGenerating}
@@ -691,7 +494,7 @@
 			<button
 				class="sp-msg-quiet-btn"
 				title="Cancel edit (Esc)"
-				onclick={onCancelEditMessage}
+				onclick={() => conv.edit.cancel()}
 			>
 				Cancel
 			</button>
@@ -718,14 +521,14 @@
 						<button
 							class="sp-msg-icon-btn"
 							aria-label="Previous swipe"
-							onclick={() => onSwipeLeft(msg)}
-							disabled={!!editSessionMessage ||
+							onclick={() => conv.swipe(msg, "left")}
+							disabled={conv.edit.id !== null ||
 								!swipes!.currentIdx ||
 								swipes!.history.length <= 1 ||
 								msg.isGenerating ||
 								!canControl}
 						>
-							<Icons.ChevronLeft size={14} aria-hidden="true" />
+							<sp-icon name="chevron-left" size="14"></sp-icon>
 						</button>
 						<!-- tabular-nums + a min width so stepping 9/12 -> 10/12
 						     doesn't shove the arrows sideways. -->
@@ -738,10 +541,10 @@
 						class="sp-msg-icon-btn"
 						aria-label="Next swipe"
 						title={swipeWhen[1] ? `Next swipe — ${swipeWhen[1]}` : undefined}
-						onclick={() => onSwipeRight(msg)}
-						disabled={!!editSessionMessage || swipeWhen[0] || !canControl}
+						onclick={() => conv.swipe(msg, "right")}
+						disabled={conv.edit.id !== null || swipeWhen[0] || !canControl}
 					>
-						<Icons.ChevronRight size={14} aria-hidden="true" />
+						<sp-icon name="chevron-right" size="14"></sp-icon>
 					</button>
 				</div>
 			{/if}
@@ -756,55 +559,78 @@
 					aria-label="Message actions"
 				>
 					{#each quickActions as { action } (actionIdentity(action))}
-						{@const Icon = actionIcon(action.icon)}
+						{@const iconName = action.icon || "play"}
 						<button
 							class="sp-msg-icon-btn"
 							aria-label={action.name}
 							title={action.name}
 							onclick={(e) => fireQuick(e, action)}
 						>
-							<Icon size={14} aria-hidden="true" />
+							<sp-icon name={iconName} size="14"></sp-icon>
 						</button>
 					{/each}
 				</div>
 			{/if}
 
 			<div class="sp-msg-menu">
-				{#if messageControls}
-					{@render messageControls(msg)}
+				{#if isSummarizationMode}
+					<!-- Selecting lines for a summary: this line's own choice, and
+					     the two range selections. A line a scene already captured
+					     cannot join another. -->
+					<div class="flex gap-2" role="group" aria-label="Selection controls">
+						{#if scened}
+							<span
+								class="btn msg-ctrl-btn-labeled preset-filled-surface-400-600 cursor-not-allowed opacity-60"
+								title="Already captured in a scene"
+								aria-label="Already captured in a scene"
+							>
+								<sp-icon name="film"></sp-icon>
+								<span class="hidden lg:inline">In Scene</span>
+							</span>
+						{:else}
+							<button
+								class="btn msg-ctrl-btn-labeled {isSelected
+									? 'preset-filled-secondary-500'
+									: 'preset-filled-surface-400-600'}"
+								title={isSelected ? "Deselect message" : "Select message"}
+								aria-label={isSelected ? "Deselect message" : "Select message"}
+								aria-pressed={isSelected}
+								onclick={() => conv.select.toggle(msg)}
+							>
+								<sp-icon name={isSelected ? "check-square" : "square"}></sp-icon>
+								<span class="hidden lg:inline">{isSelected ? "Deselect" : "Select"}</span>
+							</button>
+							<button
+								class="btn msg-ctrl-btn-labeled preset-filled-surface-400-600"
+								title="Select all above up to nearest selected"
+								aria-label="Select all above up to nearest selected"
+								onclick={() => conv.select.range(index, "above")}
+							>
+								<sp-icon name="chevrons-up"></sp-icon>
+								<span class="hidden lg:inline">Select all above</span>
+							</button>
+							<button
+								class="btn msg-ctrl-btn-labeled preset-filled-surface-400-600"
+								title="Select all below up to nearest selected"
+								aria-label="Select all below up to nearest selected"
+								onclick={() => conv.select.range(index, "below")}
+							>
+								<sp-icon name="chevrons-down"></sp-icon>
+								<span class="hidden lg:inline">Select all below</span>
+							</button>
+						{/if}
+					</div>
 				{:else}
-					<MessageControls
-						{msg}
-						{isLastMessage}
-						{editSessionMessage}
-						{hasGeneratingMessage}
-						{canControl}
-						{continueRefusal}
-						{onEditMessage}
-						{onHideMessage}
-						{onDeleteMessage}
-						{onRegenerateMessage}
-						{onContinueMessage}
-						{onAbortMessage}
-						{onBranchMessage}
-						{onStartSummarization}
-						messageActions={venueActions}
-						onSwipeMessage={(_e, m) => onSwipeRight(m)}
-						{onActionsSeen}
-						onFireTrigger={canFireTrigger ? fireTrigger : undefined}
-						open={openMsgControlsMenu === msg.id}
-						onOpenChange={(isOpen) =>
-							(openMsgControlsMenu = isOpen ? msg.id : undefined)}
-					/>
+					<MessageControls {msg} {isLastMessage} />
 				{/if}
 			</div>
 
 			{#if msg.isGenerating}
 				<button
 					class="sp-msg-stop preset-tonal-error"
-					onclick={(e) => onAbortMessage(e, msg)}
+					onclick={() => conv.invoke("stop", msg)}
 				>
-					<Icons.Square size={14} aria-hidden="true" />
+					<sp-icon name="square" size="14"></sp-icon>
 					Stop
 				</button>
 			{/if}
@@ -825,9 +651,9 @@
 							aria-expanded={isNarratorInstructionsExpanded}
 							aria-controls="extra-instructions-{msg.id}"
 						>
-							<Icons.Target size={14} aria-hidden="true" />
+							<sp-icon name="target" size="14"></sp-icon>
 							<span>Extra instructions</span>
-							<Icons.ChevronDown size={14} aria-hidden="true" />
+							<sp-icon name="chevron-down" size="14"></sp-icon>
 						</button>
 						<!-- grid 0fr -> 1fr is the only way to transition to/from an
 						     auto height in pure CSS. The inner overflow-hidden
@@ -835,23 +661,19 @@
 						     content keeps its intrinsic height, so without it the
 						     text spills out. Content stays mounted while collapsed
 						     because a transition needs both endpoints to exist —
-						     hence `inert`, since a 0fr track still contains
-						     focusable content. -->
+						     and the skin hides a collapsed track's content, since
+						     a 0fr track still contains focusable content
+						     (`.sp-disclosure-track`, conversation.css). -->
 						<div
 							id="extra-instructions-{msg.id}"
 							class="sp-disclosure-track"
-							style:grid-template-rows={isNarratorInstructionsExpanded
-								? "1fr"
-								: "0fr"}
-							inert={!isNarratorInstructionsExpanded}
+							data-expanded={isNarratorInstructionsExpanded ? "" : undefined}
 						>
 							<div class="sp-disclosure-clip">
 								<div
 									class="sp-disclosure-panel rendered-session-message-content"
 								>
-									{@html renderMarkdownWithQuotedText(
-										narratorInstructionsContent
-									)}
+									<sp-message-body text={narratorInstructionsContent}></sp-message-body>
 								</div>
 							</div>
 						</div>
@@ -866,26 +688,21 @@
 							aria-expanded={isThinkingExpanded}
 							aria-controls="thinking-{msg.id}"
 						>
-							<Icons.BrainCircuit size={14} aria-hidden="true" />
+							<sp-icon name="brain-circuit" size="14"></sp-icon>
 							<span>Thinking</span>
-							<Icons.ChevronDown size={14} aria-hidden="true" />
+							<sp-icon name="chevron-down" size="14"></sp-icon>
 						</button>
 						<!-- See the block above for why this is a grid track. -->
 						<div
 							id="thinking-{msg.id}"
 							class="sp-disclosure-track"
-							style:grid-template-rows={isThinkingExpanded
-								? "1fr"
-								: "0fr"}
-							inert={!isThinkingExpanded}
+							data-expanded={isThinkingExpanded ? "" : undefined}
 						>
 							<div class="sp-disclosure-clip">
 								<div
 									class="sp-disclosure-panel rendered-session-message-content"
 								>
-									{@html renderMarkdownWithQuotedText(
-										thinkingContent
-									)}
+									<sp-message-body text={thinkingContent}></sp-message-body>
 								</div>
 							</div>
 						</div>
@@ -894,35 +711,24 @@
 			</div>
 		{/if}
 
-		<!-- Padding-free wrapper whose only job is to carry the height animation —
-	     see animateHeight, which observes the child and drives this element.
-	     Disabled while generating: during streaming the height changes on every
-	     token, and an animation would trail the text permanently instead of
-	     settling. The discrete swaps are what this is for — swiping between
-	     alternatives, entering/leaving edit, an error replacing content. -->
-		<div
-			use:animateHeight={{
-				enabled: !msg.isGenerating,
-				scrollContainer: "#session-history"
-			}}
-		>
+		<!-- Padding-free wrapper that carries the height change of a discrete
+		     swap (swiping between alternatives, entering or leaving edit, an
+		     error replacing content) — in CSS, the conversation skin's
+		     `.sp-msg-size`, where the engine can interpolate to `auto`. Not while
+		     generating: the height changes on every token, and a transition
+		     would trail the text instead of settling. -->
+		<div class="sp-msg-size" data-settled={msg.isGenerating ? undefined : ""}>
 			<div class="sp-msg-body flex h-fit text-left">
 				{#if msg.error}
 					<div class="w-full">
 						{#if msg.content}
 							<div class="rendered-session-message-content mb-2">
-								{@html renderMarkdownWithQuotedText(
-									msg.content
-								)}
+								<sp-message-body text={msg.content}></sp-message-body>
 							</div>
 						{/if}
 						<div class="sp-msg-error text-error-600-400">
 							<p class="flex items-start gap-1.5">
-								<Icons.AlertTriangle
-									size={14}
-									aria-hidden="true"
-									class="mt-0.5 shrink-0"
-								/>
+								<sp-icon name="alert-triangle" size="14" class="mt-0.5 shrink-0"></sp-icon>
 								<span>
 									{msg.error.message}{#if msg.error.code}
 										({msg.error.code}){/if}
@@ -956,7 +762,7 @@
 							{/if}
 							<button
 								class="sp-msg-retry"
-								onclick={(e) => onRegenerateMessage(e, msg)}
+								onclick={() => conv.invoke("retry", msg)}
 							>
 								Retry
 							</button>
@@ -972,7 +778,7 @@
 						<MessageComposer
 							bind:markdown={editContent}
 							onSend={handleMessageUpdate}
-							onCancel={() => onCancelEditMessage()}
+							onCancel={() => conv.edit.cancel()}
 							enterBehavior="newline"
 							placeholder="Edit this message…"
 							autofocus
@@ -984,14 +790,14 @@
 							class="text-surface-600-400 flex flex-wrap items-center gap-x-3 gap-y-1 px-1 pt-1 text-xs"
 						>
 							<span>
-								<kbd class="kbd-hint">Ctrl</kbd>
+								<kbd class="sp-kbd-hint">Ctrl</kbd>
 								+
-								<kbd class="kbd-hint">Enter</kbd>
+								<kbd class="sp-kbd-hint">Enter</kbd>
 								to save
 							</span>
 							<span aria-hidden="true" class="opacity-40">·</span>
 							<span>
-								<kbd class="kbd-hint">Esc</kbd>
+								<kbd class="sp-kbd-hint">Esc</kbd>
 								to cancel
 							</span>
 							{#if isEditDirty}
@@ -1011,31 +817,27 @@
 							messageId={msg.id}
 							parts={msg.parts!}
 							activeRevisions={msg.activeRevisions ?? { "0": 0 }}
-							onContentClick={handleContentClick}
+							onOpenImage={(src) => void conv.request("view-image", { src })}
 							bodyText={msg.content ?? ""}
 							onAction={(fn, payload, action, blockId) =>
 								fireBlockAction(fn, msg, payload, action, blockId)}
-							canAnswer={canAnswerForm}
+							canAnswer={(addressee) => conv.canAnswer(addressee)}
 							isStale={(block) =>
-								staleOf(block, msg, session?.sessionMessages ?? [])}
+								staleOf(block, msg, allMessages)}
 						/>
 					</div>
 				{:else}
-					<!-- Click delegation only matters for the inline `<img>` tags
-			     inside the rendered markdown, which are individually
-			     cursor-pointer and already reachable/described via normal
-			     image semantics (alt text) — the div itself is a passive
-			     text container, not a single interactive control. -->
-					<!-- svelte-ignore a11y_click_events_have_key_events -->
-					<!-- svelte-ignore a11y_no_static_element_interactions -->
 					<div
 						class="rendered-session-message-content {msg.isGenerating &&
 						msg.content
 							? 'animate-pulse'
 							: ''}"
-						onclick={handleContentClick}
 					>
-						{@html renderMarkdownWithQuotedText(msg.content)}
+						<sp-message-body
+							text={msg.content}
+							streaming={msg.isGenerating ? "" : undefined}
+							onopen-image={openImage}
+						></sp-message-body>
 					</div>
 				{/if}
 			</div>
@@ -1046,104 +848,6 @@
 		     changed nothing, which is almost every message — and it is outside
 		     the height-animated wrapper above, because a decision landing here
 		     must not look like the body re-rendering. -->
-		<MessageStateLedger
-			messageId={msg.id}
-			sessionId={session?.id ?? null}
-		/>
+		<MessageStateLedger messageId={msg.id} />
 	</div>
 </div>
-
-<style lang="postcss">
-	@reference "tailwindcss";
-
-	/* --- Edit mode --- */
-
-	/* The textarea is a child of MessageComposer, so this has to cross the
-	   component boundary — but it stays anchored to `.edit-surface` so it can
-	   only ever reach the edit composer's field, never the session bar's.
-
-	   Every declaration here is colourless on purpose: Skeleton registers its
-	   palette through `@theme` in app.css, which a component's
-	   `@reference "tailwindcss"` does not pull in, so `@apply bg-warning-500`
-	   and friends would fail to resolve at build time. Colour for edit mode is
-	   applied as ordinary utility classes in the markup above. */
-	.edit-surface :global(.edit-field) {
-		background: transparent;
-		border: none;
-		border-radius: 0;
-		padding: 0.5rem 0.25rem;
-		color: inherit;
-		font: inherit;
-		line-height: 1.6;
-
-		/* The native grabber is redundant under `field-sizing-content` (the
-		   field already grows to fit) and dragging it only desynchronised the
-		   box from its content. */
-		resize: none;
-
-		/* Without a cap, editing a long message grows the card unbounded and
-		   pushes Save/Cancel — which live in the header — off the top of the
-		   viewport. */
-		max-height: 45vh;
-		overflow-y: auto;
-
-		&:focus {
-			outline: none;
-			box-shadow: none;
-		}
-
-		/* Mouse focus needs no ring — the card's own outline already says which
-		   message is open. This is only for keyboard users tabbing back in
-		   from Cancel/Save, who would otherwise get no landing cue at all
-		   beyond the caret. color-mix keeps it palette-free. */
-		&:focus-visible {
-			outline: 2px solid color-mix(in srgb, currentColor 30%, transparent);
-			outline-offset: -2px;
-			border-radius: 0.375rem;
-		}
-
-		&::placeholder {
-			color: inherit;
-			opacity: 0.45;
-		}
-	}
-
-	/* currentColor keeps these legible in both themes without naming a palette
-	   entry (see the note above about `@theme` not being in scope here). */
-	.kbd-hint {
-		display: inline-block;
-		padding: 0.05rem 0.3rem;
-		border: 1px solid currentColor;
-		border-radius: 0.25rem;
-		font-family: inherit;
-		font-size: 0.9em;
-		line-height: 1.4;
-		opacity: 0.75;
-	}
-
-	/* --- Markdown custom styles --- */
-	:global(.markdown-body) {
-		white-space: pre-line;
-	}
-	:global(.markdown-body blockquote) {
-		color: #7dd3fc; /* sky-300 */
-		border-left: 4px solid #38bdf8; /* sky-400 */
-		background: rgba(56, 189, 248, 0.08);
-		padding-left: 1em;
-		margin-left: 0;
-	}
-	:global(.markdown-body em),
-	:global(.markdown-body i) {
-		color: #f472b6; /* pink-400 */
-		font-style: italic;
-		background: rgba(244, 114, 182, 0.08);
-		border-radius: 0.2em;
-		padding: 0 0.15em;
-	}
-	/* Preserve blank lines between paragraphs */
-	:global(.markdown-body p) {
-		margin-top: 1em;
-		margin-bottom: 1em;
-		min-height: 1.5em;
-	}
-</style>

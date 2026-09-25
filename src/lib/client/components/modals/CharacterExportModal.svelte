@@ -20,7 +20,7 @@
 		onOpenChange: (e: OpenChangeDetails) => void
 		character: ExportableCharacter | null
 		onConfirm: (options: {
-			format: "json" | "png"
+			format: "json" | "png" | "charx"
 			lorebookId: number | null
 		}) => void
 		onCancel: () => void
@@ -92,6 +92,11 @@
 	function handleExportAsPng() {
 		onConfirm({ format: "png", lorebookId: selectedExportLorebookId })
 	}
+
+	/** CHARX is the one format that carries the character's sprites. */
+	function handleExportAsCharx() {
+		onConfirm({ format: "charx", lorebookId: selectedExportLorebookId })
+	}
 </script>
 
 <Dialog {open} {onOpenChange}>
@@ -110,7 +115,7 @@
 						<h2 class="mb-2 text-lg font-bold">Export Character</h2>
 						<p class="mb-4">
 							Choose the export format for "{character.nickname ||
-								character.name}":
+								character.name}". Sprites travel in CHARX only.
 						</p>
 						{#if exportableLorebooks.length > 0}
 							<label
@@ -139,6 +144,13 @@
 							>
 								<Icons.FileText size={20} aria-hidden="true" />
 								<span>Export as JSON</span>
+							</button>
+							<button
+								class="btn preset-filled-primary-500 justify-start"
+								onclick={handleExportAsCharx}
+							>
+								<Icons.FileArchive size={20} aria-hidden="true" />
+								<span>Export as CHARX, with sprites</span>
 							</button>
 							{#if avatarSrc(character)}
 								<button

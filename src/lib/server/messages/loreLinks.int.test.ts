@@ -16,9 +16,9 @@
  *    a genre that keeps its lorebook as reference writes none, whatever spec
  *    is bound.
  *
- * And the one that makes it usable: F7 allows a pipeline ONE write-class
- * outlet, so `create-lore-entry@1` takes its `links` and writes them in the
- * same transaction — a room whose exits do not resolve fails WITH the room.
+ * And the one that makes it usable: `create-lore-entry@1` takes its `links`
+ * and writes them in the same transaction — a room whose exits do not resolve
+ * fails WITH the room.
  */
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"

@@ -1,7 +1,7 @@
 /**
  * `applyPresetDefaults` (EditSessionForm's create-flow preset pre-fill, 23
  * §9) used to overwrite `name`/`scenario`/`tags`/`lorebookId`/
- * `groupReplyStrategy`/`genreFields` unconditionally on every preset switch,
+ * the turn strategy/`genreFields` unconditionally on every preset switch,
  * silently discarding a scenario (or any other field) the user had already
  * typed. `resolvePresetFill` is the extracted, pure decision behind the fix:
  * fill only a field that's still pristine — the form's initial value, or
@@ -29,7 +29,7 @@ describe("resolvePresetFill", () => {
 			{
 				name: "Alice",
 				scenario: "A quiet tavern.",
-				groupReplyStrategy: "manual",
+				swaps: [{ spec: "core:spec/chat-turn-order", node: "strategy", definition: "core:task/turn-manual@1" }],
 				lorebookId: 7,
 				tags: ["fantasy", "slow-burn"],
 				genreFields: { tone: "cozy" }
@@ -38,7 +38,7 @@ describe("resolvePresetFill", () => {
 		expect(result.fields).toEqual({
 			name: "Alice",
 			scenario: "A quiet tavern.",
-			groupReplyStrategy: "manual",
+			swaps: [{ spec: "core:spec/chat-turn-order", node: "strategy", definition: "core:task/turn-manual@1" }],
 			lorebookId: 7,
 			tags: ["fantasy", "slow-burn"],
 			genreFields: { tone: "cozy" }
@@ -132,11 +132,33 @@ describe("resolvePresetFill", () => {
 		expect(result.fields.lorebookId).toBe(42)
 	})
 
-	it("groupReplyStrategy: an invalid value in defaults is ignored entirely", () => {
-		const result = resolvePresetFill(blank(), {}, {
-			groupReplyStrategy: "not-a-real-strategy"
+	it("swaps (R40): malformed entries are dropped, well-formed ones fill a pristine field", () => {
+		expect(
+			resolvePresetFill(blank(), {}, { swaps: [{ spec: "", node: "strategy", definition: "x" }] as never })
+				.fields.swaps
+		).toEqual([])
+		expect(
+			resolvePresetFill(blank(), {}, {
+				swaps: [{ spec: "core:spec/chat-turn-order", node: "strategy", definition: "core:task/turn-random@1" }]
+			}).fields.swaps
+		).toEqual([{ spec: "core:spec/chat-turn-order", node: "strategy", definition: "core:task/turn-random@1" }])
+	})
+
+	it("swaps: switching to a preset with none clears what the previous preset seeded (M2 review)", () => {
+		const seeded = [{ spec: "core:spec/chat-turn-order", node: "strategy", definition: "core:task/turn-random@1" }]
+		const first = resolvePresetFill(blank(), {}, { swaps: seeded })
+		expect(first.fields.swaps).toEqual(seeded)
+		const second = resolvePresetFill(first.fields, first.fillState, {})
+		expect(second.fields.swaps).toEqual([])
+		expect(second.fillState.swaps).toBeUndefined()
+	})
+
+	it("swaps: a user's own choice is never overwritten by the next preset", () => {
+		const mine = [{ spec: "core:spec/chat-turn-order", node: "strategy", definition: "core:task/turn-user-split@1" }]
+		const result = resolvePresetFill({ ...blank(), swaps: mine }, {}, {
+			swaps: [{ spec: "core:spec/chat-turn-order", node: "strategy", definition: "core:task/turn-random@1" }]
 		})
-		expect(result.fields.groupReplyStrategy).toBe("ordered")
+		expect(result.fields.swaps).toEqual(mine)
 	})
 
 	it("genreFields: fills only the keys the new preset specifies, per key pristineness", () => {

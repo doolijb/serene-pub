@@ -20,11 +20,30 @@ Connections is a rail item. Its view lives in the sidebar, fills the page when y
 
 - **Add** opens a menu with five doors: **A connection** (the New connection dialog, every service and preset), **KoboldCPP, run by Serene Pub** (installs and manages a local runtime — see [KoboldCPP, run by Serene Pub](#koboldcpp-run-by-serene-pub)), **Ollama** (points at a running Ollama), **A model** (the [model finder](#the-model-finder)), and **A model by name** (for a host that does not list its models). Beside it, **Get a model** opens the finder directly. Ctrl/Cmd+N still opens the New connection dialog.
 - **Filter** ("Filter N connections") matches a connection's name, service and host, and the names of its models — a connection stays in the list when one of its models matches. The popout beside it narrows to _Everything_, _Needs attention_, the _Defaults ledger_, or the connections that can serve _Chat_, _Images_, _Embeddings_ or _Entities_. The active filter shows as one chip under the row. There is deliberately no dropdown.
-- **The readiness card** ("What this pub can do", captioned _K of 10 ready_) has one row per core capability — Chat, Image generation, Embeddings, Named entities — and folds the other six SDK transforms under one line you can expand. Every row is one dot, one sentence, and at most one button, and the button is the fix: a set capability names its model and connection and opens the [capability view](#the-capability-view); an unset one says what that costs you ("Not set · sessions can't reply") and offers **Set up**; one that needs attention says why and offers the one thing that fixes it (**Download**, **Start**, **Refresh**, or **Change**); one that is downloading shows bytes, never a time estimate. Only the Chat row's **Set up** is gold, because chat is the one capability that blocks play.
-- **Connections** lists one row per endpoint. A row is its **title** and a **service chip**, always both — the title is yours, the chip says what it is (teal for a managed runtime such as KoboldCPP or Ollama, outlined for a host such as OpenRouter, Anthropic or ONNX) — over one state line: _Running · Nemo 12B loaded · 3 on disk_, _12 models · openrouter.ai · checked 3 min ago_, _Couldn't list models · key rejected_, _bge-small active · loaded, idle 4 min_. At most one inline action rides on the row: **Stop**/**Start** on a managed KoboldCPP, **Fix** when a listing failed, **Refresh** when models went missing. Tap the row to open the connection. A managed KoboldCPP shows as one row even when it also has an image connection; the image models live in that row's view.
+- **The status strip** answers the one question that blocks play: _Sessions can reply_, with the model and connection that answer, and **Change** — or _Sessions can't reply yet_ and a gold **Set up chat**. It is the only gold button on the index.
+- **Other jobs** is a grid of tiles, one per remaining capability: two across in the sidebar, four at full page, four shown with a **N more** tile for the rest. Each tile is the button. It says what is registered or _Not set up_, and a one-line description of what the job does. There is deliberately **no fraction**: nine of the ten jobs are optional and off is a perfectly good answer for all nine, so nothing here is scored out of ten.
+- **Connections** lists one row per endpoint, in two groups: **On this machine** (_private · free_) and **Services** (_billed per message_). That split is the trade you are actually choosing between, and the header names it once so no row has to.
+
+  A row is its **title**, a **service chip** where that adds something the title hasn't already said, and — on the right, in a column that lines up down the list — its **state** and one **metric**: _Ready · 9 models_, _Running · 4 models_, _Stopped · 2 on disk_, _Needs a key_. Under the title sits the host, or, when something failed, the host's own words. A gold star marks whatever the connection is the instance default for, so the list answers "which of these is my sessions actually using" without opening anything.
+
+  There are five states and **only one of them is red**:
+
+  | State | Means |
+  | --- | --- |
+  | **Ready** (green) | It works right now. |
+  | **Stopped**, **Not tested**, **Installed** (grey) | Set up, nothing wrong, not running. |
+  | **Needs a key**, **Not set up**, **N no longer listed** (gold) | It is waiting on _you_. Nothing has failed. |
+  | **Checking**, **Downloading** (amber) | Something is in flight. |
+  | **Not working**, **Not reachable**, **Crashed** (red) | It was finished and it still failed. |
+
+  A connection you created a minute ago and haven't given a key to is **gold**, never red: it isn't broken, it's unfinished. At most one inline action rides on a row — **Stop**/**Start** on a managed KoboldCPP, **Set up** when it needs a key, **Fix** when something genuinely failed, **Refresh** when models went missing. Tap the row to open the connection. A managed KoboldCPP shows as one row even when it also has an image connection; the image models live in that row's view.
 - **Downloads tray**, at the foot while anything is downloading: a count, an overall bar, and **View** for the [Downloads view](#downloads).
 
 Models no longer appear on the index. They are what a capability view lists and what a connection view manages.
+
+### At full page
+
+Expanding the view keeps the list at 340px and gives the rest to whatever you opened. With **nothing** open the pane shows every job tile four across, with room for the descriptions the sidebar has to clip; the list beside it keeps the status strip, so whether sessions can reply is answered once and stays answered while you open things. With a connection open the pane holds what 400px cannot: its **model table**, with a column each for context window, price in and out per million tokens, and what each model can do, plus a filter and a **hide** control for the models you will never use (hiding is not deleting — the row, its settings and anything pointing at it all survive, and one press brings it back).
 
 ### First run
 
@@ -73,9 +92,11 @@ Everything this pub is fetching, in one list: GGUFs into KoboldCPP, the KoboldCP
 
 Tap a connection row and its view opens, titled with its name and its service chip. For a host this pub talks to — OpenRouter, Anthropic, a llama.cpp of your own — the view puts the _whether_ above the _how_:
 
-- **Status card.** One dot, one word, one sentence: _Reachable · Answered just now_, _Not reachable · ECONNREFUSED_, _Listed · Models checked 3 minutes ago_, _Couldn't list models · 401 Unauthorized_, or _Not checked yet · Test it, or ask for its models_. **Test** (then **Test again**) asks the host with the settings as they are on the form, saved or not, and the forms' own inline Test buttons feed the same card. Nothing is guessed: a test nobody ran is not a failure.
+- **Status card.** One dot, one word, one sentence: _Reachable · Answered just now_, _Not reachable · ECONNREFUSED_, _Listed · Models checked 3 minutes ago_, _Couldn't list models · 401 Unauthorized_, or _Not checked yet · Test it, or ask for its models_. **Test** (then **Test again**) asks the host with the settings as they are on the form, saved or not. Nothing is guessed: a test nobody ran is not a failure. There is exactly one Test button on the screen — the forms' own inline ones were removed in 0.6, because two buttons of the same name in different colours reporting into different places is not two features.
+
+  For a service that needs a key and hasn't got one, the card says so directly — **Needs an API key**, in gold, with _"Nothing has failed — this connection isn't finished"_ and a **Get a key ↗** link straight to that service's key page. It deliberately does **not** report the listing error a missing key obviously caused.
 - **Models card.** How many models the host lists and how many are no longer listed, with **Refresh** (ask again), **Browse models**, and — for a host that serves no list — **Add by name**, which takes the identifier exactly as the host expects it and an optional label.
-- **Settings.** The connection's name and its service's own form: address, key, how requests are shaped. Unchanged inside.
+- **Settings.** The connection's name, then the thing it cannot work without — the **API key** — then the address. The key used to be the last field on the form, under the token counter and the base URL and below the fold; it is now the first thing after the name. What shapes a request rather than establishing one (prompt format, token counter, streaming, wire mode) sits under **Request settings** inside the form.
 - **Advanced and notes.** One disclosure, open when you have written a note: notes, capabilities, the embeddings or entities lane panel, stop scripts.
 - **Delete connection** at the foot, with its confirmation.
 - **Save** and **Discard** appear only while something has changed, pinned under the view. Leaving with unsaved changes still asks.

@@ -746,3 +746,23 @@ describe("the lexical reading is a switch, not an edit", () => {
 		expect(weighted[3]!).toBeGreaterThan(weighted[4]!)
 	})
 })
+
+describe("match facts at the source, and archived entries (L1)", () => {
+	it("a candidate names the keys that matched and the message each was in", () => {
+		const r = run([entry({ keys: "ashguard, riders, dragon" })], [
+			"hello there",
+			"the ashguard rode north",
+			"and the riders followed"
+		])
+		const matched = r.candidates[0].matched ?? []
+		expect(matched.map((m) => m.key).sort()).toEqual(["ashguard", "riders"])
+		expect(matched.find((m) => m.key === "ashguard")?.messageId).toBe(2)
+		expect(matched.find((m) => m.key === "riders")?.messageId).toBe(3)
+	})
+
+	it("an archived entry is excluded, and says so", () => {
+		const r = run([entry({ archived: true })], ["the ashguard rode north"])
+		expect(r.candidates).toHaveLength(0)
+		expect(r.skipped[0]).toMatchObject({ kind: "excluded", reason: "entry is archived" })
+	})
+})

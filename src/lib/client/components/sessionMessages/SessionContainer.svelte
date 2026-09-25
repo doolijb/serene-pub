@@ -1,14 +1,13 @@
 <script lang="ts">
-	import type { Snippet } from "svelte"
 	import { untrack } from "svelte"
-	import { softFade } from "$lib/client/utils/motion"
 	import {
 		conversationIndex,
 		orderedMessages,
 		type MessageOrder
 	} from "./messageOrder"
+	import SessionMessage from "./SessionMessage.svelte"
+	import { useConversation } from "./conversation.svelte"
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
-	import * as Icons from "@lucide/svelte"
 
 	// Visually distinct, readable scene colors (work in both light and dark)
 	const SCENE_COLORS = [
@@ -55,179 +54,41 @@
 	]
 
 	// Props for customizing the components used
+	/**
+	 * The conversation's log (C0b): the widget's own part. It draws what the
+	 * conversation holds — the rows off the widget context, the scenes off the
+	 * page's dossier — in a host-measured scroll region (`sp-scroll`), and asks
+	 * for older rows when the reader reaches the far end.
+	 */
 	interface Props {
-		session: Sockets.Sessions.Get.Response["session"] | undefined
-		pagination: Sockets.Sessions.Get.Response["pagination"] | undefined
-		loadingOlderMessages: boolean
-		sessionMessagesContainer: HTMLDivElement | null
-		onScroll: (event: Event) => void
-
-		/**
-		 * Which end the newest message is drawn at (the widget's `order`
-		 * setting). The list is reversed for `newest-first` rather than flipped
-		 * in CSS: the region is a `log`, and a reader follows the DOM.
-		 */
 		order?: MessageOrder
-		/**
-		 * Whether the scene titles, history-entry markers and each row's
-		 * `--sp-scene` colour are drawn (the widget's `showSceneMarkers`).
-		 */
 		showSceneMarkers?: boolean
-
-		/** Scenes for this session — drives the scene titles and history-entry markers */
-		sceneList?: Sockets.Scenes.List.SceneWithEntry[]
-
-		/** Called when user clicks a history-entry marker */
-		onHistoryEntryClick?: (info: {
-			historyEntryId: number
-			lorebookId: number
-		}) => void
-		/** Called when user clicks a scene title */
-		onSceneClick?: (info: {
-			sceneId: number
-			historyEntryId: number
-			lorebookId: number
-		}) => void
-		/** Called when user clicks "Start a new entry" after a completed entry with no successor */
-		onNewHistoryEntry?: (info: { lorebookId: number }) => void
-
-		// Required props for MessageComponent
-		getMessageCharacter: (
-			msg: SelectSessionMessage
-		) => SelectCharacter | undefined
-		canControlMessage: (msg: SelectSessionMessage) => boolean
-		showSwipeControls: (
-			msg: SelectSessionMessage,
-			isGreeting: boolean
-		) => boolean
-		canSwipeRight: (
-			msg: SelectSessionMessage,
-			isGreeting: boolean
-		) => boolean
-		onSwipeLeft: (msg: SelectSessionMessage) => void
-		onSwipeRight: (msg: SelectSessionMessage) => void
-		onEditMessage: (event: Event, msg: SelectSessionMessage) => void
-		onDeleteMessage: (event: Event, msg: SelectSessionMessage) => void
-		onHideMessage: (event: Event, msg: SelectSessionMessage) => void
-		onRegenerateMessage: (event: Event, msg: SelectSessionMessage) => void
-		onContinueMessage?: (event: Event, msg: SelectSessionMessage) => void
-		onAbortMessage: (event: Event, msg: SelectSessionMessage) => void
-		onBranchMessage?: (event: Event, msg: SelectSessionMessage) => void
-		editSessionMessage: SelectSessionMessage | undefined
-		canRegenerateLastMessage: boolean
-		hasGeneratingMessage: boolean
-		isGuest: boolean
-		/**
-		 * Which channel the log is showing (20 §7; R-C) — the composer's pick.
-		 *
-		 * The rows of every other channel are drawn and hidden rather than
-		 * dropped, which is what they have always been: this used to read
-		 * `msg.channel === "main"` outright, so a genre with a second channel
-		 * had rows nothing could ever show. `main` is the default, so a session
-		 * whose genre declares one channel renders exactly what it rendered.
-		 */
-		channel?: string
-
-		// Snippet children
-		MessageComponent: Snippet<
-			[
-				{
-					msg: SelectSessionMessage
-					index: number
-					session: Sockets.Sessions.Get.Response["session"] & {
-						sessionMessages: SelectSessionMessage[]
-					}
-					isLastMessage: boolean
-					getMessageCharacter: (
-						msg: SelectSessionMessage
-					) => SelectCharacter | undefined
-					canControlMessage: (msg: SelectSessionMessage) => boolean
-					showSwipeControls: (
-						msg: SelectSessionMessage,
-						isGreeting: boolean
-					) => boolean
-					canSwipeRight: (
-						msg: SelectSessionMessage,
-						isGreeting: boolean
-					) => boolean
-					onSwipeLeft: (msg: SelectSessionMessage) => void
-					onSwipeRight: (msg: SelectSessionMessage) => void
-					onEditMessage: (
-						event: Event,
-						msg: SelectSessionMessage
-					) => void
-					onDeleteMessage: (
-						event: Event,
-						msg: SelectSessionMessage
-					) => void
-					onHideMessage: (
-						event: Event,
-						msg: SelectSessionMessage
-					) => void
-					onRegenerateMessage: (
-						event: Event,
-						msg: SelectSessionMessage
-					) => void
-					onContinueMessage?: (
-						event: Event,
-						msg: SelectSessionMessage
-					) => void
-					onAbortMessage: (
-						event: Event,
-						msg: SelectSessionMessage
-					) => void
-					onBranchMessage?: (
-						event: Event,
-						msg: SelectSessionMessage
-					) => void
-					editSessionMessage: SelectSessionMessage | undefined
-					canRegenerateLastMessage: boolean
-					hasGeneratingMessage: boolean
-					/**
-					 * The scene this message belongs to, read off the scene
-					 * map below — `null` for a message in none. The row it
-					 * renders in carries the scene's colour as `--sp-scene`.
-					 */
-					sceneName: string | null
-				}
-			]
-		>
 	}
 
-	let {
-		session,
-		pagination,
-		loadingOlderMessages,
-		sessionMessagesContainer = $bindable(),
-		onScroll,
-		order = "oldest-first",
-		showSceneMarkers = true,
-		sceneList = [],
-		onHistoryEntryClick,
-		onSceneClick,
-		onNewHistoryEntry,
-		getMessageCharacter,
-		canControlMessage,
-		showSwipeControls,
-		canSwipeRight,
-		onSwipeLeft,
-		onSwipeRight,
-		onEditMessage,
-		onDeleteMessage,
-		onHideMessage,
-		onRegenerateMessage,
-		onContinueMessage,
-		onAbortMessage,
-		onBranchMessage,
-		editSessionMessage,
-		canRegenerateLastMessage,
-		hasGeneratingMessage,
-		isGuest,
-		channel = "main",
-		MessageComponent
-	}: Props = $props()
+	let { order = "oldest-first", showSceneMarkers = true }: Props = $props()
 
-	// ── Scene / history-entry annotation ──────────────────────────
+	const conv = useConversation()
+	const messages = $derived(conv.ctx.messages.v1 as unknown as SelectSessionMessage[])
+	const sceneList = $derived(
+		(conv.dossier?.scenes ?? []) as unknown as Sockets.Scenes.List.SceneWithEntry[]
+	)
+	const loadingOlderMessages = $derived(!!conv.dossier?.loadingOlder)
+	const loaded = $derived(!!conv.dossier)
+
+	/** Older rows, asked for once per reach of the far end. */
+	function loadOlder() {
+		if (!conv.dossier?.hasOlder || conv.dossier.loadingOlder) return
+		void conv.request("messages", {})
+	}
+	/** The lore panel, at a history entry, a scene, or a new entry. */
+	const openLore = (params: {
+		lorebookId: number
+		scope: "history" | "scenes"
+		entryId?: number
+		sceneId?: number
+		create?: boolean
+	}) => void conv.request("open-lore", params)
+
 	type MsgSceneInfo = {
 		scene: Sockets.Scenes.List.SceneWithEntry
 		isFirstInScene: boolean
@@ -239,18 +100,16 @@
 	}
 
 	// Lightweight signal capturing only the message *set and order* (ids), not
-	// their content. The parent replaces the whole `session.sessionMessages` array
+	// their content. The parent replaces the whole `messages` array
 	// reference on every streamed chunk even when only one message's content
 	// changed, which would otherwise force the expensive O(scenes × messages)
 	// derivation below to fully recompute on every token.
-	let msgOrderKey = $derived(
-		session?.sessionMessages.map((m) => m.id).join(",") ?? ""
-	)
+	let msgOrderKey = $derived(messages.map((m) => m.id).join(","))
 
 	let msgSceneMap = $derived.by((): Map<number, MsgSceneInfo> => {
 		// Track sceneList and msgOrderKey as the real dependencies here. The
-		// heavy work below (which reads session.sessionMessages directly) is wrapped
-		// in untrack() so a session.sessionMessages reference change alone doesn't
+		// heavy work below (which reads messages directly) is wrapped
+		// in untrack() so a messages reference change alone doesn't
 		// dirty this derived — only a change in msgOrderKey's *value* (i.e. the
 		// message ids/order actually changing) or sceneList does.
 		void sceneList.length
@@ -264,12 +123,12 @@
 
 	/** The messages in the sequence this log draws them, `order` applied. */
 	let drawnMessages = $derived(
-		orderedMessages(session?.sessionMessages ?? [], order)
+		orderedMessages(messages, order)
 	)
 
 	function buildMsgSceneMap(): Map<number, MsgSceneInfo> {
 		const map = new Map<number, MsgSceneInfo>()
-		if (!sceneList.length || !session?.sessionMessages.length) return map
+		if (!sceneList.length || !messages.length) return map
 
 		// Build messageId → scene lookup
 		const messageToScene = new Map<
@@ -287,7 +146,7 @@
 		for (const scene of sceneList) {
 			const ids = new Set(scene.selectedMessageIds ?? [])
 			if (!ids.size) continue
-			const ordered = session.sessionMessages
+			const ordered = messages
 				.filter((m) => ids.has(m.id))
 				.map((m) => m.id)
 			if (ordered.length)
@@ -303,7 +162,7 @@
 			if (!scene.historyEntryId) continue
 			const bounds = sceneBounds.get(scene.id)
 			if (!bounds) continue
-			const idx = session.sessionMessages.findIndex(
+			const idx = messages.findIndex(
 				(m) => m.id === bounds.last
 			)
 			const current = entryLastMsgIndex.get(scene.historyEntryId) ?? -1
@@ -311,13 +170,13 @@
 		}
 		const entryLastMsgId = new Map<number, number>()
 		for (const [entryId, idx] of entryLastMsgIndex) {
-			entryLastMsgId.set(entryId, session.sessionMessages[idx].id)
+			entryLastMsgId.set(entryId, messages[idx].id)
 		}
 
 		// Assign colors in the order scenes first appear in the session
 		const sceneColorIndex = new Map<number, number>()
 		let colorCounter = 0
-		for (const msg of session.sessionMessages) {
+		for (const msg of messages) {
 			const scene = messageToScene.get(msg.id)
 			if (scene && !sceneColorIndex.has(scene.id)) {
 				sceneColorIndex.set(
@@ -330,7 +189,7 @@
 
 		// Walk messages in display order to build the full map
 		const seenEntryIds = new Set<number>()
-		for (const msg of session.sessionMessages) {
+		for (const msg of messages) {
 			const scene = messageToScene.get(msg.id)
 			if (!scene) continue
 			const bounds = sceneBounds.get(scene.id)
@@ -372,34 +231,34 @@
 </script>
 
 <div class="relative flex h-full flex-col">
+	<!-- The host measures and scrolls (`sp-scroll`): pinned to the newest end
+	     as rows arrive, held still when the reader has scrolled away, and
+	     `reach-start` at the far end asks for older rows. -->
+	<sp-scroll
+		class="sp-log-scroll"
+		stick={order === "newest-first" ? "top" : "bottom"}
+		label="Session messages"
+		onreach-start={loadOlder}
+	>
 	<div
 		id="session-history"
-		class="flex flex-1 flex-col gap-3 overflow-auto"
-		bind:this={sessionMessagesContainer}
-		onscroll={onScroll}
+		class="flex flex-1 flex-col gap-3"
 		role="log"
-		aria-label="Session messages"
 		aria-live="polite"
 		aria-atomic="false"
 	>
 		<div class="p-2">
-			{#if !session}
+			{#if !loaded}
 				<!-- Still loading the session itself — distinct from a genuinely
 				     empty session below, otherwise "No messages yet." flashes on
 				     every session open even when it has hundreds of messages. -->
 				<div class="flex flex-col items-center gap-2 py-16">
-					<Icons.Loader2
-						size={28}
-						class="text-surface-400 animate-spin"
-					/>
+					<sp-icon name="loader-2" size="28" class="text-surface-400 animate-spin"></sp-icon>
 					<span class="text-muted text-sm">Loading session…</span>
 				</div>
-			{:else if session.sessionMessages.length === 0}
+			{:else if messages.length === 0}
 				<div class="flex flex-col items-center gap-2 py-16 text-center">
-					<Icons.MessageSquareText
-						size={28}
-						class="text-surface-400"
-					/>
+					<sp-icon name="message-square-text" size="28" class="text-surface-400"></sp-icon>
 					<span class="text-muted text-sm">
 						Send a message to begin the roleplay
 					</span>
@@ -411,7 +270,7 @@
 					{#if loadingOlderMessages}
 						<div class="text-muted py-2 text-center">
 							<div class="inline-flex items-center gap-2">
-								<Icons.Loader2 size={16} class="animate-spin" />
+								<sp-icon name="loader-2" size="16" class="animate-spin"></sp-icon>
 								Loading older messages...
 							</div>
 						</div>
@@ -424,19 +283,18 @@
 				<ul
 					class="flex flex-1 flex-col gap-3"
 					role="group"
-					aria-label="Session conversation with {session
-						.sessionMessages.length} messages"
+					aria-label="Session conversation with {messages.length} messages"
 				>
 					{#each drawnMessages as msg, row (msg.id)}
 						{@const index = conversationIndex(
 							row,
-							session.sessionMessages.length,
+							messages.length,
 							order
 						)}
 						{@const isLastMessage =
-							index === session.sessionMessages.length - 1}
+							index === messages.length - 1}
 						{@const onThisChannel =
-							(msg.channel || "main") === channel}
+							(msg.channel || "main") === conv.lane.current}
 						{@const si = msgSceneMap.get(msg.id)}
 						{@const color = si ? SCENE_COLORS[si.colorIndex] : null}
 
@@ -445,29 +303,23 @@
 						     message. -->
 						{#if si?.isFirstOfEntry && si.historyEntry}
 							<li class="w-full" role="presentation">
-								{#if onHistoryEntryClick}
+								{#if si.scene.historyEntryId}
 									<button
 										class="sp-history-marker"
 										onclick={() =>
-											onHistoryEntryClick!({
-												historyEntryId:
-													si.scene.historyEntryId,
+											openLore({
+												scope: "history",
+												entryId: si.scene.historyEntryId!,
 												lorebookId: si.scene.lorebookId
 											})}
 										title="Open history entry in lorebook"
 									>
-										<Icons.Calendar
-											size={12}
-											aria-hidden="true"
-										/>
+										<sp-icon name="calendar" size="12"></sp-icon>
 										{formatEntryDate(si.historyEntry)}
 									</button>
 								{:else}
 									<span class="sp-history-marker">
-										<Icons.Calendar
-											size={12}
-											aria-hidden="true"
-										/>
+										<sp-icon name="calendar" size="12"></sp-icon>
 										{formatEntryDate(si.historyEntry)}
 									</span>
 								{/if}
@@ -482,22 +334,18 @@
 								role="presentation"
 								style="--sp-scene: {color.text}"
 							>
-								{#if onSceneClick}
-									<button
+																	<button
 										class="sp-scene-title"
 										onclick={() =>
-											onSceneClick!({
+											openLore({
+												scope: "scenes",
 												sceneId: si.scene.id,
-												historyEntryId:
-													si.scene.historyEntryId,
+												entryId: si.scene.historyEntryId ?? undefined,
 												lorebookId: si.scene.lorebookId
 											})}
 										title="Open scene in lorebook"
 									>
-										<Icons.Film
-											size={14}
-											aria-hidden="true"
-										/>
+										<sp-icon name="film" size="14"></sp-icon>
 										{si.scene.name ?? "Scene"}
 										{#if si.historyEntry && !si.historyEntry.isCompleted}
 											<span class="sp-scene-title-state">
@@ -505,20 +353,7 @@
 											</span>
 										{/if}
 									</button>
-								{:else}
-									<span class="sp-scene-title">
-										<Icons.Film
-											size={14}
-											aria-hidden="true"
-										/>
-										{si.scene.name ?? "Scene"}
-										{#if si.historyEntry && !si.historyEntry.isCompleted}
-											<span class="sp-scene-title-state">
-												open
-											</span>
-										{/if}
-									</span>
-								{/if}
+								
 							</li>
 						{/if}
 
@@ -546,37 +381,17 @@
 								? `--sp-scene: ${color.text}`
 								: undefined}
 							data-scene={si ? si.scene.id : undefined}
-							in:softFade={{
-								suppressed:
-									loadingOlderMessages || !isLastMessage
-							}}
-							out:softFade
+							data-arrive={untrack(() =>
+								loadingOlderMessages || !isLastMessage
+									? undefined
+									: "")}
 						>
-							{@render MessageComponent({
-								msg,
-								index,
-								session,
-								isLastMessage,
-								sceneName: si
-									? (si.scene.name ?? "Scene")
-									: null,
-								getMessageCharacter,
-								canControlMessage,
-								showSwipeControls,
-								canSwipeRight,
-								onSwipeLeft,
-								onSwipeRight,
-								onEditMessage,
-								onDeleteMessage,
-								onHideMessage,
-								onRegenerateMessage,
-								onContinueMessage,
-								onAbortMessage,
-								onBranchMessage,
-								editSessionMessage,
-								canRegenerateLastMessage,
-								hasGeneratingMessage
-							})}
+							<SessionMessage
+								{msg}
+								{index}
+								{isLastMessage}
+								sceneName={si ? (si.scene.name ?? "Scene") : null}
+							/>
 						</li>
 
 						<!-- Completed-entry marker: where this entry's story
@@ -585,45 +400,32 @@
 							<li class="w-full" role="presentation">
 								{#if si.historyEntry.nextEntry}
 									{@const next = si.historyEntry.nextEntry}
-									{#if onHistoryEntryClick}
-										<button
+																			<button
 											class="sp-history-marker"
 											onclick={() =>
-												onHistoryEntryClick!({
-													historyEntryId: next.id,
-													lorebookId:
-														si.scene.lorebookId
+												openLore({
+													scope: "history",
+													entryId: next.id,
+													lorebookId: si.scene.lorebookId
 												})}
 											title="Open next history entry in lorebook"
 										>
-											<Icons.Calendar
-												size={12}
-												aria-hidden="true"
-											/>
+											<sp-icon name="calendar" size="12"></sp-icon>
 											Next: {formatEntryDate(next)}
 										</button>
-									{:else}
-										<span class="sp-history-marker">
-											<Icons.Calendar
-												size={12}
-												aria-hidden="true"
-											/>
-											Next: {formatEntryDate(next)}
-										</span>
-									{/if}
+									
 								{:else}
 									<button
 										class="sp-history-marker sp-history-marker-new"
 										onclick={() =>
-											onNewHistoryEntry?.({
+											openLore({
+												scope: "history",
+												create: true,
 												lorebookId: si.scene.lorebookId
 											})}
 										title="Start a new history entry"
 									>
-										<Icons.CalendarPlus
-											size={12}
-											aria-hidden="true"
-										/>
+										<sp-icon name="calendar-plus" size="12"></sp-icon>
 										Start a new entry
 									</button>
 								{/if}
@@ -637,4 +439,5 @@
 			{/if}
 		</div>
 	</div>
+	</sp-scroll>
 </div>

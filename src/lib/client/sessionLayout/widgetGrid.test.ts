@@ -724,3 +724,26 @@ describe("withoutGridRequired — a side list may not seat the conversation", ()
 		).toEqual({ ids: ["stats", "inventory"], refused: [] })
 	})
 })
+
+describe("a genre's own middle (R71)", () => {
+	it("puts the genre's primary widget where the conversation would be, required", () => {
+		const grid = loadChatLayout({}, "acme.game:board", new Set(["messages"]))
+		expect(grid.widgets.map((w) => [w.id, w.zone, w.required])).toEqual([["acme.game:board", "middle", true]])
+	})
+
+	it("drops a saved placement of what the genre withholds", () => {
+		const saved = {
+			version: 1,
+			widgets: [
+				{ id: "messages", zone: "middle", order: 0, size: { w: "grow", h: "grow" } },
+				{ id: "stats", zone: "middle", order: 1, size: { w: "grow", h: { cells: 3 } } }
+			]
+		}
+		const grid = loadChatLayout(saved, "acme.game:board", new Set(["messages", "stats"]))
+		expect(grid.widgets.map((w) => w.id)).toEqual(["acme.game:board"])
+	})
+
+	it("is unchanged for a genre that withholds nothing", () => {
+		expect(loadChatLayout({})).toEqual(defaultChatLayout())
+	})
+})

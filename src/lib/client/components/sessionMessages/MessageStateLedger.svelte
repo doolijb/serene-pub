@@ -13,37 +13,31 @@
 	 * change is the one above them; **Review** opens the same rows for the whole
 	 * session, for when they have scrolled away.
 	 */
-	import * as Icons from "@lucide/svelte"
-	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
-	import {
-		openSessionState,
-		sessionState
-	} from "$lib/client/state/sessionState.svelte"
 	import StateProposalList from "./StateProposalList.svelte"
+	import { useConversation } from "./conversation.svelte"
 
 	interface Props {
 		messageId: number
-		sessionId: number | null
 	}
-	let { messageId, sessionId }: Props = $props()
+	let { messageId }: Props = $props()
 
-	const store = sessionState()
-	$effect(() => openSessionState(sessionId))
-
-	let groups = $derived(store.ledgerFor(messageId))
-	let pending = $derived(store.pendingFor(messageId))
-	let waiting = $derived(store.pending)
+	// What this line changed and what waits on it: the page's projection of
+	// the session state (C0b), read off the conversation.
+	const conv = useConversation()
+	let groups = $derived(conv.dossier?.state.ledgers[messageId] ?? [])
+	let pending = $derived(conv.dossier?.state.pending[messageId] ?? [])
+	let waiting = $derived(conv.dossier?.state.waiting ?? [])
 	let reviewOpen = $state(false)
 </script>
 
 {#if groups.length || pending.length}
-	<div class="ledger" data-ledger-message={messageId}>
+	<div class="sp-ledger" data-ledger-message={messageId}>
 		{#each groups as group (group.ownerKey)}
-			<p class="line" data-owner-key={group.ownerKey}>
-				<span class="who">{group.ownerLabel}</span>
+			<p class="sp-ledger-line" data-owner-key={group.ownerKey}>
+				<span class="sp-ledger-who">{group.ownerLabel}</span>
 				{#each group.lines as line, i (line.key)}
-					{#if i > 0}<span class="sep">·</span>{/if}
-					<span class="change" title="changed by {line.updatedBy}">
+					{#if i > 0}<span class="sp-ledger-sep">·</span>{/if}
+					<span class="sp-ledger-change" title="changed by {line.updatedBy}">
 						{line.text}
 					</span>
 				{/each}
@@ -55,32 +49,27 @@
 		{/if}
 
 		{#if waiting.length}
-			<Popover
+			<!-- `sp-popover` (§3.5): our button is the trigger, the card the panel. -->
+			<sp-popover
+				placement="bottom-start"
+				label="Waiting for you"
 				open={reviewOpen}
-				onOpenChange={(e) => (reviewOpen = e.open)}
-				positioning={{ placement: "bottom-start" }}
+				onopen-change={(e: CustomEvent<{ open: boolean }>) => (reviewOpen = e.detail.open)}
 			>
-				<Popover.Trigger class="review">
-					<Icons.ClipboardCheck size={11} aria-hidden="true" />
+				<button slot="trigger" type="button" class="sp-ledger-review">
+					<sp-icon name="clipboard-check" size="11"></sp-icon>
 					<span>
 						Review
 						{waiting.length === 1
 							? "1 change"
 							: `${waiting.length} changes`}
 					</span>
-				</Popover.Trigger>
-				<Portal>
-					<Popover.Positioner class="z-[1000]!">
-						<Popover.Content
-							class="card bg-surface-100-900 w-[min(92vw,360px)] space-y-2 p-3"
-						>
+				</button>
+						<div class="card bg-surface-100-900 w-[min(92vw,360px)] space-y-2 p-3">
 							<header
 								class="flex items-center gap-1.5 text-xs font-semibold"
 							>
-								<Icons.ClipboardCheck
-									size={14}
-									aria-hidden="true"
-								/>
+								<sp-icon name="clipboard-check" size="14"></sp-icon>
 								<span>Waiting for you</span>
 							</header>
 							<p class="text-surface-600-400 text-[0.68rem]">
@@ -88,50 +77,8 @@
 								you accept one.
 							</p>
 							<StateProposalList proposals={waiting} showAnchor />
-						</Popover.Content>
-					</Popover.Positioner>
-				</Portal>
-			</Popover>
+						</div>
+			</sp-popover>
 		{/if}
 	</div>
 {/if}
-
-<style>
-	.ledger {
-		display: flex;
-		flex-direction: column;
-		gap: 0.15rem;
-		padding: 0.2rem 0.1rem 0;
-		font-size: 0.68rem;
-		opacity: 0.85;
-	}
-	.line {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: baseline;
-		gap: 0.25rem;
-		margin: 0;
-	}
-	.who {
-		font-weight: 600;
-	}
-	.sep {
-		opacity: 0.5;
-	}
-	.change {
-		font-variant-numeric: tabular-nums;
-	}
-	:global(.review) {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.25rem;
-		align-self: flex-start;
-		padding: 0.02rem 0.35rem;
-		border-radius: 999px;
-		background: color-mix(in oklab, currentColor 12%, transparent);
-		font-size: 0.66rem;
-	}
-	:global(.review:hover) {
-		filter: brightness(1.2);
-	}
-</style>

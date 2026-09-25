@@ -489,9 +489,13 @@ describe("who portrays whom on a turn", () => {
 		const inlet = receipt.nodes.find((n: any) => n.nodeKey === "input")
 		expect(inlet.output.speaker).toBe(`character:${characterId}`)
 		expect(inlet.output.characterId).toBe(characterId)
-		const speaker = receipt.nodes.find((n: any) => n.nodeKey === "speaker")
-		expect(speaker.output.speaker).toBe(`character:${characterId}`)
-		expect(speaker.output.characterId).toBe(characterId)
+		// The reply run seats no `speaker` node since A6 (PLAN-turn-order
+		// §4.4): the entry being fired names who speaks, and it arrives on
+		// the inlet — which the assertion above already reads.
+		expect(receipt.nodes.some((n: any) => n.nodeKey === "speaker")).toBe(
+			false
+		)
+		expect((inlet.output as any).characterId).toBe(characterId)
 		/**
 		 * And who PRESSED, beside who is speaking (G9, 2026-09-17) — the two
 		 * differ on nearly every turn, which is the whole reason the port

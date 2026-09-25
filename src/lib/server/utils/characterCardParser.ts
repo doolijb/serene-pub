@@ -1,5 +1,5 @@
 /**
- * Shared utilities for parsing character cards (PNG or JSON)
+ * Shared utilities for parsing character cards (PNG, JPEG, WebP, JSON or CHARX)
  * Used by both character and persona import handlers
  */
 
@@ -8,7 +8,18 @@ import extract from "png-chunks-extract"
 import encode from "png-chunks-encode"
 import text from "png-chunk-text"
 import { fileTypeFromBuffer } from "file-type"
+import { unzipSync } from "fflate"
 import { hasLorebookEntries } from "./lorebookImportMapper"
+import {
+	CARD_SPRITE_LIMITS,
+	bytesOfDataUri,
+	decodeBase64Capped,
+	embeddedPathOf,
+	extractCardSprites,
+	spriteAssetsOf,
+	type CardSprite,
+	type ExtractedSprites
+} from "./cardSprites"
 
 /**
  * `png-chunks-extract`'s `extractChunks` reads each chunk's 32-bit declared
@@ -155,13 +166,299 @@ export interface ParsedCharacterCard {
 	card: CharacterCard
 	avatarBuffer?: Buffer
 	lorebook?: SpecV3.Lorebook
+	/**
+	 * Card assets this import did NOT keep, counted by asset type. Absent
+	 * when there are none. See `unimportedAssets`.
+	 */
+	unimportedAssets?: Record<string, number>
+	/**
+	 * The card's sprites with their bytes (DESIGN-sprites §4) — CCv3
+	 * `emotion`/`expression` assets, Serene Pub's `x_sp_sprite`, and RisuAI's
+	 * older emotion pairs. Absent when the card carries none, or when parsed
+	 * with `includeAvatar: false`.
+	 */
+	sprites?: CardSprite[]
 }
 
 /**
- * Parse a character card from a buffer (PNG or JSON)
+ * Count the card's assets that Serene Pub does not keep, by asset type.
+ *
+ * The V3 spec (§assets) lets an application ignore an asset it has no use
+ * for, but says it MUST alert the user when it cannot keep the asset's data,
+ * because a re-export will then leave it out. Serene Pub keeps exactly one
+ * asset, the main icon, as the avatar; everything else is counted here so the
+ * import can say so rather than dropping it silently. Sprites
+ * (DESIGN-sprites §4) ARE kept now: pass what `extractCardSprites` took and
+ * they are not counted.
+ *
+ * Covers both places a card carries assets: V3 `data.assets` (CHARX, and
+ * RisuAI's PNG exports, which embed them as `chara-ext-asset_:` chunks) and
+ * RisuAI's older `extensions.risuai.emotions` / `additionalAssets` pairs.
+ */
+export function unimportedAssets(
+	raw: any,
+	taken?: Pick<ExtractedSprites, "used" | "legacyUsed">
+): Record<string, number> | undefined {
+	const counts: Record<string, number> = {}
+	const add = (type: unknown) => {
+		const key = typeof type === "string" && type.trim() ? type.trim() : "other"
+		counts[key] = (counts[key] ?? 0) + 1
+	}
+	const assets = raw?.data?.assets ?? raw?.assets
+	if (Array.isArray(assets)) {
+		const kept = mainIconAsset(raw)
+		for (const asset of assets) {
+			if (!asset || asset === kept || taken?.used.has(asset)) continue
+			add(asset.type)
+		}
+	}
+	const risu = raw?.data?.extensions?.risuai ?? raw?.extensions?.risuai
+	if (Array.isArray(risu?.emotions)) {
+		const left = risu.emotions.length - (taken?.legacyUsed ?? 0)
+		for (let i = 0; i < left; i++) add("emotion")
+	}
+	if (Array.isArray(risu?.additionalAssets)) {
+		for (let i = 0; i < risu.additionalAssets.length; i++) add("x-risu-asset")
+	}
+	return Object.keys(counts).length > 0 ? counts : undefined
+}
+
+/**
+ * One sentence for the import toast naming what `unimportedAssets` counted.
+ * Undefined when nothing was left behind.
+ */
+export function describeUnimportedAssets(
+	counts: Record<string, number> | undefined
+): string | undefined {
+	if (!counts) return undefined
+	const label: Record<string, [string, string]> = {
+		emotion: ["emotion image", "emotion images"],
+		expression: ["emotion image", "emotion images"],
+		background: ["background", "backgrounds"],
+		icon: ["alternate icon", "alternate icons"],
+		user_icon: ["user icon", "user icons"]
+	}
+	const parts = Object.entries(counts).map(([type, n]) => {
+		const [one, many] = label[type] ?? ["other asset", "other assets"]
+		return `${n} ${n === 1 ? one : many}`
+	})
+	const total = Object.values(counts).reduce((a, b) => a + b, 0)
+	const list =
+		parts.length === 1
+			? parts[0]
+			: `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`
+	return `The card's ${list} ${total === 1 ? "was" : "were"} not imported, so exporting this character will leave ${total === 1 ? "it" : "them"} out.`
+}
+
+/**
+ * Ceilings on what a CHARX is allowed to make us inflate. Both are checked
+ * against the size the zip DECLARES before anything is decompressed, so a
+ * small upload cannot expand into a huge allocation (a zip bomb). fflate
+ * inflates into a buffer of exactly the declared size and never grows it,
+ * so a header that under-declares truncates rather than allocating more.
+ */
+export const CHARX_LIMITS = {
+	cardJsonBytes: 16 * 1024 * 1024,
+	iconBytes: 32 * 1024 * 1024
+}
+
+/** A zip local-file header: "PK\x03\x04". CHARX is a plain zip. */
+export function isZipBuffer(buffer: Buffer | Uint8Array): boolean {
+	return (
+		buffer.length >= 4 &&
+		buffer[0] === 0x50 &&
+		buffer[1] === 0x4b &&
+		buffer[2] === 0x03 &&
+		buffer[3] === 0x04
+	)
+}
+
+/** Inflate exactly one named entry, refusing it if it declares more than `maxBytes`. */
+function readZipEntry(
+	buffer: Uint8Array,
+	name: string,
+	maxBytes: number
+): Uint8Array | undefined {
+	let tooLarge = false
+	let files: Record<string, Uint8Array>
+	try {
+		files = unzipSync(buffer, {
+			filter: (file) => {
+				if (file.name !== name) return false
+				if (file.originalSize > maxBytes) {
+					tooLarge = true
+					return false
+				}
+				return true
+			}
+		})
+	} catch (e: any) {
+		throw new Error(
+			`This .charx file could not be read as a zip archive: ${e?.message || e}`
+		)
+	}
+	if (tooLarge) {
+		throw new Error(
+			`This .charx file's "${name}" is larger than Serene Pub will unpack.`
+		)
+	}
+	return files[name]
+}
+
+/**
+ * Inflate several named entries in ONE pass, each refused if it declares more
+ * than `maxEach`, and stopping once `maxTotal` declared bytes are taken.
+ * Entries past a ceiling are simply absent from the result — a card's sprite
+ * the import leaves behind, which `unimportedAssets` then counts.
+ */
+function readZipEntries(
+	buffer: Uint8Array,
+	names: ReadonlySet<string>,
+	maxEach: number,
+	maxTotal: number
+): Map<string, Uint8Array> {
+	if (names.size === 0) return new Map()
+	let total = 0
+	let files: Record<string, Uint8Array>
+	try {
+		files = unzipSync(buffer, {
+			filter: (file) => {
+				if (!names.has(file.name)) return false
+				if (file.originalSize > maxEach) return false
+				if (total + file.originalSize > maxTotal) return false
+				total += file.originalSize
+				return true
+			}
+		})
+	} catch (e: any) {
+		throw new Error(
+			`This .charx file could not be read as a zip archive: ${e?.message || e}`
+		)
+	}
+	return new Map(Object.entries(files))
+}
+
+/**
+ * The URI of the card's main icon, per the V3 spec: the `icon` asset named
+ * `main`, else the first `icon` asset. Undefined when the card declares none.
+ */
+function mainIconAsset(raw: any): any {
+	const assets = raw?.data?.assets ?? raw?.assets
+	if (!Array.isArray(assets)) return undefined
+	const icons = assets.filter(
+		(a: any) => a && a.type === "icon" && typeof a.uri === "string"
+	)
+	return icons.find((a: any) => a.name === "main") ?? icons[0]
+}
+
+function mainIconUri(raw: any): string | undefined {
+	return mainIconAsset(raw)?.uri
+}
+
+/**
+ * Read a CHARX container (Character Card V3 §CHARX): a zip with `card.json`
+ * at its root, assets referenced as `embeded://<path inside the zip>` — the
+ * spec's own spelling, and the correctly spelled form is tolerated too.
+ *
+ * The main icon becomes the avatar, and the card's sprites (`emotion`,
+ * `expression` and `x_sp_sprite` assets) are returned for the import to store
+ * (DESIGN-sprites §4). Other assets (backgrounds, alternate icons, a RisuAI
+ * `module.risum`) are left behind and counted by `unimportedAssets`.
+ * `ccdefault:` and remote `http(s)` icons are skipped — the first names no
+ * file in a CHARX, and the second would make an import fetch a URL.
+ */
+export function readCharxContainer(
+	buffer: Buffer | Uint8Array,
+	opts?: { includeAvatar?: boolean }
+): { raw: any; avatarBuffer?: Buffer; sprites?: ExtractedSprites } {
+	const bytes = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.length)
+
+	const cardBytes = readZipEntry(bytes, "card.json", CHARX_LIMITS.cardJsonBytes)
+	if (!cardBytes) {
+		throw new Error(
+			"This .charx file has no card.json at its root, so it isn't a character card."
+		)
+	}
+	let raw: any
+	try {
+		raw = JSON.parse(
+			new TextDecoder("utf-8").decode(cardBytes).replace(/^\uFEFF/, "")
+		)
+	} catch {
+		throw new Error("This .charx file's card.json is not valid JSON.")
+	}
+
+	if (!(opts?.includeAvatar ?? true)) return { raw }
+
+	const uri = mainIconUri(raw)
+	let avatarBuffer: Buffer | undefined
+	const embedded = uri?.match(/^embedd?ed:\/\/\/?(.+)$/)
+	if (embedded) {
+		const path = embedded[1].replace(/\\/g, "/")
+		const icon = readZipEntry(bytes, path, CHARX_LIMITS.iconBytes)
+		if (icon) avatarBuffer = Buffer.from(icon)
+	} else if (uri?.startsWith("data:")) {
+		const base64 = uri.match(/^data:[^,]*;base64,(.*)$/s)?.[1]
+		if (base64 && (base64.length * 3) / 4 <= CHARX_LIMITS.iconBytes) {
+			avatarBuffer = Buffer.from(base64, "base64")
+		}
+	}
+
+	// The card's sprites (DESIGN-sprites §4): every embedded path they name,
+	// inflated in one pass under the card-wide ceilings.
+	const paths = new Set<string>()
+	for (const a of spriteAssetsOf(raw)) {
+		const path = embeddedPathOf(a.uri)
+		if (path) paths.add(path)
+	}
+	const entries = readZipEntries(
+		bytes,
+		paths,
+		CARD_SPRITE_LIMITS.eachBytes,
+		CARD_SPRITE_LIMITS.totalBytes
+	)
+	const sprites = extractCardSprites(raw, (uri) => {
+		const path = embeddedPathOf(uri)
+		if (path) {
+			const entry = entries.get(path)
+			return entry ? Buffer.from(entry) : null
+		}
+		return uri.startsWith("data:")
+			? bytesOfDataUri(uri, CARD_SPRITE_LIMITS.eachBytes)
+			: null
+	})
+	return { raw, avatarBuffer, sprites }
+}
+
+/**
+ * The `chara-ext-asset_:<key>` tEXt chunks of a PNG card, by key — where a
+ * RisuAI PNG export keeps the assets its `__asset:<key>` URIs name. The
+ * values stay base64 until a sprite actually asks for one.
+ */
+export function pngAssetChunks(buffer: Buffer): Map<string, string> {
+	const out = new Map<string, string>()
+	if (buffer[0] !== 0x89 || buffer[1] !== 0x50) return out
+	try {
+		validatePngChunkLengths(buffer)
+		for (const chunk of extract(buffer)) {
+			if (chunk.name !== "tEXt") continue
+			const { keyword, text: value } = text.decode(chunk.data)
+			if (keyword?.startsWith("chara-ext-asset_:")) {
+				out.set(keyword.slice("chara-ext-asset_:".length), value)
+			}
+		}
+	} catch {
+		// A PNG the card reader accepted but whose chunks do not walk: no
+		// embedded assets, which is the honest answer.
+	}
+	return out
+}
+
+/**
+ * Parse a character card from a buffer (PNG, JPEG, WebP, JSON or CHARX)
  * Extracts card instance, avatar, and lorebook if present
  *
- * @param buffer - Buffer containing the character card file (PNG or JSON)
+ * @param buffer - Buffer containing the character card file (image, JSON or CHARX)
  * @param opts.includeAvatar - Default true. Set false to skip decoding the
  *   avatar into a Buffer — most real-world cards fall back to a whole-file
  *   re-encoded string for card.avatar (no explicit avatar field of their
@@ -179,19 +476,53 @@ export async function parseCharacterCard(
 	// CharacterCard.from_file() only understands image formats (PNG/JPEG/WebP)
 	// metadata — it throws "Unsupported image format" on a plain JSON buffer.
 	// Sniff the actual file type so JSON character cards route to from_json()
-	// instead.
-	const fileType = await fileTypeFromBuffer(buffer)
-	const card = fileType?.mime.startsWith("image/")
-		? await CharacterCard.from_file(buffer)
-		: CharacterCard.from_json(JSON.parse(buffer.toString("utf8")))
+	// instead. A CHARX is recognised by its zip magic before any of that: its
+	// avatar comes from the archive's main icon, never from card.avatar.
+	let card: CharacterCard
+	let avatarBuffer: Buffer | undefined
+	let avatarResolved = false
+	let sprites: ExtractedSprites | undefined
+	const wantSprites = opts?.includeAvatar ?? true
+	if (isZipBuffer(buffer)) {
+		const charx = readCharxContainer(buffer, opts)
+		card = CharacterCard.from_json(charx.raw)
+		avatarBuffer = charx.avatarBuffer
+		avatarResolved = true
+		sprites = charx.sprites
+	} else {
+		const fileType = await fileTypeFromBuffer(buffer)
+		const isImage = fileType?.mime.startsWith("image/")
+		card = isImage
+			? await CharacterCard.from_file(buffer)
+			: CharacterCard.from_json(JSON.parse(buffer.toString("utf8")))
+		if (card && wantSprites) {
+			// A RisuAI PNG keeps assets in `chara-ext-asset_:` chunks named by
+			// `__asset:<key>`; a JSON card can only carry `data:` URIs and
+			// RisuAI's raw base64 pairs.
+			const chunks =
+				fileType?.mime === "image/png" || fileType?.mime === "image/apng"
+					? pngAssetChunks(buffer)
+					: new Map<string, string>()
+			sprites = extractCardSprites(card.raw_data, (uri) => {
+				if (uri.startsWith("__asset:")) {
+					const b64 = chunks.get(uri.slice("__asset:".length))
+					return b64
+						? decodeBase64Capped(b64, CARD_SPRITE_LIMITS.eachBytes)
+						: null
+				}
+				return uri.startsWith("data:")
+					? bytesOfDataUri(uri, CARD_SPRITE_LIMITS.eachBytes)
+					: null
+			})
+		}
+	}
 
 	if (!card) {
 		throw new Error("Failed to parse character card")
 	}
 
 	// Extract avatar if present
-	let avatarBuffer: Buffer | undefined
-	if ((opts?.includeAvatar ?? true) && card.avatar) {
+	if (!avatarResolved && (opts?.includeAvatar ?? true) && card.avatar) {
 		// Avatar is base64 data URL - extract the buffer
 		const base64Data = card.avatar.replace(/^data:image\/\w+;base64,/, "")
 		avatarBuffer = Buffer.from(base64Data, "base64")
@@ -220,10 +551,15 @@ export async function parseCharacterCard(
 		lorebook = candidateBook as SpecV3.Lorebook
 	}
 
+	const unimported = unimportedAssets(card.raw_data, sprites)
 	return {
 		card,
 		avatarBuffer,
-		lorebook
+		lorebook,
+		...(unimported ? { unimportedAssets: unimported } : {}),
+		...(sprites && sprites.sprites.length > 0
+			? { sprites: sprites.sprites }
+			: {})
 	}
 }
 

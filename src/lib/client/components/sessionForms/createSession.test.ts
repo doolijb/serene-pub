@@ -62,7 +62,7 @@ describe("buildCreatePayload", () => {
 			scenario: "  A stall of lanterns.  ",
 			tags: ["noir"],
 			genreFields: { trustNarrator: true },
-			groupReplyStrategy: "round-robin",
+			swaps: [{ spec: "core:spec/chat-turn-order", node: "strategy", definition: "core:task/turn-manual@1" }],
 			lorebookId: 3
 		})
 
@@ -70,7 +70,7 @@ describe("buildCreatePayload", () => {
 			session: {
 				name: "Night market",
 				scenario: "A stall of lanterns.",
-				groupReplyStrategy: "round-robin",
+				swaps: [{ spec: "core:spec/chat-turn-order", node: "strategy", definition: "core:task/turn-manual@1" }],
 				lorebookId: 3,
 				genreId: "core:genre/adventure@2",
 				presetId: 7,
@@ -104,7 +104,6 @@ describe("buildCreatePayload", () => {
 		})
 		expect(params.session).toMatchObject({
 			scenario: "",
-			groupReplyStrategy: "ordered",
 			lorebookId: null,
 			presetId: null,
 			genreFields: {}

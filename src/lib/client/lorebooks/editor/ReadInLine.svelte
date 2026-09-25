@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { EntryDecision } from "../markers"
+	import type { RetrievalMarker } from "../markers"
 	import { readInLine } from "./readIn"
 	import { retrievalReadout } from "./retrievalReadout.svelte"
 
@@ -16,7 +16,7 @@
 		sessionId: number | null
 		sessionName: string | null
 		entryId: number
-		decision: EntryDecision | null
+		decision: RetrievalMarker | null
 		/** The docked and phone sheets stop the line at the match. */
 		short?: boolean
 	}

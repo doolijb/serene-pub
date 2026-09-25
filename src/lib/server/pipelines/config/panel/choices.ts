@@ -70,10 +70,15 @@ export async function choiceSets(db: Db, specId: number) {
 	// prompts without anything being seeded or copied. Narrowed per option by
 	// `nodeDefinitionId` + `slot` below, and grouped so the pipeline being configured
 	// comes first.
-	const promptRows = await db
-		.select()
-		.from(schema.pipelinePrompts)
-		.orderBy(asc(schema.pipelinePrompts.id))
+	// A disabled plugin's rows are offered in no picker (R67).
+	const { disabledPlugins } = await import("$lib/server/plugins/disabledPlugins")
+	const off = await disabledPlugins(db)
+	const promptRows = (
+		await db
+			.select()
+			.from(schema.pipelinePrompts)
+			.orderBy(asc(schema.pipelinePrompts.id))
+	).filter((r) => !off.owns(r.ownerPluginId))
 
 	const connections = await db
 		.select()
@@ -118,10 +123,12 @@ export async function choiceSets(db: Db, specId: number) {
 	// and the narrator run the same assemble node, so one story string serves
 	// both and always has. Narrowed per option by `nodeDefinitionId` below, and
 	// grouped so the pipeline being configured comes first.
-	const contextTemplateRows = await db
-		.select()
-		.from(schema.pipelineContextTemplates)
-		.orderBy(asc(schema.pipelineContextTemplates.id))
+	const contextTemplateRows = (
+		await db
+			.select()
+			.from(schema.pipelineContextTemplates)
+			.orderBy(asc(schema.pipelineContextTemplates.id))
+	).filter((r) => !off.owns(r.ownerPluginId))
 
 	const specRows = await db.select().from(schema.pipelineSpecs)
 	// The display name, not the slug: `from core:spec/respond` is the id a
@@ -211,10 +218,12 @@ export async function choiceSets(db: Db, specId: number) {
 	// Every layout on the instance, not this spec's — a layout is keyed by the
 	// variable it renders, so one written while configuring replies belongs in
 	// the narrator's picker too. Narrowed per option by `variableId` below.
-	const variableTemplates = await db
-		.select()
-		.from(schema.pipelineVariableTemplates)
-		.orderBy(asc(schema.pipelineVariableTemplates.id))
+	const variableTemplates = (
+		await db
+			.select()
+			.from(schema.pipelineVariableTemplates)
+			.orderBy(asc(schema.pipelineVariableTemplates.id))
+	).filter((r) => !off.owns(r.ownerPluginId))
 
 	const byVariable = new Map<string, ChoiceList>()
 	for (const t of variableTemplates as any[]) {
@@ -235,19 +244,23 @@ export async function choiceSets(db: Db, specId: number) {
 	// script is deliberately not namespaced to a spec — a slop filter written
 	// while configuring replies belongs in the summarizer's picker too — so the
 	// narrowing per option is by the hook's accepted types, applied below.
-	const scriptRows = await db
-		.select()
-		.from(schema.pipelineScripts)
-		.orderBy(asc(schema.pipelineScripts.id))
+	const scriptRows = (
+		await db
+			.select()
+			.from(schema.pipelineScripts)
+			.orderBy(asc(schema.pipelineScripts.id))
+	).filter((r) => !off.ownsId(r.typeId))
 
 	// The type's display name and badge, from registry rows (F6) — the picker
 	// subtitle has to say what kind of thing each row is, because a hook
 	// accepting two operations ("rewrites content" vs "ends generations") is
 	// offering two different powers under one Add button.
-	const scriptTypeRegistry = await db
-		.select()
-		.from(schema.pipelineDefinitionRegistry)
-		.where(eq(schema.pipelineDefinitionRegistry.kind, "script"))
+	const scriptTypeRegistry = (
+		await db
+			.select()
+			.from(schema.pipelineDefinitionRegistry)
+			.where(eq(schema.pipelineDefinitionRegistry.kind, "script"))
+	).filter((r) => !off.owns(r.ownerPluginId))
 	const scriptTypeMeta = new Map<
 		string,
 		{ name: string; blastRadius: string; operation: string }

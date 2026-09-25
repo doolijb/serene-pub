@@ -159,7 +159,10 @@
 				class="bg-surface-400-600 absolute top-1/2 right-2 left-2 h-px"
 				aria-hidden="true"
 			></div>
-			{#each ticks as tick (tick.id)}
+			<!-- Keyed on the DATE, not the row id. The axis holds one tick
+			     per date by construction, and its ids come from two tables
+			     (entry and cast amendments) whose ids collide. -->
+			{#each ticks as tick (tick.value)}
 				<span
 					class="absolute top-1/2 h-3 w-px -translate-x-1/2 -translate-y-1/2"
 					class:bg-primary-500={position != null &&

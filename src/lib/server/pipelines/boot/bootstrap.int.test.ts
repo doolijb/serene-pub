@@ -18,6 +18,7 @@ import {
 } from "$lib/server/pipelines/boot/bootstrap"
 import { CORE_SPECS } from "$lib/server/pipelines/specs"
 import * as schema from "$lib/server/db/schema"
+import { eq } from "drizzle-orm"
 
 let db: TestDb
 
@@ -62,6 +63,39 @@ describe("bootstrapping the pipeline tables", () => {
 		expect(doc!.nodes.map((n: any) => n.key)).toEqual(
 			respondSpec().nodes.map((n: any) => n.key)
 		)
+	})
+
+	it("binds every core genre to its own turn-order spec (R27, M2)", async () => {
+		const { resolveSessionEventSpec } = await import(
+			"$lib/server/pipelines/runtime/sessionEvents"
+		)
+		const { TURN_ORDER_BY_GENRE } = await import("@serene-pub/core-catalog")
+		expect(TURN_ORDER_BY_GENRE.length).toBe(6)
+		for (const { genre, spec, events } of TURN_ORDER_BY_GENRE)
+			for (const event of events)
+				expect(
+					await resolveSessionEventSpec(db, genre.id, event),
+					`${genre.id} on ${event}`
+				).toBe(spec)
+	})
+
+	it("heals a present version whose nodes lost their expose mark (0155 arrived after the mark)", async () => {
+		const [spec] = await db
+			.select({ activeVersionId: schema.pipelineSpecs.activeVersionId })
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, "core:spec/chat-turn-order"))
+		const { and: andOp } = await import("drizzle-orm")
+		const strategy = andOp(
+			eq(schema.pipelineNodes.specVersionId, spec!.activeVersionId!),
+			eq(schema.pipelineNodes.nodeKey, "decide.rules.strategy")
+		)
+		await db.update(schema.pipelineNodes).set({ expose: null }).where(strategy)
+		await bootstrapPipelines(db)
+		const [node] = await db
+			.select({ expose: schema.pipelineNodes.expose })
+			.from(schema.pipelineNodes)
+			.where(strategy)
+		expect(node!.expose?.swaps?.length).toBe(5)
 	})
 
 	it("finds nothing for a spec nobody published", async () => {

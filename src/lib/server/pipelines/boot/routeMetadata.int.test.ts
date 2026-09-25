@@ -50,7 +50,7 @@ const routedAndLooped = () =>
 			version: "1.0.0",
 			// Rides along so the taxonomy column (23 §2) is proven through
 			// the same save → rows → load identity as the route metadata.
-			taxonomy: { role: "action", mode: "demo:inlet/x@1" }
+			taxonomy: { role: "action"}
 		})
 			.inlet("input", C.userMessage.v1())
 			.task("decide", ($: any) => decide.v1({ text: $.input.text }))
@@ -120,11 +120,8 @@ describe("route/loop metadata through the store", () => {
 			.where(
 				eq(schema.pipelineSpecVersions.id, saved.specVersionId)
 			)) as any[]
-		// The deprecated `mode` spelling normalizes to `genre` (24 §2).
-		expect(versionRow.taxonomy).toEqual({
-			role: "action",
-			genre: "demo:inlet/x@1"
-		})
+		// No inlet lock, so no genre: the catalogue's genre is the lock's.
+		expect(versionRow.taxonomy).toEqual({ role: "action" })
 
 		// C1 over the new columns: import(export(rows)) is the identity.
 		const back = await loadDocument(db, saved.specVersionId)

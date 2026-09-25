@@ -21,6 +21,7 @@
 		requestWithInterest
 	} from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
+	import { refusedSwapsSentence } from "./refusedSwaps"
 	import Avatar from "../Avatar.svelte"
 	import PanelFilterInput from "../panels/PanelFilterInput.svelte"
 	import PanelNavHeader from "../panels/PanelNavHeader.svelte"
@@ -413,6 +414,8 @@
 			title: "Session started",
 			description: res.session.name || placeholderName
 		})
+		const refused = refusedSwapsSentence(res)
+		if (refused) toaster.warning({ title: "Some settings were not applied", description: refused })
 		onCreated(res.session.id)
 	}
 

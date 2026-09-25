@@ -356,6 +356,20 @@ export async function saveReceipt(
 				}))
 			)
 
+		// The ranking store (R64): every node publishing decisions, recorded
+		// from the full receipt (not the bounded copy stored above). A
+		// preview that left nothing behind stays in memory (§3.9).
+		if (!(artifacts.length === 0 && receipt.preview)) {
+			const { recordRankings } = await import(
+				"$lib/server/pipelines/runtime/rankingStore"
+			)
+			await recordRankings(db, receipt, {
+				runRowId: row.id,
+				sessionId: scope.sessionId ?? null,
+				userId: scope.userId ?? null
+			})
+		}
+
 		return row.id
 	} catch (err) {
 		// Logged loudly enough to notice, quiet enough not to break a session.

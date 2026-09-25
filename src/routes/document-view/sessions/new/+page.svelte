@@ -1,11 +1,11 @@
 <script lang="ts">
+	import { refusedSwapsSentence } from "$lib/client/components/sessionForms/refusedSwaps"
 	import { getContext } from "svelte"
 	import { page } from "$app/state"
 	import { goto } from "$app/navigation"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { getInterestContext } from "$lib/client/sockets/interest.svelte"
 	import { announce } from "$lib/client/accessibility/state.svelte"
-	import { GroupReplyStrategies } from "$lib/shared/constants/GroupReplyStrategies"
 
 	const socket = useTypedSocket()
 	const interest = getInterestContext()
@@ -13,7 +13,8 @@
 
 	let name = $state("")
 	let scenario = $state("")
-	let groupReplyStrategy = $state(GroupReplyStrategies.ORDERED)
+	// Turn order: the next-speaker strategies the standard genre offers,
+	// listed by the server; "" inherits the reply pipeline's own pin.
 	let error = $state("")
 	let saving = $state(false)
 
@@ -110,7 +111,6 @@
 			session: {
 				name: name.trim(),
 				scenario: scenario.trim(),
-				groupReplyStrategy,
 				lorebookId: null,
 				samplingConfigId: null,
 				promptConfigId: null,
@@ -141,9 +141,12 @@
 			}
 		}
 	}
-	function handleSessionsCreate(msg: any) {
+	function handleSessionsCreate(msg: Sockets.Sessions.Create.Response) {
 		saving = false
-		if (msg.session) goto(`/document-view/sessions/${msg.session.id}`)
+		if (!msg.session) return
+		const refused = refusedSwapsSentence(msg)
+		if (refused) announce(refused)
+		goto(`/document-view/sessions/${msg.session.id}`)
 	}
 	function handleSessionsCreateError(msg: { error?: string }) {
 		saving = false
@@ -328,27 +331,6 @@
 		{/if}
 	</div>
 
-	{#if selectedCharacters.length > 1 || selectedPersonas.length > 1}
-		<div class="a11y-field">
-			<label for="a11y-session-group-strategy">
-				Group Reply Strategy
-			</label>
-			<p class="a11y-hint">
-				Controls the order characters and personas take turns in.
-			</p>
-			<select
-				id="a11y-session-group-strategy"
-				bind:value={groupReplyStrategy}
-				disabled={saving}
-			>
-				{#each GroupReplyStrategies.options as opt}
-					{#if opt.value !== GroupReplyStrategies.USER_SPLIT || systemSettingsCtx.settings?.isAccountsEnabled}
-						<option value={opt.value}>{opt.label}</option>
-					{/if}
-				{/each}
-			</select>
-		</div>
-	{/if}
 
 	<div class="a11y-field">
 		<label for="a11y-session-scenario">Scenario</label>

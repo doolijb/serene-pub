@@ -65,6 +65,8 @@
  * nothing matches. Embedded as a string because the eval workers cannot import
  * modules.
  */
+import { pluginRuleRef } from "@serene-pub/sdk"
+
 export const HOST_ALLOW_SOURCE = String.raw`
 function isIpLiteral(h) {
 	return /^\d{1,3}(\.\d{1,3}){3}$/.test(h) || h.indexOf(":") >= 0;
@@ -108,8 +110,69 @@ function matchAllow(allow, reqHost, reqPort) {
 export const FETCH_HOST_SOURCE =
 	HOST_ALLOW_SOURCE +
 	String.raw`
-function makeFetchHost(hosts, isCancelled) {
+function makeFetchHost(hosts, isCancelled, secrets) {
 	var allow = Array.isArray(hosts) ? hosts : [];
+	// Secret handles (R63): plugin code holds "⟦secret:<key>:<nonce>⟧", never a
+	// value. The nonce is minted per plugin load and known only to the host,
+	// so a handle cannot be forged from text that came from anywhere else — a
+	// prompt, a tool argument, another package's input. Filled in here, at the
+	// network boundary, only after the request's host has passed the
+	// allowlist, and only for the keys this call may use (a node running in
+	// another package's pipeline gets the ones its owner lends, no more).
+	var bag = secrets && typeof secrets === "object" ? secrets : {};
+	var secretMap = bag.values && typeof bag.values === "object" ? bag.values : {};
+	var nonce = typeof bag.nonce === "string" ? bag.nonce : "";
+	var OPEN = "\u27E6secret:", CLOSE = "\u27E7";
+	var HANDLE = /\u27E6secret:([A-Za-z0-9_.-]+):([0-9a-f]+)\u27E7/g;
+	// The same handle as a URL spells it: its two brackets percent-encoded.
+	var HANDLE_IN_URL = /%E2%9F%A6secret:([A-Za-z0-9_.-]+):([0-9a-f]+)%E2%9F%A7/gi;
+	function hasHandle(text) {
+		return typeof text === "string" && (text.indexOf(OPEN) >= 0 || /%E2%9F%A6secret:/i.test(text));
+	}
+	function valueFor(key, n) {
+		if (!nonce || n !== nonce)
+			throw new Error("fetch: that is not a secret handle this plugin was given${pluginRuleRef("secrets")}");
+		if (!Object.prototype.hasOwnProperty.call(secretMap, key))
+			throw new Error("fetch: the secret '" + key + "' is not available to this call${pluginRuleRef("secrets")}");
+		return String(secretMap[key]);
+	}
+	function fill(text) {
+		if (typeof text !== "string" || !hasHandle(text)) return text;
+		return text.replace(HANDLE, function (_, key, n) { return valueFor(key, n); });
+	}
+	// A value in a URL is percent-encoded, so its own "/", "?", "#" or "%"
+	// cannot reshape the request; nothing else in the URL is decoded or touched.
+	function fillUrl(href) {
+		if (!hasHandle(href)) return href;
+		return href
+			.replace(HANDLE_IN_URL, function (_, key, n) { return encodeURIComponent(valueFor(key, n)); })
+			.replace(HANDLE, function (_, key, n) { return encodeURIComponent(valueFor(key, n)); });
+	}
+	// Every form a value can take on the way back — as sent in a header or
+	// body, and as a URL spells it — masked back to its handle, so neither a
+	// response that echoes a key nor an error message quoting the request can
+	// hand the plugin the value.
+	var echoes = [];
+	Object.keys(secretMap).forEach(function (k) {
+		var v = String(secretMap[k]);
+		var handle = OPEN + k + ":" + nonce + CLOSE;
+		if (v.length >= 4) {
+			echoes.push([v, handle]);
+			var enc = encodeURIComponent(v);
+			if (enc !== v) echoes.push([enc, handle]);
+		}
+	});
+	echoes.sort(function (a, b) { return b[0].length - a[0].length; });
+	function mask(text) {
+		if (typeof text !== "string" || !echoes.length) return text;
+		for (var i = 0; i < echoes.length; i++) text = text.split(echoes[i][0]).join(echoes[i][1]);
+		return text;
+	}
+	// A header value the Fetch standard would refuse, refused here first and
+	// in words that quote nothing — the runtime's own error quotes the value.
+	function assertHeaderValue(name, value) {
+		if (/[\r\n\0]/.test(value)) throw new Error("fetch: the header '" + name + "' has a line break or a NUL in it");
+	}
 	// Whether this call's ctx.signal has already fired. The gate lives here,
 	// with the permission, rather than in a backend — which is exactly what let
 	// it travel unchanged when the second backend gained fetch. Each host passes
@@ -154,7 +217,7 @@ function makeFetchHost(hosts, isCancelled) {
 		var reqPort = u.port ? Number(u.port) : (u.protocol === "https:" ? 443 : 80);
 		var entry = matchAllow(allow, reqHost, reqPort);
 		if (entry === null)
-			throw new Error("fetch: host not permitted: " + u.host);
+			throw new Error("fetch: host not permitted: " + u.host + "${pluginRuleRef("kind-oracle")}");
 
 		var addrs;
 		if (isIpLiteral(reqHost)) addrs = [reqHost];
@@ -180,11 +243,20 @@ function makeFetchHost(hosts, isCancelled) {
 		if (optsJson) { try { opts = JSON.parse(optsJson) || {}; } catch (e) {} }
 		var current;
 		try { current = new URL(String(url)); } catch (e) { throw new Error("fetch: invalid URL"); }
+		// A handle in the host or the userinfo would let a key choose where it
+		// is sent, or ride in a part the runtime quotes back in its errors.
+		if (hasHandle(current.hostname)) throw new Error("fetch: a secret cannot name the host${pluginRuleRef("secrets")}");
+		// Any piece of a handle there — the user part splits one at its colon.
+		var inUserPart = /\u27E6|%E2%9F%A6/i;
+		if (inUserPart.test(current.username) || inUserPart.test(current.password))
+			throw new Error("fetch: a secret cannot ride in the URL's user part — send it in a header${pluginRuleRef("secrets")}");
 
 		var method = opts.method || "GET";
 		var headers = opts.headers || {};
 		var body = opts.body != null ? String(opts.body) : undefined;
 		var maxHops = 5;
+		// Filled in once the first host has passed (below), never before.
+		var filled = false;
 
 		for (var hop = 0; ; hop++) {
 			// Checked per hop, not once: a redirect is another outbound request,
@@ -193,12 +265,35 @@ function makeFetchHost(hosts, isCancelled) {
 			if (cancelled())
 				throw new Error("fetch: the run was cancelled — no new requests");
 			await assertReachable(current);
-			var res = await fetch(current.toString(), {
-				method: method,
-				headers: headers,
-				body: body,
-				redirect: "manual"
-			});
+			var res;
+			// From the fill to the response, every error is masked: a message
+			// that quotes the request would otherwise quote the key.
+			try {
+				if (!filled) {
+					filled = true;
+					var href = current.toString();
+					var target = hasHandle(href) ? new URL(fillUrl(href)) : current;
+					if (target.host !== current.host) throw new Error("fetch: a secret cannot change the host${pluginRuleRef("secrets")}");
+					current = target;
+					var outHeadersReq = {};
+					for (var hk in headers)
+						if (Object.prototype.hasOwnProperty.call(headers, hk)) {
+							var hv = fill(String(headers[hk]));
+							assertHeaderValue(hk, hv);
+							outHeadersReq[hk] = hv;
+						}
+					headers = outHeadersReq;
+					body = fill(body);
+				}
+				res = await fetch(current.toString(), {
+					method: method,
+					headers: headers,
+					body: body,
+					redirect: "manual"
+				});
+			} catch (e) {
+				throw new Error(mask(String((e && e.message) || e)));
+			}
 			var location = res.status >= 300 && res.status < 400
 				? res.headers.get("location")
 				: null;
@@ -217,9 +312,9 @@ function makeFetchHost(hosts, isCancelled) {
 				if (crossOrigin) headers = {};
 				continue;
 			}
-			var text = await res.text();
+			var text = mask(await res.text());
 			var outHeaders = {};
-			res.headers.forEach(function (v, k) { outHeaders[k] = v; });
+			res.headers.forEach(function (v, k) { outHeaders[k] = mask(v); });
 			return { status: res.status, ok: res.ok, headers: outHeaders, body: text };
 		}
 	};
@@ -228,7 +323,7 @@ function makeFetchHost(hosts, isCancelled) {
 // into both backends, because a hook must not be able to tell them apart by the
 // wording of a denial. It throws rather than resolving to a response, so a
 // denial can never be mistaken for a request that failed.
-var __DENIED_FETCH = function () { throw new Error("network: permission not granted"); };
+var __DENIED_FETCH = function () { throw new Error("network: permission not granted${pluginRuleRef("kind-oracle")}"); };
 // The permission a backend should endow, from the grants it was loaded with.
 //
 // An allowlist with nothing in it is NOT a grant with nothing in it: it is what
@@ -238,10 +333,10 @@ var __DENIED_FETCH = function () { throw new Error("network: permission not gran
 // aimed badly. SandboxManager.permissionConfig already drops the whole grant in
 // that case; this keeps the same answer true one layer down, for any caller that
 // hands a sandbox an empty allowlist directly.
-function fetchHostFor(config, isCancelled) {
+function fetchHostFor(config, isCancelled, secrets) {
 	var hosts = config && config.networkHosts;
 	return Array.isArray(hosts) && hosts.length
-		? makeFetchHost(hosts, isCancelled)
+		? makeFetchHost(hosts, isCancelled, secrets)
 		: __DENIED_FETCH;
 }
 `

@@ -216,21 +216,9 @@
 		</div>
 	{/if}
 
-	<div class="mt-3 flex gap-2">
-		<button
-			type="button"
-			class="btn preset-tonal-success btn-sm w-full"
-			onclick={handleTest}
-		>
-			{#if testResult?.ok === true}
-				Test: Okay!
-			{:else if testResult?.ok === false}
-				Test: Failed!
-			{:else}
-				Test Connection
-			{/if}
-		</button>
-	</div>
+	<!-- The Test button lives on the connection view's status card, not
+	     here. Two Test buttons on one screen, styled differently and
+	     reporting into different places, was the shipped state. -->
 	{#if testResult?.error}
 		<p class="text-error-500 mt-2 text-sm">{testResult.error}</p>
 	{/if}

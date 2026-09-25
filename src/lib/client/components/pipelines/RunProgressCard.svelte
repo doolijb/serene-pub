@@ -25,6 +25,7 @@
 	import { interestKey } from "$lib/shared/sockets/interest"
 	import { runProgress } from "$lib/client/stores/runProgress.svelte"
 	import { runInspector } from "$lib/client/stores/runInspector.svelte"
+	import { getContext } from "svelte"
 	import { statusText } from "$lib/client/i18n/state.svelte"
 	import { outcomeOf, outcomeIcon, outcomeStatusText } from "./runOutcome"
 	import type { RunProgress } from "$lib/shared/sockets/progress"
@@ -33,6 +34,9 @@
 		sessionId: number
 	}
 	let { sessionId }: Props = $props()
+	// A receipt is an administrator's (R55): only they are offered Inspect.
+	const userCtx: UserCtx | undefined = getContext("userCtx")
+	const isAdmin = $derived(!!userCtx?.user?.isAdmin)
 
 	const socket = useTypedSocket()
 	const runs = $derived(runProgress.forSession(sessionId))
@@ -138,14 +142,16 @@
 					{outcomeCaption(ended)}
 				</span>
 			</span>
-			<button
-				type="button"
-				class="btn btn-sm preset-tonal-surface shrink-0"
-				onclick={() => runInspector.open(ended.runId)}
-				title="See what this run did, stage by stage"
-			>
-				<Icons.Receipt size={14} /> Inspect
-			</button>
+			{#if isAdmin}
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-surface shrink-0"
+					onclick={() => runInspector.open(ended.runId)}
+					title="See what this run did, stage by stage"
+				>
+					<Icons.Receipt size={14} /> Inspect
+				</button>
+			{/if}
 			<button
 				type="button"
 				class="btn btn-sm preset-tonal-surface shrink-0"

@@ -12,6 +12,7 @@
 	import { getInterestContext } from "$lib/client/sockets/interest.svelte"
 	import type { SocketEventMap } from "$lib/client/sockets/typedSocket"
 	import { toaster } from "$lib/client/utils/toaster"
+	import { refusedSwapsSentence } from "$lib/client/components/sessionForms/refusedSwaps"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import { enableManager } from "$lib/client/components/connections/managers"
 	import { enableAccessibility } from "$lib/client/accessibility/state.svelte"
@@ -949,6 +950,9 @@
 		releaseWizardCreate?.()
 		releaseWizardCreate = null
 		if (res.session) {
+			const refused = refusedSwapsSentence(res)
+			if (refused)
+				toaster.warning({ title: "Some settings were not applied", description: refused })
 			goto(`/sessions/${res.session.id}`)
 		}
 	}
@@ -1190,7 +1194,9 @@
 	     loudest thing on a page whose single accent belongs to "Start a
 	     session". The 400 stop carries the warning at speaking volume; the
 	     500 dot is the one place the ember runs at full strength. -->
-	<div class="text-warning-400 flex w-full items-center gap-2 text-xs">
+	<div
+		class="text-warning-800 dark:text-warning-400 flex w-full items-center gap-2 text-xs"
+	>
 		<span
 			class="bg-warning-500 h-1.5 w-1.5 shrink-0 rounded-full"
 			aria-hidden="true"
@@ -1539,8 +1545,16 @@
 				</div>
 			</header>
 
-			<!-- Wizard body: scrollable step content -->
-			<main class="flex-1 overflow-y-auto">
+			<!--
+				Wizard body: scrollable step content.
+
+				⚠ A div, not a `<main>`. The shell already owns the page's one
+				main landmark (`Layout.svelte`), and a second one nested inside
+				it is announced as a duplicate — axe:
+				`landmark-no-duplicate-main`. The wizard is a section of the
+				page, not the page.
+			-->
+			<div class="flex-1 overflow-y-auto">
 				{#key wizardStep}
 					<div
 						class="flex flex-col gap-6 p-8"
@@ -2174,7 +2188,7 @@
 										Import from File
 									</div>
 									<p class="mb-1 text-sm opacity-75">
-										Upload a character card (.png or .json).
+										Upload a character card (.png, .json or .charx).
 									</p>
 									{#if wizardImportingCharacterCard}
 										<div
@@ -2189,7 +2203,7 @@
 									{:else}
 										<FileDropzone
 											name="wizard-char-card"
-											accept=".png,.apng,.jpeg,.jpg,.webp,.json"
+											accept=".png,.apng,.jpeg,.jpg,.webp,.json,.charx"
 											class="border-surface-300-700 hover:bg-surface-100-900 flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6"
 											onFileAccept={handleCharacterCardImport}
 										/>
@@ -2292,7 +2306,7 @@
 										Import from File
 									</div>
 									<p class="mb-1 text-sm opacity-75">
-										Upload a persona card (.png or .json).
+										Upload a persona card (.png, .json or .charx).
 									</p>
 									{#if wizardImportingPersonaCard}
 										<div
@@ -2307,7 +2321,7 @@
 									{:else}
 										<FileDropzone
 											name="wizard-persona-card"
-											accept=".png,.apng,.jpeg,.jpg,.webp,.json"
+											accept=".png,.apng,.jpeg,.jpg,.webp,.json,.charx"
 											class="border-surface-300-700 hover:bg-surface-100-900 flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6"
 											onFileAccept={handlePersonaCardImport}
 										/>
@@ -2417,7 +2431,7 @@
 						{/if}
 					</div>
 				{/key}
-			</main>
+			</div>
 
 			<!-- Wizard footer: navigation -->
 			<footer
@@ -2474,7 +2488,8 @@
 								     panel of its own left to open. -->
 								<button
 									class="btn preset-filled-primary-500"
-									onclick={() => openManagedConnection("ollama")}
+									onclick={() =>
+										openManagedConnection("ollama")}
 								>
 									<OllamaIcon class="h-4 w-4" />
 									Ollama

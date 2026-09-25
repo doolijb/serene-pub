@@ -18,14 +18,13 @@
  * it here is that a change refused at the gate is never shown to a player as
  * something to accept.
  *
- * `core:task/set-state@1` has nowhere to go. A Task's `ctx` has no write seam
- * — only a Consumer's `ctx.commit` does — and it cannot be a write-class
- * Consumer, because a spec is allowed exactly one of those and that one is the
- * message (F7). So the handler reaches the database directly, through a
- * **dynamic** import that keeps a PGlite handle out of the module graph that
- * `bindingCompat` and the registry tests load. This is the deviation, stated
- * here rather than discovered later: the day a Task-level write seam exists,
- * this is what moves onto it.
+ * `core:task/set-state@1` is a task, and a task's `ctx` has no write seam —
+ * only an outlet's `ctx.commit` does. A pipeline may hold any number of
+ * write-class outlets beside its one live row (F7), so a write-class outlet
+ * is where this belongs. Until it is one, the handler reaches the database
+ * directly, through a **dynamic** import that keeps a PGlite handle out of
+ * the module graph that `bindingCompat` and the registry tests load. This is
+ * the deviation, stated where it lives.
  */
 
 import type { Bindings } from "@serene-pub/sdk"

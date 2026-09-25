@@ -100,14 +100,14 @@ declare const speaker: SharedInput<
 		typeof C.turnRoundRobin,
 		typeof C.turnRandom,
 		typeof C.turnManual,
-		typeof C.turnNone
+		typeof C.turnNarrator
 	]
 >
-const _cast: unknown = speaker.cast
-const _characterId: unknown = speaker.characterId
-// @ts-expect-error — none of the four declares a `strategy` IN-port; it is an
-// out-port, and the binding takes the strategy as a closure argument
-speaker.strategy
+const _candidates: unknown = speaker.candidates
+const _messages: unknown = speaker.messages
+// @ts-expect-error — `speaker` is not an in-port any more (PLAN-turn-order
+// §4.4): an explicit pick never enters a strategy, it fires the entry
+speaker.speaker
 
 // ── Handlers declare what they read, and the declaration is checked ────────
 //

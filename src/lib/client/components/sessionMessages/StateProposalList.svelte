@@ -16,49 +16,35 @@
 	 * made. It stays under its message, collapsed, naming what moved, with
 	 * no buttons — the ledger's word on why the model's ask never landed.
 	 */
-	import * as Icons from "@lucide/svelte"
-	import { describeProposal } from "$lib/shared/state/ledgerLines"
-	import { sessionState } from "$lib/client/state/sessionState.svelte"
-	import { t } from "$lib/client/i18n/state.svelte"
+	import type { ConversationProposalV1 } from "$lib/shared/widgets/conversation"
+	import { useConversation, useT } from "./conversation.svelte"
 
 	interface Props {
-		proposals: Sockets.State.ProposalRow[]
+		proposals: ConversationProposalV1[]
 		/** Shown in the Review panel, where a row is not under its message. */
 		showAnchor?: boolean
 	}
 	let { proposals, showAnchor = false }: Props = $props()
 
-	const store = sessionState()
-
-	const describe = (row: Sockets.State.ProposalRow) =>
-		describeProposal(row, {
-			ownerLabel: (owner) => store.ownerLabelFor(owner),
-			slotLabel: (slotId) => store.slotLabelFor(slotId),
-			itemName: (entryId) => store.itemNameFor(entryId)
-		})
-
-	/** What a superseded row names as moved: the slot's label, or the item. */
-	const movedName = (row: Sockets.State.ProposalRow): string => {
-		const payload = row.payload ?? {}
-		if (row.kind === "value" && typeof payload.slotId === "string")
-			return store.slotLabelFor(payload.slotId) ?? payload.slotId
-		if (typeof payload.entryId === "number")
-			return store.itemNameFor(payload.entryId) ?? t("an item")
-		return t("a value")
-	}
+	const conv = useConversation()
+	const t = useT()
+	const describe = (row: ConversationProposalV1) => row.text
+	const movedName = (row: ConversationProposalV1) => row.moved ?? t("a value")
+	const decide = (id: number, accept: boolean) =>
+		void conv.request("decide-proposal", { proposalId: id, accept })
 </script>
 
 {#each proposals as row (row.id)}
 	{#if row.status === "superseded"}
 		<div
-			class="pending superseded"
+			class="sp-proposal sp-proposal-superseded"
 			data-proposal-id={row.id}
 			data-superseded="true"
 		>
-			<Icons.History size={11} aria-hidden="true" />
-			<span class="pending-text">
+			<sp-icon name="history" size="11"></sp-icon>
+			<span class="sp-proposal-text">
 				{describe(row)}
-				<span class="who">
+				<span class="sp-proposal-who">
 					· {t("Superseded — {slot} changed since this was proposed").replace(
 						"{slot}",
 						movedName(row)
@@ -67,64 +53,29 @@
 			</span>
 		</div>
 	{:else}
-		<div class="pending" data-proposal-id={row.id}>
-			<Icons.Sparkles size={11} aria-hidden="true" />
-			<span class="pending-text">
+		<div class="sp-proposal" data-proposal-id={row.id}>
+			<sp-icon name="sparkles" size="11"></sp-icon>
+			<span class="sp-proposal-text">
 				{describe(row)}
 				{#if showAnchor && row.messageId != null}
-					<span class="anchor">on message {row.messageId}</span>
+					<span class="sp-proposal-anchor">on message {row.messageId}</span>
 				{/if}
 			</span>
-			<span class="who" title="Proposed by {row.proposedBy || 'a run'}">
+			<span class="sp-proposal-who" title="Proposed by {row.proposedBy || 'a run'}">
 				proposed
 			</span>
 			<button
-				class="decide accept"
-				onclick={() => store.decide(row.id, true)}
+				class="sp-proposal-decide sp-proposal-accept"
+				onclick={() => decide(row.id, true)}
 			>
 				Accept
 			</button>
 			<button
-				class="decide reject"
-				onclick={() => store.decide(row.id, false)}
+				class="sp-proposal-decide sp-proposal-reject"
+				onclick={() => decide(row.id, false)}
 			>
 				Reject
 			</button>
 		</div>
 	{/if}
 {/each}
-
-<style>
-	.pending {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: 0.3rem;
-		font-size: 0.68rem;
-	}
-	.pending-text {
-		min-width: 0;
-		flex: 1 1 8rem;
-	}
-	.anchor,
-	.who {
-		opacity: 0.55;
-	}
-	.superseded {
-		opacity: 0.7;
-	}
-	.decide {
-		padding: 0.02rem 0.4rem;
-		border-radius: 999px;
-		background: color-mix(in oklab, currentColor 14%, transparent);
-	}
-	.decide:hover {
-		filter: brightness(1.2);
-	}
-	.accept {
-		font-weight: 600;
-	}
-	.reject {
-		opacity: 0.75;
-	}
-</style>

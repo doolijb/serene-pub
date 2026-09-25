@@ -18,6 +18,7 @@ import {
 	pluginDeclarationsOf,
 	registerPluginDefinitions
 } from "./pluginDefinitions"
+import { registerPluginEvents } from "./pluginEvents"
 import { makePluginRowPort } from "./rowStore"
 import { pluginsEnabled } from "./flag"
 import { syncPluginEngines } from "./engineHost"
@@ -86,7 +87,9 @@ export async function bootstrapPlugins(db: Db): Promise<void> {
 					row.pluginId
 				)
 				const registered = registerPluginDefinitions(declarations)
-				for (const line of [...refused, ...registered.refused])
+				// Its declared events too, from the same manifest (E1b).
+				const events = registerPluginEvents(row.manifest, row.pluginId)
+				for (const line of [...refused, ...registered.refused, ...events])
 					console.warn(`[plugins] '${row.pluginId}': ${line}`)
 			}
 		} catch (e) {

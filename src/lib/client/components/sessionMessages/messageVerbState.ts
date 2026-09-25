@@ -29,7 +29,7 @@ import {
 	type EnabledWhen,
 	type ParticipantRef
 } from "@serene-pub/sdk"
-import { statusText } from "$lib/client/i18n/state.svelte"
+import { statusText } from "./text"
 import { itemValuesOf } from "$lib/shared/actions/itemValues"
 
 export interface VerbMessage {

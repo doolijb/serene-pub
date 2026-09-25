@@ -37,6 +37,7 @@
  * names, which is the whole point of shipping a layout for somebody else's
  * genre.
  */
+import { i18nText, type I18n } from "@serene-pub/sdk"
 import { and, eq } from "drizzle-orm"
 import * as schema from "./schema"
 import { engineNamespaceOf } from "$lib/server/plugins/engineHost"
@@ -103,8 +104,7 @@ export function declaredLayoutsOf(manifest: unknown): DeclaredLayout[] {
 			!d.genreId ||
 			typeof d.slug !== "string" ||
 			!d.slug ||
-			typeof d.name !== "string" ||
-			!d.name ||
+			!i18nText(d.name as I18n) ||
 			!d.preset ||
 			typeof d.preset !== "object"
 		)
@@ -112,9 +112,9 @@ export function declaredLayoutsOf(manifest: unknown): DeclaredLayout[] {
 		out.push({
 			genreId: d.genreId,
 			slug: d.slug,
-			name: d.name,
-			description:
-				typeof d.description === "string" ? d.description : undefined,
+			// Display text is a string or a locale map (R-20); the row keeps English.
+			name: i18nText(d.name as I18n)!,
+			description: i18nText(d.description as I18n | undefined),
 			preset: d.preset as LayoutPreset
 		})
 	}

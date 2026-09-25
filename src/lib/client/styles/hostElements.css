@@ -1,0 +1,108 @@
+/*
+ * Core's base skin for the sp elements (STYLE-GUIDE §6.10, §6.6).
+ *
+ * The elements themselves carry structure, not a look (R22): a root
+ * `.sp-<name>` and the parts their `.d.ts` lists. This file is the skin core
+ * ships over those parts, so core's own widgets and a plugin's remote look
+ * the same, and a widget skin or a user style still layers over it.
+ *
+ * A popover's panel is deliberately bare: its body is the widget's own card.
+ */
+
+/* An icon sits in a line like the glyph it is, and takes a transform
+   (`animate-spin`, `rotate-180`) — which an inline box would ignore. Its box
+   is the size: `size` (SpIcon sets `--sp-icon-size`), or whatever a context
+   gives it (a button's, a badge's — below), and the svg fills it. In the
+   base layer, so a utility on the icon (`size-4`) still wins. */
+@layer base {
+	sp-icon {
+		display: inline-flex;
+		flex-shrink: 0;
+		align-items: center;
+		justify-content: center;
+		line-height: 0;
+		inline-size: var(--sp-icon-size, 1em);
+		block-size: var(--sp-icon-size, 1em);
+	}
+	sp-icon svg {
+		inline-size: 100%;
+		block-size: 100%;
+	}
+}
+/* Skeleton sizes an icon that is a control's direct child (`& > :where(svg)`);
+   an sp-icon is that child now, so it gets the same size, in the same layer. */
+@layer utilities {
+	:where(.btn, .btn-icon) > sp-icon {
+		inline-size: var(--btn-size);
+		block-size: var(--btn-size);
+	}
+	:where(.badge, .badge-icon) > sp-icon {
+		inline-size: var(--badge-size);
+		block-size: var(--badge-size);
+	}
+	:where(.chip, .chip-icon) > sp-icon {
+		inline-size: var(--chip-size);
+		block-size: var(--chip-size);
+	}
+}
+sp-avatar {
+	display: inline-flex;
+	flex-shrink: 0;
+}
+/* Text is a block, as the markup it replaced was. */
+sp-message-body {
+	display: block;
+}
+
+.sp-dialog-backdrop {
+	@apply bg-surface-50-950/50 backdrop-blur-sm;
+}
+.sp-dialog-panel {
+	@apply card bg-surface-100-900 max-h-full w-full max-w-md space-y-3 overflow-y-auto p-5 shadow-xl;
+}
+.sp-dialog-header {
+	@apply flex items-center gap-2;
+}
+.sp-dialog-title {
+	@apply flex-1 text-base font-semibold;
+}
+.sp-dialog-close {
+	@apply btn-icon btn-icon-sm hover:preset-tonal-surface pointer-coarse:size-11;
+}
+.sp-dialog-footer:empty {
+	display: none;
+}
+
+.sp-menu-panel,
+.sp-combobox-panel {
+	@apply card bg-surface-100-900 flex max-h-[min(70vh,28rem)] max-w-[90vw] min-w-40 flex-col overflow-y-auto p-1 shadow-xl;
+}
+.sp-menu-row {
+	@apply flex min-h-9 cursor-pointer items-center rounded-md px-3 text-sm;
+}
+.sp-menu-row[data-highlighted] {
+	@apply bg-surface-200-800;
+}
+.sp-menu-row[data-disabled] {
+	@apply cursor-not-allowed opacity-50;
+}
+
+.sp-tooltip-panel {
+	@apply card preset-filled-surface-950-50 px-2 py-1 text-xs;
+}
+
+.sp-progress-track {
+	@apply overflow-hidden rounded-full;
+}
+
+/*
+ * A remote's listener hears an event only when its own element is the
+ * target (Remote DOM's rule), so a click on the icon or the word inside a
+ * plugin's button would reach nothing. Its content takes no pointer, so the
+ * button itself is what is clicked. Not core's: core's own widgets are
+ * native and listen as usual.
+ */
+[data-sp-owner]:not([data-sp-owner="core"]) :is(button, a, [role="button"]) * {
+	pointer-events: none;
+}
+

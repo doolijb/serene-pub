@@ -19,7 +19,13 @@ import SceneEditor from "./SceneEditor.svelte"
 import SceneRow from "./SceneRow.svelte"
 import WorldLoreEditor from "./WorldLoreEditor.svelte"
 import WorldLoreRow from "./WorldLoreRow.svelte"
-import { dateValue, editBounds, formatDate } from "./historyDates"
+import {
+	compareDates,
+	dateValue,
+	editBounds,
+	formatDate,
+	type StoryDate
+} from "./historyDates"
 import type {
 	DoorId,
 	InspectorTab,
@@ -231,20 +237,20 @@ const history: SectionDescriptor = {
 		}
 		if (draft.id == null) return true
 		const bounds = editBounds(siblings as any, draft.id)
-		const value = dateValue(draft as any)
-		if (bounds.min !== -Infinity && value <= bounds.min) {
+		const date = draft as any as StoryDate
+		if (bounds.min && compareDates(date, bounds.min) <= 0) {
 			if (warn)
 				toaster.error({
 					title: "Date would be out of order",
-					description: `Must be after ${formatDate({ year: Math.floor(bounds.min / 10000), month: Math.floor((bounds.min % 10000) / 100), day: bounds.min % 100 })}`
+					description: `Must be after ${formatDate(bounds.min)}`
 				})
 			return false
 		}
-		if (bounds.max !== Infinity && value >= bounds.max) {
+		if (bounds.max && compareDates(date, bounds.max) >= 0) {
 			if (warn)
 				toaster.error({
 					title: "Date would be out of order",
-					description: `Must be before ${formatDate({ year: Math.floor(bounds.max / 10000), month: Math.floor((bounds.max % 10000) / 100), day: bounds.max % 100 })}`
+					description: `Must be before ${formatDate(bounds.max)}`
 				})
 			return false
 		}

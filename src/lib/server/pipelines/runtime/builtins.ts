@@ -87,7 +87,37 @@ export async function runBuiltIn(
 	db: Db,
 	request: BuiltInRequest
 ): Promise<BuiltInOutcome> {
-	const specId = BUILTIN_SPEC_IDS[request.kind]
+	return runActionSpec(db, BUILTIN_SPEC_IDS[request.kind], request)
+}
+
+/**
+ * A person's message action that is not a built-in but runs like one — the
+ * same one-node shape, receipt, gate and row push. Today: a line's sprite
+ * (`core:spec/show-sprite`, DESIGN-sprites §6), whose outlet the reply specs'
+ * sprite tail also places, which is exactly why it cannot be a built-in (a
+ * built-in outlet may appear in its own spec and nowhere else).
+ */
+export async function runSpriteAction(
+	db: Db,
+	request: Omit<BuiltInRequest, "kind" | "payload"> & {
+		target: number
+		sprite: { set: string; label: string } | null
+	}
+): Promise<BuiltInOutcome> {
+	const { SHOW_SPRITE_SPEC_ID } = await import("@serene-pub/core-catalog")
+	return runActionSpec(db, SHOW_SPRITE_SPEC_ID, {
+		...request,
+		payload: { target: request.target, sprite: request.sprite }
+	})
+}
+
+async function runActionSpec(
+	db: Db,
+	specId: string,
+	request: Omit<BuiltInRequest, "kind"> & {
+		payload: BuiltInRequest["payload"] & { sprite?: unknown }
+	}
+): Promise<BuiltInOutcome> {
 	const runId = request.runId ?? uuidv4()
 	const handle = runRegistry.start({
 		runId,

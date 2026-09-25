@@ -9,8 +9,14 @@ import {
 	buildCharacterCardV3,
 	embedCharacterCardInPng,
 	getRobustSpecV3Data,
-	validatePngChunkLengths
+	validatePngChunkLengths,
+	readCharxContainer,
+	isZipBuffer,
+	CHARX_LIMITS,
+	unimportedAssets,
+	describeUnimportedAssets
 } from "./characterCardParser"
+import { zipSync, strToU8 } from "fflate"
 
 const minimalCardJson = {
 	spec: "chara_card_v2",
@@ -460,5 +466,316 @@ describe("validatePngChunkLengths", () => {
 		expect(() => validatePngChunkLengths(buffer)).toThrow(
 			/truncated chunk header/
 		)
+	})
+})
+
+describe("CHARX containers", () => {
+	const v3Card = (assets?: unknown[]) => ({
+		spec: "chara_card_v3",
+		spec_version: "3.0",
+		data: {
+			name: "Charx Character",
+			description: "Packed in a zip",
+			first_mes: "Hello from a zip",
+			tags: ["zipped"],
+			character_book: {
+				name: "Zip Book",
+				entries: [
+					{ keys: ["harbour"], content: "It burned.", enabled: true, insertion_order: 0 }
+				]
+			},
+			...(assets ? { assets } : {})
+		}
+	})
+
+	function makeCharx(
+		card: unknown,
+		extra: Record<string, Uint8Array> = {}
+	): Buffer {
+		return Buffer.from(
+			zipSync({ "card.json": strToU8(JSON.stringify(card)), ...extra })
+		)
+	}
+
+	test("detects the zip magic", () => {
+		expect(isZipBuffer(makeCharx(v3Card()))).toBe(true)
+		expect(isZipBuffer(makeTestPngBuffer())).toBe(false)
+	})
+
+	test("imports the card, its lorebook and the main icon as the avatar", async () => {
+		const png = makeTestPngBuffer()
+		const buffer = makeCharx(
+			v3Card([
+				{ type: "icon", uri: "embeded://assets/icon/images/2.png", name: "alt", ext: "png" },
+				{ type: "icon", uri: "embeded://assets/icon/images/1.png", name: "main", ext: "png" },
+				{ type: "emotion", uri: "embeded://assets/emotion/happy.png", name: "happy", ext: "png" }
+			]),
+			{
+				"assets/icon/images/1.png": png,
+				"assets/icon/images/2.png": strToU8("not the main icon")
+			}
+		)
+		const parsed = await parseCharacterCard(buffer)
+		const data = getRobustSpecV3Data(parsed.card)
+		expect(data.name).toBe("Charx Character")
+		expect(data.first_mes).toBe("Hello from a zip")
+		expect(data.tags).toEqual(["zipped"])
+		expect(parsed.lorebook?.entries).toHaveLength(1)
+		expect(parsed.avatarBuffer?.equals(png)).toBe(true)
+	})
+
+	test("falls back to the first icon when none is named main", () => {
+		const png = makeTestPngBuffer()
+		const { avatarBuffer } = readCharxContainer(
+			makeCharx(v3Card([{ type: "icon", uri: "embeded://a.png", name: "x", ext: "png" }]), {
+				"a.png": png
+			})
+		)
+		expect(avatarBuffer?.equals(png)).toBe(true)
+	})
+
+	test("tolerates the correctly spelled embedded:// scheme", () => {
+		const png = makeTestPngBuffer()
+		const { avatarBuffer } = readCharxContainer(
+			makeCharx(v3Card([{ type: "icon", uri: "embedded://a.png", name: "main", ext: "png" }]), {
+				"a.png": png
+			})
+		)
+		expect(avatarBuffer?.equals(png)).toBe(true)
+	})
+
+	test("reads a data: URI icon", () => {
+		const png = makeTestPngBuffer()
+		const uri = `data:image/png;base64,${png.toString("base64")}`
+		const { avatarBuffer } = readCharxContainer(
+			makeCharx(v3Card([{ type: "icon", uri, name: "main", ext: "png" }]))
+		)
+		expect(avatarBuffer?.equals(png)).toBe(true)
+	})
+
+	test("never fetches a remote icon, and ccdefault: yields no avatar", () => {
+		for (const uri of ["https://example.com/a.png", "ccdefault:"]) {
+			const { raw, avatarBuffer } = readCharxContainer(
+				makeCharx(v3Card([{ type: "icon", uri, name: "main", ext: "png" }]))
+			)
+			expect(raw.data.name).toBe("Charx Character")
+			expect(avatarBuffer).toBeUndefined()
+		}
+	})
+
+	test("an icon the card names but the zip lacks is simply absent", () => {
+		const { avatarBuffer } = readCharxContainer(
+			makeCharx(v3Card([{ type: "icon", uri: "embeded://missing.png", name: "main", ext: "png" }]))
+		)
+		expect(avatarBuffer).toBeUndefined()
+	})
+
+	test("includeAvatar false never inflates the icon", async () => {
+		const parsed = await parseCharacterCard(
+			makeCharx(v3Card([{ type: "icon", uri: "embeded://a.png", name: "main", ext: "png" }]), {
+				"a.png": makeTestPngBuffer()
+			}),
+			{ includeAvatar: false }
+		)
+		expect(parsed.avatarBuffer).toBeUndefined()
+	})
+
+	test("a zip without card.json is refused with a readable error", async () => {
+		const buffer = Buffer.from(zipSync({ "readme.txt": strToU8("hi") }))
+		await expect(parseCharacterCard(buffer)).rejects.toThrow(/no card\.json/)
+	})
+
+	test("card.json that is not JSON is refused", () => {
+		const buffer = Buffer.from(zipSync({ "card.json": strToU8("{nope") }))
+		expect(() => readCharxContainer(buffer)).toThrow(/not valid JSON/)
+	})
+
+	test("a byte-order mark on card.json is tolerated", () => {
+		const buffer = Buffer.from(
+			zipSync({ "card.json": strToU8("\uFEFF" + JSON.stringify(v3Card())) })
+		)
+		expect(readCharxContainer(buffer).raw.data.name).toBe("Charx Character")
+	})
+
+	test("an entry declaring more than the ceiling is refused before inflating", () => {
+		const prior = CHARX_LIMITS.cardJsonBytes
+		CHARX_LIMITS.cardJsonBytes = 10
+		try {
+			expect(() => readCharxContainer(makeCharx(v3Card()))).toThrow(/larger than/)
+		} finally {
+			CHARX_LIMITS.cardJsonBytes = prior
+		}
+	})
+
+	test("a truncated zip is refused as unreadable", () => {
+		const buffer = makeCharx(v3Card()).subarray(0, 30)
+		expect(() => readCharxContainer(buffer)).toThrow(/could not be read/)
+	})
+})
+
+describe("unimported card assets (V3 spec: alert when assets are not kept)", () => {
+	test("counts everything except the main icon, by type", () => {
+		const raw = {
+			data: {
+				assets: [
+					{ type: "icon", uri: "ccdefault:", name: "main", ext: "png" },
+					{ type: "icon", uri: "embeded://b.png", name: "alt", ext: "png" },
+					{ type: "emotion", uri: "embeded://joy.png", name: "joy", ext: "png" },
+					{ type: "emotion", uri: "embeded://sad.png", name: "sad", ext: "png" },
+					{ type: "background", uri: "embeded://bg.png", name: "main", ext: "png" },
+					{ type: "x-risu-asset", uri: "__asset:4", name: "map", ext: "png" }
+				]
+			}
+		}
+		expect(unimportedAssets(raw)).toEqual({
+			icon: 1,
+			emotion: 2,
+			background: 1,
+			"x-risu-asset": 1
+		})
+	})
+
+	test("counts RisuAI's older extension pairs", () => {
+		const raw = {
+			data: {
+				extensions: {
+					risuai: {
+						emotions: [["joy", "AAAA"], ["sad", "BBBB"]],
+						additionalAssets: [["map", "CCCC", "png"]]
+					}
+				}
+			}
+		}
+		expect(unimportedAssets(raw)).toEqual({ emotion: 2, "x-risu-asset": 1 })
+	})
+
+	test("a card with only its main icon, or no assets, leaves nothing behind", () => {
+		expect(
+			unimportedAssets({
+				data: { assets: [{ type: "icon", uri: "ccdefault:", name: "main", ext: "png" }] }
+			})
+		).toBeUndefined()
+		expect(unimportedAssets({ data: {} })).toBeUndefined()
+		expect(unimportedAssets(undefined)).toBeUndefined()
+	})
+
+	test("describes the counts in one sentence", () => {
+		expect(describeUnimportedAssets(undefined)).toBeUndefined()
+		expect(describeUnimportedAssets({ emotion: 1 })).toBe(
+			"The card's 1 emotion image was not imported, so exporting this character will leave it out."
+		)
+		expect(
+			describeUnimportedAssets({ emotion: 12, background: 1, "x-risu-asset": 3 })
+		).toBe(
+			"The card's 12 emotion images, 1 background and 3 other assets were not imported, so exporting this character will leave them out."
+		)
+	})
+
+	test("parseCharacterCard reports them for a CHARX", async () => {
+		const buffer = Buffer.from(
+			zipSync({
+				"card.json": strToU8(
+					JSON.stringify({
+						spec: "chara_card_v3",
+						spec_version: "3.0",
+						data: {
+							name: "Packed",
+							description: "x",
+							assets: [
+								{ type: "icon", uri: "embeded://i.png", name: "main", ext: "png" },
+								{ type: "emotion", uri: "embeded://joy.png", name: "joy", ext: "png" }
+							]
+						}
+					})
+				),
+				"i.png": makeTestPngBuffer(),
+				"joy.png": makeTestPngBuffer()
+			})
+		)
+		const parsed = await parseCharacterCard(buffer)
+		// Sprites are kept now (DESIGN-sprites §4): nothing left behind.
+		expect(parsed.unimportedAssets).toBeUndefined()
+		expect(parsed.sprites?.map((p) => p.label)).toEqual(["joy"])
+		expect(parsed.avatarBuffer).toBeDefined()
+	})
+})
+
+describe("card sprites (DESIGN-sprites §4)", () => {
+	const card = (assets: unknown[], extensions: unknown = {}) => ({
+		spec: "chara_card_v3",
+		spec_version: "3.0",
+		data: { name: "Sprited", description: "x", assets, extensions }
+	})
+
+	test("CHARX: emotion and expression assets land in the default set; x_sp_sprite keeps its set", async () => {
+		const joy = makeTestPngBuffer()
+		const plate = Buffer.from(makeTestPngBuffer())
+		const buffer = Buffer.from(
+			zipSync({
+				"card.json": strToU8(
+					JSON.stringify(
+						card([
+							{ type: "emotion", uri: "embeded://assets/emotion/images/0.png", name: "Joy", ext: "png" },
+							{ type: "expression", uri: "embeded://assets/emotion/images/1.png", name: "anger", ext: "png" },
+							{ type: "x_sp_sprite", uri: "embeded://assets/x/armour-stern.png", name: "Armour/Stern", ext: "png" },
+							{ type: "emotion", uri: "https://example.com/sad.png", name: "sad", ext: "png" },
+							{ type: "background", uri: "embeded://assets/background/images/0.png", name: "main", ext: "png" }
+						])
+					)
+				),
+				"assets/emotion/images/0.png": joy,
+				"assets/emotion/images/1.png": plate,
+				"assets/x/armour-stern.png": plate,
+				"assets/background/images/0.png": plate
+			})
+		)
+		const parsed = await parseCharacterCard(buffer)
+		expect(parsed.sprites?.map((s) => [s.set ?? null, s.label])).toEqual([
+			[null, "joy"],
+			[null, "anger"],
+			["armour", "stern"]
+		])
+		expect(parsed.sprites?.[0].bytes.equals(joy)).toBe(true)
+		// The remote sprite and the background are left behind — and said so.
+		expect(parsed.unimportedAssets).toEqual({ emotion: 1, background: 1 })
+	})
+
+	test("RisuAI PNG: __asset URIs resolve to chara-ext-asset_ chunks", async () => {
+		const sprite = makeTestPngBuffer()
+		const base = embedCharacterCardInPng(
+			makeTestPngBuffer(),
+			card([{ type: "emotion", uri: "__asset:3", name: "joy", ext: "png" }])
+		)
+		const chunks = extract(base)
+		chunks.splice(
+			chunks.length - 1,
+			0,
+			text.encode("chara-ext-asset_:3", sprite.toString("base64"))
+		)
+		const encode = (await import("png-chunks-encode")).default
+		const buffer = Buffer.from(encode(chunks))
+		const parsed = await parseCharacterCard(buffer)
+		expect(parsed.sprites?.map((s) => s.label)).toEqual(["joy"])
+		expect(parsed.sprites?.[0].bytes.equals(sprite)).toBe(true)
+		expect(parsed.unimportedAssets).toBeUndefined()
+	})
+
+	test("older RisuAI pairs: raw base64 values become sprites", async () => {
+		const sprite = makeTestPngBuffer()
+		const json = card([], {
+			risuai: { emotions: [["Happy", sprite.toString("base64")], ["", "x"]] }
+		})
+		const parsed = await parseCharacterCard(Buffer.from(JSON.stringify(json)))
+		expect(parsed.sprites?.map((s) => s.label)).toEqual(["happy"])
+		// The unlabelled pair is left behind and counted.
+		expect(parsed.unimportedAssets).toEqual({ emotion: 1 })
+	})
+
+	test("includeAvatar: false skips sprite extraction too", async () => {
+		const json = card([], { risuai: { emotions: [["joy", makeTestPngBuffer().toString("base64")]] } })
+		const parsed = await parseCharacterCard(Buffer.from(JSON.stringify(json)), {
+			includeAvatar: false
+		})
+		expect(parsed.sprites).toBeUndefined()
 	})
 })

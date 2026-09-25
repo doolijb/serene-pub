@@ -368,23 +368,30 @@ describe("0134 — the one-shot rename, against the pre-rename seeds", () => {
 		 * Specs that did not exist at the rename, so the pre-rename fixture
 		 * holds no row for them and the migration has nothing of theirs to
 		 * rewrite; the boot after it publishes them fresh (the last case
-		 * below sees them arrive). U5b (R-15): the five built-in writes.
-		 * U5g (R-18): the guide genre's two — its create pipeline and its
-		 * reply. U5d (R-15 *Forms*): the three answer pipelines and the
-		 * Adventure genre's Ask and Answer.
+		 * below sees them arrive).
+		 *
+		 * DERIVED from the fixture rather than listed: a hand-kept list went
+		 * stale with every genre that shipped after the rename (U5b's
+		 * built-ins, U5g's guide, U5d's answer pipelines, the lair, the
+		 * writing room, whodunit, the per-genre turn-order specs, sprites'
+		 * `show-sprite`), and its size assertion then masked the real one
+		 * below. The fixture IS the set that existed at the rename.
 		 */
-		const PUBLISHED_SINCE_RENAME = new Set(
-			CORE_SPECS.map((c) => c.slug).filter(
-				(slug) =>
-					slug.startsWith("core:spec/builtin-") ||
-					slug === "core:spec/create-guide" ||
-					slug === "core:spec/guide-respond" ||
-					slug.startsWith("core:spec/answer-form-") ||
-					slug === "core:spec/adventure-ask" ||
-					slug === "core:spec/adventure-answer"
-			)
+		const AT_RENAME = new Set(
+			(fixture.pipeline_specs as { slug: string }[]).map((r) => r.slug)
 		)
-		expect(PUBLISHED_SINCE_RENAME.size).toBe(12)
+		for (const slug of AT_RENAME)
+			expect(
+				CORE_SPECS.some((c) => c.slug === slug),
+				`${slug} existed at the rename and is no longer shipped`
+			).toBe(true)
+		const PUBLISHED_SINCE_RENAME = new Set(
+			CORE_SPECS.map((c) => c.slug).filter((slug) => !AT_RENAME.has(slug))
+		)
+		// A spot check that the derivation sees what shipped since: the
+		// built-ins (U5b) and sprites' action spec (2026-09-24).
+		expect(PUBLISHED_SINCE_RENAME.has("core:spec/builtin-delete")).toBe(true)
+		expect(PUBLISHED_SINCE_RENAME.has("core:spec/show-sprite")).toBe(true)
 		const atRename = CORE_SPECS.length - PUBLISHED_SINCE_RENAME.size
 		expect(specs.length).toBe(atRename)
 		/**
@@ -431,7 +438,15 @@ describe("0134 — the one-shot rename, against the pre-rename seeds", () => {
 			"core:spec/adventure-advance-time": "17168783bd30d0",
 			"core:spec/echo": "19cc4810162b94",
 			"core:spec/generate-image": "19338b1db2497c",
-			"core:spec/tool-loop": "1d560d3f202dd5"
+			"core:spec/tool-loop": "1d560d3f202dd5",
+			// The four summarize specs moved after the rename and were never
+			// recorded here; the hand-kept "published since" count above masked
+			// it. Recorded 2026-09-24 at the hash the rename rewrote them TO
+			// (the stored document's own).
+			"core:spec/summarize-world": "6a5f107fa3641",
+			"core:spec/summarize-character": "102b4ae06e92a1",
+			"core:spec/summarize-scene": "63c1e956ffead",
+			"core:spec/summarize-history": "d31fcf98fd3d6"
 		}
 		let checked = 0
 		for (const s of specs) {
@@ -633,7 +648,8 @@ describe("0134 — the one-shot rename, against the pre-rename seeds", () => {
 		// edited-away row says nothing about a rename, the one pinned to the
 		// active row names the date.
 		const { pipelinesRun } = await import("$lib/server/sockets/pipelines")
-		const socket = { user: { id: 2, isAdmin: false } } as any
+		// An admin: receipts are an administrator's (R55).
+		const socket = { user: { id: 2, isAdmin: true } } as any
 		const noop = () => {}
 		const edited: any = await pipelinesRun.handler(socket, { runId: EDITED_AWAY_RUN }, noop)
 		expect(edited.run?.specHash).toBe(EDITED_AWAY_HASH)

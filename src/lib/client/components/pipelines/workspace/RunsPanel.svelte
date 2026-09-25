@@ -77,6 +77,8 @@
 
 	const runColumns: AdminColumn<Run>[] = [
 		{ key: "startedAt", label: "When", value: (r) => r.startedAt },
+		// Whose run: the list holds every user's runs (R55).
+		{ key: "username", label: "User", value: (r) => r.username ?? "" },
 		{ key: "outcome", label: "Outcome", value: (r) => r.outcome },
 		{
 			key: "elapsedMs",
@@ -146,6 +148,8 @@
 	{#snippet cell(r, col)}
 		{#if col.key === "startedAt"}
 			<span class="whitespace-nowrap">{when(r.startedAt)}</span>
+		{:else if col.key === "username"}
+			{r.username ?? "—"}
 		{:else if col.key === "outcome"}
 			{#if r.outcome === "ok"}
 				<span class="text-success-500">ok</span>

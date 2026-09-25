@@ -11,6 +11,7 @@ import {
 	countNotInStory,
 	dateAtRatio,
 	isInStoryAsOf,
+	amendmentsAheadSentence,
 	momentBannerSentence,
 	momentChipLabel,
 	momentKey,
@@ -125,9 +126,18 @@ describe("the moment, said out loud", () => {
 		)
 	})
 
-	it("says what an edit made here is saved as", () => {
+	it("counts an entry's amendments still ahead of the moment", () => {
+		expect(amendmentsAheadSentence(1, 3)).toBe(
+			"1 of 3 has not happened yet at this moment"
+		)
+		expect(amendmentsAheadSentence(4, 4)).toBe(
+			"4 of 4 have not happened yet at this moment"
+		)
+	})
+
+	it("names the choice a save here presents", () => {
 		expect(momentBannerSentence("Y2-8")).toBe(
-			"Reading as of Year 2, Mo. 8. Changes made here are saved to the entry itself; dated amendments are not built yet."
+			"Reading as of Year 2, Mo. 8. A change saved here can begin at this date, or change it everywhere."
 		)
 	})
 })

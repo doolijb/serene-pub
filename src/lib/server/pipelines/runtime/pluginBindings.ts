@@ -49,6 +49,7 @@
  * binding", exactly like any other unregistered type.
  */
 
+import { pluginRuleRef } from "@serene-pub/sdk"
 import { and, eq, isNotNull, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { Bindings, Result } from "@serene-pub/sdk"
@@ -188,6 +189,12 @@ export interface PluginBindingOptions {
 	nowMs: number
 	runId?: string
 	user?: string
+	/**
+	 * The running pipeline's owning package (its slug), or undefined for core's
+	 * and a person's own pipelines. A plugin's private node runs only in its own
+	 * package's pipelines (R62): everywhere else its binding refuses.
+	 */
+	specOwner?: string
 }
 
 export async function pluginNodeBindings(
@@ -203,6 +210,7 @@ export async function pluginNodeBindings(
 			version: schema.pipelineDefinitionRegistry.version,
 			kind: schema.pipelineDefinitionRegistry.kind,
 			ownerPluginId: schema.pipelineDefinitionRegistry.ownerPluginId,
+			isPublic: schema.pipelineDefinitionRegistry.isPublic,
 			// The declaration side of the structural check. Read from the
 			// **row**, never from a descriptor: F6 says core reads a plugin's
 			// contract from what it stored at install, and a
@@ -265,6 +273,18 @@ export async function pluginNodeBindings(
 			bindings[pin] = async () =>
 				err(
 					`${pin} belongs to an extension that is no longer installed`
+				)
+			continue
+		}
+		// A node is as public as its handler (R62). A private one runs only in
+		// its own package's pipelines — never another package's, never one a
+		// person authored — whatever door the pipeline came in by.
+		if (!row.isPublic && owner.pluginId !== opts.specOwner) {
+			bindings[pin] = async () =>
+				err(
+					`${pin} is private to '${owner.pluginId}' — only its own pipelines may use it. ` +
+						`Its author makes it reusable with handler(…, { visibility: 'public' }).` +
+						pluginRuleRef("private-nodes")
 				)
 			continue
 		}
@@ -360,7 +380,10 @@ export async function pluginNodeBindings(
 					seedLabel: `${opts.seed}:node:${pin}:${digest(input)}`,
 					nowMs: opts.nowMs,
 					runId: opts.runId,
-					user: opts.user
+					user: opts.user,
+					// Another package's pipeline, or a person's: only the
+					// secrets this plugin lends reach the fetch bridge (R63).
+					foreignPipeline: owner.pluginId !== opts.specOwner
 				}
 			)
 			if (!r.ok) return err(r.reason ?? "the extension's hook failed")

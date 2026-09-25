@@ -49,7 +49,7 @@ describe("the index's rows render", () => {
 		expect(html).toContain("Not set · sessions can't reply")
 		expect(html).toContain("6 more")
 	})
-	test("connection row", () => {
+	test("connection row fills its four slots", () => {
 		const html = render(ConnectionRow, {
 			props: {
 				title: "OpenRouter",
@@ -57,8 +57,10 @@ describe("the index's rows render", () => {
 				kind: "api",
 				managed: false,
 				status: {
-					dot: "ok",
-					sentence: "4 models · openrouter.ai",
+					state: "ready",
+					label: "Ready",
+					detail: "openrouter.ai",
+					metric: "4 models",
 					action: null
 				},
 				onOpen: () => {},
@@ -66,23 +68,71 @@ describe("the index's rows render", () => {
 			}
 		}).body
 		expect(html).toContain("OpenRouter")
+		expect(html).toContain("Ready")
+		expect(html).toContain("openrouter.ai")
 		expect(html).toContain("4 models")
 	})
-	test("connection row with an action", () => {
+	test("a default-named connection does not repeat itself in a chip", () => {
+		// The shipped index read "Anthropic (Claude)" beside a chip saying
+		// "Anthropic (Claude)". Amended 2026-09-23.
+		const html = render(ConnectionRow, {
+			props: {
+				title: "Ollama",
+				serviceLabel: "Ollama",
+				kind: "ollama",
+				managed: true,
+				status: {
+					state: "ready",
+					label: "Running",
+					detail: "localhost:11434",
+					metric: "4 models",
+					action: null
+				},
+				onOpen: () => {},
+				onAction: () => {}
+			}
+		}).body
+		expect(html).not.toContain("preset-tonal-tertiary")
+	})
+	test("a renamed connection still says what it is", () => {
+		const html = render(ConnectionRow, {
+			props: {
+				title: "Downstairs box",
+				serviceLabel: "Ollama",
+				kind: "ollama",
+				managed: true,
+				status: {
+					state: "ready",
+					label: "Running",
+					detail: "localhost:11434",
+					metric: "4 models",
+					action: null
+				},
+				onOpen: () => {},
+				onAction: () => {}
+			}
+		}).body
+		expect(html).toContain("preset-tonal-tertiary")
+		expect(html).toContain("Ollama")
+	})
+	test("connection row with an action, and the chat mark", () => {
 		const html = render(ConnectionRow, {
 			props: {
 				title: "KoboldCPP",
 				serviceLabel: "KoboldCPP",
 				kind: "koboldcpp-managed",
 				managed: true,
+				defaultFor: ["Chat"],
 				status: {
-					dot: "quiet",
-					sentence: "Stopped · starts on first use · 2 on disk",
+					state: "idle",
+					label: "Stopped",
+					detail: "Starts on first use",
+					metric: "2 on disk",
 					action: {
 						verb: "start",
 						label: "Start",
 						icon: "Play",
-						emphasis: "ghost"
+						emphasis: "tonal"
 					}
 				},
 				onOpen: () => {},
@@ -90,7 +140,8 @@ describe("the index's rows render", () => {
 			}
 		}).body
 		expect(html).toContain("Start")
-		expect(html).toContain("preset-tonal-tertiary")
+		expect(html).toContain("Chat")
+		expect(html).toContain("2 on disk")
 	})
 	test("tray", () => {
 		const html = render(DownloadsTray, {

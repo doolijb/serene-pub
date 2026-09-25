@@ -156,38 +156,85 @@
 		}
 	}
 
-	// Replaces a separate "Get Next Response" button, which asked the server
-	// to work out whose turn it is via sessions:triggerGenerateMessage's
-	// `triggered: true` path — that could quietly do nothing once a full
-	// round had already completed, with no way to tell it happened and no
-	// way to choose who goes instead. This single selector always shows a
-	// live, real due-character (or Narrator) and always does something when
-	// used: characterId + once:true forces exactly that responder right now,
-	// regardless of turn order.
-	let sessionResponseOrder:
-		| Sockets.Sessions.GetResponseOrder.Response
-		| undefined = $state()
-	let triggerResponseFrom: number | "narrator" | "" = $state("")
-	// Keep the selection tracking the live due-rotation rather than a
-	// one-time default — sessionResponseOrder is re-queried after every message
-	// (see onMount below), so this re-syncs each time whoever's actually due
-	// next changes. A manual pick right before clicking "Get Response" still
-	// works fine; it just resets on the next refresh, same as the response
-	// order itself would have moved on anyway.
+	/**
+	 * Who replies next (PLAN-turn-order §4.9): the session's stored turn
+	 * order, pushed by the server (`sessions:turnOrder`) — never worked out
+	 * here. The selector defaults to the order's head; picking a candidate or
+	 * the narrator fires that turn instead (`sessions:fireTurn`, `via:
+	 * 'pick'`), which the server allows the owner and refuses anyone else
+	 * with a sentence.
+	 */
+	type TurnOrderView = {
+		order: Array<{ ref: string | null }>
+		candidates: Array<{
+			ref: string
+			kind: string
+			name: string
+			nickname?: string
+			ownerUserId?: number
+		}>
+	}
+	let turnOrder = $state<TurnOrderView | null>(null)
+	const HEAD = "head"
+	const NARRATOR = "narrator"
+	let triggerResponseFrom: string = $state("")
+	const headName = $derived.by(() => {
+		const head = turnOrder?.order[0]
+		if (!head) return null
+		if (head.ref === null) return "the narrator"
+		const c = turnOrder!.candidates.find((x) => x.ref === head.ref)
+		return c?.nickname || c?.name || "someone"
+	})
+	const headCandidate = $derived.by(() => {
+		const head = turnOrder?.order[0]
+		return head?.ref ? turnOrder!.candidates.find((c) => c.ref === head.ref) : undefined
+	})
+	const headIsPerson = $derived(headCandidate?.kind === "persona")
+	const headIsMine = $derived(
+		headIsPerson && headCandidate?.ownerUserId === userCtx.user?.id
+	)
+	// The selection follows the head each time the order moves; a manual
+	// pick holds until then.
 	$effect(() => {
-		triggerResponseFrom = sessionResponseOrder?.nextCharacterId ?? ""
+		triggerResponseFrom = turnOrder?.order.length && !headIsPerson ? HEAD : ""
 	})
 	function triggerSelectedResponse() {
 		if (triggerResponseFrom === "") return
-		if (triggerResponseFrom === "narrator") {
-			socket.emit("sessions:triggerNarratorResponse", { sessionId })
+		if (triggerResponseFrom === HEAD) {
+			socket.emit("sessions:fireTurn", { sessionId })
 			return
 		}
-		socket.emit("sessions:triggerGenerateMessage", {
+		socket.emit("sessions:fireTurn", {
 			sessionId,
-			characterId: triggerResponseFrom,
-			once: true
+			entry: {
+				ref: triggerResponseFrom === NARRATOR ? null : triggerResponseFrom,
+				via: "pick"
+			}
 		})
+	}
+	/**
+	 * Viewing a session is what has the server push its turn order — asked
+	 * again whenever the route moves to another session, with the old order
+	 * dropped first so it is never shown for the wrong one.
+	 */
+	$effect(() => {
+		if (!Number.isFinite(sessionId)) return
+		turnOrder = null
+		socket.emit("sessions:view", { sessionId })
+	})
+
+	function handleTurnOrder(msg: Sockets.Sessions.TurnOrder.Push) {
+		if (msg.sessionId !== sessionId) return
+		const t = msg.turnOrder as Partial<TurnOrderView> | null
+		turnOrder = {
+			order: Array.isArray(t?.order) ? t!.order : [],
+			candidates: Array.isArray(t?.candidates) ? t!.candidates : []
+		}
+	}
+	function handleFireTurnError(msg: Sockets.Sessions.FireTurn.Response) {
+		if (msg.sessionId !== sessionId || !msg.error) return
+		error = msg.error
+		announce(error)
 	}
 
 	function cancelGeneration() {
@@ -306,7 +353,6 @@
 			error = ""
 			messageAnnouncement = `${speakerName(m)} replied.`
 		}
-		socket.emit("sessions:getResponseOrder", { sessionId })
 	}
 	function handleSessionMessagesDelete(
 		msg: Sockets.SessionMessages.Delete.Response
@@ -319,7 +365,6 @@
 				(m) => m.id !== msg.id
 			)
 		}
-		socket.emit("sessions:getResponseOrder", { sessionId })
 	}
 	function handleSessionMessagesUpdate(
 		msg: Sockets.SessionMessages.Update.Response
@@ -350,8 +395,7 @@
 		if (msg.sessionMessage) {
 			error = ""
 			upsertMessage(msg.sessionMessage)
-			socket.emit("sessions:getResponseOrder", { sessionId })
-		}
+			}
 	}
 	function handleSessionMessagesSwipeRight(
 		msg: Sockets.SessionMessages.SwipeRight.Response
@@ -364,8 +408,7 @@
 		if (msg.sessionMessage) {
 			error = ""
 			upsertMessage(msg.sessionMessage)
-			socket.emit("sessions:getResponseOrder", { sessionId })
-		}
+			}
 	}
 	function handleSessionMessagesCancel() {
 		generatingMessageId = null
@@ -384,11 +427,6 @@
 	}
 	function handleCharactersList(msg: Sockets.Characters.List.Response) {
 		characters = msg.characterList || []
-	}
-	function handleSessionsGetResponseOrder(
-		msg: Sockets.Sessions.GetResponseOrder.Response
-	) {
-		if (msg.sessionId === sessionId) sessionResponseOrder = msg
 	}
 
 	/**
@@ -440,9 +478,10 @@
 		"sessions:addPersona",
 		handleSessionsAddPersona
 	)
-	useInterest<"sessions:getResponseOrder">(
-		"sessions:getResponseOrder",
-		handleSessionsGetResponseOrder
+	useInterest<"sessions:turnOrder">("sessions:turnOrder", handleTurnOrder)
+	useInterest<"sessions:fireTurn:error">(
+		"sessions:fireTurn:error",
+		handleFireTurnError
 	)
 	useInterest<"characters:list">("characters:list", handleCharactersList)
 
@@ -478,14 +517,13 @@
 
 	onMount(() => {
 		// "sessionMessage", "sessions:get", "sessions:addPersona",
-		// "sessions:getResponseOrder", "characters:list" and every
+		// "sessions:turnOrder", "characters:list" and every
 		// "sessionMessages:*" key are interests, declared above.
 		// The `sessions:*` and `characters:list` keys are already held
 		// (declared above, and effects run in declaration order); the typed
 		// `emit` puts their sync ahead of this request group on the same
 		// socket — plan ruling 3.
 		socket.emit("characters:list", {})
-		socket.emit("sessions:getResponseOrder", { sessionId })
 		load()
 	})
 </script>
@@ -722,9 +760,17 @@
 					Get a Response From
 				</label>
 				<p class="a11y-hint">
-					Defaults to whoever's due next in the turn order. Pick a
-					different character, or Narrator, to make them reply
-					instead.
+					{#if headName && !headIsPerson}
+						Next in the turn order: {headName}. Pick someone else, or
+						the narrator, to make them reply instead.
+					{:else if headIsMine}
+						It is your turn to write. Pick someone to reply instead.
+					{:else if headName}
+						It is {headName}'s turn to write. Pick someone to reply
+						instead.
+					{:else}
+						Nothing is prepared yet. Pick someone to reply.
+					{/if}
 				</p>
 				<div class="a11y-inline-add">
 					<select
@@ -733,11 +779,12 @@
 						disabled={!!generatingStatus}
 					>
 						<option value="">Choose…</option>
-						<option value="narrator">Narrator</option>
-						{#each session.sessionCharacters as cc (cc.characterId)}
-							<option value={cc.characterId}>
-								{cc.character?.nickname || cc.character?.name}
-							</option>
+						{#if headName && !headIsPerson}
+							<option value={HEAD}>Next: {headName}</option>
+						{/if}
+						<option value={NARRATOR}>The narrator</option>
+						{#each (turnOrder?.candidates ?? []).filter((c) => c.kind !== "persona") as c (c.ref)}
+							<option value={c.ref}>{c.nickname || c.name}</option>
 						{/each}
 					</select>
 					<button

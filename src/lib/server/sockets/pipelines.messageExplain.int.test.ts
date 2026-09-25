@@ -233,39 +233,21 @@ describe("pipelines:messageExplain", () => {
 		)
 	}, 60_000)
 
-	it("lets a guest read why a reply in their own conversation said that", async () => {
+	it("refuses a guest and a stranger alike: a run's explanation is an administrator's (R55)", async () => {
 		const { pipelinesMessageExplain } = await import("./pipelines")
-		const res: any = await pipelinesMessageExplain.handler(
-			fakeSocket(guestId),
-			{ messageId: explainedMessageId } as any,
-			noop
-		)
-		// The run is the owner's; the gate is the session. An owner-only gate
-		// here — `pipelines:runExplain`'s — would refuse a participant the
-		// account of a turn they took part in.
-		expect(res.error).toBeUndefined()
-		expect(res.runId).toBe("message-explain-run")
-		expect(res.explanation.rows.length).toBeGreaterThan(0)
-		// The levers are owner-scoped by `retrievalEntriesFor`'s own rule, so
-		// a guest reads the decision and is offered nothing to write.
-		expect(
-			res.explanation.rows.every((r: any) => r.entry === undefined)
-		).toBe(true)
-	}, 60_000)
-
-	it("refuses a stranger, with the sentence a missing message gets", async () => {
-		const { pipelinesMessageExplain } = await import("./pipelines")
-		const events: any[] = []
-		const res: any = await pipelinesMessageExplain.handler(
-			fakeSocket(strangerId),
-			{ messageId: explainedMessageId } as any,
-			(event, data) => events.push({ event, data })
-		)
-		expect(res.error).toBe("No such message.")
-		expect(res.explanation).toBeUndefined()
-		expect(events.map((e) => e.event)).toContain(
-			"pipelines:messageExplain:error"
-		)
+		for (const who of [guestId, strangerId]) {
+			const events: any[] = []
+			const res: any = await pipelinesMessageExplain.handler(
+				fakeSocket(who),
+				{ messageId: explainedMessageId } as any,
+				(event, data) => events.push({ event, data })
+			)
+			expect(res.error).toBe("Only administrators can see run reports.")
+			expect(res.explanation).toBeUndefined()
+			expect(events.map((e) => e.event)).toContain(
+				"pipelines:messageExplain:error"
+			)
+		}
 	}, 60_000)
 
 	it("says a message with no run linked, rather than guessing at one", async () => {

@@ -78,6 +78,7 @@
 		quantsFromOllama,
 		scopeForCapability,
 		scopePhrase,
+		repoTitle,
 		secondLine,
 		SerialAsk,
 		type FinderRow,
@@ -994,8 +995,11 @@
 		</span>
 		<span class="min-w-0 flex-1">
 			<span class="flex min-w-0 items-center gap-1.5">
-				<span class="min-w-0 truncate text-[15px] font-medium">
-					{row.name}
+				<span
+					class="min-w-0 truncate text-[15px] font-medium"
+					title={row.name}
+				>
+					{repoTitle(row.name)}
 				</span>
 				{#if row.tier}
 					<span
@@ -1076,8 +1080,11 @@
 			<Icons.Globe size={16} />
 		</span>
 		<span class="min-w-0 flex-1">
-			<span class="block truncate text-[15px] font-medium">
-				{row.name}
+			<span
+				class="block truncate text-[15px] font-medium"
+				title={row.name}
+			>
+				{repoTitle(row.name)}
 			</span>
 			<span class="text-surface-600-400 block truncate text-xs">
 				{row.detail}

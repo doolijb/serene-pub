@@ -174,12 +174,15 @@ const row = async (id: number) =>
 			.where(eq(schema.sessionMessages.id, id))
 	)[0]
 
-const changesOf = (sessionId: number) =>
-	db
+const changesOf = async (sessionId: number) => {
+	// Event work runs after the writer, on the session's queue (PLAN §8 (27)).
+	await (await import("$lib/server/pipelines/runtime/sessionEvents")).settleSessionEvents()
+	return db
 		.select()
 		.from(schema.sessionChanges)
 		.where(eq(schema.sessionChanges.sessionId, sessionId))
 		.orderBy(schema.sessionChanges.id)
+}
 
 const runsFor = (specSlug: string, sessionId: number) =>
 	db
@@ -486,13 +489,21 @@ describe("each built-in is a receipted run that emits what changed", () => {
 			REPLY
 		])
 
-		// Two changes: the swipe (the old text lost from view) and the
-		// rewrite the reply's own finishing write recorded with the verb.
+		// Three changes: the swipe (the old text lost from view), the
+		// rewrite the reply's own finishing write recorded with the verb,
+		// and the row LANDING (`message-completed`, PLAN-turn-order §4.1,
+		// A2) — the same finishing write, under the run's cause.
 		const changes = await changesOf(s.sessionId)
 		expect(changes.map((c) => c.event)).toEqual([
 			"core:event/message-swiped@1",
-			"core:event/message-updated@1"
+			"core:event/message-updated@1",
+			"core:event/message-completed@1"
 		])
+		expect(changes[2]!.runId).toBe(changes[1]!.runId)
+		expect((changes[2]!.payload as any).cause).toEqual({
+			kind: "run",
+			runId: changes[1]!.runId
+		})
 		// The swipe was consumed by the reply run that followed it — a
 		// reply reads what came before it; the rewrite it wrote itself
 		// waits for the next one. Consumed, the swipe's content has done
@@ -758,13 +769,22 @@ describe("changes on the next inlet", () => {
 		})
 
 		// A fresh reply's own finish is the history growing, not moving:
-		// nothing recorded, so the second reply sees an empty list.
-		expect((await changesOf(s.sessionId)).length).toBe(1)
+		// no verb, no `message-updated` — but the row LANDED, and since
+		// PLAN-turn-order A2 that is an event (`message-completed`) on the
+		// same ledger, so the second reply sees exactly that one and
+		// nothing else.
+		const afterFirst = await changesOf(s.sessionId)
+		expect(afterFirst.map((c) => c.event)).toEqual([
+			"core:event/message-deleted@1",
+			"core:event/message-completed@1"
+		])
 		const second = await reply(s.sessionId)
 		expect(second.ok).toBe(true)
 		expect(
-			(second.receipt!.nodes[0]!.output as any).sessionChanges
-		).toEqual([])
+			(second.receipt!.nodes[0]!.output as any).sessionChanges.map(
+				(c: any) => [c.event, c.cause?.kind]
+			)
+		).toEqual([["core:event/message-completed@1", "run"]])
 	})
 
 	it("a reply that fails at the oracle leaves the changes for the next one (W1)", async () => {
@@ -801,10 +821,13 @@ describe("changes on the next inlet", () => {
 		expect((await changesOf(s.sessionId))[0]!.consumedByRunId).toBe(
 			next.receipt!.runId
 		)
+		// The third sees only what the second's finish landed (A2).
 		const third = await reply(s.sessionId)
-		expect((third.receipt!.nodes[0]!.output as any).sessionChanges).toEqual(
-			[]
-		)
+		expect(
+			(third.receipt!.nodes[0]!.output as any).sessionChanges.map(
+				(c: any) => c.event
+			)
+		).toEqual(["core:event/message-completed@1"])
 	})
 
 	it("a regenerate's finishing write records what it replaced (W3)", async () => {
@@ -822,7 +845,9 @@ describe("changes on the next inlet", () => {
 		expect((await row(s.replyId)).content).toBe(REPLY)
 		const changes = await changesOf(s.sessionId)
 		expect(changes.map((c) => c.event)).toEqual([
-			"core:event/message-updated@1"
+			"core:event/message-updated@1",
+			// The regenerated row landed (PLAN-turn-order §4.1, A2).
+			"core:event/message-completed@1"
 		])
 		expect(changes[0]!.payload).toMatchObject({
 			verb: "regenerate",
@@ -865,11 +890,17 @@ describe("changes on the next inlet", () => {
 		const seen = (r.receipt!.nodes[0]!.output as any).sessionChanges
 		expect(seen.length).toBe(SESSION_CHANGES_CAP + 1)
 		expect(seen.at(-1).dropped).toBe(5)
+		// Plus the one the reply's own finish landed (`message-completed`,
+		// A2), written after the read and so left for the next run.
 		const rows = await changesOf(s.sessionId)
-		expect(rows.length).toBe(SESSION_CHANGES_CAP + 5)
-		expect(rows.every((c) => c.consumedByRunId === r.receipt!.runId)).toBe(
-			true
-		)
+		expect(rows.length).toBe(SESSION_CHANGES_CAP + 5 + 1)
+		expect(rows.at(-1)!.event).toBe("core:event/message-completed@1")
+		expect(rows.at(-1)!.consumedByRunId).toBeNull()
+		expect(
+			rows
+				.slice(0, -1)
+				.every((c) => c.consumedByRunId === r.receipt!.runId)
+		).toBe(true)
 		// The marker is never written to the table.
 		expect(
 			rows.some(
@@ -1147,17 +1178,26 @@ describe("a branch's runs (S5)", () => {
 		)
 		expect(res.error).toBeUndefined()
 		const { pipelinesRuns } = await import("$lib/server/sockets/pipelines")
+		await (await import("$lib/server/pipelines/runtime/sessionEvents")).settleSessionEvents()
+		// Read as an admin: the runs list is an administrator's (R55).
 		const listed: any = await pipelinesRuns.handler(
-			fakeSocket(userId),
+			{ user: { id: userId, isAdmin: true }, io: {} } as any,
 			{ sessionId: res.session.id },
 			emit
 		)
-		expect(listed.runs.map((r: any) => r.specSlug)).toEqual([
-			"core:spec/builtin-branch"
+		// The branch's own run, and the branch's first turn-order recompute:
+		// a branch recomputes at birth (PLAN-turn-order §4.5), which is what
+		// gives a forked session an order without a backfill.
+		// In either order: the recompute runs after the branch's write, on the
+		// session's queue, and may save its row first (PLAN §8 (27)).
+		expect(listed.runs.map((r: any) => r.specSlug).sort()).toEqual([
+			"core:spec/builtin-branch",
+			"core:spec/chat-turn-order"
 		])
+		const branchRun = listed.runs.find((r: any) => r.specSlug === "core:spec/builtin-branch")
 		// The run row itself still sits on the session it ran in.
-		expect(listed.runs[0].sessionId).toBe(s.sessionId)
-		expect(listed.runs[0].artifacts).toEqual([
+		expect(branchRun.sessionId).toBe(s.sessionId)
+		expect(branchRun.artifacts).toEqual([
 			expect.objectContaining({
 				kind: "session",
 				entityId: res.session.id

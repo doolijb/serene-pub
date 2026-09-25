@@ -23,6 +23,14 @@ const excluded = ["**/node_modules/**", "src/**/*.budgets.test.ts"]
 const integrationTests = ["src/**/*.int.test.ts", "scripts/**/*.int.test.ts"]
 
 /**
+ * Client code that needs a DOM — custom elements, Svelte's `mount` — runs in
+ * its own project under happy-dom with the `browser` export condition:
+ * without it `svelte` resolves to its server build, where `mount` refuses.
+ * Partitioned out of "unit" the same way "int" is, so no file is run twice.
+ */
+const domTests = ["src/**/*.dom.test.ts", "src/**/*.dom.test.svelte.ts"]
+
+/**
  * `core:query/vector-search@1` declares a 3s `timeoutMs` (see the SDK
  * contract) enforced by the real host + `run()` engine — not a vitest
  * setting, so raising `testTimeout` cannot buy it headroom. A file that
@@ -78,7 +86,18 @@ export default defineConfig({
 						"src/**/*.{test,spec}.ts",
 						"scripts/**/*.{test,spec}.ts"
 					],
-					exclude: [...excluded, ...integrationTests]
+					exclude: [...excluded, ...integrationTests, ...domTests]
+				}
+			},
+			{
+				extends: true,
+				resolve: { conditions: ["browser"] },
+				test: {
+					...shared,
+					environment: "happy-dom",
+					name: "dom",
+					include: domTests,
+					exclude: excluded
 				}
 			},
 			{

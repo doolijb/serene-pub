@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, getContext } from "svelte"
+	import PipelineCards from "$lib/client/components/sessionForms/PipelineCards.svelte"
 	import { page } from "$app/state"
 	import { goto } from "$app/navigation"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
@@ -10,7 +11,6 @@
 	} from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
 	import { announce } from "$lib/client/accessibility/state.svelte"
-	import { GroupReplyStrategies } from "$lib/shared/constants/GroupReplyStrategies"
 
 	const socket = useTypedSocket()
 	const sessionId = $derived(Number(page.params.id))
@@ -26,8 +26,42 @@
 
 	let name = $state("")
 	let scenario = $state("")
-	let groupReplyStrategy = $state(GroupReplyStrategies.ORDERED)
+	// Turn order (19 §5): the strategies this session's genre offers and the
+	// session's rebound choice; "" inherits the reply pipeline's own pin.
+	// Applied on Save through its own event, beside the row update.
 	let tags: string[] = $state([])
+	/**
+	 * The genre's declared fields (§4.11) — auto-advance, turn mode — and
+	 * the session's values for them, stored in `genre_fields`. Rendered as
+	 * plain controls by field type; nothing undeclared is shown or saved.
+	 */
+	type FieldDecl = {
+		type: string
+		label?: unknown
+		description?: unknown
+		of?: string[]
+		/** Labelled choices; `of` derives from their keys. */
+		members?: Array<{ key: string; label?: unknown }>
+		default?: unknown
+	}
+	const choicesOf = (d: FieldDecl) =>
+		d.members?.length
+			? d.members.map((m) => ({ value: m.key, label: textOf(m.label) || m.key }))
+			: (d.of ?? []).map((o) => ({ value: o, label: o }))
+	let genres: Sockets.Sessions.Genres.Response["genres"] = $state([])
+	let genreFields: Record<string, unknown> = $state({})
+	const fieldDecls = $derived(
+		((genres.find((g: any) => g.genreId === (session as any)?.genreId) as any)?.shape
+			?.fields ?? {}) as Record<string, FieldDecl>
+	)
+	const textOf = (v: unknown): string =>
+		typeof v === "string"
+			? v
+			: v && typeof v === "object" && typeof (v as any).en === "string"
+				? (v as any).en
+				: ""
+	const fieldValue = (key: string, d: FieldDecl) =>
+		genreFields[key] !== undefined ? genreFields[key] : d.default
 	let tagInput = $state("")
 
 	let characters: Sockets.Characters.List.Response["characterList"] = $state(
@@ -177,7 +211,11 @@
 				id: sessionId,
 				name: name.trim(),
 				scenario: scenario.trim(),
-				groupReplyStrategy
+				genreFields: Object.fromEntries(
+					Object.keys(fieldDecls)
+						.filter((k) => genreFields[k] !== undefined)
+						.map((k) => [k, genreFields[k]])
+				)
 			} as any,
 			characterIds: selectedCharacters.map((c) => c.id),
 			personaIds: selectedPersonas.map((p) => p.id),
@@ -200,14 +238,18 @@
 		session = c
 		name = c.name || ""
 		scenario = c.scenario || ""
-		groupReplyStrategy =
-			c.groupReplyStrategy || GroupReplyStrategies.ORDERED
 		tags = c.tags || []
 		selectedCharacters = (c.sessionCharacters || []).map(
 			(cc) => cc.character
 		)
 		selectedPersonas = (c.sessionPersonas || []).map((cp) => cp.persona)
+		genreFields = { ...(((c as any).genreFields ?? {}) as Record<string, unknown>) }
 	}
+	$effect(() =>
+		requestWithInterest("sessions:genres", {}, (res: Sockets.Sessions.Genres.Response) => {
+			genres = res.genres ?? []
+		})
+	)
 
 	function handleSessionsGet(msg: Sockets.Sessions.Get.Response) {
 		loaded = true
@@ -291,6 +333,7 @@
 		"sessions:removeGuest",
 		handleSessionsRemoveGuest
 	)
+
 
 	/**
 	 * Both cast pickers, off ONE list: a persona is a character carrying
@@ -527,24 +570,63 @@
 			</div>
 		{/if}
 
-		{#if selectedCharacters.length > 1 || selectedPersonas.length > 1}
-			<div class="a11y-field">
-				<label for="a11y-session-group-strategy">
-					Group Reply Strategy
-				</label>
-				<select
-					id="a11y-session-group-strategy"
-					bind:value={groupReplyStrategy}
-					disabled={saving || isGuest}
-				>
-					{#each GroupReplyStrategies.options as opt}
-						{#if opt.value !== GroupReplyStrategies.USER_SPLIT || systemSettingsCtx.settings?.isAccountsEnabled}
-							<option value={opt.value}>{opt.label}</option>
-						{/if}
-					{/each}
-				</select>
-			</div>
+		<!-- Pipeline cards (PLAN-turn-order §4.11): the turn order's
+		     strategy and every other node the session's pipelines expose,
+		     each applied on its own. -->
+		{#if Number.isFinite(sessionId)}
+			<PipelineCards {sessionId} canEdit={!isGuest} variant="document" />
 		{/if}
+
+		{#each Object.entries(fieldDecls) as [key, d] (key)}
+			{@const id = `a11y-genre-field-${key}`}
+			<div class="a11y-field">
+				{#if d.type === "boolean"}
+					<label for={id}>
+						<input
+							{id}
+							type="checkbox"
+							checked={!!fieldValue(key, d)}
+							disabled={saving || isGuest}
+							onchange={(e) => (genreFields[key] = e.currentTarget.checked)}
+						/>
+						{textOf(d.label) || key}
+					</label>
+				{:else}
+					<label for={id}>{textOf(d.label) || key}</label>
+					{#if d.type === "enum"}
+						<select
+							{id}
+							value={String(fieldValue(key, d) ?? "")}
+							disabled={saving || isGuest}
+							onchange={(e) => (genreFields[key] = e.currentTarget.value)}
+						>
+							{#each choicesOf(d) as c (c.value)}
+								<option value={c.value}>{c.label}</option>
+							{/each}
+						</select>
+					{:else if d.type === "number" || d.type === "integer"}
+						<input
+							{id}
+							type="number"
+							value={fieldValue(key, d) as number}
+							disabled={saving || isGuest}
+							onchange={(e) => (genreFields[key] = Number(e.currentTarget.value))}
+						/>
+					{:else}
+						<input
+							{id}
+							type="text"
+							value={String(fieldValue(key, d) ?? "")}
+							disabled={saving || isGuest}
+							onchange={(e) => (genreFields[key] = e.currentTarget.value)}
+						/>
+					{/if}
+				{/if}
+				{#if textOf(d.description)}
+					<p class="a11y-hint">{textOf(d.description)}</p>
+				{/if}
+			</div>
+		{/each}
 
 		<div class="a11y-field">
 			<label for="a11y-session-scenario">Scenario</label>

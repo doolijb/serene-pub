@@ -109,7 +109,13 @@ export function pluginDeclarationsOf(
 			)
 			continue
 		}
-		declarations.push(decl)
+		// A package built before K1a projected no `public` from its handler;
+		// the handler's own entry still says what its author chose (R62).
+		const handlers = m?.hooks?.handlers
+		const publicByHandler =
+			Array.isArray(handlers) &&
+			handlers.some((h: any) => h?.definitionId === decl.id && h?.visibility === "public")
+		declarations.push(publicByHandler && !decl.public ? { ...decl, public: true } : decl)
 	}
 	return { declarations, refused }
 }

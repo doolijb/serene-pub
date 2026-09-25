@@ -25,8 +25,8 @@ import {
 	ADVENTURE_RESPOND_SPEC_ID,
 	ADVENTURE_REST_SPEC_ID,
 	ADVENTURE_SLOTS,
-	CORE_PRESETS,
-	CORE_PRESET_SEEDS,
+	corePresets,
+	corePresetSeeds,
 	CORE_PROMPTS,
 	CORE_SPECS,
 	RESPOND_SPEC_ID,
@@ -45,7 +45,10 @@ describe("the Adventure genre declares itself", () => {
 		expect(adventureGenre.id).toBe(ADVENTURE_GENRE_ID)
 		expect(adventureGenre.shape?.lorebook).toBe("required")
 		expect(adventureGenre.shape?.voice).toBe("narrator")
-		expect(adventureGenre.shape?.nextSpeaker).toBe("planner")
+		// The planner decides who speaks: no Turn order control is offered.
+		// Since R28 there is no shape key at all — the control is a turn-order
+		// spec's `strategy` swaps, and adventure's spec declares none.
+		expect("turnOrder" in (adventureGenre.shape ?? {})).toBe(false)
 		expect((adventureGenre.slots ?? []).map((s) => s.id)).toEqual([
 			"core:slot/hp@1",
 			"core:slot/stamina@1",
@@ -285,7 +288,7 @@ describe("the two keeper actions", () => {
 
 describe("the preset and the prompts", () => {
 	const preset = () =>
-		CORE_PRESETS.find((p) => p.slug === "adventure-default")!
+		corePresets().find((p) => p.slug === "adventure-default")!
 
 	it("binds both required events and the form answer, and includes the five actions", () => {
 		const p = preset()
@@ -314,7 +317,7 @@ describe("the preset and the prompts", () => {
 
 	it("ships enabled, and is offered rather than assumed", () => {
 		expect(preset().enabled).toBe(true)
-		const seed = CORE_PRESET_SEEDS.find(
+		const seed = corePresetSeeds().find(
 			(s) => s.seedKey === "core-adventure-default"
 		)
 		expect(seed?.enabled).toBe(true)
@@ -322,13 +325,13 @@ describe("the preset and the prompts", () => {
 		// to, and there is exactly one of those on an instance.
 		expect(seed?.isDefault).toBe(false)
 		expect(
-			CORE_PRESET_SEEDS.find((s) => s.seedKey === "core-chat-default")
+			corePresetSeeds().find((s) => s.seedKey === "core-chat-default")
 				?.isDefault
 		).toBe(true)
 	})
 
 	it("carries the field pre-fill into the seeded row, and curates nothing", () => {
-		const seed = CORE_PRESET_SEEDS.find(
+		const seed = corePresetSeeds().find(
 			(s) => s.seedKey === "core-adventure-default"
 		)
 		expect((seed?.defaults as any)?.genreFields?.trustNarrator).toBe(false)
@@ -442,7 +445,13 @@ describe("parity", () => {
 		// and an edge's compiled shape is part of the document — every spec
 		// reading history moved) — none by this genre.
 		// (was "18917086c3f34", then "3f0e84937c657", then "19cac7b1208d4e",
-		//  then "1ace29594a6283", then "1c503cc437da52")
-		expect(canonicalHash(built(RESPOND_SPEC_ID))).toBe("c0b92cae6b39d")
+		//  then "1ace29594a6283", then "1c503cc437da52", then "1c2931c6f16055" —
+	// the last move being A6's, where the `speaker` node left for
+	// `core:spec/<genre>-turn-order` and `placeholder` returned to directly after
+	// the inlet (PLAN-turn-order §4.4). Still nothing adventure edited.
+	// Then "2c62eb10ed01b", before the sprite tail (DESIGN-sprites §5,
+	// 2026-09-24) appended `sprites` and its junction after `save` — also not
+	// adventure's.
+		expect(canonicalHash(built(RESPOND_SPEC_ID))).toBe("1970a642240009")
 	})
 })

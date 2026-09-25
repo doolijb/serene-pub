@@ -2,29 +2,42 @@
 	/**
 	 * ONE connection, as one row in the index.
 	 *
-	 * It replaces `ConnectionCard`, which was a card per endpoint with its
-	 * models listed inside it. Models left the index with the 2026-09-17
-	 * concept ruling (R1), and what is left of a connection is small enough to
-	 * be a row: where the compute is, what it is doing right now, and the one
-	 * thing to press about it.
+	 * ## Slots, not a sentence
 	 *
-	 * ## Title and service chip travel together
+	 * The row used to be a title, a chip and one `·`-joined status line, and in
+	 * a 400px column that line truncated from the right — where the fact is.
+	 * The shipped panel read `9 models · api.anthropic.com · checked 2 min…`.
+	 * So the row is now a grid of four fixed slots, filled by
+	 * `connectionRowStatus` and composed by nobody:
 	 *
-	 * Ruling R5: every connection surface shows both. The title is what
-	 * somebody called it, which may be anything at all; the chip is what it
-	 * actually IS — teal for a runtime this pub manages, outlined for a host it
-	 * merely talks to. A title alone answers "which one is this" and never
-	 * "what is it", and two rows called "Local" are then indistinguishable.
+	 *     ▣  Anthropic          ● Ready
+	 *        api.anthropic.com    9 models
 	 *
-	 * ## One dot, one line, at most one button
+	 * Name and `detail` on the left, state chip and `metric` right-aligned in a
+	 * fixed-width column. The eye runs down the state column instead of reading
+	 * four sentences, and the widths are the reason nothing is cut.
 	 *
-	 * The sentence and the button both come from `connectionRowStatus`, which
-	 * is where the five status slots the card used to have were collapsed into
-	 * one line per kind. The ROW opens the connection; the button is a separate
-	 * target beside it, never nested inside it.
+	 * ## The service chip appears only when it says something
+	 *
+	 * Ruling R5 (2026-09-17) put the title and a service chip on every
+	 * connection surface, on the grounds that a title alone never answers "what
+	 * is it". True — except that a connection's DEFAULT name *is* its service
+	 * label, which every one created through the New connection dialog carries.
+	 * The shipped index read `Anthropic (Claude)` beside a chip saying
+	 * `Anthropic (Claude)`, `Ollama` beside `Ollama`, `OpenRouter` beside
+	 * `OpenRouter` — four rows, four self-repetitions, in the narrowest column
+	 * in the app. Amended 2026-09-23: the chip is shown when it differs from the
+	 * title and suppressed when it would only repeat it. Rename a connection to
+	 * "Local" and the chip comes back, which is the case R5 was defending.
+	 *
+	 * ## The state chip carries the colour; the tile does not
+	 *
+	 * The kind tile says WHERE the compute is and is tinted by kind, not by
+	 * health — a tile that changed colour with status made every row a traffic
+	 * light and left nowhere calm for the eye to rest.
 	 */
 	import * as Icons from "@lucide/svelte"
-	import type { RowStatus } from "./connectionRowStatus"
+	import { stateTone, type RowStatus } from "./connectionRowStatus"
 	import type { EndpointKind } from "./modelManagement"
 
 	interface Props {
@@ -36,6 +49,12 @@
 		/** A runtime this pub runs, rather than a host it talks to. */
 		managed: boolean
 		status: RowStatus
+		/**
+		 * Capability labels this connection's models serve as the instance
+		 * default — "Chat", "Images". The gold mark, so the index answers "which
+		 * one is actually being used" without opening anything.
+		 */
+		defaultFor?: readonly string[]
 		/** The list-beside-detail selection at desk width. */
 		selected?: boolean
 		onOpen: () => void
@@ -47,6 +66,7 @@
 		kind,
 		managed,
 		status,
+		defaultFor = [],
 		selected = false,
 		onOpen,
 		onAction
@@ -76,24 +96,47 @@
 			: null
 	)
 
-	const DOT: Record<RowStatus["dot"], string> = {
+	const tone = $derived(stateTone(status.state))
+
+	const DOT: Record<ReturnType<typeof stateTone>, string> = {
 		ok: "bg-success-500",
-		pending: "bg-warning-500 animate-pulse",
-		warning: "bg-warning-500",
-		error: "bg-error-500",
-		quiet: "bg-surface-400-600"
+		quiet: "bg-surface-400-600",
+		primary: "bg-primary-500",
+		warning: "bg-warning-500 animate-pulse",
+		error: "bg-error-500"
 	}
-	const TILE: Record<RowStatus["dot"], string> = {
-		ok: "preset-tonal-success",
-		pending: "preset-tonal-warning",
-		warning: "preset-tonal-warning",
-		error: "preset-tonal-error",
-		quiet: "preset-tonal-surface"
+	const TEXT: Record<ReturnType<typeof stateTone>, string> = {
+		ok: "text-success-800 dark:text-success-300",
+		quiet: "text-surface-600-400",
+		primary: "text-primary-900 dark:text-primary-300",
+		warning: "text-warning-800 dark:text-warning-300",
+		error: "text-error-800 dark:text-error-300"
 	}
+
+	/**
+	 * What the second line says after the state and the marks.
+	 *
+	 * With an action the METRIC wins it: "2 on disk" is the fact, and "Starts
+	 * on first use" is already implied by a Start button that is quiet rather
+	 * than urgent. Without an action the metric has a column of its own and
+	 * this is the detail — the host, or what went wrong.
+	 */
+	const secondary = $derived(
+		(status.action ? status.metric : null) ?? status.detail
+	)
+
+	/**
+	 * Shown only where it adds a word the title has not already said. See the
+	 * header: a default-named connection repeating itself is what this removes.
+	 */
+	const showChip = $derived(
+		!!serviceLabel &&
+			serviceLabel.trim().toLowerCase() !== title.trim().toLowerCase()
+	)
 </script>
 
 <div
-	class="flex min-h-11 items-center gap-2 rounded-[10px] {selected
+	class="flex min-h-11 items-center gap-1 rounded-[10px] {selected
 		? 'sidebar-row-active'
 		: ''}"
 >
@@ -106,39 +149,109 @@
 		onclick={onOpen}
 	>
 		<span
-			class="grid size-8 shrink-0 place-items-center rounded-lg {TILE[
-				status.dot
-			]}"
+			class="preset-tonal-surface grid size-8 shrink-0 place-items-center rounded-lg"
 			aria-hidden="true"
 		>
 			<KindIcon size={16} />
 		</span>
+
 		<span class="min-w-0 flex-1">
 			<span class="flex min-w-0 items-center gap-1.5">
 				<span class="min-w-0 truncate text-[15px] font-medium">
 					{title}
 				</span>
-				<!-- Teal for a runtime this pub manages, outlined for a host it
-				     talks to. Never one without the other (R5). -->
-				<span
-					class="shrink-0 rounded-full px-1.5 py-0.5 text-[11px] {managed
-						? 'preset-tonal-tertiary'
-						: 'border-surface-300-700 text-surface-600-400 border'}"
-				>
-					{serviceLabel}
-				</span>
+				{#if showChip}
+					<span
+						class="shrink-0 rounded-full px-1.5 py-0.5 text-[11px] {managed
+							? 'preset-tonal-tertiary'
+							: 'border-surface-300-700 text-surface-600-400 border'}"
+					>
+						{serviceLabel}
+					</span>
+				{/if}
 			</span>
-			<span
-				class="text-surface-600-400 flex min-w-0 items-center gap-1.5 text-xs"
-			>
-				<span
-					class="size-1.5 shrink-0 rounded-full {DOT[status.dot]}"
-					aria-hidden="true"
-				></span>
-				<span class="min-w-0 truncate">{status.sentence}</span>
+			<!--
+				The gold marks ride on the SECOND line, beside the host.
+
+				Beside the name they competed with it and won: an Anthropic row
+				is the default for chat, vision and document reading the moment
+				it is created, and with a state chip and a Set up button also on
+				the row the title rendered as "A…". A mark that costs you the
+				name of the thing it is marking is not worth having. Here it is
+				just as gold and nothing it sits next to is essential.
+			-->
+			<span class="mt-0.5 flex min-w-0 items-center gap-1.5">
+				{#if status.action}
+					<span
+						class="flex shrink-0 items-center gap-1.5 text-xs font-medium {TEXT[
+							tone
+						]}"
+					>
+						<span
+							class="size-1.5 shrink-0 rounded-full {DOT[tone]}"
+							aria-hidden="true"
+						></span>
+						{status.label}
+					</span>
+				{/if}
+				{#each defaultFor as capability (capability)}
+					<span
+						class="preset-tonal-primary text-primary-900 dark:text-primary-300 flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-bold"
+					>
+						<Icons.Star
+							size={8}
+							fill="currentColor"
+							aria-hidden="true"
+						/>
+						{capability}
+					</span>
+				{/each}
+				{#if secondary}
+					<span
+						class="text-surface-600-400 min-w-0 truncate text-xs"
+						title={secondary}
+					>
+						{secondary}
+					</span>
+				{/if}
 			</span>
 		</span>
+
+		<!--
+			The right-hand column. A fixed basis so every row's state chip and
+			metric line up down the list; `text-right` so they read as a column
+			rather than as the tail of a sentence.
+
+			⚠ Dropped entirely when the row has an ACTION. "Needs a key" in the
+			column and **Set up** on the button say the same thing twice, and
+			the two of them together took 156px out of a 340px row — which is
+			how "Anthropic (Claude)" came to render as "Anthro…". With an action
+			present the button IS the state, and the label joins the detail line
+			where it costs nothing.
+		-->
 		{#if !status.action}
+			<span class="shrink-0 basis-[86px] text-right">
+				<span
+					class="flex items-center justify-end gap-1.5 text-xs font-medium {TEXT[
+						tone
+					]}"
+				>
+					<span
+						class="size-1.5 shrink-0 rounded-full {DOT[tone]}"
+						aria-hidden="true"
+					></span>
+					<span class="truncate">{status.label}</span>
+				</span>
+				{#if status.metric}
+					<!-- Muted, not quiet: "9 models" is a fact the reader came
+					     for. §2.5 — quiet text is never body copy. -->
+					<span
+						class="text-surface-600-400 mt-0.5 block truncate text-xs"
+					>
+						{status.metric}
+					</span>
+				{/if}
+			</span>
 			<Icons.ChevronRight
 				size={16}
 				class="text-surface-500 shrink-0"
@@ -146,12 +259,13 @@
 			/>
 		{/if}
 	</button>
+
 	{#if status.action && ActionIcon}
 		<button
 			type="button"
 			class="btn btn-sm mr-1 shrink-0 text-xs {status.action.emphasis ===
 			'tonal'
-				? 'preset-tonal-surface'
+				? 'preset-tonal-primary'
 				: 'hover:preset-tonal-surface text-surface-600-400'}"
 			onclick={() => onAction(status.action!.verb)}
 			aria-label={`${status.action.label} — ${title}`}

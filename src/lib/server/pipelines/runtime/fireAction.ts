@@ -103,7 +103,11 @@ import * as schema from "$lib/server/db/schema"
 import type { RunProgress } from "$lib/shared/sockets/progress"
 import type { SessionIo } from "$lib/server/pipelines/runtime/liveRow"
 import * as runRegistry from "$lib/server/pipelines/runtime/runRegistry"
-import type { RunLineage } from "$lib/server/pipelines/runtime/lineage"
+import {
+	closeBranch,
+	openBranch,
+	type RunLineage
+} from "$lib/server/pipelines/runtime/lineage"
 import {
 	ownPresence,
 	participantRowId,
@@ -116,7 +120,6 @@ import {
 	type FormFacts
 } from "$lib/server/messages/blocks"
 import { stalenessHead } from "$lib/server/messages/channels"
-import { recordSessionChange } from "$lib/server/messages/sessionChanges"
 import { NARRATE_ACTION, NARRATE_CHARACTER_ACTION } from "$lib/shared/actions/identity"
 
 export interface FireActionRequest {
@@ -561,6 +564,13 @@ export async function fireAction(
 	const chosen = offered.find((f) => f.specSlug === parsed.specSlug && f.key === parsed.key)
 	if (!chosen) return refused(`No action '${actionId}' is offered to this session.`)
 	if (!chosen.enabled) return turnedOff(chosen.name)
+	// A disabled plugin's action is not offered, so it is not fired either
+	// — the same answer the listing gives (R67): its code is not loaded.
+	{
+		const { disabledPlugins } = await import("$lib/server/plugins/disabledPlugins")
+		if ((await disabledPlugins(db)).ownsId(chosen.specSlug))
+			return refused(`'${chosen.name}' is not available while its plugin is turned off.`)
+	}
 	// The effects line (R-15, F41): an out-of-fiction effect is never a
 	// block's to carry nor an oracle's to answer — unless the block was
 	// put to the owner, who is that action's whole audience anyway.
@@ -655,7 +665,20 @@ export async function fireAction(
 			? `character:${presserPresence}`
 			: `user:${req.actor.userId}`)
 
+	// The run's tree is held from before the run until after `form-answered`
+	// is emitted below (E1c): that event's listeners are this run's children,
+	// dispatched after its `runSpec` has returned, and the tree's count must
+	// still be there when they are.
+	const treeRoot = req.lineage?.rootRunId ?? runId
 	const settle = async (): Promise<Extract<FireActionOutcome, { kind: "ran" | "stopped" }>> => {
+		openBranch(treeRoot)
+		try {
+			return await settleHeld()
+		} finally {
+			closeBranch(treeRoot)
+		}
+	}
+	const settleHeld = async (): Promise<Extract<FireActionOutcome, { kind: "ran" | "stopped" }>> => {
 		let receipt: Receipt | undefined
 		let stopped: { by: string; reason: string } | undefined
 		// A stopped run that came out as a throw is still a stopped run: the
@@ -723,16 +746,35 @@ export async function fireAction(
 		 * has.
 		 */
 		if (form && receipt.outcome === "ok") {
-			await recordSessionChange(db, {
-				event: "core:event/form-answered@1",
+			const { emitSessionEvent } = await import(
+				"$lib/server/pipelines/runtime/sessionEvents"
+			)
+			const { childLineage } = await import(
+				"$lib/server/pipelines/runtime/lineage"
+			)
+			// The cause (PLAN-turn-order §4.1): a click is the person's —
+			// `{ kind: 'user' }` — an oracle's answer is the answer run's.
+			// Either way the action's run wrote it, so `runId` is its.
+			await emitSessionEvent(db, {
 				sessionId: req.sessionId,
-				messageId: form.messageId,
-				blockId: form.blockId,
-				...(actionId ? { action: actionId } : {}),
-				...(blockAddressee ? { addressee: blockAddressee } : {}),
-				answer: payload ?? {},
-				answeredBy: req.actor.as ? "oracle" : "click",
-				runId
+				userId: req.actor.userId,
+				event: "core:event/form-answered@1",
+				payload: {
+					sessionId: req.sessionId,
+					messageId: form.messageId,
+					blockId: form.blockId,
+					...(actionId ? { action: actionId } : {}),
+					...(blockAddressee ? { addressee: blockAddressee } : {}),
+					answer: payload ?? {},
+					answeredBy: req.actor.as ? "oracle" : "click",
+					cause: req.actor.as
+						? { kind: "run", runId }
+						: { kind: "user", userId: req.actor.userId, runId },
+					...(req.lineage ? { lineage: req.lineage } : {})
+				},
+				lineage: childLineage({ runId, lineage: req.lineage }),
+				io: req.io,
+				signal: req.parentSignal
 			})
 			// Answered once (W7): the stored block says so from here on — a
 			// second press is refused above, and the row goes out with its parts

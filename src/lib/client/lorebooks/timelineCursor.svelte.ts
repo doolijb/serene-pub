@@ -1,3 +1,4 @@
+import { untrack } from "svelte"
 import type { DatedRow, TimelineTick } from "./timelineStrip"
 import { buildTicks } from "./timelineStrip"
 
@@ -46,16 +47,30 @@ class TimelineCursor {
 	 * another.
 	 */
 	setAxis(lorebookId: number | null, rows: readonly DatedRow[]): void {
-		if (lorebookId !== this.#lorebookId) {
-			this.#lorebookId = lorebookId
-			this.#position = null
-		}
-		this.#ticks = buildTicks(rows)
-		if (
-			this.#position != null &&
-			!this.#ticks.some((t) => t.value === this.#position)
-		)
-			this.#position = null
+		// ⚠ **Every read of `#position` and `#lorebookId` here is untracked,
+		// and that is load-bearing.** This runs inside an `$effect`, and a
+		// tracked read would make that effect depend on state it also writes —
+		// while a second effect writes `#position` from the route. The two then
+		// chase each other: axis → position → axis → `effect_update_depth_
+		// exceeded`, and the whole workspace stops responding.
+		//
+		// It stayed hidden for as long as it did because it needs an axis to
+		// start: a book with no dated rows has no ticks, the route effect
+		// leaves the position at null, and nothing is ever written. Amendment
+		// dates joining the axis (2026-09-23) gave such a book one, and the
+		// loop woke up. Writes are what this method is for; reads are not.
+		untrack(() => {
+			if (lorebookId !== this.#lorebookId) {
+				this.#lorebookId = lorebookId
+				this.#position = null
+			}
+			this.#ticks = buildTicks(rows)
+			if (
+				this.#position != null &&
+				!this.#ticks.some((t) => t.value === this.#position)
+			)
+				this.#position = null
+		})
 	}
 
 	reset(): void {

@@ -175,6 +175,12 @@ export async function markFormAnswered(
  * oracle's dispatched answer are two callers of `fireAction`, and only the
  * socket door is serialised in memory), and a check made ahead of the insert
  * is made by both before either records.
+ *
+ * ⚠ **The one direct ledger write.** Every other session event goes through
+ * `emitSessionEvent` (PLAN-turn-order §4.1, A2), whose plugin fan-out must
+ * not sit inside a transaction (`db/transactionGuard.ts`). This write must —
+ * the once IS the transaction — so it records directly and fans out to
+ * nothing; PLAN §8 (13) holds the gap.
  */
 export async function recordFormSuperseded(
 	db: Db,

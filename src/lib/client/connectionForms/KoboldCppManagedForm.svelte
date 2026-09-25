@@ -209,8 +209,10 @@
 		bind:value={connection.tokenCounter}
 	/>
 	<details class="mt-4">
-		<summary class="cursor-pointer font-semibold">
-			Advanced Settings
+		<summary
+			class="hover:preset-tonal-primary flex cursor-pointer items-center gap-2 rounded-[10px] px-2 py-2 text-[13px] font-medium"
+		>
+			Request settings
 		</summary>
 		<p class="text-muted-foreground mt-2 text-xs">
 			Base URL is managed by KoboldCPP Manager's configured address and

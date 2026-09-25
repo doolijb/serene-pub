@@ -13,8 +13,9 @@
  * its own HKDF key class, so a plugin setting is cryptographically independent
  * of connection keys despite sharing the root secret. The type is what makes
  * custody defensible: core mechanically masks it to the client (`forClient`
- * reports only set/unset), never exports it, and decrypts it only into the
- * declaring plugin's own hook invocations (`forOwningHook`).
+ * reports only set/unset), never exports it, and decrypts it only host-side
+ * for the declaring plugin (`forOwningHookSplit`, R63): its hooks hold a
+ * handle, the fetch bridge fills the value in, and every result is scrubbed.
  *
  * ## Delivery
  *
@@ -25,13 +26,14 @@
  * and an in-flight one keeps the values it started with.
  */
 
+import { randomBytes } from "node:crypto"
 import { eq } from "drizzle-orm"
 import { plugins } from "$lib/server/db/schema"
 import {
 	checkValues,
 	configState,
 	forClient,
-	forOwningHook,
+	forOwningHookSplit,
 	isSecret,
 	reconcile,
 	type PluginConfigState,
@@ -145,6 +147,13 @@ export function applySettingsWrite(
 					ok: false,
 					error: `'${key}' is a secret — write it as text, or clear it.`
 				}
+			// Shorter than the scrub can safely match (R63): it would reach
+			// outputs untouched, so it is refused rather than half-protected.
+			if (value.length < 4)
+				return {
+					ok: false,
+					error: `'${key}' is too short to be kept out of what the extension returns — use the full key.`
+				}
 			next[key] = {
 				$secret: true,
 				value: JSON.stringify(
@@ -172,18 +181,24 @@ export function applySettingsWrite(
 }
 
 /**
- * The values a hook invocation receives — plaintext, only here, only for the
- * declaring plugin. Undefined when the manifest declares no settings, so the
- * manager can skip injecting a key the plugin never asked for.
+ * What a plugin's hooks are handed (R63): `settings` with a **secret handle**
+ * (`⟦secret:<key>:<nonce>⟧`, the nonce minted per registration) in place of
+ * each secret, and — host-side only — the
+ * plaintext values and the keys the package lends. Undefined when the
+ * manifest declares no settings, so the manager injects nothing a plugin
+ * never asked for.
  */
 export function hookSettingsFor(
 	manifest: unknown,
-	settings: unknown
-): Record<string, unknown> | undefined {
+	settings: unknown,
+	nonce: string = randomBytes(8).toString("hex")
+):
+	| { settings: Record<string, unknown>; secrets: Record<string, string>; lent: string[]; nonce: string }
+	| undefined {
 	const schema = settingsSchemaOf(manifest)
 	if (!Object.keys(schema).length) return undefined
 	const r = reconcile(schema, stored(settings))
-	return forOwningHook(schema, r.values, (cipher) => {
+	const split = forOwningHookSplit(schema, r.values, (cipher) => {
 		try {
 			return decryptToken(
 				JSON.parse(cipher) as EncryptedToken,
@@ -191,11 +206,12 @@ export function hookSettingsFor(
 			)
 		} catch {
 			// A key mismatch (restored backup, 13 §5) fails loudly and locally
-			// at the field, not the call: the hook sees an empty string and
+			// at the field, not the call: the hook sees an empty value and
 			// the admin re-enters the secret.
 			return ""
 		}
-	})
+	}, nonce)
+	return { ...split, nonce }
 }
 
 /** Persist a successful write. The caller re-syncs the manager afterwards. */

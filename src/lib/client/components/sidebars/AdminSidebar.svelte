@@ -28,9 +28,18 @@
 	)
 
 	let path = $derived(page.url.pathname)
-	/** The same rule the admin route's rail used, so the selected row cannot drift. */
-	const isActive = (href: string) =>
+	const matches = (href: string) =>
 		path === href || path.startsWith(href + "/")
+	/**
+	 * The same rule the admin route's rail used, so the selected row cannot
+	 * drift — except that a nested section wins over its parent: on
+	 * `/admin/pipelines/events` only Events is selected, not Pipelines too.
+	 */
+	const isActive = (href: string) =>
+		matches(href) &&
+		!nav.some((g) =>
+			g.items.some((i) => i.href.length > href.length && matches(i.href))
+		)
 
 	/**
 	 * A row is an `<a>`, so it keeps middle-click and "open in new tab" and

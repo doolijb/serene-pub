@@ -10,6 +10,7 @@ import {
 	SAVED_SCOPES,
 	savedScopeCount,
 	savedScopeFilters,
+	readingIntoSentence,
 	scopeKinds
 } from "./scopes"
 import { emptyFilters, SCENE_KIND, type PoolItem } from "./poolFilter"
@@ -290,5 +291,31 @@ describe("facetCounts — what the chips under the pool header say", () => {
 		expect(
 			facetCounts([item({ id: 1 })], new Set()).kinds.map((k) => k.kind)
 		).toEqual([WORLD])
+	})
+})
+
+describe("readingIntoSentence", () => {
+	it("names the line and what reached, in one line", () => {
+		expect(readingIntoSentence("marrow-stays", 4)).toBe(
+			"Reading this book on marrow-stays, as of now · 4 entries reached the last turn"
+		)
+	})
+
+	it("says nothing reached rather than zero", () => {
+		expect(readingIntoSentence("main", 0)).toBe(
+			"Reading this book on main, as of now · nothing reached the last turn"
+		)
+	})
+
+	it("a run that has not happened reads the same as one that reached nothing", () => {
+		// Both are "the model has not been given anything from this book yet",
+		// and a reader does not need the two told apart here.
+		expect(readingIntoSentence("main", null)).toBe(
+			readingIntoSentence("main", 0)
+		)
+	})
+
+	it("one entry is singular", () => {
+		expect(readingIntoSentence("main", 1)).toContain("1 entry reached")
 	})
 })

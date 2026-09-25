@@ -74,6 +74,7 @@ const STATUS = {
 } satisfies Record<string, StatusText>
 import { i18nTextIn } from "$lib/shared/i18n/i18nText"
 import { participantRowId } from "$lib/server/pipelines/runtime/portrayals"
+import { pickSpriteBySimilarity } from "$lib/shared/sprites/pick"
 /**
  * The node declarations themselves, as types.
  *
@@ -174,6 +175,19 @@ import { promptFormatOf } from "$lib/shared/constants/PromptFormats"
 import { explicitStopsFrom } from "$lib/server/connections/stops"
 import { streamingModeFrom } from "$lib/server/connections/streaming"
 import { contextBudgetFrom } from "$lib/server/pipelines/runtime/contextWindow"
+import {
+	inTurnEnvoys,
+	mentionedFirst,
+	rotationTurns,
+	roundRobinEntries,
+	spokenRefsSince,
+	turnOrderSelection,
+	userSplitEntries,
+	type CastRead,
+	type RotationMessage,
+	type TurnCandidate,
+	type TurnEntry
+} from "$lib/server/pipelines/runtime/speakerRotation"
 
 /**
  * ⚠ **This file's `Unsupplied` population is ZERO** (R-12, 2026-09-16) — the
@@ -1052,7 +1066,8 @@ function capRelationships(
 }
 
 /**
- * One next-speaker implementation behind four type ids (19 §5, U-C4).
+ * One next-speaker implementation behind six type ids (19 §5, U-C4; the one
+ * decider since the socket pre-pick retired, 2026-09-21).
  *
  * The rules, in order:
  *
@@ -1062,28 +1077,39 @@ function capRelationships(
  *    regen — and every strategy's only job then is to record it (`via:
  *    'pick'`). The bare `characterId` in-port says the same one release
  *    longer, and is read when `speaker` is unwired or null.
- * 2. Otherwise the strategy decides. `round-robin` is the 0.5 rotation
- *    verbatim — the same `getNextCharacterTurn` the socket ran, now inside
- *    the run where the receipt can see it (the flat "Ordered" rule; the
- *    user-split variant is its own future strategy, not a parameter here).
- *    `random` is a seeded pick among active characters, so a replayed run
- *    seats the same speaker. `manual` and `none` never decide — they differ
- *    in what the UI offers (a picker vs no speaker system at all), not in
- *    what the node computes.
- * 3. **No speaker is an outcome, not a failure.** A null id is exactly what
- *    the legacy path handed on, so nothing here halts.
+ * 2. Otherwise the strategy decides, over the rules in `speakerRotation.ts`:
+ *    `round-robin` (once per turn of the person's), `user-split` (the
+ *    sender's own seats first), `random` (seeded, so a replay seats the
+ *    same speaker), `scripted` (the `select` chain, `due` as its fallback).
+ *    `manual` and `none` never decide — they differ in what the UI offers
+ *    (a picker vs no speaker system at all), not in what the node computes.
+ * 3. **A deciding strategy with candidates that seats none halts**
+ *    (`NOBODY_DUE`): nothing before this node has an effect, and the
+ *    trigger reads the halt as quiet. With nobody to choose from, and under
+ *    manual and none, a null pick passes on instead — an action fired with
+ *    no speaker, or a genre that seats nobody, still runs, its prompts
+ *    naming the voice.
  *
  * Published both ways: `speaker` as a reference — the strategy's own pick
  * spelled `character:<id>` — and `characterId` as the bare id, null for an
  * envoy, for the context and generation consumers that still take the id.
  */
-/** The four turn strategies `pickSpeaker` serves. See `LORE_LANES`. */
+/** The six strategies `turnEntries` serves — one implementation, six ids. */
 const TURN_STRATEGIES = [
 	"core:task/turn-round-robin@1",
+	"core:task/turn-user-split@1",
 	"core:task/turn-random@1",
+	"core:task/turn-scripted@1",
 	"core:task/turn-manual@1",
-	"core:task/turn-none@1"
+	"core:task/turn-narrator@1"
 ] as const
+type TurnStrategyName =
+	| "round-robin"
+	| "user-split"
+	| "random"
+	| "scripted"
+	| "manual"
+	| "narrator"
 
 /** Lower-cased word terms of three letters or more — what `docs-search` matches on. */
 function docsTerms(text: string): string[] {
@@ -1211,136 +1237,119 @@ function resolveAddresseeName(
 	return null
 }
 
-function pickSpeaker(strategy: string) {
-	// All four turn strategies below are this one function. They come from one
-	// `turnStrategy()` helper in the contracts and so declare identically —
-	// which is exactly the fact a single-contract annotation would have been
-	// silently relying on. Each call makes a fresh closure, so the declaration
-	// attached below is per pin even though the body is shared.
+/**
+ * The six strategies (PLAN-turn-order §4.4, A6): candidates in, **entries**
+ * out, one implementation behind six ids.
+ *
+ * Every one of them reads the same two ports — the candidates the pool
+ * admitted (through any orderers) and the session's visible history — and
+ * publishes the same shape: a list of prepared turns. None of them halts.
+ * An empty order is the answer when nobody is due, which is the ordinary
+ * state of a cast that has all spoken since the person did; the halt this
+ * replaced (`nobody is due`) made an ordinary state look like a failure and
+ * made the trigger learn about turn-taking to read it.
+ *
+ * There is no `speaker` in-port any more either. An explicit pick never
+ * enters a strategy: a person's press fires the entry directly (§4.6) and
+ * the next recompute sees the row it produced.
+ */
+function turnEntries(strategy: TurnStrategyName) {
 	return reads<
 		[
 			typeof C.turnRoundRobin,
+			typeof C.turnUserSplit,
 			typeof C.turnRandom,
+			typeof C.turnScripted,
 			typeof C.turnManual,
-			typeof C.turnNone
+			typeof C.turnNarrator
 		]
 	>(
 		async (
 			input: SharedInput<
 				[
 					typeof C.turnRoundRobin,
+					typeof C.turnUserSplit,
 					typeof C.turnRandom,
+					typeof C.turnScripted,
 					typeof C.turnManual,
-					typeof C.turnNone
+					typeof C.turnNarrator
 				]
 			>,
 			ctx: TaskCtx
 		) => {
-			const done = (
-				speaker: ParticipantRef | null,
-				characterId: number | null,
-				via: string
-			) =>
-				ok({
-					main: { speaker, characterId, strategy, via },
-					speaker,
-					characterId,
-					strategy
-				})
-			/** The strategy's own pick, spelled as a reference beside the id. */
-			const picked = (characterId: number | null, via: string) =>
-				done(
-					characterId != null ? `character:${characterId}` : null,
-					characterId,
-					via
-				)
+			const candidates = (input?.candidates ?? []) as TurnCandidate[]
+			const messages = (input?.messages ?? []) as RotationMessage[]
+			const done = (order: TurnEntry[]) => ok({ main: order, order })
 
-			// The reference first (R-18 (3)): an envoy has no id, so only
-			// this port can say it. A malformed value is not a pick — the
-			// port's contract is a participant reference, and reading a stray
-			// string as one would seat nobody with `via: 'pick'` on the receipt.
-			const explicitRef =
-				typeof input?.speaker === "string" &&
-				isParticipantRef(input.speaker)
-					? input.speaker
-					: null
-			if (explicitRef) {
-				const parsed = parseParticipantRef(explicitRef)
-				return done(
-					explicitRef,
-					parsed.kind === "character" && /^[0-9]+$/.test(parsed.id)
-						? Number(parsed.id)
-						: null,
-					"pick"
-				)
-			}
-			const explicit = input?.characterId
-			const explicitId =
-				typeof explicit === "number"
-					? explicit
-					: typeof explicit?.id === "number"
-						? explicit.id
-						: null
-			if (explicitId != null) return picked(explicitId, "pick")
+			// Manual prepares nothing: every turn here is a press (§4.4).
+			if (strategy === "manual") return done([])
 
-			const cast = input?.cast ?? {}
 			/**
-			 * The seated envoys that may take a turn (plans/29 R-18, R-21
-			 * (6); U5g): live seats declared `in-turn`, off the cast read.
-			 * An `on-action` envoy is never a candidate — it speaks only
-			 * through its action's outputs — so it is filtered out here
-			 * before either strategy looks, which is the whole of the rule.
+			 * The narrator strategy (§4.4): one entry in the pipeline's own
+			 * voice after a person's line, none after a reply. This is how a
+			 * planner genre gets exactly one reply per send — its pool admits
+			 * nobody, so there is no seat for the entry to name.
 			 */
-			const inTurnEnvoys: Array<{ slug: string; position: number }> = (
-				(cast.envoys ?? []) as Array<{
-					slug: string
-					position?: number
-					removedAt?: unknown
-					speaks?: string
-				}>
-			)
-				.filter((e) => !e.removedAt && e.speaks === "in-turn")
-				.map((e) => ({ slug: e.slug, position: e.position ?? 0 }))
-			/** An envoy's pick: the reference is the whole identity. */
-			const pickedEnvoy = (slug: string | null, via: string) =>
-				slug ? done(`envoy:${slug}`, null, via) : picked(null, via)
+			if (strategy === "narrator") {
+				// "The LAST ROW" (§4.4), not the last row in the rotation:
+				// a narrator's reply is exactly what this strategy produced,
+				// so it has to count as the turn being taken. `rotationTurns`
+				// filters narration out — it is not a seat's turn — and
+				// reading through it here would prepare a second narrator
+				// entry after every narrator reply, forever.
+				const visible = messages.filter((m) => !m.isHidden)
+				const newest = visible[visible.length - 1]
+				return done(
+					newest?.role === "user" ? [{ ref: null, via: "voice" }] : []
+				)
+			}
 
-			if (strategy === "round-robin") {
-				const { getNextCharacterTurn, nextEnvoyTurn } = await import(
-					"$lib/server/utils/getNextCharacterTurn"
-				)
-				const characterId = getNextCharacterTurn({
-					sessionMessages: input?.messages ?? [],
-					sessionCharacters: cast.sessionCharacters ?? [],
-					sessionPersonas: cast.sessionPersonas ?? []
-				} as any)
-				if (characterId != null) return picked(characterId, "strategy")
-				// No character due: an in-turn envoy takes the turn.
-				return pickedEnvoy(
-					nextEnvoyTurn(inTurnEnvoys, input?.messages ?? []),
-					"strategy"
-				)
-			}
+			if (strategy === "round-robin")
+				return done(roundRobinEntries(candidates, messages))
+			if (strategy === "user-split")
+				return done(userSplitEntries(candidates, messages))
 			if (strategy === "random") {
-				const eligible = (cast.sessionCharacters ?? []).filter(
-					(cc: any) => cc?.character && cc.isActive && !cc.removedAt
-				)
-				// One draw over characters and in-turn envoys alike.
-				const pool: Array<{ characterId: number } | { slug: string }> = [
-					...eligible.map((cc: any) => ({ characterId: cc.character.id as number })),
-					...inTurnEnvoys.map((e) => ({ slug: e.slug }))
-				]
-				if (!pool.length) return picked(null, "strategy")
+				// One seeded draw over the not-yet-spoken candidates. The seed
+				// is the run's, so a replay re-rolls identically and an
+				// unrelated recompute may not — documented, not prevented.
+				const due = roundRobinEntries(candidates, messages)
+				if (!due.length) return done([])
 				const random: () => number = ctx?.random ?? (() => 0)
-				const pick = pool[Math.floor(random() * pool.length)]!
-				return "slug" in pick
-					? pickedEnvoy(pick.slug, "strategy")
-					: picked(pick.characterId, "strategy")
+				return done([due[Math.floor(random() * due.length)]!])
 			}
-			// manual / none: explicit picks or nobody.
-			return picked(null, "strategy")
+
+			/**
+			 * Scripted: round robin, with the `select` point free to rewrite
+			 * it. A chain that returns nothing usable leaves the order as it
+			 * was; an entry naming a ref the pool did not admit is dropped
+			 * with a note, because a script may reorder the turn but may not
+			 * invent a participant. Entries the chain changed carry
+			 * `via: 'script'`.
+			 */
+			const selection = turnOrderSelection(candidates, messages)
+			const out = (await ctx?.scripts?.apply("select", selection)) ?? selection
+			const returned =
+				out && typeof out === "object"
+					? (out as { order?: unknown }).order
+					: undefined
+			if (!Array.isArray(returned)) return done(selection.order)
+			const admitted = new Set<string>(candidates.map((c) => String(c.ref)))
+			const kept: TurnEntry[] = []
+			for (const raw of returned) {
+				if (!raw || typeof raw !== "object") continue
+				const entry = raw as TurnEntry
+				if (entry.ref !== null && !admitted.has(String(entry.ref))) {
+					ctx?.log(
+						"warn",
+						`the select chain named '${String(entry.ref)}', which is not a candidate — dropped`
+					)
+					continue
+				}
+				kept.push({ ...entry, via: entry.via ?? "script" })
+			}
+			return done(kept)
 		},
-		{ ports: ["cast", "messages", "speaker", "characterId"] }
+		{ ports: ["candidates", "messages"] }
 	)
 }
 
@@ -1821,6 +1830,14 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		),
 		"core:inlet/session-created@1": reads<typeof C.sessionCreated>(
 			async (input: NodeInput<typeof C.sessionCreated>) => ok(input),
+			{ ports: [] }
+		),
+		// A session event (PLAN-turn-order §4.1, §4.4). Identity like its
+		// siblings: `emitSessionEvent` shaped the input — the event, its
+		// payload, its cause and its instant — and the host put the settings
+		// document and its cast on it at run start (A3).
+		"core:inlet/session-event@1": reads<typeof C.sessionEvent>(
+			async (input: NodeInput<typeof C.sessionEvent>) => ok(input),
 			{ ports: [] }
 		),
 		// The side-character turn (ruling 2026-09-07). Identity like its
@@ -3278,18 +3295,196 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					// is a name this definition does not declare (R-12).
 					currentCharacterId: input?.scope?.currentCharacterId ?? null
 				}
-				return ok({ main: withSpeaker, cast: withSpeaker })
+				return ok({
+					main: withSpeaker,
+					cast: withSpeaker,
+					// The seated envoys on their own port (PLAN-turn-order
+					// §4.4): the same rows `main` carries under `envoys`.
+					envoys: Array.isArray(castForPrompt.envoys)
+						? castForPrompt.envoys
+						: []
+				})
+			},
+			{ ports: ["scope"] }
+		),
+		/**
+		 * The settings document, re-read (PLAN-turn-order §4.12, way 2).
+		 * The host owns the resolver (`sessions/settings.ts`); this is the
+		 * declared node in front of it, for a spec that placed a write and
+		 * wants what is stored now rather than what the inlet carried.
+		 */
+		/**
+		 * One owner's annex document (§4.3). The host resolves whose — the
+		 * running spec's namespace unless the params name another and
+		 * `sharedAnnex` allows it — and answers `{}` for an owner that has
+		 * written nothing, which is the ordinary state.
+		 */
+		"core:query/session-annex@1": reads<typeof C.sessionAnnex>(
+			async (input: NodeInput<typeof C.sessionAnnex>, ctx: CoreQueryCtx) => {
+				// `view: 'ai'` is the prompt-safe view (R57); absent is everything.
+				const view = (input as { view?: unknown })?.view
+				if (view !== undefined && view !== null && view !== "" && view !== "ai")
+					return halt(`view is 'ai' or left out — '${String(view)}' is neither`)
+				const doc = await ctx.read("session_annex", {
+					sessionId: input?.scope?.sessionId,
+					...(view === "ai"
+						? { view: "ai", speaker: (input as { speaker?: unknown })?.speaker ?? null }
+						: {})
+				})
+				if (doc === null)
+					return halt(
+						"there is no session to read an annex for — the run is scoped to a " +
+							"session that no longer exists"
+					)
+				return ok({ main: doc })
+			},
+			{ ports: ["scope", "view", "speaker"], params: ["owner", "sharedAnnex"] }
+		),
+		"core:query/session-settings@1": reads<typeof C.sessionSettings>(
+			async (
+				input: NodeInput<typeof C.sessionSettings>,
+				ctx: CoreQueryCtx
+			) => {
+				const doc = await ctx.read("session_settings", {
+					sessionId: input?.scope?.sessionId
+				})
+				if (!doc)
+					return halt(
+						"there is no session to read settings for — the run is scoped to a " +
+							"session that no longer exists"
+					)
+				return ok({ main: doc })
 			},
 			{ ports: ["scope"] }
 		),
 
 		// ── Tasks ───────────────────────────────────────────────────────────
-		// The four next-speaker strategies (19 §5, U-C4). One implementation,
-		// four ids — see `pickSpeaker` below for the rules.
-		"core:task/turn-round-robin@1": pickSpeaker("round-robin"),
-		"core:task/turn-random@1": pickSpeaker("random"),
-		"core:task/turn-manual@1": pickSpeaker("manual"),
-		"core:task/turn-none@1": pickSpeaker("none"),
+		// The six turn strategies (PLAN-turn-order §4.4). One implementation,
+		// six ids — see `turnEntries` above.
+		"core:task/turn-round-robin@1": turnEntries("round-robin"),
+		"core:task/turn-user-split@1": turnEntries("user-split"),
+		"core:task/turn-random@1": turnEntries("random"),
+		"core:task/turn-scripted@1": turnEntries("scripted"),
+		"core:task/turn-manual@1": turnEntries("manual"),
+		"core:task/turn-narrator@1": turnEntries("narrator"),
+		/**
+		 * The pool (§4.4): who may be seated at all, from the settings
+		 * document's cast. Two floors no param overrides — a removed row and
+		 * an `on-action` envoy are never candidates — and an output order of
+		 * characters, then personas, then envoys, each by position.
+		 */
+		"core:task/turn-pool@1": reads<typeof C.turnPool>(
+			async (input: NodeInput<typeof C.turnPool>) => {
+				const cast = (input?.cast ?? {}) as CastRead
+				const params = (input?.params ?? {}) as {
+					characters?: string
+					personas?: string
+					envoys?: string
+					envoySlugs?: unknown
+				}
+				const messages = (input?.messages ?? []) as RotationMessage[]
+				const out: TurnCandidate[] = []
+
+				const characters = params.characters ?? "active"
+				if (characters !== "none")
+					for (const cc of (cast.sessionCharacters ?? [])
+						.map((cc, index) => ({ cc, position: cc.position ?? index }))
+						.filter(
+							({ cc }) =>
+								cc.character &&
+								!cc.removedAt &&
+								(characters === "all" || cc.isActive)
+						)
+						.sort((a, b) => a.position - b.position))
+						out.push({
+							ref: `character:${cc.cc.character!.id}`,
+							kind: "character",
+							name: cc.cc.character!.name ?? "",
+							position: cc.position,
+							...(cc.cc.character!.userId != null
+								? { ownerUserId: cc.cc.character!.userId }
+								: {})
+						})
+
+				// Personas are candidates (R15): a person's entry is shown as
+				// their turn and never fired — that is how a session says it
+				// is your turn. `others` leaves out whoever just wrote.
+				const personas = params.personas ?? "all"
+				if (personas !== "none") {
+					const turns = rotationTurns(messages)
+					let lastSender: number | null = null
+					for (let i = turns.length - 1; i >= 0; i--)
+						if (turns[i]!.role === "user") {
+							lastSender = turns[i]!.personaId ?? null
+							break
+						}
+					for (const cp of (cast.sessionPersonas ?? [])
+						.map((cp, index) => ({ cp, position: cp.position ?? index }))
+						.filter(({ cp }) => cp.persona && !cp.removedAt)
+						.sort((a, b) => a.position - b.position)) {
+						const id = cp.cp.persona!.id
+						if (personas === "others" && id === lastSender) continue
+						out.push({
+							// A persona IS a character row (0132), so its
+							// reference is `character:<id>`; `kind` is the
+							// discriminator (PLAN §8 (8)).
+							ref: `character:${id}`,
+							kind: "persona",
+							name: (cp.cp.persona as { name?: string })?.name ?? "",
+							position: cp.position,
+							...(cp.cp.persona!.userId != null
+								? { ownerUserId: cp.cp.persona!.userId }
+								: {})
+						})
+					}
+				}
+
+				const envoysParam = params.envoys ?? "in-turn"
+				if (envoysParam !== "none") {
+					const slugs = new Set(
+						(Array.isArray(params.envoySlugs) ? params.envoySlugs : []).map(
+							String
+						)
+					)
+					for (const e of inTurnEnvoys(cast)) {
+						if (envoysParam === "only" && !slugs.has(e.slug)) continue
+						if (envoysParam === "except" && slugs.has(e.slug)) continue
+						out.push({
+							ref: `envoy:${e.slug}`,
+							kind: "envoy",
+							name: i18nTextIn(e.name) ?? e.slug,
+							position: e.position
+						})
+					}
+				}
+				return ok({ main: out })
+			},
+			{
+				ports: ["cast", "messages"],
+				params: ["characters", "personas", "envoys", "envoySlugs"]
+			}
+		),
+		/**
+		 * The mentioned orderer (R8): whoever the person named goes first.
+		 * The receipt records which refs matched, so "why did Bram answer"
+		 * is answerable from the run.
+		 */
+		"core:task/turn-mentioned@1": reads<typeof C.turnMentioned>(
+			async (input: NodeInput<typeof C.turnMentioned>, ctx: TaskCtx) => {
+				const lookback = Number(
+					(input?.params as { lookback?: unknown })?.lookback ?? 1
+				)
+				const { candidates, mentioned } = mentionedFirst(
+					(input?.candidates ?? []) as TurnCandidate[],
+					(input?.messages ?? []) as RotationMessage[],
+					Number.isFinite(lookback) ? lookback : 1
+				)
+				if (mentioned.length)
+					ctx?.log("info", `mentioned: ${mentioned.join(", ")}`)
+				return ok({ main: candidates, mentioned })
+			},
+			{ ports: ["candidates", "messages"], params: ["lookback"] }
+		),
 		/**
 		 * Fuse the two mechanisms into one ordering.
 		 *
@@ -5539,6 +5734,126 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			}
 		),
 
+		/**
+		 * The model decides who speaks (PLAN-turn-order R41, M4) — the oracle
+		 * on the turn-order spec's model path. The prompt's instruction comes
+		 * from the node's prompts slot; the binding appends the candidates
+		 * (reference and name) and the recent conversation, and holds the
+		 * answer to the candidates: a reference the pool did not admit is
+		 * dropped with a note. No usable answer — a failed call, no order
+		 * list, or a list naming nobody seatable — falls back to round robin,
+		 * noted, never a halt: a model hiccup must not leave the session
+		 * without an order. An empty list the model chose is its answer
+		 * ("nobody now") and stands.
+		 */
+		"core:oracle/turn-advise@1": reads<typeof C.turnAdvise>(
+			async (input: NodeInput<typeof C.turnAdvise>, ctx: OracleCtx) => {
+				const messages = (input?.messages ?? []) as RotationMessage[]
+				// The model orders the round, it does not extend it: only
+				// candidates not yet heard from since the person last spoke are
+				// asked about — round robin's own rule — so a `round` under the
+				// model path ends when everyone has had their turn, instead of
+				// running to the auto-advance cap on a model that keeps picking.
+				const spoken = spokenRefsSince(messages)
+				const everyone = (input?.candidates ?? []) as TurnCandidate[]
+				const candidates = everyone.filter((c) => !spoken.has(c.ref))
+				const done = (order: TurnEntry[]) => ok({ main: order, order })
+				if (!candidates.length) return done([])
+				const fallback = (why: string) => {
+					ctx.log("warn", `${why} — round robin stands`)
+					return done(roundRobinEntries(candidates, messages))
+				}
+
+				// Names from every candidate — who already spoke this round is
+				// still named in the transcript — and a person's line under their
+				// persona (a persona is a character row, R15), so the model can
+				// tell who said what (M4 review).
+				const nameOf = new Map<string, string>()
+				for (const c of everyone) nameOf.set(c.ref, c.name)
+				const seatable = new Set(candidates.map((c) => c.ref))
+				const who = (m: RotationMessage & { content?: unknown }) => {
+					const ref =
+						m.role === "user"
+							? m.personaId != null
+								? `character:${m.personaId}`
+								: null
+							: m.characterId != null
+								? `character:${m.characterId}`
+								: (m.speaker ?? null)
+					return (ref && nameOf.get(ref)) || (m.role === "user" ? "User" : "Narrator")
+				}
+				const recent = messages
+					.slice(-20)
+					.map((m) => `${who(m)}: ${String((m as { content?: unknown }).content ?? "")}`)
+					.join("\n")
+				const participants = candidates.map((c) => `- ${c.ref}: ${c.name}`).join("\n")
+				const systemPrompt =
+					input?.prompts?.turnAdvice?.trim() ||
+					'Decide who speaks next. Output ONLY {"order": ["<reference>", ...]} using the references given.'
+				const userPrompt =
+					`Participants who may speak:\n${participants}\n\n` +
+					`Recent conversation:\n${recent || "(nothing yet)"}`
+
+				// Its own deadline, inside the node's `timeoutMs` (60s): a call the
+				// executor timed out would fail the run with no order written;
+				// one this binding abandons falls back to round robin (M4 review).
+				const ADVISE_DEADLINE_MS = 50_000
+				let result: any
+				try {
+					result = await Promise.race([
+						ctx.call({
+							systemPrompt,
+							userPrompt,
+							...stepSlots(input),
+							label: "turn-order:advise",
+							// The answer's shape, carried as far as the connection
+							// can (json_schema → json_object → the prompt's own
+							// words): an `order` list whose items can only be the
+							// references that may speak now, so a grammar-capable
+							// backend cannot even spell a wrong one.
+							schema: {
+								type: "object",
+								properties: {
+									order: {
+										type: "array",
+										items: { type: "string", enum: [...seatable] }
+									}
+								},
+								required: ["order"],
+								additionalProperties: false
+							}
+						}),
+						new Promise((_, reject) =>
+							setTimeout(
+								() => reject(new Error(`no answer in ${ADVISE_DEADLINE_MS / 1000}s`)),
+								ADVISE_DEADLINE_MS
+							).unref?.()
+						)
+					])
+				} catch (e) {
+					return fallback(
+						`the model call failed (${e instanceof Error ? e.message : String(e)})`
+					)
+				}
+				const refs = result?.json?.order
+				if (!Array.isArray(refs)) return fallback("the model's answer had no order list")
+
+				const order: TurnEntry[] = []
+				const dropped: string[] = []
+				for (const r of refs) {
+					if (typeof r === "string" && seatable.has(r as TurnEntry["ref"] & string) && !order.some((e) => e.ref === r))
+						order.push({ ref: r as TurnEntry["ref"], via: "model" })
+					else dropped.push(String(r))
+				}
+				if (dropped.length)
+					ctx.log("warn", `dropped ${dropped.join(", ")}: not a candidate this turn`)
+				if (refs.length && !order.length)
+					return fallback("the model's answer named nobody who may speak")
+				return done(order)
+			},
+			{ ports: ["candidates", "messages", "prompts", "connection", "sampling"] }
+		),
+
 		"core:oracle/extract-cast@1": reads<typeof C.extractCast>(
 			async (
 				input: NodeInput<typeof C.extractCast>,
@@ -5721,6 +6036,36 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		// host's, written at the binding because the binding is what is bound.
 		// A port declared here that the commit case never looks at is the same
 		// dead control as anywhere else, one file along.
+		/**
+		 * The turn-order write (PLAN-turn-order §4.4, §4.2) — through the
+		 * host's commit, like every other write outlet. The binding declares
+		 * the node; the host owns the rows, the drops it makes before
+		 * writing (a ref the pool did not admit, a channel this session does
+		 * not have) and `writeTurnOrder`'s staleness rule. The emission of
+		 * `turn-order-changed` is the executor's, off `causesEvent`.
+		 */
+		"core:outlet/set-turn-order@1": reads<typeof C.setTurnOrder>(
+			async (input: NodeInput<typeof C.setTurnOrder>, ctx: OutletCtx) =>
+				ok(await ctx.commit(input)),
+			{ ports: ["order", "candidates", "basedOnAt", "event", "cause"] }
+		),
+		/**
+		 * The annex write (§4.3), likewise: the host merges the owner's
+		 * document under the annex's advisory lock. `owner` defaults to the
+		 * running spec's own namespace, and naming another one needs
+		 * `sharedAnnex` — the host refuses otherwise, with a receipt note.
+		 */
+		"core:outlet/set-session-annex@1": reads<typeof C.setSessionAnnex>(
+			async (input: NodeInput<typeof C.setSessionAnnex>, ctx: OutletCtx) =>
+				ok(await ctx.commit(input)),
+			{ ports: ["value", "see"], params: ["owner", "merge", "sharedAnnex"] }
+		),
+		/** A declared event, recorded (E1b): the host checks scope, writes the ledger row, dispatches. */
+		"core:outlet/record-event@1": reads<typeof C.recordEvent>(
+			async (input: NodeInput<typeof C.recordEvent>, ctx: OutletCtx) =>
+				ok(await ctx.commit(input)),
+			{ ports: ["event", "payload"] }
+		),
 		"core:outlet/create-message@1": reads<typeof C.createMessage>(
 			async (
 				input: NodeInput<typeof C.createMessage>,
@@ -5816,6 +6161,95 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			},
 			{ ports: ["form", "answer", "messageId", "blockId", "addressee"] }
 		),
+		// ── Sprites (DESIGN-sprites §5, 2026-09-24) ─────────────────────────
+		//
+		// The reply specs' sprite tail: read what the speaker can show, let a
+		// picker choose, record it on the line. The host owns both effects —
+		// the read (`sprites_for`, which decides the set) and the write
+		// (`show-sprite`, which decides who chose it).
+		"core:query/sprites-for@1": reads<typeof C.spritesFor>(
+			async (
+				input: NodeInput<typeof C.spritesFor>,
+				ctx: CoreQueryCtx
+			) => {
+				const choices = (await ctx.read("sprites_for", {
+					sessionId: input?.scope?.sessionId,
+					message: input?.message
+				})) as {
+					labels?: string[]
+					text?: string
+					has?: boolean
+					lineVector?: number[] | null
+					labelVectors?: number[][] | null
+				} | null
+				const {
+					lineVector = null,
+					labelVectors = null,
+					...safe
+				} = choices ?? { labels: [], text: "", has: false }
+				return ok({
+					main: safe,
+					choices: safe,
+					labels: safe.labels ?? [],
+					text: safe.text ?? "",
+					lineVector,
+					labelVectors,
+					has: safe.has === true
+				})
+			},
+			{ ports: ["scope", "message"] }
+		),
+		"core:task/pick-sprite-similarity@1": reads<
+			typeof C.pickSpriteSimilarity
+		>(
+			async (input: NodeInput<typeof C.pickSpriteSimilarity>) => {
+				if (input?.params?.enabled === false)
+					return ok({ main: null, pick: null })
+				const choices = (input?.choices ?? {}) as {
+					set?: string | null
+					labels?: string[]
+					last?: { set: string; label: string } | null
+					recent?: string[]
+				}
+				const pick = pickSpriteBySimilarity(
+					{
+						set: choices.set ?? null,
+						labels: choices.labels ?? [],
+						last: choices.last ?? null,
+						recent: choices.recent ?? []
+					},
+					input?.lineVector,
+					input?.labelVectors,
+					{
+						margin: input?.params?.margin,
+						floor: input?.params?.floor
+					}
+				)
+				return ok({ main: pick, pick })
+			},
+			{
+				ports: ["choices", "lineVector", "labelVectors"],
+				params: ["enabled", "margin", "floor"]
+			}
+		),
+		"core:outlet/show-sprite@1": reads<typeof C.showSprite>(
+			async (input: NodeInput<typeof C.showSprite>, ctx: OutletCtx) => {
+				const { sprite, kept, ...ids } = (await ctx.commit(input)) as {
+					id: unknown
+					sessionId?: unknown
+					sprite?: unknown
+					kept?: unknown
+				}
+				return ok({
+					status: "committed",
+					ids,
+					sprite: sprite ?? null,
+					kept: kept === true
+				})
+			},
+			{ ports: ["target", "pick"] }
+		),
+
 		// ── The built-in writes (R-15, 2026-09-16) ──────────────────────────
 		// Each publishes the write result AND what the commit reported was
 		// lost or replaced, on its own port: the executor wraps a bare `{id}`
@@ -5909,10 +6343,8 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * there, inside the transaction, so a room whose exits do not resolve
 		 * fails WITH the room rather than leaving half of one behind.
 		 *
-		 * ⚠ The links are here rather than only on
-		 * `core:outlet/link-lore-entries@1` because of F7: a pipeline has ONE
-		 * write-class outlet, so a spec cannot create an entry and then link it
-		 * in the same run.
+		 * The links are here as well as on `core:outlet/link-lore-entries@1`
+		 * so an entry and its links commit in one transaction, or not at all.
 		 */
 		"core:outlet/create-lore-entry@1": reads<typeof C.createLoreEntry>(
 			async (

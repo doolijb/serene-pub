@@ -37,6 +37,9 @@ import { getConnectionAdapter } from "$lib/server/utils/getConnectionAdapter"
 import { composeStopsFor } from "$lib/server/connections/stops"
 import { resolveSampling } from "$lib/server/utils/resolveSampling"
 import { runQueuedLLMCall } from "$lib/server/utils/runQueuedLLMCall"
+import { chooseStructuredMode } from "$lib/server/connections/structuredOutput"
+import { storedCapabilities } from "$lib/server/pipelines/runtime/capabilityGuard"
+import type { JsonSchemaNode } from "$lib/server/connectionAdapters/jsonSchemaToGbnf"
 import {
 	contextWindowFrom,
 	replyReserveFrom
@@ -62,6 +65,14 @@ export interface StepCall {
 	samplingId?: number | null
 	label?: string
 	signal?: AbortSignal
+	/**
+	 * A JSON Schema the answer should follow (M4 follow-up): carried as far
+	 * as this connection can — its schema door (native or a grammar), else
+	 * JSON mode, else nothing added, because a step's own prompt already
+	 * asks for JSON in words. The same choice the reply dispatch makes
+	 * (`chooseStructuredMode`), so the two paths cannot disagree.
+	 */
+	schema?: unknown
 }
 
 /**
@@ -85,7 +96,6 @@ function minimalSession(userPrompt: string): any {
 		lorebookId: null,
 		isGroup: false,
 		sessionType: SessionTypes.SUMMARIZE,
-		groupReplyStrategy: null,
 		sessionMessages: [
 			{
 				id: 1,
@@ -209,6 +219,17 @@ export async function dispatchStep(
 		tokenLimit,
 		contextThresholdPercent: 0.9
 	})
+
+	if (call.schema) {
+		const structured = chooseStructuredMode(storedCapabilities(connection), {
+			schema: call.schema
+		})
+		if (structured.mode !== "instruction") {
+			adapter.responseFormat = "json"
+			if (structured.mode === "schema")
+				adapter.responseSchema = call.schema as JsonSchemaNode
+		}
+	}
 
 	// Composed once and handed over — an adapter builds none of its own (ruling
 	// 2026-09-10). A step's session is minimal and has no cast, so this is the

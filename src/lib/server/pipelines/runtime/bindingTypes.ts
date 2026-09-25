@@ -219,6 +219,8 @@ export type HostTable =
 	| "summarize_source"
 	| "lorebook_entries"
 	| "session_cast"
+	| "session_settings"
+	| "session_annex"
 	| "graph_scenes"
 	| "session_state"
 	| "graph_context"
@@ -230,6 +232,7 @@ export type HostTable =
 	| "mention_spans"
 	| "entity_link"
 	| "available_tools"
+	| "sprites_for"
 
 /**
  * A Query's context: the SDK's `QueryCtx` with one member narrowed.

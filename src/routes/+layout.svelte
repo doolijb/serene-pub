@@ -16,6 +16,7 @@
 	import { appVersion } from "$lib/shared/constants/version"
 	import { docsHref } from "$lib/shared/utils/docsHref"
 	import AccessibleLoginForm from "$lib/client/accessibility/AccessibleLoginForm.svelte"
+	import { registerHostElements } from "$lib/client/components/hostElements/registry"
 	import {
 		accessibilityModeStore,
 		pausedStore,
@@ -315,6 +316,9 @@
 		// runs (parent script bodies run first), which only flips `enabled`.
 		accessibilityModeStore.persisted = persistedPreference
 		pausedStore.paused = isPaused()
+		// The host-element vocabulary's sp elements (§3.5): defined once, so a
+		// native page and the component host mount the same elements.
+		registerHostElements()
 		startup()
 	}
 </script>

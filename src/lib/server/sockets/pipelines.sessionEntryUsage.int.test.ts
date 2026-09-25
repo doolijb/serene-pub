@@ -14,13 +14,12 @@
  *    and the ranker records `history`; the fold happens before the grouping,
  *    because one entry arriving as two rows is the panel contradicting itself
  *    about its own tally.
- * 3. **Two gates, both load-bearing.** The session must be reachable — owner
- *    *or* guest, through `checkSessionAccess` — and the runs summed are the
- *    asker's own. Neither implies the other, and the second is what stops a
- *    guest in a shared session from reading the owner's receipts.
- * 4. **The bound is stated.** A tally that silently stopped counting at some
- *    depth is not a partial answer; it is a wrong one, and "this entry never
- *    fires" is exactly the conclusion somebody would draw from it.
+ * 3. **The book's owner reads it, and admins (R58).** Every turn in the
+ *    session counts, guests' included; a guest gets nothing. Read from the
+ *    ranking store (L1), never a receipt.
+ * 4. **Nothing is forgotten.** Read from the rollup, which retention never
+ *    prunes: a tally that silently stopped counting at some depth is a wrong
+ *    answer, and "this entry never fires" is what somebody would conclude.
  */
 import { beforeAll, describe, expect, it, vi } from "vitest"
 import * as schema from "$lib/server/db/schema"
@@ -194,8 +193,9 @@ const decision = (
 	why: `scored 1.000, ${tokens} tokens`
 })
 
-const receiptFor = (decisions: any[]) => ({
+const receiptFor = (decisions: any[], startedAt?: number) => ({
 	runId: "seeded",
+	...(startedAt ? { startedAt } : {}),
 	outcome: "ok",
 	nodes: [
 		{
@@ -209,6 +209,7 @@ const receiptFor = (decisions: any[]) => ({
 			nodeKey: "rank",
 			seq: 2,
 			kind: "task",
+			definitionId: "core:task/rank-hybrid@1",
 			result: "ok",
 			output: { decisions, groups: {} }
 		}
@@ -226,7 +227,7 @@ async function seedRun(opts: {
 	// Ordered by row id, and each run gets a distinct wall clock so
 	// "most recently" is a fact rather than a tie.
 	const at = new Date(Date.UTC(2026, 0, 1 + seq++))
-	await testDb.insert(schema.pipelineRuns).values({
+	const [row] = await testDb.insert(schema.pipelineRuns).values({
 		runId: opts.runId,
 		specSlug: "core:spec/respond",
 		specVersion: "1.0.0",
@@ -241,7 +242,16 @@ async function seedRun(opts: {
 		elapsedMs: 10,
 		tokensSpent: 10,
 		receipt: receiptFor(opts.decisions)
-	} as any)
+	} as any).returning({ id: schema.pipelineRuns.id })
+	// What `saveReceipt` does next (L1) — a preview is never recorded.
+	if (!opts.isPreview) {
+		const { recordRankings } = await import("$lib/server/pipelines/runtime/rankingStore")
+		await recordRankings(testDb as any, receiptFor(opts.decisions, at.getTime()) as any, {
+			runRowId: row.id,
+			sessionId: opts.sessionId,
+			userId: opts.userId
+		})
+	}
 	return at
 }
 
@@ -314,7 +324,7 @@ describe("pipelines:sessionEntryUsage — the tally across a session", () => {
 		const { pipelinesSessionEntryUsage } = await import("./pipelines")
 		const events: any[] = []
 		const res: any = await pipelinesSessionEntryUsage.handler(
-			fakeSocket(ownerId, true),
+			fakeSocket(ownerId),
 			{ sessionId } as any,
 			(event, data) => events.push({ event, data })
 		)
@@ -326,9 +336,11 @@ describe("pipelines:sessionEntryUsage — the tally across a session", () => {
 		// Frequency leads, because the question is which entries are *shaping*
 		// the session — an entry in most of the turns is doing the work whether
 		// or not it happened to fire in the last one.
+		// The guest's turn counts too (R58): the Silver Road went in once.
 		expect(res.entries.map((e: any) => e.title)).toEqual([
 			"The Ashguard",
-			"Year 412"
+			"Year 412",
+			"The Silver Road"
 		])
 		const top = res.entries[0]
 		expect(top.usedInRuns).toBe(3)
@@ -347,19 +359,17 @@ describe("pipelines:sessionEntryUsage — the tally across a session", () => {
 		})
 	})
 
-	it("leaves out an entry that was only ever judged and refused", async () => {
-		// The Silver Road was a candidate in two of the owner's turns and got
-		// into neither. "Fired" is a claim about what reached a prompt, and a
-		// row here saying otherwise is the exact thing an author would act on.
+	it("counts an entry only for the turns it reached a prompt in", async () => {
+		// The Silver Road was judged in three turns and let in once (the
+		// guest's). "Fired" is a claim about what reached a prompt.
 		const { pipelinesSessionEntryUsage } = await import("./pipelines")
 		const res: any = await pipelinesSessionEntryUsage.handler(
-			fakeSocket(ownerId, true),
+			fakeSocket(ownerId),
 			{ sessionId } as any,
 			noop
 		)
-		expect(
-			res.entries.some((e: any) => e.title === "The Silver Road")
-		).toBe(false)
+		const road = res.entries.find((e: any) => e.title === "The Silver Road")
+		expect(road).toMatchObject({ usedInRuns: 1, judgedInRuns: 3 })
 	})
 
 	it("folds the index spelling onto the budget group, so one entry is one row", async () => {
@@ -367,11 +377,11 @@ describe("pipelines:sessionEntryUsage — the tally across a session", () => {
 		// that fired twice, not two entries that fired once.
 		const { pipelinesSessionEntryUsage } = await import("./pipelines")
 		const res: any = await pipelinesSessionEntryUsage.handler(
-			fakeSocket(ownerId, true),
+			fakeSocket(ownerId),
 			{ sessionId } as any,
 			noop
 		)
-		const history = res.entries.filter((e: any) => e.source === "history")
+		const history = res.entries.filter((e: any) => e.id === siegeId)
 		expect(history).toHaveLength(1)
 		expect(history[0].usedInRuns).toBe(2)
 		expect(history[0].sourceLabel).toBe("History")
@@ -383,77 +393,87 @@ describe("pipelines:sessionEntryUsage — the tally across a session", () => {
 	it("says what it found before it says how much of it there was", async () => {
 		const { pipelinesSessionEntryUsage } = await import("./pipelines")
 		const res: any = await pipelinesSessionEntryUsage.handler(
-			fakeSocket(ownerId, true),
+			fakeSocket(ownerId),
 			{ sessionId } as any,
 			noop
 		)
 		expect(res.summary).toBe(
 			"“The Ashguard” is what this session reaches for most — it has gone " +
-				"into 3 of the 3 turns counted here, alongside 1 other entry."
+				"into 3 of the 3 turns it was weighed in, alongside 2 other entries."
 		)
 		// The preview is left out, and said to be left out — otherwise the
 		// tally quietly disagrees with the run list beside it.
 		expect(res.notes.join(" ")).toMatch(
 			/1 preview is not counted: a preview assembles a prompt and never sends it\./
 		)
-		expect(res.runsTotal).toBe(3)
-		expect(res.runsRead).toBe(3)
+		expect(res.runsTotal).toBe(4)
+		expect(res.runsRead).toBe(4)
 	})
 
-	it("states the bound when it does not read every turn", async () => {
-		// ⚠ A tally that silently stopped counting at some depth is not a
-		// partial answer, it is a wrong one: "this entry never fires" is what
-		// an author would conclude, and act on.
+	it("keeps counting past retention: the rollup is never pruned", async () => {
+		// ⚠ Retention trims the per-turn decisions to one round (R68).
+		// A tally read from those would quietly forget old turns and tell an
+		// author "this never fires"; the rollup keeps every turn's count.
 		const { pipelinesSessionEntryUsage } = await import("./pipelines")
+		const [book] = await testDb.select().from(schema.lorebooks).limit(1)
+		const [kept] = await testDb
+			.insert(schema.sessions)
+			.values({ name: "Retention session", isGroup: false, userId: ownerId, lorebookId: book.id } as any)
+			.returning()
+		// One speaker, three turns: the round keeps only the newest (R68).
+		for (const runId of ["kept-1", "kept-2", "kept-3"])
+			await seedRun({
+				runId,
+				userId: ownerId,
+				sessionId: kept.id,
+				decisions: [decision(ashguardId, "worldLore", 40, true, "The Ashguard")]
+			})
+		const retained = await testDb
+			.select()
+			.from(schema.rankings)
+			.where((await import("drizzle-orm")).eq(schema.rankings.sessionId, kept.id))
+		expect(retained).toHaveLength(1)
 		const res: any = await pipelinesSessionEntryUsage.handler(
-			fakeSocket(ownerId, true),
-			{ sessionId, runLimit: 1 } as any,
+			fakeSocket(ownerId),
+			{ sessionId: kept.id } as any,
 			noop
 		)
-		expect(res.runsRead).toBe(1)
-		expect(res.runsTotal).toBe(3)
-		expect(res.notes.join(" ")).toMatch(
-			/newest 1 of this session's 3 turns/
-		)
-		// Only the newest turn was read, so only what fired in it is counted.
-		expect(res.entries.every((e: any) => e.usedInRuns === 1)).toBe(true)
+		expect(res.entries[0]).toMatchObject({ usedInRuns: 3, judgedInRuns: 3, lastRunId: "kept-3" })
+		expect(res.notes.join(" ")).not.toMatch(/newest/)
 	})
 
 	it("reports the tail it did not list rather than dropping it", async () => {
 		const { pipelinesSessionEntryUsage } = await import("./pipelines")
 		const res: any = await pipelinesSessionEntryUsage.handler(
-			fakeSocket(ownerId, true),
+			fakeSocket(ownerId),
 			{ sessionId, limit: 1 } as any,
 			noop
 		)
 		expect(res.entries).toHaveLength(1)
-		expect(res.omitted).toBe(1)
-		expect(res.notes.join(" ")).toMatch(/1 further entry fired less often/)
+		expect(res.omitted).toBe(2)
+		expect(res.notes.join(" ")).toMatch(/2 further entries fired less often/)
 	})
 
-	it("counts a guest's own turns and none of the owner's", async () => {
-		// The session is reachable — `checkSessionAccess` is owner OR guest,
-		// and a local ownership check here would lock a participant out of
-		// their own evidence. The runs are still the asker's: reaching a
-		// shared session must never become reading somebody else's receipts.
+	it("a guest gets nothing: the usage is the book owner's (R58)", async () => {
 		const { pipelinesSessionEntryUsage } = await import("./pipelines")
 		const res: any = await pipelinesSessionEntryUsage.handler(
 			fakeSocket(guestId),
 			{ sessionId } as any,
 			noop
 		)
-		expect(res.error).toBeUndefined()
-		expect(res.runsTotal).toBe(1)
-		expect(res.entries).toHaveLength(1)
-		expect(res.entries[0].usedInRuns).toBe(1)
-		// The guest's own receipt recorded the name, so the row is not
-		// anonymous — but the lorebook is the owner's and is not read for
-		// them, so there is no lever to offer.
-		expect(res.entries[0].title).toBe("The Silver Road")
-		expect(res.entries[0].entry).toBeUndefined()
-		expect(res.entries.some((e: any) => e.title === "The Ashguard")).toBe(
-			false
+		expect(res.error).toMatch(/owner's to read/)
+		expect(res.entries).toBeUndefined()
+	})
+
+	it("an administrator counts every user's turns, the guest's included (R55)", async () => {
+		const { pipelinesSessionEntryUsage } = await import("./pipelines")
+		const res: any = await pipelinesSessionEntryUsage.handler(
+			fakeSocket(strangerId, true),
+			{ sessionId } as any,
+			noop
 		)
+		expect(res.error).toBeUndefined()
+		expect(res.runsTotal).toBe(4)
 	})
 
 	it("refuses a session the asker cannot reach", async () => {
@@ -477,7 +497,7 @@ describe("pipelines:sessionEntryUsage — the tally across a session", () => {
 		// nothing has fired is not an error state.
 		const { pipelinesSessionEntryUsage } = await import("./pipelines")
 		const res: any = await pipelinesSessionEntryUsage.handler(
-			fakeSocket(strangerId),
+			fakeSocket(strangerId, true),
 			{ sessionId: emptySessionId } as any,
 			noop
 		)
@@ -489,86 +509,42 @@ describe("pipelines:sessionEntryUsage — the tally across a session", () => {
 		)
 	})
 
-	it("drops a malformed receipt rather than failing the whole tally", async () => {
-		// ⚠ The receipt is a verbatim blob and a node outside core can publish
-		// anything under `decisions` — a compacted run has no `nodes` at all.
-		// One such row must cost that row, not the answer: a reader whose
-		// session contains one bad receipt would otherwise get an error where
-		// the tally should be, with nothing saying which run caused it.
+	it("a malformed decision is never recorded, so the tally cannot fail on it", async () => {
+		// ⚠ A node outside core can publish anything under `decisions`. The
+		// store's writer drops what names no entry, so one such run costs
+		// that run's odd rows, never the answer.
 		const { pipelinesSessionEntryUsage } = await import("./pipelines")
 		const [odd] = await testDb
 			.insert(schema.sessions)
-			.values({
-				name: "Odd session",
-				isGroup: false,
-				userId: ownerId
-			} as any)
+			.values({ name: "Odd session", isGroup: false, userId: ownerId, lorebookId: (await testDb.select().from(schema.lorebooks).limit(1))[0].id } as any)
 			.returning()
-		const at = new Date(Date.UTC(2026, 5, 1))
-		const seedRaw = (runId: string, receipt: any) =>
-			testDb.insert(schema.pipelineRuns).values({
-				runId,
-				specSlug: "core:spec/respond",
-				specVersion: "1.0.0",
-				userId: ownerId,
-				sessionId: odd.id,
-				outcome: "ok",
-				triggerSource: "event",
-				seed: "s",
-				startedAt: at,
-				endedAt: at,
-				elapsedMs: 1,
-				tokensSpent: 0,
-				receipt
-			} as any)
-
-		await seedRaw("odd-compact", { compact: true })
-		await seedRaw("odd-scalar", { nodes: [{ output: "a string" }] })
-		await seedRaw("odd-shapes", {
-			nodes: [
-				{
-					output: {
-						decisions: [
-							// `included` is not a boolean, `tokens` is not whole,
-							// and there is no candidate at all.
-							{
-								candidate: { id: 5, source: "worldLore" },
-								included: 1
-							},
-							{ included: true },
-							{
-								candidate: {
-									id: ashguardId,
-									source: "worldLore",
-									tokens: 12.5,
-									payload: { name: "The Ashguard" }
-								},
-								included: true
-							}
-						]
-					}
-				}
+		await seedRun({
+			runId: "odd-shapes",
+			userId: ownerId,
+			sessionId: odd.id,
+			decisions: [
+				{ candidate: { id: "5", source: "worldLore" }, included: true },
+				{ included: true },
+				{ candidate: { id: ashguardId, source: "worldLore", tokens: 12.5 }, included: true, reason: "keyword" }
 			]
 		})
-
 		const res: any = await pipelinesSessionEntryUsage.handler(
-			fakeSocket(ownerId, true),
+			fakeSocket(ownerId),
 			{ sessionId: odd.id } as any,
 			noop
 		)
 		expect(res.error).toBeUndefined()
-		// Only the one well-formed decision counts; `included: 1` is not
-		// `included: true`, and a decision with no candidate names no entry.
 		expect(res.entries).toHaveLength(1)
 		expect(res.entries[0].title).toBe("The Ashguard")
-		expect(res.entries[0].tokens).toBe(12.5)
-		expect(res.runsTotal).toBe(3)
+		// Whole tokens in the store.
+		expect(res.entries[0].tokens).toBe(13)
 	})
 
 	it("carries the session on a run, so a receipt on screen can ask for this", async () => {
 		// Without it the panel showing one run's decisions has no way to ask
 		// what has fired across the session those decisions belong to.
 		const { pipelinesRun } = await import("./pipelines")
+		// Read as an administrator: a receipt is theirs (R55).
 		const res: any = await pipelinesRun.handler(
 			fakeSocket(ownerId, true),
 			{ runId: "usage-3" } as any,

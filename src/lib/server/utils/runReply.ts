@@ -83,6 +83,12 @@ export type ReplyTurn =
 	 */
 	| { kind: "respond"; characterId: number; speaker?: undefined }
 	| { kind: "respond"; characterId?: null; speaker: EnvoyRef }
+	/**
+	 * Nobody named: the pipeline's own voice — a narrator entry
+	 * (`{ ref: null }`, PLAN-turn-order §4.4). The spec's prompts say whose
+	 * voice that is; no node decides anything about turn-taking.
+	 */
+	| { kind: "respond"; characterId?: null; speaker?: undefined }
 	/** World narration, on the narrator's own button. */
 	| { kind: "narrate"; instructions?: string }
 	/** A side character speaks once, and joins nothing. */
@@ -127,6 +133,13 @@ export interface ReplyRequest {
 	 * on a fresh turn.
 	 */
 	channel?: string
+	/**
+	 * This run was started by auto-advance (PLAN-turn-order §4.6), not by a
+	 * press. Carried onto the run so every write it makes says so, which is
+	 * what lets the recompute that follows tell an automatic turn from a
+	 * person's and continue — or stop — a `round`.
+	 */
+	auto?: boolean
 }
 
 export interface ReplyOutcome {
@@ -186,7 +199,7 @@ async function routeFor(
 			subject: sessionEvents.messageRespond,
 			label: "respond",
 			floorSpecId: RESPOND_SPEC_ID,
-			currentCharacterId: turn.speaker ? null : turn.characterId,
+			currentCharacterId: turn.speaker ? null : (turn.characterId ?? null),
 			speaker: null,
 			...(turn.speaker ? { speakerRef: turn.speaker } : {}),
 			narration: false
@@ -470,6 +483,8 @@ export async function runReply(request: ReplyRequest): Promise<ReplyOutcome> {
 				: {}),
 			specId,
 			runId,
+			// Fired by auto-advance rather than pressed (§4.6).
+			...(request.auto ? { auto: true } : {}),
 			io: socket.io,
 			signal: handle.controller.signal,
 			cancelSignal: () => runRegistry.cancellation(handle),
@@ -500,6 +515,10 @@ export async function runReply(request: ReplyRequest): Promise<ReplyOutcome> {
 		stopped = runRegistry.cancellation(handle)
 
 		if (stopped) return { ok: false, stopped: true, receipt }
+		// ⚠ There is no `nobodyDue` any more (PLAN-turn-order §7). A reply
+		// run is started by FIRING a prepared entry, so "nobody is due" is
+		// answered before a run exists — by an empty order — rather than by
+		// a halt inside one. A halt here is a halt like any other.
 		if (receipt.outcome !== "ok")
 			return {
 				ok: false,

@@ -6,7 +6,7 @@
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
 	import { toaster } from "$lib/client/utils/toaster"
-	import EntityGalleryViewModal from "$lib/client/components/sessionMessages/EntityGalleryViewModal.svelte"
+	import EntityGalleryViewModal from "$lib/client/components/gallery/EntityGalleryViewModal.svelte"
 
 	interface Props {
 		/**

@@ -71,7 +71,6 @@ export async function branchSession(
 				scenario: original.scenario,
 				userId: original.userId,
 				isGroup: original.isGroup,
-				groupReplyStrategy: original.groupReplyStrategy,
 				metadata: original.metadata,
 				lorebookId: original.lorebookId,
 				// The same genre, preset and genre fields: the copies keep

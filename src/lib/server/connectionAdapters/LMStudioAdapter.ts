@@ -541,10 +541,22 @@ async function listModels(
 		})
 		const res = await client.system.listDownloadedModels()
 		if (res && Array.isArray(res)) {
+			// The identifier and the label are renamed to the shape every
+			// adapter shares; the rest of the SDK's descriptor rides along
+			// untouched so `readModelFacts` can read the context window,
+			// parameter string, quantisation and size it already holds. Mapping
+			// to two fields here is what used to lose them before the shared
+			// normalizer ever saw the entry.
 			const models = res.map((model) => {
+				const { modelKey, displayName, ...rest } =
+					model as unknown as Record<string, unknown> & {
+						modelKey: string
+						displayName: string
+					}
 				return {
-					model: model.modelKey,
-					name: model.displayName
+					...rest,
+					model: modelKey,
+					name: displayName
 				}
 			})
 			return {

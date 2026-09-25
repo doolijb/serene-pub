@@ -18,6 +18,7 @@
 
 import {
 	buildScanWindow,
+	messageAt,
 	buildBm25Idf,
 	buildIdf,
 	buildLastRefMap,
@@ -100,6 +101,8 @@ export interface LoreRow {
 	bindingCharacterId?: number | null
 	constant?: boolean | null
 	enabled?: boolean | null
+	/** An archived entry is out of retrieval, like a disabled one (L1). */
+	archived?: boolean | null
 	position?: number | null
 	hasEmbedding?: boolean
 }
@@ -494,6 +497,16 @@ export function keywordQuery(input: KeywordQueryInput): KeywordQueryResult {
 	const keyOf = (e: LoreRow) => `${e.source}:${e.id}`
 
 	for (const entry of entries) {
+		if (entry.archived === true) {
+			settled.add(keyOf(entry))
+			skipped.push({
+				id: entry.id,
+				source: entry.source,
+				kind: "excluded",
+				reason: "entry is archived"
+			})
+			continue
+		}
 		if (entry.enabled === false) {
 			settled.add(keyOf(entry))
 			skipped.push({
@@ -549,6 +562,7 @@ export function keywordQuery(input: KeywordQueryInput): KeywordQueryResult {
 			// entry is unconditional, so there is nothing for a later pass to
 			// discover about it.
 			const pinned = level === 0 && !!entry.constant
+			const keyHits: Array<{ key: string; index: number }> = []
 			const signals = scoreSignals(
 				entry,
 				window,
@@ -563,7 +577,8 @@ export function keywordQuery(input: KeywordQueryInput): KeywordQueryResult {
 				lexicalIdf,
 				documents.get(keyOf(entry)),
 				profile,
-				averageContentLength
+				averageContentLength,
+				keyHits
 			)
 
 			/**
@@ -663,7 +678,20 @@ export function keywordQuery(input: KeywordQueryInput): KeywordQueryResult {
 				priority: entry.priority ?? 1,
 				position: entry.position ?? 0,
 				pinned,
-				payload: entry
+				payload: entry,
+				...(keyHits.length
+					? {
+							// Exact hits first; a trigram (fuzzy) hit has no
+							// offset and never "matched" its key, so it says so.
+							matched: [...keyHits]
+								.sort((a, b) => Number(a.index < 0) - Number(b.index < 0))
+								.map((h) =>
+									h.index < 0
+										? { key: h.key, messageId: null, fuzzy: true }
+										: { key: h.key, messageId: messageAt(window, h.index) }
+								)
+						}
+					: {})
 			})
 		}
 		return hits
@@ -791,13 +819,16 @@ function scoreSignals(
 	 * two different texts; the names are close enough that spelling out which
 	 * is which is cheaper than the bug.
 	 */
-	averageContentLength: number
+	averageContentLength: number,
+	/** Filled with the keys that matched (L1), when given. */
+	hitsOut?: Array<{ key: string; index: number }>
 ) {
 	// One walk of the entry's keys answers both of these. Proximity is the
 	// *offsets* that walk already computed, which is the whole reason design
 	// phase 1 calls it free: a second pass to measure distance would be the
 	// same comparisons twice.
 	const keys = keywordMatch(entry, window, folding)
+	if (hitsOut) hitsOut.push(...keys.hits)
 	return {
 		keyword: keys.signal,
 		proximity: keys.proximity,

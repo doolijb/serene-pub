@@ -228,7 +228,7 @@ parentPort.on("message", async (msg) => {
 			// past the ctx to a name the program never mentions (R-3).
 			const endowments = { __crypto: harden(makeCryptoHost()), __registerAbort: harden(function (fn) { if (typeof fn === "function" && !state.fire) state.fire = fn }) }
 			if (job.grants.storage) endowments.__storage = harden(tx ? tx.api : __DENIED_STORAGE)
-			if (job.grants.fetch) endowments.__fetch = harden(fetchHostFor(bundle.config, function () { return state.aborted }))
+			if (job.grants.fetch) endowments.__fetch = harden(fetchHostFor(bundle.config, function () { return state.aborted }, job.secrets))
 			const compartment = new Compartment(endowments)
 			const program = buildProgram(
 				bundle.source,
@@ -397,6 +397,7 @@ export class SesWorkerSandbox implements PluginSandbox {
 			seedLabel: opts.seedLabel,
 			nowMs: opts.nowMs,
 			rows: opts.rows,
+			secrets: opts.secrets,
 			// Derived here, on the host, from the kind the caller named — the
 			// worker never sees the kind, only what it grants (R-3). Throws on
 			// a call that names none: a host bug, surfaced loudly, never a

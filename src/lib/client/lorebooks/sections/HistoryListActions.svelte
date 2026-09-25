@@ -6,7 +6,7 @@
 	import { toaster } from "$lib/client/utils/toaster"
 	import { HISTORY_TYPE_ID } from "$lib/shared/entries/types"
 	import type { PoolSource } from "./types"
-	import { dateValue } from "./historyDates"
+	import { compareDates, dateValue } from "./historyDates"
 
 	/**
 	 * Move the story's clock forward.
@@ -36,7 +36,7 @@
 			return
 		}
 		const latest = sources.reduce((max, entry) =>
-			dateValue(entry as any) > dateValue(max as any) ? entry : max
+			compareDates(entry as any, max as any) > 0 ? entry : max
 		)
 		socket.emit("entries:iterateNext", {
 			id: latest.id,

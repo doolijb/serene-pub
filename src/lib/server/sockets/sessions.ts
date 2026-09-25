@@ -1,8 +1,15 @@
+import { storedSwapsOf, type StoredSwapContribution } from "$lib/shared/swaps"
+
 import { randomUUID } from "node:crypto"
 import {
 	envoySlugOfRef,
 	i18nText,
 	sessionEvents,
+	resolveWidgetSurface,
+	isServableEntry,
+	getGenre,
+	pluginWidgetId,
+	CONVERSATION_WIDGET_ID,
 	type WidgetDecl
 } from "@serene-pub/sdk"
 import { db } from "$lib/server/db"
@@ -45,6 +52,9 @@ import { markCharacterAsPersona } from "$lib/server/utils/markCharacterAsPersona
 import { lastVisibleMessages } from "$lib/server/sessions/rowProjection"
 import { broadcastSessionRow } from "$lib/server/sessions/rowPush"
 
+/** At most this many swaps are seeded at create — one per node, and nodes are few (M2 review). */
+const MAX_SEEDED_SWAPS = 32
+
 /**
  * `characters`, joined a SECOND time as the voiced side.
  *
@@ -58,16 +68,15 @@ const voicedCharacter = alias(schema.characters, "voiced_character")
 // see the call sites in the regenerate and swipe-right handlers.
 import { retractStateAnchoredTo } from "$lib/server/state/write"
 import { runReply } from "../utils/runReply"
-import { getNextCharacterTurn } from "$lib/server/utils/getNextCharacterTurn"
 import { getConnectionAdapter } from "../utils/getConnectionAdapter"
 import { TokenCounters } from "$lib/server/utils/TokenCounterManager"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
-import { GroupReplyStrategies } from "$lib/shared/constants/GroupReplyStrategies"
 import { SessionTypes } from "$lib/shared/constants/SessionTypes"
 import { SessionCharacterVisibility } from "$lib/shared/constants/SessionCharacterVisibility"
 import { InterpolationEngine } from "../utils/interpolation/InterpolationEngine"
 import { dev } from "$app/environment"
 import type { Handler } from "$lib/shared/events"
+import type { SessionIo } from "$lib/server/pipelines/runtime/liveRow"
 import type { RunProgress } from "$lib/shared/sockets/progress"
 import { getUserConfigurations } from "../utils/getUserConfigurations"
 import { resolveTaskConfig } from "../utils/resolveTaskConfig"
@@ -358,7 +367,9 @@ async function buildSessionsListFor(
 						eq(c.sessionType, sessionType)
 					)
 				: and(eq(c.userId, userId), eq(c.sessionType, sessionType)),
-		orderBy: desc(schema.sessions.updatedAt)
+		orderBy: desc(schema.sessions.updatedAt),
+		// Pipeline state and every member's unsent drafts never ride a list (V1a).
+		columns: { annex: false, annexAudiences: false, drafts: false }
 	})
 
 	// isOwner/isGuest let the client show the right menu affordances:
@@ -463,6 +474,23 @@ async function buildSessionsListFor(
 
 	return { sessionList: sessionsWithEditPermission }
 }
+
+/**
+ * A cast character's sprites, as far as a session needs them to draw a face
+ * (DESIGN-sprites §7): set name and default flag, and each sprite's label,
+ * variant order and file address. Empty sprites (no file) are left out — a
+ * slot waiting for an image has nothing to draw.
+ */
+const SESSION_SPRITE_SETS = {
+	columns: { name: true, isDefault: true },
+	with: {
+		sprites: {
+			columns: { label: true, position: true },
+			where: (sp: any, { isNotNull }: any) => isNotNull(sp.fileId),
+			with: { file: { columns: { uuid: true, rev: true } } }
+		}
+	}
+} as const
 
 export const sessionsListHandler: Handler<
 	Sockets.Sessions.List.Params,
@@ -617,6 +645,8 @@ export const sessionsCreateHandler: Handler<
 		// types are visible until someone hides them, same as sessionAdmin.
 		/** The preset's pre-seated envoys (`defaults.envoys`, R-18), by slug. */
 		let presetEnvoys: string[] = []
+		/** The preset's seeded swaps (`defaults.swaps`, R40). */
+		let presetSwaps: StoredSwapContribution[] = []
 		{
 			const presetId = (params.session as any).presetId ?? null
 			if (presetId != null) {
@@ -633,6 +663,14 @@ export const sessionsCreateHandler: Handler<
 				// already on one keep resolving it; only creation refuses.
 				if (!preset || !preset.enabled || preset.withdrawnAt != null)
 					return refuse("That session preset is not available.")
+				// A disabled plugin's preset starts nothing (R67).
+				{
+					const { disabledPlugins } = await import(
+						"$lib/server/plugins/disabledPlugins"
+					)
+					if ((await disabledPlugins(db)).owns(preset.ownerPluginId))
+						return refuse("That session preset is not available.")
+				}
 				const [typeSetting] = await db
 					.select()
 					.from(schema.sessionGenreSettings)
@@ -649,6 +687,9 @@ export const sessionsCreateHandler: Handler<
 					presetEnvoys = seats.filter(
 						(v): v is string => typeof v === "string"
 					)
+				presetSwaps = storedSwapsOf(
+					(preset.defaults as { swaps?: unknown } | null)?.swaps
+				)
 			}
 		}
 
@@ -670,6 +711,15 @@ export const sessionsCreateHandler: Handler<
 				return refuse(
 					`'${genreId}' is not a session mode this build registers.`
 				)
+			// A disabled plugin's genre starts no new session (R67); the
+			// sessions already on it keep running.
+			if (mode && genreId !== STANDARD_GENRE_ID) {
+				const { listOfferedGenres } = await import(
+					"$lib/server/pipelines/entities/sessionGenres"
+				)
+				if (!(await listOfferedGenres(db)).some((g) => g.genreId === genreId))
+					return refuse("That session type is not available.")
+			}
 			if (mode) {
 				const violations = shapeViolations(mode.shape, {
 					characters: characterIds.length,
@@ -705,9 +755,17 @@ export const sessionsCreateHandler: Handler<
 		// nothing behind it.
 		const {
 			connectionId: _retiredSessionConnectionId,
+			// Retired by R40 (2026-09-23): an old client's one-node strategy
+			// field, dropped in silence like the connection above.
+			speakerStrategy: _retiredSpeakerStrategy,
+			// Not a column: the session's rebinds of swappable nodes (R40),
+			// written once the row exists (below).
+			swaps: requestedSwaps,
 			...sessionDataWithoutTags
 		} = params.session as Omit<InsertSession, "userId" | "isGroup"> & {
 			connectionId?: number | null
+			speakerStrategy?: string
+			swaps?: unknown
 		}
 		// Field values only under names the mode declares (19 §1) — the same
 		// filter runTurn applies at supply, applied at write so the row never
@@ -783,6 +841,52 @@ export const sessionsCreateHandler: Handler<
 				newSession.genreId ?? STANDARD_GENRE_ID,
 				presetEnvoys
 			)
+		}
+		/**
+		 * The swaps the form asked for, else the preset's `defaults.swaps`
+		 * (R40): each written as the session's rebind of that node. An entry
+		 * the node does not offer is refused by the setter with a sentence;
+		 * the session still starts on the pin, and the refusal is logged
+		 * and named in the reply (`refusedSwaps`) rather than failing the
+		 * create.
+		 */
+		const refusedSwaps: NonNullable<Sockets.Sessions.Create.Response["refusedSwaps"]> = []
+		{
+			// One entry per node, and a bound (M2 review): each entry costs a
+			// handful of queries, and a create is not a place to run
+			// thousands. The last entry for a node wins, as a later rebind
+			// would.
+			const byNode = new Map(
+				(requestedSwaps !== undefined ? storedSwapsOf(requestedSwaps) : presetSwaps).map(
+					(s) => [`${s.spec}#${s.node}`, s] as const
+				)
+			)
+			const seeded = [...byNode.values()].slice(0, MAX_SEEDED_SWAPS)
+			if (seeded.length) {
+				const { setSessionNodeRebind } = await import(
+					"$lib/server/pipelines/entities/bindings"
+				)
+				for (const swap of seeded) {
+					const { error } = await setSessionNodeRebind(db, {
+						sessionId: newSession.id,
+						userId,
+						spec: swap.spec,
+						nodeKey: swap.node,
+						definitionId: swap.definition
+					})
+					if (error) {
+						console.warn(
+							`[sessions:create] swap ${swap.spec}#${swap.node} → ${swap.definition} not applied to session ${newSession.id}: ${error}`
+						)
+						refusedSwaps.push({
+							spec: swap.spec,
+							node: swap.node,
+							definition: swap.definition,
+							reason: error
+						})
+					}
+				}
+			}
 		}
 		// The cast arrives with the session (ruling 2026-09-12). Before the
 		// create pipeline runs, not after: its nodes may already write lore
@@ -877,7 +981,8 @@ export const sessionsCreateHandler: Handler<
 		// in hand by then. See `relistSessions` for why it is lazy.
 		await relistSessions(socket, emitToUser)
 		const res: Sockets.Sessions.Create.Response = {
-			session: resSession as any
+			session: resSession as any,
+			...(refusedSwaps.length ? { refusedSwaps } : {})
 		}
 		emitToUser("sessions:create", res)
 		return res
@@ -918,7 +1023,8 @@ async function getSessionFromDB(
 						with: {
 							avatarMedia: {
 								columns: { uuid: true, rev: true }
-							}
+							},
+							spriteSets: SESSION_SPRITE_SETS
 						}
 					}
 				},
@@ -936,7 +1042,8 @@ async function getSessionFromDB(
 						with: {
 							avatarMedia: {
 								columns: { uuid: true, rev: true }
-							}
+							},
+							spriteSets: SESSION_SPRITE_SETS
 						}
 					}
 				}
@@ -954,10 +1061,19 @@ async function getSessionFromDB(
 			},
 			sessionGuests: {
 				with: {
-					user: true
+					// A guest's name, and nothing else of their account: this
+					// payload reaches every member of the session.
+					user: {
+						columns: { id: true, username: true, displayName: true }
+					}
 				}
 			}
-		}
+		},
+		// Never to a client, whoever asks (R57, V1a): `annex` is pipeline
+		// state whose keys carry audiences, merged per reader elsewhere, and
+		// `drafts` holds every member's unsent text — the asker's own rides
+		// `sessions:get` as `userDraft`.
+		columns: { annex: false, annexAudiences: false, drafts: false }
 	})
 
 	// Drizzle may not properly handle orderby,
@@ -1203,11 +1319,11 @@ export const sessionsModesHandler: Handler<
 > = {
 	event: "sessions:genres",
 	handler: async (socket, _params, emitToUser) => {
-		const { listSessionGenres } = await import(
+		const { listOfferedGenres } = await import(
 			"$lib/server/pipelines/entities/sessionGenres"
 		)
 		const res: Sockets.Sessions.Genres.Response = {
-			genres: (await listSessionGenres(db)) as any
+			genres: (await listOfferedGenres(db)) as any
 		}
 		emitToUser("sessions:genres", res)
 		return res
@@ -1280,7 +1396,12 @@ export const sessionsFunctionCandidatesHandler: Handler<
 				.where(eq(schema.sessions.id, params.sessionId))
 				.limit(1)
 			const genreId = session?.genreId ?? STANDARD_GENRE_ID
-			res.candidates = await subjectCandidates(db, genreId, params.subject)
+			// A disabled plugin's pipelines are no choice to offer (R67).
+			const { disabledPlugins } = await import("$lib/server/plugins/disabledPlugins")
+			const off = await disabledPlugins(db)
+			res.candidates = (await subjectCandidates(db, genreId, params.subject)).filter(
+				(c) => !off.ownsId(c)
+			)
 			// Narrowed to what `sessions:bindFunction` would accept at session
 			// scope (U5c review, S8): an action that is not enabled for this
 			// session is not a choice the picker should offer and the bind
@@ -1430,97 +1551,231 @@ export const sessionsBindFunctionHandler: Handler<
 }
 
 /** The swap list plus the session's current choice (19 §5). */
-export const sessionsSpeakerStrategiesHandler: Handler<
-	Sockets.Sessions.Bindings.SpeakerStrategies.Params,
-	Sockets.Sessions.Bindings.SpeakerStrategies.Response
+/**
+ * What a session may swap one exposed node to (PLAN-turn-order §4.7) —
+ * the generic replacement for `sessions:speakerStrategies`.
+ *
+ * Generic because there was never anything turn-order-shaped about the
+ * question. A spec marks a node `expose: { session: true }` (§4.11) and
+ * this answers what that node may become; the Turn order control is the
+ * first caller and will not be the last.
+ */
+export const sessionsNodeSwapOptionsHandler: Handler<
+	Sockets.Sessions.Bindings.NodeSwapOptions.Params,
+	Sockets.Sessions.Bindings.NodeSwapOptions.Response
 > = {
-	event: "sessions:speakerStrategies",
+	event: "sessions:nodeSwapOptions",
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
-		const access = await checkSessionAccess(params.sessionId, userId)
-		const res: Sockets.Sessions.Bindings.SpeakerStrategies.Response = {
+		const empty: Sockets.Sessions.Bindings.NodeSwapOptions.Response = {
 			sessionId: params.sessionId,
-			strategies: [],
-			selected: null
+			spec: params.spec,
+			nodeKey: params.nodeKey,
+			options: [],
+			selected: null,
+			default: null
 		}
-		if (access.hasAccess) {
-			const { listSpeakerStrategies } = await import(
-				"$lib/server/pipelines/entities/sessionGenres"
-			)
-			const { getSessionSpeakerStrategy, sessionHasSpeakerNode } =
-				await import("$lib/server/pipelines/entities/bindings")
-			// No speaker node (a narrator-driven genre): no strategies, so
-			// the client offers no Turn order control rather than one that
-			// can only refuse on Apply.
-			if (await sessionHasSpeakerNode(db, params.sessionId)) {
-				res.strategies = await listSpeakerStrategies(db)
-				res.selected = await getSessionSpeakerStrategy(
-					db,
-					params.sessionId
-				)
+		try {
+			const access = await checkSessionAccess(params.sessionId, userId)
+			if (!access.hasAccess) {
+				emitToUser("sessions:nodeSwapOptions", empty)
+				return empty
 			}
+			const [session] = await db
+				.select({ genreId: schema.sessions.genreId })
+				.from(schema.sessions)
+				.where(eq(schema.sessions.id, params.sessionId))
+				.limit(1)
+			const [spec] = await db
+				.select({
+					id: schema.pipelineSpecs.id,
+					activeVersionId: schema.pipelineSpecs.activeVersionId
+				})
+				.from(schema.pipelineSpecs)
+				.where(eq(schema.pipelineSpecs.slug, params.spec))
+				.limit(1)
+			if (!spec?.activeVersionId) {
+				emitToUser("sessions:nodeSwapOptions", empty)
+				return empty
+			}
+			// The same genre rule the setter enforces (M2 review): a spec that
+			// serves another genre offers this session nothing, rather than a
+			// list whose every pick would be refused.
+			const [version] = await db
+				.select({ inputGenre: schema.pipelineSpecVersions.inputGenre })
+				.from(schema.pipelineSpecVersions)
+				.where(eq(schema.pipelineSpecVersions.id, spec.activeVersionId))
+				.limit(1)
+			if (version?.inputGenre && version.inputGenre !== session?.genreId) {
+				emitToUser("sessions:nodeSwapOptions", empty)
+				return empty
+			}
+			const { listSessionNodeSwaps } = await import(
+				"$lib/server/pipelines/entities/bindings"
+			)
+			const options = await listSessionNodeSwaps(db, {
+				spec: params.spec,
+				nodeKey: params.nodeKey,
+				specVersionId: spec.activeVersionId
+			})
+			// What is in force, and what it falls back to: the session's
+			// rebind, and the node's own pin. Both, because a control that
+			// showed only the effective value could not say "inherited".
+			const [rebind] = await db
+				.select({ definitionId: schema.pipelineNodeRebinds.definitionId })
+				.from(schema.pipelineNodeRebinds)
+				.where(
+					and(
+						eq(schema.pipelineNodeRebinds.specId, spec.id),
+						eq(schema.pipelineNodeRebinds.scopeKind, "session"),
+						eq(schema.pipelineNodeRebinds.scopeId, params.sessionId),
+						eq(schema.pipelineNodeRebinds.nodeKey, params.nodeKey)
+					)
+				)
+				.limit(1)
+			const [pin] = await db
+				.select({
+					definitionId: schema.pipelineNodes.definitionId,
+					definitionVersion: schema.pipelineNodes.definitionVersion
+				})
+				.from(schema.pipelineNodes)
+				.where(
+					and(
+						eq(
+							schema.pipelineNodes.specVersionId,
+							spec.activeVersionId
+						),
+						eq(schema.pipelineNodes.nodeKey, params.nodeKey)
+					)
+				)
+				.limit(1)
+			const res: Sockets.Sessions.Bindings.NodeSwapOptions.Response = {
+				sessionId: params.sessionId,
+				spec: params.spec,
+				nodeKey: params.nodeKey,
+				options,
+				selected: rebind?.definitionId ?? null,
+				default: pin
+					? `${pin.definitionId}@${pin.definitionVersion}`
+					: null
+			}
+			emitToUser("sessions:nodeSwapOptions", res)
+			return res
+		} catch (error) {
+			console.error("Error in sessionsNodeSwapOptionsHandler:", error)
+			emitToUser("sessions:nodeSwapOptions", empty)
+			return empty
 		}
-		emitToUser("sessions:speakerStrategies", res)
-		return res
 	}
 }
 
-export const sessionsSetSpeakerStrategyHandler: Handler<
-	Sockets.Sessions.Bindings.SetSpeakerStrategy.Params,
-	Sockets.Sessions.Bindings.SetSpeakerStrategy.Response
+/**
+ * The session form's pipeline cards (PLAN-turn-order §4.11): every node the
+ * pipelines this session runs expose to it, with what each may become and
+ * what the session chose. Any participant may read it; only the owner may
+ * change a card (`sessions:setNodeRebind`).
+ */
+export const sessionsPipelineCardsHandler: Handler<
+	Sockets.Sessions.Bindings.PipelineCards.Params,
+	Sockets.Sessions.Bindings.PipelineCards.Response
 > = {
-	event: "sessions:setSpeakerStrategy",
+	event: "sessions:pipelineCards",
 	handler: async (socket, params, emitToUser) => {
-		const userId = socket.user!.id
-		const access = await checkSessionAccess(params.sessionId, userId)
-		if (!access.hasAccess || !access.isOwner) {
-			const res = {
-				sessionId: params.sessionId,
-				error: "Session not found."
-			}
-			emitToUser("sessions:setSpeakerStrategy", res)
-			return res
-		}
-		const { setSessionSpeakerStrategy } = await import(
-			"$lib/server/pipelines/entities/bindings"
-		)
-		const { error } = await setSessionSpeakerStrategy(db, {
+		const res: Sockets.Sessions.Bindings.PipelineCards.Response = {
 			sessionId: params.sessionId,
-			userId,
-			definitionId: params.definitionId
-		})
-		const res: Sockets.Sessions.Bindings.SetSpeakerStrategy.Response = error
-			? { sessionId: params.sessionId, error }
-			: { sessionId: params.sessionId }
-		emitToUser("sessions:setSpeakerStrategy", res)
+			cards: []
+		}
+		const access = await checkSessionAccess(params.sessionId, socket.user!.id)
+		if (access.hasAccess) {
+			const { listSessionPipelineCards } = await import(
+				"$lib/server/pipelines/entities/bindings"
+			)
+			res.cards = await listSessionPipelineCards(db, params.sessionId)
+		}
+		emitToUser("sessions:pipelineCards", res)
 		return res
 	}
 }
 
 /**
- * The generic trigger fire (19 §4): a contributed function resolves to its
- * serving spec (§3) and the spec runs against this session. The two functions
- * with bespoke lifecycles keep their dedicated events — a respond needs the
- * streaming message row, a narrate its instructions modal — and this route
- * says so rather than running them wrong. Owner-only where nothing declares,
- * like the narrator trigger and for the same reason: it is only ever reached
- * from a button.
- *
- * The road itself — which declaration, may this person, which spec, run it —
- * is `fireAction` (`runtime/fireAction.ts`) since U5d, because the form's
- * answer pipeline commits an oracle's answer through the same road and
- * "exactly as a click would" is only true when it IS this road. What stays
- * here is what only a socket has: the session's trigger lock, the frames a
- * person watches, and the relist afterwards.
- *
- * **A parked run releases the lock and the ack** (U5d review, R-b). A run
- * that parks at a review gate — its own write, or a write in a run the
- * tree dispatched — answers `parked: true` the moment the card is up,
- * and the lock goes with the ack: one review must never hold every
- * trigger in the session until the owner decides. The parked run keeps its
- * handle; when it ends, the same terminal frame, relist and answer the
- * person would have had at the ack arrive as a push (`onSettled`).
+ * Rebind one exposed node at session scope (§4.7) — the generic
+ * replacement for `sessions:setSpeakerStrategy`. Owner only: a session's
+ * pipeline shape is the owner's, as every other session setting is.
  */
+export const sessionsSetNodeRebindHandler: Handler<
+	Sockets.Sessions.Bindings.SetNodeRebind.Params,
+	Sockets.Sessions.Bindings.SetNodeRebind.Response
+> = {
+	event: "sessions:setNodeRebind",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const reply = (
+			res: Sockets.Sessions.Bindings.SetNodeRebind.Response
+		): Sockets.Sessions.Bindings.SetNodeRebind.Response => {
+			emitToUser("sessions:setNodeRebind", res)
+			return res
+		}
+		try {
+			const access = await checkSessionAccess(params.sessionId, userId)
+			if (!access.hasAccess || !access.isOwner)
+				return reply({
+					sessionId: params.sessionId,
+					spec: params.spec,
+					nodeKey: params.nodeKey,
+					error: "Access denied. Only the session owner can change this."
+				})
+			const { setSessionNodeRebind } = await import(
+				"$lib/server/pipelines/entities/bindings"
+			)
+			const out = await setSessionNodeRebind(db, {
+				sessionId: params.sessionId,
+				userId,
+				spec: params.spec,
+				nodeKey: params.nodeKey,
+				definitionId: params.definitionId ?? null
+			})
+			if (out.error)
+				return reply({
+					sessionId: params.sessionId,
+					spec: params.spec,
+					nodeKey: params.nodeKey,
+					error: out.error
+				})
+			const res = reply({
+				sessionId: params.sessionId,
+				spec: params.spec,
+				nodeKey: params.nodeKey,
+				definitionId: params.definitionId ?? null
+			})
+			// The options list carries `selected`, so the control re-renders
+			// from the server's answer rather than from its own optimism.
+			await sessionsPipelineCardsHandler.handler(
+				socket,
+				{ sessionId: params.sessionId },
+				emitToUser
+			)
+			await sessionsNodeSwapOptionsHandler.handler(
+				socket,
+				{
+					sessionId: params.sessionId,
+					spec: params.spec,
+					nodeKey: params.nodeKey
+				},
+				emitToUser
+			)
+			return res
+		} catch (error) {
+			console.error("Error in sessionsSetNodeRebindHandler:", error)
+			return reply({
+				sessionId: params.sessionId,
+				spec: params.spec,
+				nodeKey: params.nodeKey,
+				error: "Failed to change this setting."
+			})
+		}
+	}
+}
+
 export const sessionsTriggerFunctionHandler: Handler<
 	Sockets.Sessions.TriggerFunction.Params,
 	Sockets.Sessions.TriggerFunction.Response
@@ -2016,6 +2271,11 @@ export const sessionsViewHandler: Handler<
 			channels: [DEFAULT_CHANNEL]
 		}
 		if (access.hasAccess) {
+			// The viewer's language, as the envoys in this same response are
+			// resolved (`viewEnvoys`): it titles the declared widgets below,
+			// and every widget reads it as the envelope's `locale` (C3b).
+			const { resolveUserLanguage } = await import("$lib/server/i18n")
+			res.language = (await resolveUserLanguage(userId)).code
 			const { surfacesOf, frameSrc } = await import(
 				"$lib/server/plugins/frameHost"
 			)
@@ -2023,7 +2283,8 @@ export const sessionsViewHandler: Handler<
 				.select({
 					pluginId: schema.plugins.pluginId,
 					name: schema.plugins.name,
-					manifest: schema.plugins.manifest
+					manifest: schema.plugins.manifest,
+					adminDenied: schema.plugins.adminDenied
 				})
 				.from(schema.plugins)
 				.where(eq(schema.plugins.enabled, true))
@@ -2043,13 +2304,15 @@ export const sessionsViewHandler: Handler<
 			const pluginWidgets: {
 				pluginId: string
 				decl: WidgetDecl
+				surface: { kind: "frame"; pluginId: string; entry: string }
 			}[] = []
 			for (const p of enabled) {
 				const surfaces = surfacesOf(p.manifest, p.pluginId)
 				const prefix = `${p.pluginId}:`
 				for (const panel of surfaces.panels) {
-					if (panel.surface.kind !== "frame") continue
-					pluginWidgets.push({ pluginId: p.pluginId, decl: panel })
+					const surface = resolveWidgetSurface(panel, p.pluginId)
+					if (surface?.kind !== "frame") continue
+					pluginWidgets.push({ pluginId: p.pluginId, decl: panel, surface })
 					// Stripped by the prefix this loop just put on, not parsed
 					// back out: an installed plugin id is not held to the slug
 					// grammar anywhere but the frame URL, so a stored
@@ -2061,7 +2324,7 @@ export const sessionsViewHandler: Handler<
 					res.panels.push({
 						pluginId: p.pluginId,
 						panelId: bare,
-						src: frameSrc(p.pluginId, panel.surface.entry),
+						src: frameSrc(p.pluginId, surface.entry),
 						title: i18nText(panel.title) ?? bare
 					})
 				}
@@ -2149,27 +2412,58 @@ export const sessionsViewHandler: Handler<
 				? declaredPanels
 				: []
 			if (genrePanels.length || pluginWidgets.length) {
-				// The viewer's language, as the envoys in this same response
-				// are resolved (`viewEnvoys`): a panel's title is display text
-				// (R-20) — a string or a locale map — and the client reads text.
-				// Resolved once for both lists, and only when there is a title
-				// to resolve: a session with no declared widgets at all must
-				// not pay a read for the answer.
-				const { resolveUserLanguage } = await import("$lib/server/i18n")
-				const language = (await resolveUserLanguage(userId)).code
+				// The viewer's language (read above, `res.language`): a panel's
+				// title is display text (R-20) — a string or a locale map — and
+				// the client reads text.
+				const language = res.language ?? "en"
 				// The genre's FIRST. The client merges by id and the later
 				// entry wins, so this order is what keeps a genre's widget the
 				// one that is seated. After namespacing the two id spaces
 				// cannot collide — which is the point — but the precedence is
 				// the rule, not the collision.
+				// Whose widgets these are decides what `component` means (R25):
+				// core's name a native component, a plugin's a remote.
+				const genreId = session?.genreId ?? STANDARD_GENRE_ID
+				const genreOwner = genreId.startsWith("core:")
+					? "core"
+					: genreId.slice(0, genreId.indexOf(":"))
 				for (const p of genrePanels) {
 					if (!p || typeof p.id !== "string") continue
+					const surface = resolveWidgetSurface(p, genreOwner)
+					if (!surface) continue
+					// A remote runs its owner's component module in the UI
+					// worker (§3.5): offered only when that plugin is enabled
+					// and declares the component; otherwise not offered rather
+					// than offered broken.
+					let remoteSrc: string | undefined
+					/** The data it asked for that its plugin was granted (`widget:<scope>`). */
+					let grants: string[] | undefined
+					if (surface.kind === "remote") {
+						const owner = enabled.find((e) => e.pluginId === surface.owner)
+						const declared = (
+							(owner?.manifest as { components?: unknown } | undefined)?.components as
+								| Array<{ slug?: unknown; entry?: unknown }>
+								| undefined
+						)?.find((c) => c?.slug === surface.component)
+						if (
+							!owner ||
+							typeof declared?.entry !== "string" ||
+							!isServableEntry(declared.entry) ||
+							!/\.m?js$/.test(declared.entry) // the built module, never its source
+						)
+							continue
+						remoteSrc = frameSrc(owner.pluginId, declared.entry)
+						if (Array.isArray(p.scopes) && p.scopes.length) {
+							const { panelGrants } = await import("$lib/server/plugins/permissions")
+							grants = panelGrants(p.scopes, owner.manifest as never, owner.adminDenied)
+						}
+					}
 					const panel: Sockets.Sessions.View.ModePanel = {
 						id: p.id,
 						title: i18nText(p.title, language) ?? p.id,
 						icon: typeof p.icon === "string" ? p.icon : undefined,
 						role: p.role === "primary" ? "primary" : "secondary",
-						surface: p.surface,
+						surface,
 						channels: Array.isArray(p.channels)
 							? p.channels
 							: undefined,
@@ -2191,19 +2485,15 @@ export const sessionsViewHandler: Handler<
 								: undefined,
 						defaultActive: !!p.defaultActive
 					}
-					if (
-						p.surface?.kind === "frame" &&
-						typeof p.surface.pluginId === "string" &&
-						typeof p.surface.entry === "string"
-					) {
+					if (surface.kind === "frame") {
 						const owner = enabled.find(
-							(e) => e.pluginId === p.surface.pluginId
+							(e) => e.pluginId === surface.pluginId
 						)
 						if (owner)
-							panel.src = frameSrc(
-								p.surface.pluginId,
-								p.surface.entry
-							)
+							panel.src = frameSrc(surface.pluginId, surface.entry)
+					} else if (remoteSrc) {
+						panel.src = remoteSrc
+						if (grants?.length) panel.grants = grants as Sockets.Sessions.View.ModePanel["grants"]
 					}
 					res.modePanels.push(panel)
 				}
@@ -2220,8 +2510,7 @@ export const sessionsViewHandler: Handler<
 				 * picked its panel id in private, and a layout row outlives the
 				 * install that could have told two `map`s apart.
 				 */
-				for (const { pluginId, decl } of pluginWidgets) {
-					if (decl.surface.kind !== "frame") continue
+				for (const { pluginId, decl, surface } of pluginWidgets) {
 					res.modePanels.push({
 						id: decl.id,
 						title: i18nText(decl.title, language) ?? decl.id,
@@ -2233,11 +2522,11 @@ export const sessionsViewHandler: Handler<
 						// chooses its own view; a plugin offers a panel beside
 						// it.
 						role: "secondary",
-						surface: decl.surface,
+						surface,
 						// Resolved unconditionally — this list is built from
 						// the ENABLED plugins, so the owner is by construction
 						// installed and serving.
-						src: frameSrc(pluginId, decl.surface.entry),
+						src: frameSrc(pluginId, surface.entry),
 						...(decl.channels ? { channels: decl.channels } : {}),
 						...(decl.layout ? { layout: decl.layout } : {}),
 						...(decl.settings
@@ -2253,7 +2542,100 @@ export const sessionsViewHandler: Handler<
 				}
 			}
 		}
+		// R71: a session offers every enabled package's widgets scoped to its
+		// genre or to all, minus what the genre omits (core's included). A
+		// package widget takes the middle only where the genre withheld the
+		// conversation — an installed package may not take the anchor otherwise.
+		// Only a member learns what a session offers — its genre's omissions and
+		// every package widget with its module URL are the session's to know.
+		if (access.hasAccess && res.modePanels) {
+			const { STANDARD_GENRE_ID } = await import("$lib/server/pipelines/entities/sessionGenres")
+			const { panelGrants } = await import("$lib/server/plugins/permissions")
+			const { frameSrc } = await import("$lib/server/plugins/frameHost")
+			const [row] = await db
+				.select({ genreId: schema.sessions.genreId })
+				.from(schema.sessions)
+				.where(eq(schema.sessions.id, params.sessionId))
+				.limit(1)
+			const genreId = row?.genreId ?? STANDARD_GENRE_ID
+			const enabledNow = await db
+				.select({
+					pluginId: schema.plugins.pluginId,
+					manifest: schema.plugins.manifest,
+					adminDenied: schema.plugins.adminDenied
+				})
+				.from(schema.plugins)
+				.where(eq(schema.plugins.enabled, true))
+			const genreDecl =
+				getGenre(genreId) ??
+				(enabledNow
+					.flatMap((e) => ((e.manifest as { genres?: unknown[] })?.genres ?? []) as Array<{ id?: string }>)
+					.find((g) => g?.id === genreId) as { omitWidgets?: unknown } | undefined)
+			const omit = new Set<string>(
+				Array.isArray(genreDecl?.omitWidgets)
+					? (genreDecl.omitWidgets as unknown[]).filter((w): w is string => typeof w === "string")
+					: []
+			)
+			const language = res.language ?? "en"
+			// Whose genre this is — a package widget stands in the middle only in its own.
+			const genreOwner = genreId.startsWith("core:") ? "core" : genreId.slice(0, genreId.indexOf(":"))
+			const seen = new Set(res.modePanels.map((p) => p.id))
+			for (const e of enabledNow) {
+				const m = e.manifest as {
+					widgets?: unknown
+					components?: Array<{ slug?: unknown; entry?: unknown }>
+				}
+				if (!Array.isArray(m?.widgets)) continue
+				for (const w of m.widgets as WidgetDecl[]) {
+					if (!w || typeof w.id !== "string" || typeof w.component !== "string") continue
+					if (Array.isArray(w.genres) && w.genres.length && !w.genres.includes(genreId)) continue
+					const built = (m.components ?? []).find((c) => c?.slug === w.component)
+					// The built module, never its source — otherwise not offered rather than offered broken.
+					if (typeof built?.entry !== "string" || !isServableEntry(built.entry) || !/\.m?js$/.test(built.entry))
+						continue
+					const id = pluginWidgetId(e.pluginId, w.id)
+					if (seen.has(id)) continue // one declaration per id (a legacy panel of the same id wins)
+					seen.add(id)
+					const grants = panelGrants(w.scopes, e.manifest as never, e.adminDenied)
+					res.modePanels.push({
+						id,
+						title: i18nText(w.title, language) ?? w.id,
+						...(typeof w.icon === "string" ? { icon: w.icon } : {}),
+						role:
+							w.role === "primary" && omit.has(CONVERSATION_WIDGET_ID) && genreOwner === e.pluginId
+								? "primary"
+								: "secondary",
+						surface: { kind: "remote", owner: e.pluginId, component: w.component },
+						src: frameSrc(e.pluginId, built.entry),
+						...(Array.isArray(w.channels) ? { channels: w.channels } : {}),
+						...(w.settings ? { settings: w.settings as Record<string, unknown> } : {}),
+						...(grants.length ? { grants: grants as Sockets.Sessions.View.ModePanel["grants"] } : {}),
+						defaultActive: !!w.defaultActive
+					})
+				}
+			}
+			// The middle is never empty: a genre that withholds the conversation
+			// but whose own middle did not survive (its module unbuilt, its
+			// plugin's component gone) keeps the conversation instead.
+			if (omit.has(CONVERSATION_WIDGET_ID) && !res.modePanels.some((p) => p.role === "primary" && !omit.has(p.id)))
+				omit.delete(CONVERSATION_WIDGET_ID)
+			if (omit.size) {
+				res.modePanels = res.modePanels.filter((p) => !omit.has(p.id))
+				res.omitWidgets = [...omit]
+			}
+		}
 		emitToUser("sessions:view", res)
+		// The turn order rides with the view (PLAN-turn-order §4.7): a client
+		// that has just joined renders the same state as one that was already
+		// here, without asking for a decision — page load is not an event.
+		try {
+			const { pushTurnOrder } = await import(
+				"$lib/server/sessions/turnOrderPush"
+			)
+			await pushTurnOrder(socket.io, params.sessionId)
+		} catch (err) {
+			console.warn("[sessions:view] the turn-order push failed:", err)
+		}
 		return res
 	}
 }
@@ -2958,6 +3340,28 @@ export const sessionsChoosePresetHandler: Handler<
 		)
 		if (!r.ok) return reply({ sessionId: params.sessionId, error: r.error })
 
+		// The preset is a session setting (PLAN-turn-order §4.1, A2): its
+		// change is a `session-updated` naming `presetId`, under the
+		// person's `settings` cause. Best-effort — the choice has landed.
+		try {
+			const { emitSessionEvent } = await import(
+				"$lib/server/pipelines/runtime/sessionEvents"
+			)
+			await emitSessionEvent(db, {
+				sessionId: params.sessionId,
+				userId,
+				event: sessionEvents.sessionUpdated,
+				payload: {
+					sessionId: params.sessionId,
+					changed: ["presetId"],
+					cause: { kind: "settings", userId }
+				},
+				io: socket.io
+			})
+		} catch (err) {
+			console.warn("session-updated emit failed:", err)
+		}
+
 		// The preset decides which actions a session includes, so all three
 		// follow in the same breath — otherwise the Actions list describes the
 		// preset the session was on a moment ago.
@@ -3012,13 +3416,14 @@ async function buildSessionFunctions(
 		genreId,
 		functions: []
 	}
-	if (access.hasAccess && access.isOwner)
-		res.functions = (await listSessionFunctions(
-			db,
-			sessionId,
-			genreId,
-			caller.userId
-		)) as any
+	if (access.hasAccess && access.isOwner) {
+		// A disabled plugin's actions are not listed (R67).
+		const { disabledPlugins } = await import("$lib/server/plugins/disabledPlugins")
+		const off = await disabledPlugins(db)
+		res.functions = (
+			await listSessionFunctions(db, sessionId, genreId, caller.userId)
+		).filter((f) => !off.ownsId(f.specSlug)) as any
+	}
 	res.canAddOutsidePreset = caller.isAdmin
 	return res
 }
@@ -3182,11 +3587,14 @@ async function buildSessionGetResponse(
 			? loadedCount === limit // cursor mode: full page implies more exist
 			: total > limit // initial load: more exist than we fetched
 
-	const drafts = (sessionData as any).drafts as
-		| Record<string, string>
-		| null
-		| undefined
-	const userDraft = drafts?.[String(userId)] || null
+	// Read here, for the asker alone: the session payload never carries the
+	// drafts map, which holds every member's unsent text.
+	const [draftRow] = await db
+		.select({ drafts: schema.sessions.drafts })
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, sessionId))
+		.limit(1)
+	const userDraft = draftRow?.drafts?.[String(userId)] || null
 
 	// The parts-native half rides along (20 §13 phase 2): the client
 	// renders from parts when present and falls back to the legacy
@@ -3199,12 +3607,52 @@ async function buildSessionGetResponse(
 		)
 	}
 
+	// The session's sprite-set overrides (DESIGN-sprites §2.3), so a portrait
+	// shows the outfit the session changed to before the next line records it.
+	try {
+		const { spriteSetOverridesFor } = await import(
+			"$lib/server/sprites/choices"
+		)
+		;(sessionData as any).spriteSetOverrides = await spriteSetOverridesFor(
+			db,
+			sessionId,
+			((sessionData as any).sessionCharacters ?? [])
+				.map((sc: any) => sc.characterId)
+				.filter((id: unknown): id is number => typeof id === "number")
+		)
+	} catch {
+		;(sessionData as any).spriteSetOverrides = {}
+	}
+
 	return {
 		session: sessionData as any,
 		messages: (sessionData as any).sessionMessages || null,
 		pagination: { total, hasMore },
 		beforeId,
 		userDraft
+	}
+}
+
+/**
+ * The asker's view of the session annex (R57, V1c): the values whose audience
+ * holds for them, one object per owner — the catch-up for a page that opens or
+ * reconnects. Every change is pushed under the same event, to each member
+ * their own (`pushAnnexViews`). The annex itself never reaches a client.
+ */
+export const sessionsAnnexHandler: Handler<
+	Sockets.Sessions.Annex.Params,
+	Sockets.Sessions.Annex.Response
+> = {
+	event: "sessions:annex",
+	handler: async (socket, params, emitToUser) => {
+		const { annexViewFor } = await import("$lib/server/sessions/annexViews")
+		const annex = await annexViewFor(db, params.sessionId, socket.user!.id)
+		const res: Sockets.Sessions.Annex.Response =
+			annex === null
+				? { sessionId: params.sessionId, annex: {}, error: "No such session." }
+				: { sessionId: params.sessionId, annex }
+		emitToUser("sessions:annex", res)
+		return res
 	}
 }
 
@@ -3543,7 +3991,6 @@ export const sessionsUpdateHandler: Handler<
 					sessionType,
 					scenario,
 					metadata,
-					groupReplyStrategy,
 					drafts,
 					lorebookId,
 					samplingConfigId,
@@ -3581,6 +4028,28 @@ export const sessionsUpdateHandler: Handler<
 					)
 				}
 
+				/**
+				 * What `session-updated` names as `changed` (PLAN-turn-order
+				 * §4.1, A2): the columns whose stored value differs after
+				 * the write, by name, in the allowlist's order — read once
+				 * before the write and compared after it, so a form that
+				 * posts every field unchanged emits nothing. Tags are diffed
+				 * as a set of ids.
+				 */
+				const [before] = await db
+					.select()
+					.from(schema.sessions)
+					.where(eq(schema.sessions.id, params.session.id!))
+					.limit(1)
+				const tagsBefore = (
+					await db
+						.select({ tagId: schema.sessionTags.tagId })
+						.from(schema.sessionTags)
+						.where(eq(schema.sessionTags.sessionId, params.session.id!))
+				)
+					.map((t) => t.tagId)
+					.sort()
+
 				await db
 					.update(schema.sessions)
 					.set({
@@ -3588,9 +4057,6 @@ export const sessionsUpdateHandler: Handler<
 						...(sessionType !== undefined ? { sessionType } : {}),
 						...(scenario !== undefined ? { scenario } : {}),
 						...(metadata !== undefined ? { metadata } : {}),
-						...(groupReplyStrategy !== undefined
-							? { groupReplyStrategy }
-							: {}),
 						...(drafts !== undefined ? { drafts } : {}),
 						...(lorebookId !== undefined ? { lorebookId } : {}),
 						// The session's ONE remaining compute override, and it
@@ -3617,6 +4083,66 @@ export const sessionsUpdateHandler: Handler<
 				// Process tags after session update
 				await processSessionTags(params.session.id!, tags, userId)
 				fieldsMoved = genreFieldsPatch !== undefined
+
+				// `session-updated` (§4.1): emitted once, only when a
+				// column moved, under the person's `settings` cause — which
+				// never fires a turn (§4.6). Best-effort, like the member
+				// events below: an emitter failing must not fail the save.
+				try {
+					const [after] = await db
+						.select()
+						.from(schema.sessions)
+						.where(eq(schema.sessions.id, params.session.id!))
+						.limit(1)
+					const tagsAfter = (
+						await db
+							.select({ tagId: schema.sessionTags.tagId })
+							.from(schema.sessionTags)
+							.where(
+								eq(schema.sessionTags.sessionId, params.session.id!)
+							)
+					)
+						.map((t) => t.tagId)
+						.sort()
+					const same = (a: unknown, b: unknown) =>
+						JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
+					const changed: string[] = []
+					if (before && after) {
+						for (const column of [
+							"name",
+							"sessionType",
+							"scenario",
+							"metadata",
+							"drafts",
+							"lorebookId",
+							"samplingConfigId",
+							"promptConfigId",
+							"narratorPromptConfigId",
+							"genreFields"
+						] as const)
+							if (!same(before[column], after[column]))
+								changed.push(column)
+					}
+					if (!same(tagsBefore, tagsAfter)) changed.push("tags")
+					if (changed.length) {
+						const { emitSessionEvent } = await import(
+							"$lib/server/pipelines/runtime/sessionEvents"
+						)
+						await emitSessionEvent(db, {
+							sessionId: params.session.id!,
+							userId,
+							event: sessionEvents.sessionUpdated,
+							payload: {
+								sessionId: params.session.id!,
+								changed,
+								cause: { kind: "settings", userId }
+							},
+							io: socket.io
+						})
+					}
+				} catch (err) {
+					console.warn("session-updated emit failed:", err)
+				}
 			}
 
 			// Membership deltas dispatch as member events (24 §5) after the
@@ -3632,19 +4158,27 @@ export const sessionsUpdateHandler: Handler<
 				const cps = await db.query.sessionPersonas.findMany({
 					where: (cp, { eq }) => eq(cp.sessionId, params.session.id!)
 				})
+				const liveCcs = ccs.filter(
+					(c) => !c.removedAt && c.characterId != null
+				)
+				const liveCps = cps.filter(
+					(c) => !c.removedAt && c.personaId != null
+				)
 				return {
-					characters: new Set(
-						ccs
-							.filter(
-								(c) => !c.removedAt && c.characterId != null
-							)
-							.map((c) => c.characterId as number)
-					),
-					personas: new Set(
-						cps
-							.filter((c) => !c.removedAt && c.personaId != null)
-							.map((c) => c.personaId as number)
-					)
+					characters: new Set(liveCcs.map((c) => c.characterId as number)),
+					personas: new Set(liveCps.map((c) => c.personaId as number)),
+					// Seat positions by participant reference, for the
+					// `cast-changed` diff (PLAN-turn-order §4.1): a reorder
+					// is a cast change, not a membership one. A persona is a
+					// character row (0132), so its reference is `character:`.
+					positions: new Map<string, number>([
+						...liveCcs.map(
+							(c) => [`character:${c.characterId}`, c.position ?? 0] as const
+						),
+						...liveCps.map(
+							(c) => [`character:${c.personaId}`, c.position ?? 0] as const
+						)
+					])
 				}
 			}
 			const membersBefore =
@@ -3932,33 +4466,46 @@ export const sessionsUpdateHandler: Handler<
 								kind: "persona",
 								id
 							})
-					if (deltas.length) {
-						const [row] = await db
-							.select({ genreId: schema.sessions.genreId })
-							.from(schema.sessions)
-							.where(eq(schema.sessions.id, params.session.id!))
-							.limit(1)
-						const { dispatchSessionEvent } = await import(
+					// A seat added or removed (R31): through the one emitter,
+					// so it lands in the ledger and reaches plugin listeners
+					// like every other session event, with the cast-change
+					// payload — `ref` the member, `change` added/removed.
+					// A persona is a character row (0132), so its reference
+					// is `character:<id>` too.
+					for (const delta of deltas)
+						await emitMemberEvent(socket, {
+							sessionId: params.session.id!,
+							userId,
+							event: delta.event,
+							ref: `character:${delta.id}`
+						})
+					// A seat that MOVED (PLAN-turn-order §4.1): one
+					// `cast-changed { change: 'position' }` per member still
+					// seated whose position differs — a reorder, not a
+					// membership change, so never a member event.
+					const moved = [...after.positions].filter(
+						([ref, position]) =>
+							membersBefore.positions.has(ref) &&
+							membersBefore.positions.get(ref) !== position
+					)
+					if (moved.length) {
+						const { emitSessionEvent } = await import(
 							"$lib/server/pipelines/runtime/sessionEvents"
 						)
-						for (const delta of deltas) {
-							const member = { kind: delta.kind, id: delta.id }
-							await dispatchSessionEvent(db, {
+						for (const [ref, position] of moved)
+							await emitSessionEvent(db, {
 								sessionId: params.session.id!,
 								userId,
-								genreId: row?.genreId ?? "core:genre/chat",
-								event: delta.event,
-								input: {
-									main: member,
-									member,
-									sessionScope: {
-										sessionId: params.session.id!,
-										userId
-									},
-									sessionId: params.session.id!
-								}
+								event: sessionEvents.castChanged,
+								payload: {
+									sessionId: params.session.id!,
+									ref,
+									change: "position",
+									value: position,
+									cause: { kind: "settings", userId }
+								},
+								io: socket.io
 							})
-						}
 					}
 				} catch (err) {
 					console.warn("member-event dispatch failed:", err)
@@ -4802,20 +5349,39 @@ export const sessionMessagesSendPersonaMessageHandler: Handler<
 			// The line this session's cards quote has just changed.
 			broadcastSessionRow(socket.io, inserted.sessionId)
 
-			// Round-robin no longer waits for every persona to speak before letting
-			// a character go — a persona can freely speak between two characters'
-			// turns. getNextCharacterTurn decides per-character, from message
-			// recency, whether anyone is actually due right now (see
-			// getNextCharacterTurn.ts), so this is safe to call after every
-			// persona message: it's a no-op if nobody's due yet.
-			await triggerGenerateMessageHandler.handler(
-				socket,
-				// The trigger's channel, carried rather than defaulted — see
-				// `channel` above. `main` on every session that has only ever
-				// had one, which is the same value the trigger assumed before.
-				{ sessionId, channel },
-				emitToUser
-			)
+			// The row LANDED (PLAN-turn-order §4.1, A2): a user send is a
+			// `message-completed` under the person's cause — the event the
+			// turn-order spec answers, and the one cause that may fire the
+			// head turn (§4.6). Emitted at the write, before the trigger
+			// below, which A7 retires in its favour.
+			{
+				const { emitSessionEvent } = await import(
+					"$lib/server/pipelines/runtime/sessionEvents"
+				)
+				await emitSessionEvent(db, {
+					sessionId: inserted.sessionId,
+					userId,
+					event: sessionEvents.messageCompleted,
+					payload: {
+						sessionId: inserted.sessionId,
+						messageId: inserted.id,
+						cause: { kind: "user", userId }
+					},
+					io: socket.io
+				})
+			}
+
+			/**
+			 * ⏳ **The send starts nothing** (PLAN-turn-order §3, §4.6; A7).
+			 *
+			 * It used to call the trigger, which looped a reply per due
+			 * character. What happens now is one road, and none of it is
+			 * here: the `message-completed` emitted above recomputes the
+			 * session's turn order, the write emits `turn-order-changed`,
+			 * and the auto-advance listener fires the head turn if — and
+			 * only if — the session says to. With `off` the send produces no
+			 * reply until Continue, which is the feature.
+			 */
 
 			return res
 		} catch (error: any) {
@@ -5804,65 +6370,6 @@ export const sessionMessagesSwipeRightHandler: Handler<
 	}
 }
 
-export const sessionsGetResponseOrderHandler: Handler<
-	Sockets.Sessions.GetResponseOrder.Params,
-	Sockets.Sessions.GetResponseOrder.Response
-> = {
-	event: "sessions:getResponseOrder",
-	handler: async (socket, params, emitToUser) => {
-		try {
-			const userId = socket.user!.id
-			const session = await getPromptSessionFromDb(
-				params.sessionId,
-				userId
-			)
-
-			if (!session) {
-				const res: Sockets.Sessions.GetResponseOrder.Response = {
-					sessionId: params.sessionId,
-					nextCharacterId: null,
-					characterIds: []
-				}
-				emitToUser("sessions:getResponseOrder", res)
-				return res
-			}
-
-			// Get next character turn using existing logic
-			const nextCharacterId = getNextCharacterTurn(
-				{
-					sessionMessages: session.sessionMessages,
-					sessionCharacters: session.sessionCharacters
-						.filter((cc) => cc.character !== null && cc.isActive)
-						.sort(
-							(a, b) => (a.position ?? 0) - (b.position ?? 0)
-						) as any,
-					sessionPersonas: session.sessionPersonas.filter(
-						(cp) => cp.persona !== null
-					) as any
-				},
-				session.groupReplyStrategy
-			)
-
-			const res: Sockets.Sessions.GetResponseOrder.Response = {
-				sessionId: params.sessionId,
-				nextCharacterId: nextCharacterId,
-				characterIds: [] // Empty array for now, can be populated later if needed
-			}
-			emitToUser("sessions:getResponseOrder", res)
-			return res
-		} catch (error: any) {
-			console.error("Error getting session response order:", error)
-			const res: Sockets.Sessions.GetResponseOrder.Response = {
-				sessionId: params.sessionId,
-				nextCharacterId: null,
-				characterIds: []
-			}
-			emitToUser("sessions:getResponseOrder", res)
-			throw error
-		}
-	}
-}
-
 export const sessionMessagesCancelHandler: Handler<
 	Sockets.SessionMessages.Cancel.Params,
 	Sockets.SessionMessages.Cancel.Response
@@ -5944,8 +6451,8 @@ export const sessionMessagesCancelHandler: Handler<
 			 * The fence is on the STATE, not on who clicked: the userId match
 			 * this handler once required is what left rows stuck.
 			 */
-			const { recordSessionChange } = await import(
-				"$lib/server/messages/sessionChanges"
+			const { emitSessionEvent } = await import(
+				"$lib/server/pipelines/runtime/sessionEvents"
 			)
 			for (const id of targetIds) {
 				const [updated] = await updateLegacyWhere(
@@ -5972,11 +6479,36 @@ export const sessionMessagesCancelHandler: Handler<
 							sessionMessage: updated
 						}
 					)
-					await recordSessionChange(db, {
-						event: "core:event/message-stopped@1",
+					// Two events (PLAN-turn-order §4.1, A2): the stop, and
+					// the row LANDING — a stopped reply is not generating, so
+					// the turn-order spec answers it like a finished one.
+					// Under the person's `edit` cause: they pressed Stop on
+					// this row, and an edit never fires a turn (§4.6).
+					// An edit cause, never `auto` (R34): a Stop ends the round whichever
+					// release wins the fence.
+					const cause = { kind: "edit" as const, userId }
+					await emitSessionEvent(db, {
 						sessionId: params.sessionId,
-						messageId: updated.id,
-						textLength: updated.content.length
+						userId,
+						event: "core:event/message-stopped@1",
+						payload: {
+							sessionId: params.sessionId,
+							messageId: updated.id,
+							textLength: updated.content.length,
+							cause
+						},
+						io: socket.io
+					})
+					await emitSessionEvent(db, {
+						sessionId: params.sessionId,
+						userId,
+						event: sessionEvents.messageCompleted,
+						payload: {
+							sessionId: params.sessionId,
+							messageId: updated.id,
+							cause
+						},
+						io: socket.io
 					})
 				}
 			}
@@ -6251,37 +6783,46 @@ export const promptTokenCountHandler: Handler<
 					]
 				: session.sessionMessages
 
-			const currentCharacterId = getNextCharacterTurn(
-				{
-					sessionMessages: messagesWithDraft,
-					sessionCharacters: activeSessionCharacters.sort(
-						(a, b) => (a.position ?? 0) - (b.position ?? 0)
-					),
-					sessionPersonas: sessionPersonasWithPersona
-				},
-				session.groupReplyStrategy
-			)
-
 			/**
-			 * No character due: a seated in-turn envoy's turn is what the
-			 * next reply will be (U5g) — the guide session's only one — so
-			 * the estimate compiles as that turn, by reference.
+			 * Whose turn the estimate compiles for: the **stored** order's
+			 * head (PLAN-turn-order §4.7, A7). An estimate needs *somebody*
+			 * to compile for, so where nothing is prepared — a fresh
+			 * session, a manual strategy, a round everybody has taken — the
+			 * first active character stands in, else a seated in-turn envoy.
+			 *
+			 * Read rather than previewed: the order is written down, so this
+			 * is right for a random or scripted strategy too, where the
+			 * preview it replaced could only answer "unknown".
 			 */
-			let envoySpeaker: `envoy:${string}` | null = null
-			if (!currentCharacterId) {
+			const { headTurnEntry } = await import(
+				"$lib/server/sessions/fireTurn"
+			)
+			const head = await headTurnEntry(db, params.sessionId)
+			const headRef = typeof head?.ref === "string" ? head.ref : null
+			let currentCharacterId: number | null =
+				headRef && headRef.startsWith("character:")
+					? Number(headRef.slice("character:".length))
+					: null
+			if (currentCharacterId !== null && !Number.isInteger(currentCharacterId))
+				currentCharacterId = null
+			let envoySpeaker: `envoy:${string}` | null =
+				headRef?.startsWith("envoy:")
+					? (headRef as `envoy:${string}`)
+					: null
+			if (!currentCharacterId && !envoySpeaker) {
+				const sorted = [...activeSessionCharacters].sort(
+					(a, b) => (a.position ?? 0) - (b.position ?? 0)
+				)
+				currentCharacterId = sorted[0]?.character.id ?? null
+			}
+			if (!currentCharacterId && !envoySpeaker) {
 				const { seatedEnvoys } = await import(
 					"$lib/server/pipelines/entities/envoys"
 				)
-				const { nextEnvoyTurn } = await import(
-					"$lib/server/utils/getNextCharacterTurn"
+				const seat = (await seatedEnvoys(db, params.sessionId)).find(
+					(e) => !e.removedAt && e.speaks === "in-turn"
 				)
-				const slug = nextEnvoyTurn(
-					(await seatedEnvoys(db, params.sessionId)).filter(
-						(e) => !e.removedAt && e.speaks === "in-turn"
-					),
-					messagesWithDraft
-				)
-				if (slug) envoySpeaker = `envoy:${slug}`
+				if (seat) envoySpeaker = `envoy:${seat.slug}`
 			}
 
 			if (!currentCharacterId && !envoySpeaker) {
@@ -6360,9 +6901,14 @@ export const promptTokenCountHandler: Handler<
 				messageCount: messagesWithDraft.length
 			})
 
-			// Return the compiled prompt in the correct format
-			emitToUser("sessions:promptTokenCount", promptResult)
-			return promptResult
+			// The compiled prompt quotes the owner's cards and lorebook: a guest
+			// gets the counts and the meta, never the text.
+			const shown =
+				sessionAccess.isOwner || socket.user?.isAdmin
+					? promptResult
+					: { ...promptResult, prompt: undefined, messages: undefined }
+			emitToUser("sessions:promptTokenCount", shown)
+			return shown
 		} catch (error) {
 			console.error("Error in promptTokenCountHandler:", error)
 			const res: Sockets.Sessions.PromptTokenCount.Response = {
@@ -6377,337 +6923,245 @@ export const promptTokenCountHandler: Handler<
 /**
  * Type-safe handler for triggering message generation
  */
+/**
+ * Fire a prepared turn (PLAN-turn-order §4.7, §4.6) — **the** way a reply
+ * starts, and the only one.
+ *
+ * `entry` absent means the stored head: that is Continue. An entry given is
+ * a pick — the "Someone else" picker hands one back with `via: 'pick'`.
+ * Either way this handler decides nothing about whose turn it is; it reads
+ * the order, checks the person may fire that entry, and dispatches.
+ *
+ * ## Who may fire what
+ *
+ * - The **owner** may fire any entry in the order.
+ * - A **guest** may fire the head, or an entry naming a character they own
+ *   — the existing out-of-turn rule, unchanged in substance and now stated
+ *   in one place instead of being spread through the trigger's checks.
+ *
+ * An entry that is not in the stored order is refused outright: firing is
+ * over prepared turns, and a client that invents one is asking core to
+ * seat somebody no strategy pooled.
+ */
+export const sessionsFireTurnHandler: Handler<
+	Sockets.Sessions.FireTurn.Params,
+	Sockets.Sessions.FireTurn.Response
+> = {
+	event: "sessions:fireTurn",
+	handler: async (socket, params, emitToUser) =>
+		withSessionTriggerLock(params.sessionId, async () => {
+			const userId = socket.user!.id
+			const reply = (
+				res: Sockets.Sessions.FireTurn.Response
+			): Sockets.Sessions.FireTurn.Response => {
+				if (res.error)
+					emitToUser("sessions:fireTurn:error", res)
+				else emitToUser("sessions:fireTurn", res)
+				return res
+			}
+			try {
+				const access = await checkSessionAccess(params.sessionId, userId)
+				if (!access.hasAccess)
+					return reply({
+						sessionId: params.sessionId,
+						ok: false,
+						error: "Session not found."
+					})
+
+				const [row] = await db
+					.select({ metadata: schema.sessions.metadata })
+					.from(schema.sessions)
+					.where(eq(schema.sessions.id, params.sessionId))
+					.limit(1)
+				if (!row)
+					return reply({
+						sessionId: params.sessionId,
+						ok: false,
+						error: "Session not found."
+					})
+				const { readTurnOrder } = await import("@serene-pub/sdk")
+				const order = readTurnOrder(row.metadata).order
+				const head = order[0]
+
+				const wanted = params.entry ?? head
+				if (!wanted)
+					return reply({
+						sessionId: params.sessionId,
+						ok: false,
+						error: "Nothing is prepared to take a turn."
+					})
+
+				/**
+				 * The prepared entry this names, when the order holds one:
+				 * its `channel` and `subject` are the strategy's and must
+				 * not be re-typed by a client. An entry the order does not
+				 * hold is the caller's own — which §4.7 allows the OWNER,
+				 * and which is how a session with no order yet (one that has
+				 * had no event: §4.1 backfills nothing) is still playable.
+				 */
+				const seated =
+					order.find((e) => String(e.ref) === String(wanted.ref)) ??
+					wanted
+
+				if (!access.isOwner) {
+					const isHead = String(seated.ref) === String(head?.ref)
+					let ownsIt = false
+					if (
+						typeof seated.ref === "string" &&
+						seated.ref.startsWith("character:")
+					) {
+						const id = Number(seated.ref.slice("character:".length))
+						const [character] = await db
+							.select({ userId: schema.characters.userId })
+							.from(schema.characters)
+							.where(eq(schema.characters.id, id))
+							.limit(1)
+						ownsIt = character?.userId === userId
+					}
+					if (!isHead && !ownsIt)
+						return reply({
+							sessionId: params.sessionId,
+							ok: false,
+							error: "Only the session owner can take somebody else's turn out of order."
+						})
+					// And a guest may only fire what is prepared: the head, or
+					// their own character's entry. The owner's latitude above
+					// does not extend to them.
+					if (
+						!order.some((e) => String(e.ref) === String(wanted.ref))
+					)
+						return reply({
+							sessionId: params.sessionId,
+							ok: false,
+							error: "That turn is not in this session's order."
+						})
+				}
+
+				// A picked ref is the client's words: it must be a participant
+				// reference (or null, the pipeline's own voice) before it is
+				// fired as one.
+				const { isParticipantRef } = await import("@serene-pub/sdk")
+				if (seated.ref !== null && !isParticipantRef(seated.ref))
+					return reply({
+						sessionId: params.sessionId,
+						ok: false,
+						error: `'${String(seated.ref)}' is not a participant.`
+					})
+				const { fireTurnEntry } = await import(
+					"$lib/server/sessions/fireTurn"
+				)
+				const result = await fireTurnEntry(db, {
+					sessionId: params.sessionId,
+					userId,
+					// The pick the person made, recorded as one (§4.6).
+					// A prepared head keeps the strategy's own `via`.
+					entry: {
+						...seated,
+						ref: seated.ref as import("@serene-pub/sdk").ParticipantRef | null,
+						via: params.entry ? "pick" : (seated.via ?? "strategy")
+					},
+					// A press is always a person's cause, which is the one
+					// cause that may fire whatever the auto-advance setting.
+					cause: { kind: "user", userId },
+					io: socket.io,
+					socket,
+					emitToUser
+				})
+				if (!result.fired)
+					return reply({
+						sessionId: params.sessionId,
+						ok: false,
+						// A person's entry is not an error: it is their turn.
+						...(result.reason === "person"
+							? {}
+							: { error: result.reason ?? "The turn produced no reply." }),
+						...(result.reason ? { reason: result.reason } : {})
+					})
+				return reply({
+					sessionId: params.sessionId,
+					ok: true,
+					...(result.runId ? { runId: result.runId } : {})
+				})
+			} catch (error) {
+				console.error("Error in sessionsFireTurnHandler:", error)
+				return reply({
+					sessionId: params.sessionId,
+					ok: false,
+					error: "Failed to take the turn."
+				})
+			}
+		})
+}
+
+/** Said once per boot, so a stale client is visible without being noisy. */
+let triggerAliasWarned = false
+
+/**
+ * ⏳ `sessions:triggerGenerateMessage`, kept **one release** as an alias for
+ * `sessions:fireTurn` (§4.7).
+ *
+ * What it was: a loop that re-read the session, asked the strategy whether
+ * anybody was due, started a reply, and went round again until a halt said
+ * nobody was — up to ten times. All of that is turn order now (§3), and the
+ * loop is gone: `{ characterId }` and `{ speaker }` are picks, and nothing
+ * is a loop.
+ *
+ * A client on this verb still works; it gets ONE turn per press, which is
+ * what `next` means, and a session on `round` gets the rest from
+ * auto-advance rather than from the socket.
+ */
 export const triggerGenerateMessageHandler: Handler<
 	Sockets.Sessions.TriggerGenerateMessage.Params,
 	Sockets.Sessions.TriggerGenerateMessage.Response
 > = {
 	event: "sessions:triggerGenerateMessage",
-	handler: async (socket, params, emitToUser) =>
-		withSessionTriggerLock(params.sessionId, async () => {
-			try {
-				const userId = socket.user!.id
-				const msgLimit = 10
-				let currentMsg = 1
-				let ok = true
-
-				// Shared by the explicit-characterId and explicit-speaker
-				// refusals below: both name one participant out of turn and
-				// both need the client to hear about it on the error channel,
-				// not just see a truthy `error` in the ack it may not await.
-				const refuse = (error: string) => {
-					emitToUser("sessions:triggerGenerateMessage:error", {
-						error
-					})
-					return { error }
-				}
-
-				// An explicit characterId means a client pressed "Trigger
-				// Character" — an out-of-turn generation aimed at a specific
-				// character. That is owner-only. getPromptSessionFromDb below
-				// admits guests too (checkSessionAccess is owner-OR-guest), and
-				// unlike regenerate/continue/swipe this path had no permission
-				// check of its own, so a guest in a shared session could emit
-				// this event directly and drive generations in someone else's
-				// session. It was gated only by the client hiding the tab.
-				//
-				// Scoped to the explicit-characterId case on purpose: the
-				// automatic round-robin call after a persona message (see
-				// sessionMessagesSendPersonaMessageHandler) invokes this handler
-				// with no characterId, and guests are supposed to be able to
-				// speak and get replies in a session shared with them.
-				if (params.characterId) {
-					const access = await checkSessionAccess(
-						params.sessionId,
-						userId
-					)
-					if (!access.hasAccess) {
-						// Matches the "Session not found" the lookup below would
-						// have produced — a missing session and an inaccessible
-						// one stay indistinguishable.
-						return refuse(
-							"Error Triggering Session Message: Session not found."
-						)
-					}
-					if (!access.isOwner) {
-						return refuse(
-							"Access denied. Only the session owner can trigger a specific character."
-						)
-					}
-				}
-
-				/**
-				 * An explicit `speaker` (U5g review, W1) is the envoy's
-				 * spelling of the explicit `characterId` above and is gated
-				 * the same way: owner-only, since it aims a generation at
-				 * one participant out of turn. And unlike an id, a reference
-				 * names nothing by itself — so it must be an `envoy:<slug>`
-				 * whose slug is a LIVE seat in this session that speaks
-				 * `in-turn`. An `on-action` envoy speaks through its action's
-				 * outputs and is never a turn to take (R-21 (6)); a slug
-				 * nothing seated would have the row announce a speaker the
-				 * cast never held. Ignored when `characterId` is given, as
-				 * the type says. Refused with a sentence, told to the client
-				 * on the error channel — the row it would have produced does
-				 * not exist to carry it.
-				 */
-				const explicitSpeaker =
-					!params.characterId &&
-					typeof params.speaker === "string" &&
-					params.speaker.trim()
-						? params.speaker.trim()
-						: null
-				if (explicitSpeaker !== null) {
-					const access = await checkSessionAccess(
-						params.sessionId,
-						userId
-					)
-					if (!access.hasAccess)
-						return refuse(
-							"Error Triggering Session Message: Session not found."
-						)
-					if (!access.isOwner)
-						return refuse(
-							"Access denied. Only the session owner can trigger a specific envoy."
-						)
-					const slug = envoySlugOfRef(explicitSpeaker)
-					if (!slug)
-						return refuse(
-							`'${explicitSpeaker}' is not an envoy reference — a speaker is named as 'envoy:<slug>'.`
-						)
-					const { seatedEnvoys } = await import(
-						"$lib/server/pipelines/entities/envoys"
-					)
-					const seat = (await seatedEnvoys(db, params.sessionId)).find(
-						(e) => e.slug === slug && !e.removedAt
-					)
-					if (!seat)
-						return refuse(
-							`'${slug}' is not an envoy seated in this session — seat it in Session settings first.`
-						)
-					if (seat.speaks !== "in-turn")
-						return refuse(
-							`${i18nText(seat.name) ?? slug} speaks only through its action and cannot be asked to take a turn.`
-						)
-				}
-
-				console.log(
-					`[triggerGenerateMessage] Starting generation for session ${params.sessionId}, once: ${params.once}, characterId: ${params.characterId}, speaker: ${explicitSpeaker}`
-				)
-
-				while (currentMsg <= msgLimit && ok) {
-					let session = await getPromptSessionFromDb(
-						params.sessionId,
-						userId
-					)
-					if (!session) {
-						return {
-							error: "Error Triggering Session Message: Session not found."
-						}
-					}
-
-					// Check if there are any ongoing generations before starting a new one
-					const hasGeneratingMessages = session.sessionMessages.some(
-						(msg) => msg.isGenerating
-					)
-					if (hasGeneratingMessages) {
-						console.log(
-							"Generation already in progress, stopping trigger loop"
-						)
-						break
-					}
-
-					// Get active characters
-					const activeCharacters = session.sessionCharacters.filter(
-						(cc) => cc.character !== null && cc.isActive
-					)
-
-					// Find the next character who should reply — an explicit
-					// characterId always wins (manual out-of-turn trigger, and the
-					// only way a "Manual" session ever advances at all). Otherwise ask
-					// getNextCharacterTurn who's actually due right now, but only for
-					// non-"Manual" sessions — a "Manual" session's whole point is that nobody
-					// auto-advances, so calls with no explicit characterId (e.g. the
-					// automatic re-check after every persona message) are a no-op.
-					const nextCharacterId =
-						params.characterId ||
-						(session.groupReplyStrategy !==
-						GroupReplyStrategies.MANUAL
-							? getNextCharacterTurn(
-									{
-										sessionMessages:
-											session.sessionMessages,
-										sessionCharacters:
-											activeCharacters.sort(
-												(a, b) =>
-													(a.position ?? 0) -
-													(b.position ?? 0)
-											) as any,
-										sessionPersonas:
-											session.sessionPersonas.filter(
-												(cp) => cp.persona !== null
-											) as any
-									},
-									session.groupReplyStrategy
-								)
-							: null)
-
-					/**
-					 * The envoys' turn (plans/29 R-18; U5g). An explicit
-					 * `speaker` naming a seated envoy wins like an explicit
-					 * `characterId` does; otherwise, when no character is due,
-					 * a seated **in-turn** envoy takes the turn — the guide
-					 * session's whole reply road, since it has no characters
-					 * at all. An `on-action` envoy is never picked here (R-21
-					 * (6)); a "Manual" session still auto-advances nobody.
-					 */
-					let nextEnvoySlug: string | null = explicitSpeaker
-						? envoySlugOfRef(explicitSpeaker)
-						: null
-					if (
-						!nextCharacterId &&
-						!nextEnvoySlug &&
-						session.groupReplyStrategy !== GroupReplyStrategies.MANUAL
-					) {
-						const { seatedEnvoys } = await import(
-							"$lib/server/pipelines/entities/envoys"
-						)
-						const { nextEnvoyTurn } = await import(
-							"$lib/server/utils/getNextCharacterTurn"
-						)
-						nextEnvoySlug = nextEnvoyTurn(
-							(await seatedEnvoys(db, params.sessionId)).filter(
-								(e) => !e.removedAt && e.speaks === "in-turn"
-							),
-							session.sessionMessages
-						)
-					}
-
-					if (!nextCharacterId && !nextEnvoySlug) {
-						/**
-						 * Nobody is due. Silent when that is the ordinary
-						 * state of things — the envoy has just answered, or a
-						 * "Manual" session is waiting to be told — but a
-						 * sentence when the session CANNOT have anyone
-						 * answer: a genre that admits no characters and no
-						 * live in-turn seat (U5g review, S7). The person
-						 * pressed send and heard nothing; this is why.
-						 */
-						const { noSpeakerRefusal } = await import(
-							"$lib/server/pipelines/entities/envoys"
-						)
-						const refusal = await noSpeakerRefusal(
-							db,
-							params.sessionId
-						)
-						if (refusal) {
-							emitToUser("sessions:triggerGenerateMessage:error", {
-								error: refusal
-							})
-							return { error: refusal }
-						}
-						// Said in the log even when it is ordinary: a send that
-						// produces no reply otherwise reads, from the client, as
-						// a run that hung — the two are indistinguishable there.
-						console.log(
-							`[triggerGenerateMessage] nobody is due in session ${params.sessionId} ` +
-								`(strategy: ${session.groupReplyStrategy ?? "default"}, ` +
-								`replies so far: ${currentMsg - 1}) — no reply generated`
-						)
-						break
-					}
-
-					const nextCharacter = nextCharacterId
-						? session.sessionCharacters.find(
-								(cc) =>
-									cc.character &&
-									cc.character.id === nextCharacterId
-							)
-						: undefined
-					if (nextCharacterId && !nextCharacter?.character) break
-
-					{
-						/**
-						 * No insert here (R-17). The pipeline creates its own
-						 * reply row at its placeholder outlet and announces it
-						 * from the commit — the composer's placeholder IS that
-						 * row. What the trigger still decides is whose turn it
-						 * is, which travels on the inlet — a character by id,
-						 * an envoy by reference.
-						 */
-						const outcome = await runReply({
-							socket,
-							emitToUser,
-							sessionId: params.sessionId,
-							userId,
-							turn: nextCharacter?.character
-								? {
-										kind: "respond",
-										characterId: nextCharacter.character.id
-									}
-								: {
-										kind: "respond",
-										speaker: `envoy:${nextEnvoySlug}`
-									},
-							/**
-							 * The channel this turn is being asked for on
-							 * (R-C) — the trigger's, which the send handler
-							 * took from the composer. It reaches the inlet's
-							 * `channel` port, where a genre's junction branches
-							 * on it, and the host scope, where the channel's
-							 * declared `voice` decides the seed line.
-							 *
-							 * Absent is `main`: a trigger raised by anything
-							 * that has not grown a channel of its own asks for
-							 * exactly what it always asked for.
-							 */
-							...(params.channel ? { channel: params.channel } : {})
-						})
-						ok = outcome.ok
-						if (outcome.error && !outcome.stopped) {
-							// A refusal before the run made a row has no row
-							// to carry it; the client hears it here instead.
-							if (!outcome.shown)
-								emitToUser(
-									"sessions:triggerGenerateMessage:error",
-									{ error: outcome.error }
-								)
-							return { error: outcome.error }
-						}
-
-						// If generation was aborted, stop the loop
-						if (!ok) {
-							console.log(
-								"Generation was aborted, stopping trigger loop"
-							)
-							break
-						}
-
-						console.log(
-							`[triggerGenerateMessage] Message ${currentMsg}/${msgLimit} generated successfully=${ok}, once: ${params.once}`
-						)
-					}
-
-					// If once is true, exit after the first message
-					if (params.once) break
-
-					currentMsg++
-				}
-
-				return { success: true }
-			} catch (error) {
-				console.error("Error in triggerGenerateMessageHandler:", error)
-				return {
-					error: "Failed to trigger message generation."
-				}
+	handler: async (socket, params, emitToUser) => {
+		if (!triggerAliasWarned) {
+			triggerAliasWarned = true
+			console.warn(
+				"[sessions] 'sessions:triggerGenerateMessage' is deprecated and will be " +
+					"removed at 0.7 — press a turn with 'sessions:fireTurn' instead " +
+					"(PLAN-turn-order §4.7)."
+			)
+		}
+		const entry =
+			typeof params.characterId === "number"
+				? { ref: `character:${params.characterId}` as const, via: "pick" }
+				: typeof params.speaker === "string" && params.speaker.trim()
+					? { ref: params.speaker.trim() as never, via: "pick" }
+					: undefined
+		const out = await sessionsFireTurnHandler.handler(
+			socket,
+			{
+				sessionId: params.sessionId,
+				...(entry ? { entry: entry as never } : {})
+			},
+			// Everything the run says on its way — the progress card's
+			// frames, the errors a row cannot carry — reaches the caller;
+			// only `sessions:fireTurn`'s own ack is swallowed, because this
+			// verb answers with its own below.
+			(event, data) => {
+				if (event === "sessions:fireTurn" || event === "sessions:fireTurn:error")
+					return
+				emitToUser(event, data)
 			}
-		})
+		)
+		const res: Sockets.Sessions.TriggerGenerateMessage.Response = out.ok
+			? { success: true }
+			: out.error
+				? { error: out.error }
+				: { success: true, nobodyDue: true }
+		if ((res as { error?: string }).error)
+			emitToUser("sessions:triggerGenerateMessage:error", res)
+		else emitToUser("sessions:triggerGenerateMessage", res)
+		return res
+	}
 }
 
 // "Narrator" — a manually-triggered, non-character narration/environment
-// response. Deliberately does NOT touch session.sessionCharacters or
-// getNextCharacterTurn at all: since a narrator message is never a
-// sessionCharacters row, it's automatically excluded from round-robin with no
-// extra exclusion logic needed.
+// response. Deliberately outside the turn rotation: a narrator message is
+// never a sessionCharacters row, and the rotation reads narration rows out
+// (`rotationTurns`), so nothing here needs excluding.
 export const triggerNarratorResponseHandler: Handler<
 	Sockets.Sessions.TriggerNarratorResponse.Params,
 	Sockets.Sessions.TriggerNarratorResponse.Response
@@ -7000,14 +7454,23 @@ export const sessionsSetEnvoySeatHandler: Handler<
 				return refuse(
 					"An action's envoy is seated by the action itself when it posts; there is nothing to toggle."
 				)
-			if (params.seated) await seatEnvoy(db, params.sessionId, params.slug)
-			else
-				await unseatEnvoy(
-					db,
-					params.sessionId,
-					params.slug,
-					i18nText(decl.name) ?? null
-				)
+			const changed = params.seated
+				? await seatEnvoy(db, params.sessionId, params.slug)
+				: await unseatEnvoy(
+						db,
+						params.sessionId,
+						params.slug,
+						i18nText(decl.name) ?? null
+					)
+			// A seat is a member change (R31): the envoy joins or leaves
+			// under the person's settings cause, as a character would — and
+			// only when the seat actually moved (a repeated press is none).
+			if (changed) await emitMemberEvent(socket, {
+				sessionId: params.sessionId,
+				userId,
+				event: params.seated ? sessionEvents.memberAdded : sessionEvents.memberRemoved,
+				ref: `envoy:${params.slug}`
+			})
 			const res = {
 				sessionId: params.sessionId,
 				slug: params.slug,
@@ -7028,6 +7491,74 @@ export const sessionsSetEnvoySeatHandler: Handler<
 				error instanceof Error ? error.message : "Failed to seat envoy."
 			)
 		}
+	}
+}
+
+/**
+ * A member joined or left (PLAN-turn-order R31): `member-added` /
+ * `member-removed` through the one emitter, with the cast-change payload
+ * (`change: 'added' | 'removed'`) under the person's `settings` cause.
+ * Best-effort, as `emitCastChanged` is: the seat has landed.
+ */
+async function emitMemberEvent(
+	socket: { io: SessionIo },
+	member: { sessionId: number; userId: number; event: string; ref: string }
+): Promise<void> {
+	try {
+		const { emitSessionEvent } = await import(
+			"$lib/server/pipelines/runtime/sessionEvents"
+		)
+		await emitSessionEvent(db, {
+			sessionId: member.sessionId,
+			userId: member.userId,
+			event: member.event,
+			payload: {
+				sessionId: member.sessionId,
+				ref: member.ref,
+				change: member.event === sessionEvents.memberAdded ? "added" : "removed",
+				cause: { kind: "settings", userId: member.userId }
+			},
+			io: socket.io
+		})
+	} catch (err) {
+		console.warn(`${member.event} emit failed:`, err)
+	}
+}
+
+/**
+ * One seated participant's row moved (PLAN-turn-order §4.1, A2):
+ * `cast-changed` under the person's `settings` cause. Best-effort — the
+ * toggle has landed and been re-sent; an emitter failing is logged.
+ */
+async function emitCastChanged(
+	socket: { io: SessionIo },
+	change: {
+		sessionId: number
+		userId: number
+		ref: string
+		change: "active" | "position" | "visibility" | "portrayal"
+		value: unknown
+	}
+): Promise<void> {
+	try {
+		const { emitSessionEvent } = await import(
+			"$lib/server/pipelines/runtime/sessionEvents"
+		)
+		await emitSessionEvent(db, {
+			sessionId: change.sessionId,
+			userId: change.userId,
+			event: sessionEvents.castChanged,
+			payload: {
+				sessionId: change.sessionId,
+				ref: change.ref,
+				change: change.change,
+				value: change.value,
+				cause: { kind: "settings", userId: change.userId }
+			},
+			io: socket.io
+		})
+	} catch (err) {
+		console.warn("cast-changed emit failed:", err)
 	}
 }
 
@@ -7124,6 +7655,15 @@ export const toggleSessionCharacterActiveHandler: Handler<
 			// payload that EditSessionForm/the session page actually listen for.
 			emitToUser("sessions:toggleSessionCharacterActive", res)
 			await resendSession(socket, session.id, emitToUser)
+			// A seat's row moved (PLAN-turn-order §4.1, A2): `cast-changed`
+			// under the person's `settings` cause, which never fires a turn.
+			await emitCastChanged(socket, {
+				sessionId: params.sessionId,
+				userId,
+				ref: `character:${params.characterId}`,
+				change: "active",
+				value: newActiveStatus
+			})
 
 			return res
 		} catch (error) {
@@ -7231,6 +7771,13 @@ export const updateSessionCharacterVisibilityHandler: Handler<
 			// name nothing listens for, dropping both the ack and the refresh.
 			emitToUser("sessions:updateSessionCharacterVisibility", res)
 			await resendSession(socket, session.id, emitToUser)
+			await emitCastChanged(socket, {
+				sessionId: params.sessionId,
+				userId,
+				ref: `character:${params.characterId}`,
+				change: "visibility",
+				value: params.visibility
+			})
 
 			return res
 		} catch (error) {
@@ -7389,6 +7936,7 @@ export function registerSessionHandlers(
 	register(socket, sessionsCreateHandler, emitToUser)
 	register(socket, sessionsDeleteHandler, emitToUser)
 	register(socket, sessionsGetHandler, emitToUser)
+	register(socket, sessionsAnnexHandler, emitToUser)
 	register(socket, sessionsModesHandler, emitToUser)
 	register(socket, sessionsTriggersHandler, emitToUser)
 	register(socket, sessionsActionsHandler, emitToUser)
@@ -7410,8 +7958,11 @@ export function registerSessionHandlers(
 	register(socket, sessionsUpgradeModeHandler, emitToUser)
 	register(socket, sessionsFunctionCandidatesHandler, emitToUser)
 	register(socket, sessionsBindFunctionHandler, emitToUser)
-	register(socket, sessionsSpeakerStrategiesHandler, emitToUser)
-	register(socket, sessionsSetSpeakerStrategyHandler, emitToUser)
+	// The generic session-scope rebind (PLAN-turn-order §4.7): what a node
+	// may become, and setting it. The Turn order control is one caller.
+	register(socket, sessionsNodeSwapOptionsHandler, emitToUser)
+	register(socket, sessionsSetNodeRebindHandler, emitToUser)
+	register(socket, sessionsPipelineCardsHandler, emitToUser)
 	register(socket, sessionsSaveDraftHandler, emitToUser)
 	register(socket, sessionsUpdateHandler, emitToUser)
 	register(socket, sessionsAddPersonaHandler, emitToUser)
@@ -7426,7 +7977,8 @@ export function registerSessionHandlers(
 	register(socket, sessionMessagesContinueHandler, emitToUser)
 	register(socket, sessionMessagesSwipeLeftHandler, emitToUser)
 	register(socket, sessionMessagesSwipeRightHandler, emitToUser)
-	register(socket, sessionsGetResponseOrderHandler, emitToUser)
+	// Firing a prepared turn (§4.7) — Continue, and the picker.
+	register(socket, sessionsFireTurnHandler, emitToUser)
 	register(socket, sessionMessagesCancelHandler, emitToUser)
 	register(socket, sessionMessageHandler, emitToUser)
 	register(socket, promptTokenCountHandler, emitToUser)

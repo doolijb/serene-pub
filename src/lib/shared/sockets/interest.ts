@@ -104,6 +104,13 @@ export const SCOPED_EVENTS: ReadonlyMap<string, InterestScopeExtractor> =
 		// own scope.
 		["sessions:rowChanged", (payload) => payload?.sessionId],
 
+		// `{ sessionId, annex }` — the viewer's own annex view (R57).
+		["sessions:annex", (payload) => payload?.sessionId],
+
+		// `{ sessionId, event, payload, at }` — a package's event recorded in
+		// the session (R56). Only the session page declares it, scoped.
+		["sessions:recordedEvent", (payload) => payload?.sessionId],
+
 		// `{ sessionId, channel, venues }` — the session's action list (U5e):
 		// the reply to `sessions:actions` and the push every finished run
 		// makes (`pushSessionActions`). A session page declares its own
@@ -132,6 +139,17 @@ export const SCOPED_EVENTS: ReadonlyMap<string, InterestScopeExtractor> =
 		["characters:listGallery", (payload) => payload?.characterId],
 		["characters:uploadGalleryImage", (payload) => payload?.characterId],
 		["characters:deleteGalleryImage", (payload) => payload?.characterId],
+		// Sprites: every reply and cascade carries the owner id top-level.
+		["characters:listSprites", (payload) => payload?.characterId],
+		["characters:createSpriteSet", (payload) => payload?.characterId],
+		["characters:updateSpriteSet", (payload) => payload?.characterId],
+		["characters:deleteSpriteSet", (payload) => payload?.characterId],
+		["characters:uploadSprite", (payload) => payload?.characterId],
+		["characters:addStandardSprites", (payload) => payload?.characterId],
+		["characters:updateSprite", (payload) => payload?.characterId],
+		["characters:deleteSprite", (payload) => payload?.characterId],
+		["characters:reorderSprites", (payload) => payload?.characterId],
+		["characters:testSprite", (payload) => payload?.characterId],
 		// `characters:setFolder` answers with the character it moved, so a
 		// panel open on one character hears about that one and no other. The
 		// id is top-level beside the ack, the not-found treatment.
@@ -146,6 +164,18 @@ export const SCOPED_EVENTS: ReadonlyMap<string, InterestScopeExtractor> =
 			(payload) => payload?.lorebook?.id ?? payload?.lorebookId
 		],
 		["entries:list", (payload) => payload?.lorebookId],
+		// Amendments (2026-09-23). Create, update and delete all answer with
+		// the SAME whole-book list as `list` (see `server/sockets/amendments.ts`),
+		// so one extractor covers the family and the book is always top-level.
+		["amendments:list", (payload) => payload?.lorebookId],
+		["amendments:create", (payload) => payload?.lorebookId],
+		["amendments:update", (payload) => payload?.lorebookId],
+		["amendments:delete", (payload) => payload?.lorebookId],
+		["amendments:fork", (payload) => payload?.lorebookId],
+		["amendments:renameBranch", (payload) => payload?.lorebookId],
+		["amendments:deleteBranch", (payload) => payload?.lorebookId],
+		["amendments:place", (payload) => payload?.lorebookId],
+		["amendments:unplace", (payload) => payload?.lorebookId],
 		["entries:counts", (payload) => payload?.lorebookId],
 		["entries:recentDecisions", (payload) => payload?.lorebookId],
 		["entries:delete", (payload) => payload?.lorebookId],
@@ -401,6 +431,9 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	// that never passes the gate — listing it here would claim a gate it has not.
 	// Every `sessions:*:error` stays out, like every other error event.
 	"sessions:accountVisibility",
+	// The viewer's annex view (R57, V1c) — consumer: the session page,
+	// SCOPED, which hands it to its widgets as `annex.v1`.
+	"sessions:annex",
 	"sessions:actions",
 	"sessions:actionsSeen",
 	"sessions:addGuest",
@@ -416,7 +449,6 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"sessions:genres",
 	"sessions:get",
 	"sessions:getNarratorName",
-	"sessions:getResponseOrder",
 	"sessions:layoutPreset:delete",
 	"sessions:layoutPreset:rename",
 	"sessions:layoutPreset:save",
@@ -429,6 +461,9 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"sessions:presets",
 	"sessions:promptTokenCount",
 	"sessions:reassignRemovedParticipant",
+	// A package's recorded event (R56, E1d) — consumer: the session page,
+	// SCOPED, which hands it to its widgets as `event:recorded`.
+	"sessions:recordedEvent",
 	"sessions:removeGuest",
 	// The list-row push — consumers: client/components/sidebars/
 	// SessionsSidebar.svelte and routes/+page.svelte, both on the patch store
@@ -441,9 +476,7 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"sessions:setEnvoySeat",
 	"sessions:setFunction",
 	"sessions:setLorebook",
-	"sessions:setSpeakerStrategy",
 	"sessions:sideCharacterOptions",
-	"sessions:speakerStrategies",
 	"sessions:summarize",
 	"sessions:summarize:complete",
 	"sessions:summarize:progress",
@@ -460,7 +493,7 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"sessions:userTyping",
 	"sessions:view",
 
-	// pipelines: — slice 3 (2026-09-14). A MIXED family (25 admin-only, 28 open
+	// pipelines: — slice 3 (2026-09-14). A MIXED family (26 admin-only, 28 open
 	// handlers), so it is NOT a restricted prefix. Consumers, all on the registry:
 	// client/components/pipelines/** (RunProgressCard, PipelineReviewModal,
 	// inspector/RunInspector, workspace/*, ConfigNotices, PipelineConfigOptions),
@@ -471,11 +504,12 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	// client/lorebooks/editor/retrievalReadout.svelte.ts,
 	// client/components/admin/{TemplateChangeForm,TemplateChangelist}.svelte,
 	// routes/sessions/[id]/+page.svelte, routes/pipelines/library/+page.svelte,
-	// routes/admin/{pipelines,pipelines/[slug],configurations,session-presets/[id],
+	// routes/admin/{pipelines,pipelines/[slug],pipelines/events,configurations,session-presets/[id],
 	// prompts,prompts/[id],scripts,scripts/new,scripts/[id]}/+page.svelte.
 	// `runStarted` and `progress` are SCOPED on sessionId (see SCOPED_EVENTS);
-	// `reviewRequested`/`reviewClosed` travel through the review transport in
-	// sockets/pipelines.ts, which honours this set like broadcastHelpers does.
+	// `reviewRequested`/`reviewClosed` and `capPauseRequested`/`capPauseClosed`
+	// travel through the review transport in sockets/pipelines.ts, which
+	// honours this set like broadcastHelpers does.
 	// Fifteen write handlers answer ONLY through the cascaded `pipelines:get`
 	// (and `acknowledgeConfigNotices` through `pipelines:configNotices`), so a
 	// view that can write must hold that key — every converted one does. Every
@@ -484,6 +518,9 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"pipelines:acknowledgeConfigNotices",
 	"pipelines:artifactRuns",
 	"pipelines:cancelRun",
+	"pipelines:capPauseClosed",
+	"pipelines:capPauseRequested",
+	"pipelines:capPauses",
 	"pipelines:clearOption",
 	"pipelines:cloneContextTemplate",
 	"pipelines:clonePrompt",
@@ -501,6 +538,7 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"pipelines:deleteScript",
 	"pipelines:deleteVariableTemplate",
 	"pipelines:detail",
+	"pipelines:eventMap",
 	"pipelines:exportScripts",
 	"pipelines:get",
 	"pipelines:importScripts",
@@ -519,6 +557,7 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"pipelines:progress",
 	"pipelines:renameConfig",
 	"pipelines:resetConfig",
+	"pipelines:resolveCapPause",
 	"pipelines:resolveReview",
 	"pipelines:reviewClosed",
 	"pipelines:reviewRequested",
@@ -571,6 +610,7 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"characters:importResolve",
 	"characters:list",
 	"characters:listGallery",
+	"characters:listSprites",
 	"characters:reorderGallery",
 	"characters:searchLibrary",
 	"characters:setAvatar",
@@ -578,6 +618,15 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"characters:setFolder",
 	"characters:update",
 	"characters:uploadGalleryImage",
+	"characters:createSpriteSet",
+	"characters:updateSpriteSet",
+	"characters:deleteSpriteSet",
+	"characters:uploadSprite",
+	"characters:addStandardSprites",
+	"characters:updateSprite",
+	"characters:deleteSprite",
+	"characters:reorderSprites",
+	"characters:testSprite",
 	"tags:create",
 	"tags:delete",
 	"tags:getRelatedData",
@@ -594,6 +643,15 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	// SCOPED_EVENTS). `entries:testRetrieval` has no client at all and the
 	// three bindingSuggestions mutators answer only through the cascaded list:
 	// gating those drops acks nobody reads.
+	"amendments:create",
+	"amendments:delete",
+	"amendments:deleteBranch",
+	"amendments:fork",
+	"amendments:renameBranch",
+	"amendments:list",
+	"amendments:place",
+	"amendments:unplace",
+	"amendments:update",
 	"bindingCheck:result",
 	"bindingSuggestions:add",
 	"bindingSuggestions:ignore",
@@ -606,6 +664,8 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"entries:list",
 	"entries:recentDecisions",
 	"entries:testRetrieval",
+	"entries:sessionEntries",
+	"entries:setMarks",
 	"entries:update",
 	"entries:updatePositions",
 	"lorebooks:bindingList",
@@ -684,6 +744,8 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"scenes:update",
 	"sessionGenres:detail",
 	"sessionGenres:list",
+	"sessionGenres:setPresetsEnabled",
+	"sessionGenres:setSwapEnabled",
 	"sessionGenres:update",
 	"sessionPresets:create",
 	"sessionPresets:delete",

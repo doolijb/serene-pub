@@ -267,6 +267,11 @@ export function toEntryRow(
 		// workspace's tree nests a district under its city and a scene under
 		// its history entry with one rule.
 		anchorEntryId: row.anchorEntryId ?? null,
+		// The line it was written on; NULL is shared. It has to cross the wire
+		// or the workspace cannot tell a fork's own entry from an entry both
+		// lines have — and a mapper that drops the column reads as "shared",
+		// which is the answer that puts it on every line.
+		branchId: row.branchId ?? null,
 		matchMode: row.matchMode,
 		useRegex: row.useRegex,
 		caseSensitive: row.caseSensitive ?? false,
@@ -345,6 +350,10 @@ export function entryInsert(
 		// The `parent` role. Null is top level, which is where an entry created
 		// without one belongs.
 		anchorEntryId: data.anchorEntryId ?? null,
+		// The line it was written on. Null is SHARED, which is what an entry
+		// written on main is and what every entry written before there were
+		// lines is. The handler is what proves the branch belongs to the book.
+		branchId: (data as any).branchId ?? null,
 		matchMode: data.matchMode ?? null,
 		useRegex: data.useRegex ?? false,
 		caseSensitive: data.caseSensitive ?? false,

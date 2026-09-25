@@ -68,6 +68,7 @@ import {
 	pluginDeclarationsOf,
 	registerPluginDefinitions
 } from "./pluginDefinitions"
+import { registerPluginEvents } from "./pluginEvents"
 import { storePluginFiles } from "./frameHost"
 import {
 	readPluginPackage,
@@ -378,6 +379,9 @@ export async function projectPluginPackage(
 	// before a pipeline can name it, and a spec saved against a registry that
 	// has not heard of its own package's node is a spec whose notice says so.
 	await projectDefinitions(db, pkg, ownerId, report)
+	// And its declared events, before a document that locks on or records
+	// one is validated (E1b; `pluginEvents.ts`).
+	report.refused.push(...registerPluginEvents(pkg.manifest, pkg.manifest.slug))
 
 	// The whole set publishes together, so a package that renames a slash name
 	// between two of its own specs is not refused one spec at a time.
@@ -612,6 +616,15 @@ export async function installPluginPackage(
 			`'${pluginId}' requires ${missing.join(", ")} — not installed on this ` +
 				`instance. Install what it builds on first.`
 		)
+
+	// Swap contributions (R29): the target node and the fit are this
+	// instance's to check, before anything is written.
+	{
+		const { swapContributionProblems } = await import("$lib/server/plugins/swaps")
+		const problems = await swapContributionProblems(db, pkg.manifest as any)
+		if (problems.length)
+			throw new Error(`'${pluginId}' cannot install: ${problems.join("; ")}`)
+	}
 
 	const bundleSource = await readBundle(pkg.dir)
 	if (!bundleSource && (pkg.manifest as any).hooks?.handlers?.length)

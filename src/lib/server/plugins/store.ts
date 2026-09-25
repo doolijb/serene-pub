@@ -58,9 +58,18 @@ function rowToDescriptor(row: PluginRow): PluginDescriptor {
 		// storage-quota override rides on top of the effective storage grant.
 		...permissionGrants(row.manifest, row.adminDenied, row.storageQuotaOverride),
 		// Manifest-declared settings, resolved for the owning hook (12 §6).
+		// Handles for the hook, plaintext kept host-side for the fetch bridge
+		// and the scrub (R63).
 		...(() => {
 			const s = hookSettingsFor(row.manifest, row.settings)
-			return s ? { settings: s } : {}
+			return s
+				? {
+						settings: s.settings,
+						...(Object.keys(s.secrets).length
+							? { secrets: s.secrets, lentSecrets: s.lent, secretNonce: s.nonce }
+							: {})
+					}
+				: {}
 		})()
 	}
 }
@@ -270,5 +279,8 @@ export async function setStorageQuotaOverride(
 }
 
 export async function removePlugin(db: Db, pluginId: string): Promise<void> {
+	// Its events stop being recordable at once (E1b).
+	const { withdrawPluginEvents } = await import("./pluginEvents")
+	withdrawPluginEvents(pluginId)
 	await db.delete(plugins).where(eq(plugins.pluginId, pluginId))
 }

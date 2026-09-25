@@ -95,6 +95,11 @@ export const ADMIN_NAV: AdminNavGroup[] = [
 				icon: "Workflow"
 			},
 			{
+				href: "/admin/pipelines/events",
+				label: "Events",
+				icon: "Zap"
+			},
+			{
 				href: "/admin/configurations",
 				label: "Configurations",
 				icon: "SlidersVertical"

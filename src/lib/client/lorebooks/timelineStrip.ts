@@ -14,6 +14,7 @@
  */
 
 import {
+	compareDates,
 	dateValue,
 	formatDateValue,
 	type StoryDate
@@ -34,6 +35,41 @@ export interface TimelineTick {
 }
 
 /**
+ * Every date the story knows, for the Moment bar's axis.
+ *
+ * ⚠ A history entry is not the only thing with a date any more. An entry
+ * amended at Y4 makes Y4 a moment worth standing at — the book reads
+ * differently there — so the bar has to be able to land on it. Before this the
+ * bar could say "Nothing is dated yet" while an amendment sat at Y4 and the
+ * banner above it said "Reading as of Year 4".
+ *
+ * ⚠ Deduped by DATE, not by row: several amendments on one day, or an
+ * amendment dated at a history entry's date, are one place to stand. The
+ * history entry wins the tick's id where both exist, so a tick keeps naming a
+ * row the reader can open.
+ *
+ * ⚠ **The tick id is not unique on this axis, and nothing may treat it as an
+ * identity.** Rows arrive from three tables — history entries, entry
+ * amendments, cast amendments — whose ids collide freely. The DATE is the
+ * identity here, because the axis holds one tick per date; `MomentBar` keys its
+ * `{#each}` on `tick.value` for exactly this reason. Keying on the id raised
+ * `each_key_duplicate` the moment a cast amendment shared an id with an entry
+ * amendment, which is to say almost immediately.
+ */
+export function momentAxisRows(
+	history: readonly DatedRow[],
+	amendments: readonly DatedRow[]
+): DatedRow[] {
+	const byDate = new Map<number, DatedRow>()
+	// History first, so it wins the id on a shared date.
+	for (const row of [...history, ...amendments]) {
+		const value = dateValue(row)
+		if (!byDate.has(value)) byDate.set(value, row)
+	}
+	return [...byDate.values()].sort(compareDates)
+}
+
+/**
  * The axis: one tick per dated row, oldest first.
  *
  * Placed by date rather than by count, so a decade of silence reads as a gap
@@ -42,9 +78,7 @@ export interface TimelineTick {
  * stack into a single unclickable tick.
  */
 export function buildTicks(rows: readonly DatedRow[]): TimelineTick[] {
-	const sorted = [...rows].sort(
-		(a, b) => dateValue(a) - dateValue(b) || a.id - b.id
-	)
+	const sorted = [...rows].sort((a, b) => compareDates(a, b) || a.id - b.id)
 	if (sorted.length === 0) return []
 	const values = sorted.map(dateValue)
 	const min = values[0]

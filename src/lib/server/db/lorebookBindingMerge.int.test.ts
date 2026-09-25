@@ -119,6 +119,106 @@ async function insertLegacyPersonaBinding(opts: {
 	return rows[0] as { id: number }
 }
 
+/**
+ * A character (or background) binding, by raw SQL — the same hazard as
+ * `insertLegacyCharacter` above, on a second table. `schema.lorebookBindings`
+ * (head of branch) declares `sprite_set`, added by 0168 (DESIGN-sprites §2.2),
+ * which has not run at 124; a typed insert names every declared column and
+ * fails with "column does not exist". Only the columns that exist at 124.
+ */
+async function insertLegacyBinding(opts: {
+	lorebookId: number
+	characterId?: number | null
+	binding: string
+	name: string
+	aliases?: string[]
+	absorbedAliases?: string[]
+}) {
+	const result = await db.execute(sql`
+		INSERT INTO "lorebook_bindings"
+			("lorebook_id", "character_id", "binding", "name", "aliases", "absorbed_aliases")
+		VALUES (
+			${opts.lorebookId},
+			${opts.characterId ?? null},
+			${opts.binding},
+			${opts.name},
+			${JSON.stringify(opts.aliases ?? [])}::json,
+			${JSON.stringify(opts.absorbedAliases ?? [])}::json
+		)
+		RETURNING "id"
+	`)
+	const rows = (result as any).rows ?? result
+	return rows[0] as { id: number }
+}
+
+/**
+ * A lorebook entry, by raw SQL — `lorebook_entries.branch_id` arrived with
+ * 0159 (lore branches), above `UNDER_TEST_IDX`, so a typed insert fails here
+ * for the same reason as the two helpers above.
+ */
+async function insertLegacyEntry(opts: {
+	lorebookId: number
+	typeId: string
+	title: string
+	position: number
+	anchorBindingId?: number | null
+}) {
+	const result = await db.execute(sql`
+		INSERT INTO "lorebook_entries"
+			("lorebook_id", "type_id", "type_version", "title", "position", "anchor_binding_id")
+		VALUES (
+			${opts.lorebookId},
+			${opts.typeId},
+			1,
+			${opts.title},
+			${opts.position},
+			${opts.anchorBindingId ?? null}
+		)
+		RETURNING "id"
+	`)
+	const rows = (result as any).rows ?? result
+	return rows[0] as { id: number }
+}
+
+/** A scene, by raw SQL — `scenes.branch_id` also arrived with 0159. */
+async function insertLegacyScene(opts: {
+	lorebookId: number
+	historyEntryId: number
+	name: string
+}) {
+	const result = await db.execute(sql`
+		INSERT INTO "scenes" ("lorebook_id", "history_entry_id", "name")
+		VALUES (${opts.lorebookId}, ${opts.historyEntryId}, ${opts.name})
+		RETURNING "id"
+	`)
+	const rows = (result as any).rows ?? result
+	return rows[0] as { id: number }
+}
+
+/** A relationship edge, by raw SQL — `narrative_relationships.branch_id` too. */
+async function insertLegacyRelationship(opts: {
+	lorebookId: number
+	fromNodeId: number
+	toNodeId: number
+	relationshipType: string
+	description: string
+}) {
+	const result = await db.execute(sql`
+		INSERT INTO "narrative_relationships"
+			("lorebook_id", "from_node_id", "to_node_id", "relationship_type", "description")
+		VALUES (
+			${opts.lorebookId},
+			${opts.fromNodeId},
+			${opts.toNodeId},
+			${opts.relationshipType},
+			${opts.description}
+		)
+		RETURNING "id"
+	`)
+	const rows = (result as any).rows ?? result
+	return rows[0] as { id: number }
+}
+
 /** A copy of `drizzle/` with the migration under test struck from the journal. */
 async function folderWithoutMigrationUnderTest(): Promise<string> {
 	const dir = await fs.mkdtemp(
@@ -210,26 +310,20 @@ beforeAll(async () => {
 	// The duplicates the removed "Pull the cast from this session" produced:
 	// one lorebooks:createBinding per member, no existence check, pressed
 	// twice.
-	const [survivor, duplicate] = await db
-		.insert(schema.lorebookBindings)
-		.values([
-			{
-				lorebookId,
-				characterId: character.id,
-				binding: "{{char:1}}",
-				name: "Maren"
-			},
-			{
-				lorebookId,
-				characterId: character.id,
-				binding: "{{char:2}}",
-				name: "Maren",
-				aliases: ["Commander Thorne"],
-				absorbedAliases: ["The Commander"],
-				sceneId: null
-			}
-		])
-		.returning()
+	const survivor = await insertLegacyBinding({
+		lorebookId,
+		characterId: character.id,
+		binding: "{{char:1}}",
+		name: "Maren"
+	})
+	const duplicate = await insertLegacyBinding({
+		lorebookId,
+		characterId: character.id,
+		binding: "{{char:2}}",
+		name: "Maren",
+		aliases: ["Commander Thorne"],
+		absorbedAliases: ["The Commander"]
+	})
 	survivorId = survivor.id
 	duplicateId = duplicate.id
 
@@ -250,47 +344,37 @@ beforeAll(async () => {
 
 	// A third, unrelated cast member so the edges below have a far end that is
 	// nobody's duplicate.
-	const [other] = await db
-		.insert(schema.lorebookBindings)
-		.values({ lorebookId, binding: "{{char:5}}", name: "The Innkeeper" })
-		.returning()
+	const other = await insertLegacyBinding({
+		lorebookId,
+		binding: "{{char:5}}",
+		name: "The Innkeeper"
+	})
 
 	const { CHARACTER_LORE_TYPE_ID, HISTORY_TYPE_ID } = await import(
 		"$lib/shared/entries/types"
 	)
-	const [historyEntry] = await db
-		.insert(schema.lorebookEntries)
-		.values({
-			lorebookId,
-			typeId: HISTORY_TYPE_ID,
-			typeVersion: 1,
-			title: "The siege",
-			position: 1
-		})
-		.returning()
+	const historyEntry = await insertLegacyEntry({
+		lorebookId,
+		typeId: HISTORY_TYPE_ID,
+		title: "The siege",
+		position: 1
+	})
 	// Character lore anchored to the DUPLICATE — the row that is about to be
 	// deleted, and whose anchor is ON DELETE SET NULL.
-	const [anchored] = await db
-		.insert(schema.lorebookEntries)
-		.values({
-			lorebookId,
-			typeId: CHARACTER_LORE_TYPE_ID,
-			typeVersion: 1,
-			title: "What Maren never says",
-			position: 1,
-			anchorBindingId: duplicateId
-		})
-		.returning()
+	const anchored = await insertLegacyEntry({
+		lorebookId,
+		typeId: CHARACTER_LORE_TYPE_ID,
+		title: "What Maren never says",
+		position: 1,
+		anchorBindingId: duplicateId
+	})
 	anchoredEntryId = anchored.id
 
-	const [scene] = await db
-		.insert(schema.scenes)
-		.values({
-			lorebookId,
-			historyEntryId: historyEntry.id,
-			name: "The gate"
-		})
-		.returning()
+	const scene = await insertLegacyScene({
+		lorebookId,
+		historyEntryId: historyEntry.id,
+		name: "The gate"
+	})
 	sceneId = scene.id
 	// Both rows appear in one scene under the same role, so the survivor
 	// already holds the key the duplicate's row would be repointed onto.
@@ -300,29 +384,23 @@ beforeAll(async () => {
 		{ sceneId, bindingId: duplicateId, role: "mentioned" }
 	])
 
-	const [keptEdge] = await db
-		.insert(schema.narrativeRelationships)
-		.values({
-			lorebookId,
-			fromNodeId: duplicateId,
-			toNodeId: other.id,
-			relationshipType: "ally",
-			description: "drinks there"
-		})
-		.returning()
+	const keptEdge = await insertLegacyRelationship({
+		lorebookId,
+		fromNodeId: duplicateId,
+		toNodeId: other.id,
+		relationshipType: "ally",
+		description: "drinks there"
+	})
 	keptEdgeId = keptEdge.id
 	// An edge between the two rows: once both ends are the survivor it is a
 	// relationship from someone to themselves.
-	const [selfLoop] = await db
-		.insert(schema.narrativeRelationships)
-		.values({
-			lorebookId,
-			fromNodeId: survivorId,
-			toNodeId: duplicateId,
-			relationshipType: "rival",
-			description: "same person, twice"
-		})
-		.returning()
+	const selfLoop = await insertLegacyRelationship({
+		lorebookId,
+		fromNodeId: survivorId,
+		toNodeId: duplicateId,
+		relationshipType: "rival",
+		description: "same person, twice"
+	})
 	selfLoopEdgeId = selfLoop.id
 
 	await db
@@ -383,15 +461,12 @@ beforeAll(async () => {
 		binding: "{{char:2}}",
 		name: "Both"
 	})
-	const [characterOnly] = await db
-		.insert(schema.lorebookBindings)
-		.values({
-			lorebookId: bothBookId,
-			characterId: otherCharacter.id,
-			binding: "{{char:3}}",
-			name: "Kael"
-		})
-		.returning()
+	const characterOnly = await insertLegacyBinding({
+		lorebookId: bothBookId,
+		characterId: otherCharacter.id,
+		binding: "{{char:3}}",
+		name: "Kael"
+	})
 	bothPersonaOnlyId = personaOnly.id
 	bothBothIdsId = bothIds.id
 	bothCharacterOnlyId = characterOnly.id

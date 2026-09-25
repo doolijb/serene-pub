@@ -24,6 +24,7 @@
  * core's from the SDK and a plugin's from rows would be two pages.
  */
 
+import { AMBIENT_SCRIPT_EXTRAS } from "@serene-pub/sdk"
 import { and, asc, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { i18nText, parseScriptKindId, type I18n } from "@serene-pub/sdk"
@@ -156,14 +157,24 @@ async function hookExtras(db: Db): Promise<Map<string, Set<string>>> {
 	return out
 }
 
-/** Every registered script type, resolved for display and validation. */
+/**
+ * Every registered script type, resolved for display and validation.
+ *
+ * A type's readable extras are its hooks' own plus the ambient set
+ * (`AMBIENT_SCRIPT_EXTRAS`, R32): the executor hands `session` to every
+ * script site — a slot's port hook and an interior point alike — so every
+ * type may read it, whether or not a slot lists it (no slot does since the
+ * modder pass) and whether it attaches at a slot or at a point.
+ */
 export async function scriptTypeInfos(db: Db): Promise<ScriptTypeInfo[]> {
 	const extras = await hookExtras(db)
 	return (await scriptTypeRows(db)).map((row) =>
-		typeInfo(
-			row,
-			[...(extras.get(`${row.definitionId}@${row.version}`) ?? [])].sort()
-		)
+		typeInfo(row, [
+			...new Set([
+				...(extras.get(`${row.definitionId}@${row.version}`) ?? []),
+				...AMBIENT_SCRIPT_EXTRAS
+			])
+		].sort())
 	)
 }
 
@@ -262,14 +273,20 @@ const record = (r: any, usedBy: Set<string> | undefined): ScriptRecord => ({
 
 /** The management page's one read: every type, every row, and what holds it. */
 export async function scriptsView(db: Db): Promise<ScriptsView> {
-	const types = await scriptTypeInfos(db)
+	// A disabled plugin's script types, and the scripts written for them, are
+	// not listed (R67); they come back when it is turned on.
+	const { disabledPlugins } = await import("$lib/server/plugins/disabledPlugins")
+	const off = await disabledPlugins(db)
+	const types = (await scriptTypeInfos(db)).filter((t) => !off.ownsId(t.typeId))
 	const use = await scriptUsageIndex(db)
 	const scripts = (
 		(await db
 			.select()
 			.from(schema.pipelineScripts)
 			.orderBy(asc(schema.pipelineScripts.id))) as any[]
-	).map((r) => record(r, use.get(r.id)))
+	)
+		.filter((r) => !off.ownsId(r.typeId))
+		.map((r) => record(r, use.get(r.id)))
 	return { types, scripts }
 }
 

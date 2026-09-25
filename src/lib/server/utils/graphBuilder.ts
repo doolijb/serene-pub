@@ -278,7 +278,6 @@ function buildMinimalSession(userPrompt: string): any {
 		lorebookId: null,
 		isGroup: false,
 		sessionType: SessionTypes.SUMMARIZE,
-		groupReplyStrategy: null,
 		sessionMessages: [
 			{
 				id: 1,

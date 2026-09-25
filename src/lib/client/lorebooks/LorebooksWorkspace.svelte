@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { getContext, onDestroy, onMount, untrack } from "svelte"
+	import { SvelteMap } from "svelte/reactivity"
 	import * as Icons from "@lucide/svelte"
 	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
@@ -28,8 +29,14 @@
 	import LensRow from "./LensRow.svelte"
 	import LorebookActions from "./LorebookActions.svelte"
 	import LoreRail from "./LoreRail.svelte"
+	import ReadingInto from "./ReadingInto.svelte"
 	import MomentBanner from "./time/MomentBanner.svelte"
 	import MomentBar from "./time/MomentBar.svelte"
+	import CompareLines from "./time/CompareLines.svelte"
+	import LivesLens from "./time/LivesLens.svelte"
+	import WorldBar from "./time/WorldBar.svelte"
+	import { worldRoster } from "./time/worldRoster"
+	import { appearancesOf } from "$lib/shared/lorebooks/presence"
 	import TimeLens from "./time/TimeLens.svelte"
 	import { refLinksFrom, type RefLink } from "./editor/refs"
 	import { drawingForLens } from "./graphs"
@@ -71,7 +78,15 @@
 	import type { EntryDecisions } from "./markers"
 	import type { PoolSource } from "./sections/types"
 	import { timelineCursor } from "./timelineCursor.svelte"
-	import { momentValue, notYetKeys } from "./time/moment"
+	import { momentAxisRows } from "./timelineStrip"
+	import { momentValue, notYetKeys, parseMoment } from "./time/moment"
+	import {
+		castAsOf,
+		compareLines,
+		entryAsOf,
+		groupAmendments,
+		rowsOnLine
+	} from "$lib/shared/lorebooks/amendments"
 	import {
 		castArrivals,
 		storyItems,
@@ -119,6 +134,16 @@
 	let counts = $state<Record<string, number> | null>(null)
 	/** Every row the book holds, so the rail can report on the whole of it. */
 	let bookRows = $state<Record<string, PoolSource[]>>({})
+	/** Dated overlays on this book's entries. See `resolvedRows` below. */
+	let entryAmendments = $state<Sockets.Amendments.EntryRow[]>([])
+	/** Overlays on the CAST — the people, card included. Ruled 2026-09-23. */
+	let castAmendments = $state<Sockets.Amendments.CastRow[]>([])
+	/** Where each member stands in their own life, and when. */
+	let presences = $state<Sockets.Amendments.Presence[]>([])
+	/** The book's cast members, for the comparison. The Cast board keeps its own. */
+	let castRows = $state<any[]>([])
+	/** The book's lines. `main` is implicit and never in here. */
+	let branches = $state<Sockets.Amendments.Branch[]>([])
 	let sceneRows = $state<PoolSource[]>([])
 	/**
 	 * The book's typed edges, and the cast rows they name.
@@ -188,8 +213,272 @@
 		return keys
 	})
 
+	/**
+	 * The book's rows as they read AT THE MOMENT, on the line being read.
+	 *
+	 * The one place amendments are applied. Everything downstream — the pool,
+	 * the tree, the time lanes — derives from this rather than from `bookRows`,
+	 * so a dated change cannot be visible on one screen and missing from
+	 * another.
+	 *
+	 * ⚠ `EntryWorkspace` keeps its OWN copy of the rows (its scope is its own
+	 * socket conversation), so it cannot read this one — it is handed the
+	 * FUNCTION instead, as the `resolve` prop, and applies it to its own rows.
+	 * One resolver, two call sites; never two rules.
+	 *
+	 * ⚠ This runs at `now` too, not only while the Moment bar is moved. An
+	 * amendment dated in the past is in effect now; that is what makes it an
+	 * amendment rather than a note about the future.
+	 *
+	 * ⚠ Untouched when the book has no overlays, which is every book until
+	 * somebody makes one — `bookRows` is handed straight back, so the common
+	 * case costs one `length` check rather than a rebuild of every row.
+	 */
+	let resolveRows = $derived.by(() => {
+		const branchId = route.branch ?? null
+		const at = amendmentsAt
+		// ⚠ The short circuit is "this book has never forked and has no
+		// overlays", NOT "we are reading main". Main is not the unfiltered
+		// reading — a fork's own entries are rows main does not have, and
+		// skipping the filter there put them on both lines.
+		if (!entryAmendments.length && !branches.length)
+			return (rows: readonly PoolSource[]) => rows as PoolSource[]
+		const byEntry = groupAmendments(entryAmendments, "entryId")
+		return (rows: readonly PoolSource[]) =>
+			// ⚠ Filter FIRST. Resolving a row this line cannot see would spend
+			// the work and then drop it, and — worse — a sibling line's entry
+			// would be counted by anything reading the length.
+			rowsOnLine(rows as any[], branchId).map((row: any) => {
+				const overlays = byEntry.get(row.id)
+				return overlays
+					? (entryAsOf(row, overlays as any, at) as PoolSource)
+					: (row as PoolSource)
+			})
+	})
+
+	/**
+	 * When, and on which line, everything in this book is being read.
+	 *
+	 * One object, shared by every resolver, so an entry and a cast member can
+	 * never disagree about the moment they are being read from.
+	 *
+	 * ⚠ **RULED 2026-09-23: a branch reads its own amendments and everything on
+	 * main BEFORE the fork — nothing main went on to do afterwards.** The cut
+	 * is by STORY DATE, not by when the change was written. A line with no fork
+	 * date was never cut off from anything and keeps following main.
+	 *
+	 * ⚠ A fork off another fork passes ITS OWN fork date, not its parent's: the
+	 * cut is where THIS line left, and the parent's cut is already baked into
+	 * what the parent carried away.
+	 */
+	let amendmentsAt = $derived.by(() => {
+		const branchId = route.branch ?? null
+		const line = branchId
+			? (branches.find((b) => b.id === branchId) ?? null)
+			: null
+		return {
+			moment: parseMoment(route.moment),
+			branchId,
+			forkedAt:
+				line && line.forkYear != null
+					? {
+							year: line.forkYear,
+							month: line.forkMonth,
+							day: line.forkDay
+						}
+					: null
+		}
+	})
+
+	/**
+	 * A cast member as they read at this moment, on this line.
+	 *
+	 * The same `at` the entries use, so a member and their lore can never
+	 * disagree about when they are being read from. Which CARD represents them
+	 * resolves through here too — `characterId` is an ordinary column.
+	 */
+	let resolveCast = $derived.by(() => {
+		if (!castAmendments.length)
+			return <T extends { id: number }>(rows: readonly T[]) => rows as T[]
+		const byMember = groupAmendments(castAmendments, "castId")
+		return <T extends { id: number }>(rows: readonly T[]) =>
+			rows.map((row) => {
+				const overlays = byMember.get(row.id)
+				return overlays
+					? (castAsOf(row, overlays as any, amendmentsAt) as T)
+					: row
+			})
+	})
+
+	/** This member's overlays, for their own account of them. */
+	let castAmendmentsFor = $derived.by(() => {
+		const byMember = groupAmendments(castAmendments, "castId")
+		return (castId: number) => byMember.get(castId) ?? []
+	})
+
+	/**
+	 * This entry's overlays, for the entry's own account of them.
+	 *
+	 * The same grouped map the resolver uses — asked a second question, never
+	 * grouped a second time.
+	 */
+	let amendmentsFor = $derived.by(() => {
+		const byEntry = groupAmendments(entryAmendments, "entryId")
+		return (entryId: number) => byEntry.get(entryId) ?? []
+	})
+
+	/**
+	 * Card names, for the one comparison where an id means nothing.
+	 *
+	 * ⚠ Asked for only while the comparison is open. Every other screen draws
+	 * a card through the row it is joined to, so the whole list would be a
+	 * fetch nobody reads — and this book may feature three of a hundred cards.
+	 */
+	let cardNames = $state(new SvelteMap<number, string>())
+
+	function handleCharactersList(msg: Sockets.Characters.List.Response) {
+		const next = new SvelteMap<number, string>()
+		for (const c of msg.characterList ?? []) {
+			// A card with no id is not a card this book can point at.
+			if (c.id == null) continue
+			next.set(
+				c.id,
+				(c.nickname || c.name || "").trim() || `card #${c.id}`
+			)
+		}
+		cardNames = next
+	}
+
+	// BARE: the whole of this user's cards, not one book's — the same key the
+	// Cast board uses, and the reason this is a fetch and not a join.
+	useInterest<"characters:list">("characters:list", handleCharactersList)
+
+	$effect(() => {
+		// ⚠ Asked for on any open book, not only while comparing: the World
+		// bar's roster names a carded member BY their card, so without this a
+		// card swapped by an amendment is invisible in the one place meant to
+		// show who is in the room.
+		if (route.lorebookId === null) return
+		socket.emit("characters:list", {})
+	})
+
+	/**
+	 * Everyone this world holds at the moment being read, on this line.
+	 *
+	 * Drawn from the cast rows resolved through `resolveCast`, so a member
+	 * whose card or state was amended reads as they are *here* — and a member
+	 * present twice is two entries, which is the whole point of the list.
+	 */
+	let inhabitants = $derived.by(() => {
+		const at = {
+			moment: amendmentsAt.moment,
+			branchId: amendmentsAt.branchId
+		}
+		const onThisLine = rowsOnLine(castRows, at.branchId) as any[]
+		// ⚠ Each member becomes one row PER APPEARANCE. A member the book has
+		// never placed has exactly one, which is every member in every book
+		// today — the doubling only appears once somebody says where in their
+		// life they are standing.
+		const expanded = onThisLine.flatMap((row) => {
+			const here = appearancesOf(row.id, presences as any, at)
+			return here.map((a) => ({
+				...row,
+				personalPosition: a.personalPosition
+			}))
+		})
+		return worldRoster(resolveCast(expanded) as any, (id) =>
+			cardNames.get(id)
+		)
+	})
+
+	/**
+	 * The cast, named as the rest of the workspace names them.
+	 *
+	 * ⚠ Resolved, and named by the RESOLVED card. Reading the raw row here put
+	 * "Verity, novice" on the lane while the roster two inches above said
+	 * "Verity, keeper" — one screen disagreeing with itself about who somebody
+	 * is, which is the exact failure the one-resolver rule exists to stop.
+	 */
+	let livesMembers = $derived(
+		(resolveCast(rowsOnLine(castRows, route.branch ?? null)) as any[]).map(
+			(r) => ({
+				id: r.id,
+				name:
+					(r.characterId != null
+						? (cardNames.get(r.characterId) ?? r.name)
+						: r.name) || "Unnamed"
+			})
+		)
+	)
+
+	/** The reader's words for a column, where a column has one. */
+	const FIELD_WORDS: Record<string, string> = {
+		name: "name",
+		content: "content",
+		keys: "triggers",
+		secondaryKeys: "secondary keys",
+		enabled: "on or off",
+		constant: "always on",
+		priority: "priority",
+		summary: "summary",
+		aliases: "aliases",
+		nodeState: "state",
+		nodeVisibility: "who can see them",
+		characterId: "which card",
+		spriteSet: "sprite set"
+	}
+
+	/**
+	 * What this line has that main does not, and what the two read differently.
+	 *
+	 * Entries and cast members in one list: an author comparing two stories
+	 * wants the whole of the difference, not two screens of half of it.
+	 *
+	 * ⚠ Computed from the UNRESOLVED rows on purpose — `compareLines` resolves
+	 * each one twice itself, once per line, which is the only way to have both
+	 * readings at the same time. `resolvedRows` holds one of them.
+	 */
+	let lineDifferences = $derived.by(() => {
+		const branchId = route.branch ?? null
+		if (branchId === null) return []
+		const at = {
+			moment: amendmentsAt.moment,
+			forkedAt: amendmentsAt.forkedAt
+		}
+		const byEntry = groupAmendments(entryAmendments, "entryId")
+		const byMember = groupAmendments(castAmendments, "castId")
+		// ⚠ The key is what tells the two apart downstream: an entry and a
+		// cast member are separate id spaces and collide at the same number.
+		const entries = compareLines(
+			Object.values(bookRows).flat() as any[],
+			(id) => (byEntry.get(id) ?? []) as any,
+			branchId,
+			at
+		).map((d) => ({
+			...d,
+			key: `entry#${d.id}`,
+			subject: "entry" as const
+		}))
+		const cast = compareLines(
+			castRows as any[],
+			(id) => (byMember.get(id) ?? []) as any,
+			branchId,
+			at
+		).map((d) => ({ ...d, key: `cast#${d.id}`, subject: "cast" as const }))
+		return [...entries, ...cast]
+	})
+
+	/** The book's own rows, read through that function. */
+	let resolvedRows = $derived.by(() => {
+		if (!entryAmendments.length) return bookRows
+		const out: Record<string, PoolSource[]> = {}
+		for (const [typeId, rows] of Object.entries(bookRows))
+			out[typeId] = resolveRows(rows)
+		return out
+	})
+
 	/** Every row in the book, as the pool reads them. */
-	let bookPool = $derived(bookPoolItems(bookRows, sceneRows))
+	let bookPool = $derived(bookPoolItems(resolvedRows, sceneRows))
 
 	/** What a cast endpoint is called, so an edge can name who it names. */
 	let castNames = $derived(
@@ -204,7 +493,44 @@
 	)
 
 	/** Every entry the book holds, whatever kind, as the line reads them. */
-	let timeEntries = $derived(Object.values(bookRows).flat() as TimeEntryRow[])
+	let timeEntries = $derived(
+		Object.values(resolvedRows).flat() as TimeEntryRow[]
+	)
+	/**
+	 * The session reading this book, for the rail's block.
+	 *
+	 * Gated on `lorebookId` as well as `sessionId`: a session is open in the
+	 * shell whatever book is on screen, and a session reading a DIFFERENT book
+	 * has nothing to say about this one.
+	 */
+	let railSession = $derived(
+		book &&
+			openSessionCtx.lorebookId === book.id &&
+			openSessionCtx.sessionId !== null
+			? {
+					id: openSessionCtx.sessionId,
+					name: openSessionCtx.sessionName ?? "the open session",
+					branchId: openSessionCtx.lorebookBranchId ?? null
+				}
+			: null
+	)
+
+	/**
+	 * Stand where the session stands: its line, and now.
+	 *
+	 * Both at once and in one step, because "what the model sees" is the pair
+	 * — a reader on the right line at the wrong date is still not looking at
+	 * what was sent.
+	 */
+	function matchSession() {
+		if (!railSession) return
+		loreRoute.navigate({ type: "setMoment", moment: undefined })
+		loreRoute.navigate({
+			type: "setBranch",
+			branch: railSession.branchId ?? undefined
+		})
+	}
+
 	/** The session reading this book, which stands at now on the line. */
 	let timeSession = $derived(
 		book &&
@@ -398,9 +724,22 @@
 		const id = route.lorebookId
 		if (id === null) return
 		socket.emit("entries:counts", {
-			lorebookId: id
+			lorebookId: id,
+			// The figures are of what this line can see, so they move with it.
+			branchId: route.branch ?? null
 		} satisfies Sockets.Entries.Counts.Params)
 	}
+
+	/**
+	 * The rail's figures follow the line being read.
+	 *
+	 * The counts are the server's, so switching line has to ask again — the
+	 * pool filters itself, but a figure computed elsewhere cannot.
+	 */
+	$effect(() => {
+		void route.branch
+		refreshCounts()
+	})
 
 	/**
 	 * Jump, scoped to this view.
@@ -468,6 +807,13 @@
 			socket.emit("entries:list", { lorebookId: id, typeId })
 		socket.emit("scenes:listByLorebook", { lorebookId: id })
 		socket.emit("narrativeGraph:list", { lorebookId: id })
+		socket.emit("amendments:list", { lorebookId: id })
+		// ⚠ The cast is REQUESTED on open, for the World bar's roster. As a
+		// cascade of somebody else's write it would not arrive at all until
+		// something touched a binding, and the world would read as empty.
+		socket.emit("lorebooks:bindingList", {
+			lorebookId: id
+		} satisfies Sockets.Lorebooks.BindingList.Params)
 		refreshCounts()
 	}
 
@@ -488,6 +834,20 @@
 	function handleEntriesList(msg: Sockets.Entries.List.Response) {
 		if (msg.lorebookId !== route.lorebookId) return
 		bookRows = { ...bookRows, [msg.typeId]: msg.entryList as PoolSource[] }
+	}
+
+	/**
+	 * Every dated overlay in the book, and the lines it has.
+	 *
+	 * One message for the whole book (see `sockets/amendments.ts`): the pool
+	 * resolves every row it draws, so a call per entry would be a call per row.
+	 */
+	function handleAmendmentsList(msg: Sockets.Amendments.List.Response) {
+		if (msg.lorebookId !== route.lorebookId) return
+		entryAmendments = msg.entries
+		castAmendments = msg.cast
+		presences = msg.presences ?? []
+		branches = msg.branches
 	}
 
 	/**
@@ -531,6 +891,9 @@
 	// One book is open at a time, and the interest key already names it, so
 	// there is nothing left here to filter on.
 	function handleGraphList(msg: Sockets.NarrativeGraph.List.Response) {
+		// The scope the gate reads; checked here too, so a stale book's
+		// reply arriving after a switch cannot paint this one.
+		if (msg.lorebookId !== route.lorebookId) return
 		graphNodes = msg.nodes
 		graphRelationships = msg.relationships
 	}
@@ -563,6 +926,9 @@
 	function handleBindingList(msg: Sockets.Lorebooks.BindingList.Response) {
 		const id = route.lorebookId
 		if (id === null || msg.lorebookId !== id) return
+		// Kept, not just counted: comparing two lines needs the cast rows as
+		// well as the entries, and this list is already on the wire.
+		castRows = msg.lorebookBindingList as any[]
 		const merged = mergeCastCount(counts, msg.lorebookBindingList)
 		// A figure that has not arrived cannot be merged into, and the answer
 		// on its way was counted before these rows existed.
@@ -657,7 +1023,15 @@
 	$effect(() => {
 		timelineCursor.setAxis(
 			route.lorebookId,
-			(bookRows[HISTORY_TYPE_ID] ?? []) as any[]
+			momentAxisRows(
+				(bookRows[HISTORY_TYPE_ID] ?? []) as any[],
+				[
+					...entryAmendments,
+					// A cast overlay dates the story exactly as an entry's does:
+					// the year a member changed card is a moment worth standing at.
+					...castAmendments
+				] as any[]
+			)
 		)
 	})
 
@@ -707,6 +1081,10 @@
 			declareInterest<"entries:list">(
 				interestKey("entries:list", id),
 				handleEntriesList
+			),
+			declareInterest<"amendments:list">(
+				interestKey("amendments:list", id),
+				handleAmendmentsList
 			),
 			declareInterest<"entries:create">(
 				interestKey("entries:create", id),
@@ -940,11 +1318,67 @@
 	</div>
 {/snippet}
 
+{#snippet worldBar()}
+	<!-- Where you are in this story, as one control. Line and moment were two
+	     corners of the screen before; they are one question. -->
+	{#if book}
+		<WorldBar
+			lorebookId={book.id}
+			{branches}
+			branchId={route.branch ?? null}
+			moment={route.moment}
+			{inhabitants}
+			comparing={!!route.compare}
+			onBranch={(next) =>
+				loreRoute.navigate({ type: "setBranch", branch: next })}
+			onMoment={(next) =>
+				loreRoute.navigate({ type: "setMoment", moment: next })}
+			onCompare={() =>
+				loreRoute.navigate({ type: "setCompare", compare: true })}
+			onOpenMember={(castId) =>
+				loreRoute.navigate({
+					type: "openCastMember",
+					scope: "cast",
+					castId
+				})}
+		/>
+	{/if}
+{/snippet}
+
 {#snippet workspace()}
 	{#if !book}
 		<div class="flex items-center justify-center py-8">
 			<Icons.Loader2 size={20} class="text-surface-400 animate-spin" />
 		</div>
+	{:else if route.compare && route.branch != null}
+		<!-- Drawn in place of the pool, not beside it: comparing is a different
+		     question from reading, and a split screen would answer neither. -->
+		<CompareLines
+			lineName={branches.find((b) => b.id === route.branch)?.name ??
+				"this line"}
+			differences={lineDifferences}
+			titleOf={(row) =>
+				(row?.name || row?.title || "").toString().trim() || "Untitled"}
+			labelOf={(field) => FIELD_WORDS[field] ?? field}
+			valueOf={(field, value) =>
+				field === "characterId"
+					? value == null
+						? "no card"
+						: (cardNames.get(Number(value)) ?? `card #${value}`)
+					: null}
+			onOpen={(d) =>
+				loreRoute.navigate(
+					(d as any).subject === "cast"
+						? {
+								type: "openCastMember",
+								scope: "cast",
+								castId: d.id
+							}
+						: { type: "openEntry", entryId: d.id }
+				)}
+			onClose={() =>
+				loreRoute.navigate({ type: "setCompare", compare: false })}
+		/>
 	{:else if settingsOpen}
 		{#key book.id}
 			<BookSettings
@@ -966,6 +1400,24 @@
 	{:else if bookEmpty}
 		{#key book.id}
 			<DayOne lorebookId={book.id} onImport={() => (importing = true)} />
+		{/key}
+	{:else if lens === "lives"}
+		<!-- Who was in the world, and when. Time draws what happened; this
+		     draws who was there for it. -->
+		{#key book.id}
+			<LivesLens
+				members={livesMembers}
+				presences={presences as any}
+				pins={(bookRows[HISTORY_TYPE_ID] ?? []) as any}
+				moment={amendmentsAt.moment}
+				branchId={amendmentsAt.branchId}
+				onOpenMember={(castId) =>
+					loreRoute.navigate({
+						type: "openCastMember",
+						scope: "cast",
+						castId
+					})}
+			/>
 		{/key}
 	{:else if lens === "time"}
 		<!-- The line is its own drawing: the graph canvas draws relationships,
@@ -1004,6 +1456,14 @@
 				lorebookId={book.id}
 				{mode}
 				{decisions}
+				{resolveCast}
+				{castAmendmentsFor}
+				moment={route.moment}
+				presences={presences as any}
+				branchId={route.branch ?? null}
+				branchName={route.branch
+					? (branches.find((b) => b.id === route.branch)?.name ?? null)
+					: null}
 				bind:hasUnsavedChanges={tabHasUnsavedChanges}
 				onViewRelationships={async (castId) => {
 					await loreRoute.navigate({
@@ -1025,6 +1485,8 @@
 				{doors}
 				{bookPool}
 				{bookLinks}
+				resolve={resolveRows}
+				{amendmentsFor}
 				{mode}
 				{lens}
 				{filters}
@@ -1120,9 +1582,16 @@
 			{/if}
 		</div>
 	{:else if mode === "desk"}
+		<div class="mb-3">
+			{@render worldBar()}
+		</div>
 		<div class="flex min-h-0 flex-1 gap-4">
 			<LoreRail
-				branch="main"
+				{branches}
+				branchId={route.branch ?? null}
+				moment={route.moment}
+				session={railSession}
+				onMatchSession={matchSession}
 				{scopes}
 				scope={route.scope}
 				{lens}
@@ -1180,6 +1649,26 @@
 			</button>
 			{@render bookChip()}
 		</div>
+		<div class="mb-2">
+			{@render worldBar()}
+		</div>
+		{#if railSession}
+			<!-- The rail is a desk thing; the session reading this book is not,
+			     so the block is mounted in both layouts rather than living
+			     inside `LoreRail`. -->
+			<div class="mb-2">
+				<ReadingInto
+					sessionId={railSession.id}
+					sessionName={railSession.name}
+					reached={readInKeys ? readInKeys.size : null}
+					sessionBranchId={railSession.branchId}
+					branchId={route.branch ?? null}
+					{moment}
+					{branches}
+					onMatch={matchSession}
+				/>
+			</div>
+		{/if}
 		<div class="mb-2 flex flex-col gap-2">
 			<PanelFilterInput
 				bind:value={search}

@@ -148,6 +148,22 @@ export const startupTasks: StartupTask[] = [
 	},
 	{
 		/**
+		 * The event map's laws over what is installed (PLAN-turn-order §B3):
+		 * a listed event nothing fires (C28), a loop nothing stops (C29).
+		 * After `plugins`, so a plugin's genres and listeners are judged too.
+		 * Warnings, never a refusal — the owner reads them in the log.
+		 */
+		name: "eventMap",
+		run: async () => {
+			const { eventMapFindings } = await import(
+				"$lib/server/pipelines/boot/eventMapCheck"
+			)
+			for (const line of await eventMapFindings(db))
+				console.warn(`[eventMap] ${line}`)
+		}
+	},
+	{
+		/**
 		 * A default layout preset per genre (PLAN 25 redesign).
 		 *
 		 * HERE, and not beside the other seeds in `db/index.ts`, because a

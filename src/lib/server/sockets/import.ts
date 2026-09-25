@@ -1,4 +1,5 @@
 import { db } from "$lib/server/db"
+import { spriteLabelFromFilename } from "$lib/shared/sprites"
 import * as schema from "$lib/server/db/schema"
 import {
 	WORLD_LORE_TYPE_ID,
@@ -35,6 +36,34 @@ import { resolveSillyTavernDataRoot } from "$lib/shared/utils/sillyTavernPaths"
 import { characterFieldsFromParsedData } from "./characters"
 import { personaFieldsFromParsedData } from "$lib/server/utils/personaCard"
 import { markCharacterAsPersona } from "$lib/server/utils/markCharacterAsPersona"
+
+/**
+ * An imported session announces itself (PLAN-turn-order §4.1): one
+ * `session-updated` under the `system` cause, once its cast and messages are
+ * in, so the genre's turn-order spec runs and the session has an order the
+ * first time it opens instead of waiting for its first event. No `changed`:
+ * the whole row is new, and the cause says why. Best-effort — the import has
+ * landed.
+ */
+export async function announceImportedSession(
+	db: Db,
+	opts: { sessionId: number; userId: number }
+): Promise<void> {
+	try {
+		const [{ emitSessionEvent }, { sessionEvents }] = await Promise.all([
+			import("$lib/server/pipelines/runtime/sessionEvents"),
+			import("@serene-pub/sdk")
+		])
+		await emitSessionEvent(db, {
+			sessionId: opts.sessionId,
+			userId: opts.userId,
+			event: sessionEvents.sessionUpdated,
+			payload: { sessionId: opts.sessionId, cause: { kind: "system" } }
+		})
+	} catch (err) {
+		console.warn(`[import] session-updated for session ${opts.sessionId} failed:`, err)
+	}
+}
 
 // ==================== Import Staging ====================
 //
@@ -114,6 +143,59 @@ function getImportSession(sessionId: string, userId: number): ImportSession {
  * paths can legitimately contain one subdirectory segment (eg. a session's
  * "CharacterName/session.jsonl"), so this only rejects genuine traversal
  * (".."/absolute), not slashes in general. */
+const SPRITE_FILE = /\.(png|apng|jpe?g|webp|gif|avif)$/i
+
+/**
+ * A SillyTavern character's sprite folder, imported as sprites
+ * (DESIGN-sprites §4). Top-level images land in the default set; each
+ * subfolder but `backgrounds` is a sprite set of that name. Every path goes
+ * through `resolveSafePath`, like the rest of this import. Returns how many
+ * sprites were stored.
+ */
+async function importSillyTavernSprites(
+	dataDir: string,
+	folder: string,
+	userId: number,
+	characterId: number
+): Promise<number> {
+	const charactersRoot = path.join(dataDir, "characters")
+	let root: string
+	try {
+		root = resolveSafePath(charactersRoot, folder)
+	} catch {
+		return 0
+	}
+	let entries: import("fs").Dirent[]
+	try {
+		entries = await fsPromises.readdir(root, { withFileTypes: true })
+	} catch {
+		return 0
+	}
+	const items: { set?: string; label: string; bytes: Buffer; filename: string }[] = []
+	const readImages = async (dir: string, set?: string) => {
+		for (const e of await fsPromises.readdir(dir, { withFileTypes: true })) {
+			if (!e.isFile() || !SPRITE_FILE.test(e.name)) continue
+			const label = spriteLabelFromFilename(e.name)
+			if (!label) continue
+			items.push({
+				...(set ? { set } : {}),
+				label,
+				bytes: await fsPromises.readFile(resolveSafePath(dir, e.name)),
+				filename: e.name
+			})
+		}
+	}
+	await readImages(root)
+	for (const e of entries) {
+		if (!e.isDirectory() || e.name.toLowerCase() === "backgrounds") continue
+		await readImages(resolveSafePath(root, e.name), e.name)
+	}
+	if (items.length === 0) return 0
+	const { importSprites } = await import("$lib/server/sprites")
+	const result = await importSprites(db, userId, characterId, items, "sillytavern")
+	return result.added
+}
+
 function resolveSafePath(root: string, relativePath: string): string {
 	const normalized = relativePath.replace(/\\/g, "/")
 	if (
@@ -523,6 +605,7 @@ export const importExecuteSillyTavern: Handler<
 			// ── Counters & tracking ──────────────────────────────────────────────
 			const stats = {
 				characters: 0,
+				sprites: 0,
 				personas: 0,
 				sessions: 0,
 				lorebooks: 0,
@@ -679,6 +762,25 @@ export const importExecuteSillyTavern: Handler<
 								e
 							)
 						}
+					}
+
+					// Sprites (DESIGN-sprites §4): SillyTavern keeps a
+					// character's expressions in `characters/<file name>/`,
+					// labelled by file name up to the first `-` or `.`
+					// (`joy.png`, `joy-2.png`), and a sprite-folder override
+					// in a subfolder — which is exactly a sprite set here.
+					// `backgrounds/` is where its CHARX import files a card's
+					// backgrounds, not sprites.
+					try {
+						const imported = await importSillyTavernSprites(
+							dataDir,
+							fileBasename,
+							userId,
+							newChar.id
+						)
+						stats.sprites += imported
+					} catch (e) {
+						console.warn(`Could not import sprites for ${d.name}:`, e)
 					}
 
 					// Import embedded character book as lorebook
@@ -993,6 +1095,7 @@ export const importExecuteSillyTavern: Handler<
 					// One push for the whole imported history, after it: the
 					// new row has a line to quote from the moment it appears.
 					broadcastSessionRow(socket.io, newSession.id)
+					await announceImportedSession(db, { sessionId: newSession.id, userId })
 
 					stats.sessions++
 				} catch (e) {
@@ -1058,12 +1161,37 @@ export const importExecuteSillyTavern: Handler<
 							userId,
 							name: groupItem.name,
 							isGroup: true,
-							groupReplyStrategy: mapGroupReplyStrategy(
-								groupData.activation_strategy
-							),
 							lorebookId: groupLorebookId
 						})
 						.returning()
+					// The group's activation strategy, as a rebind of the
+					// session's speaker node (2026-09-21) — only `manual`
+					// is one; the rest inherit round robin.
+					const importedStrategy = mapGroupReplyStrategy(
+						groupData.activation_strategy
+					)
+					if (importedStrategy) {
+						// The Turn order control is a rebind of the session
+						// genre's turn-order spec's `strategy` node (R27, R28),
+						// found in core-catalog's table — never a slug built
+						// here.
+						const [{ setSessionNodeRebind }, { TURN_ORDER_BY_GENRE }] =
+							await Promise.all([
+								import("$lib/server/pipelines/entities/bindings"),
+								import("@serene-pub/core-catalog")
+							])
+						const turnOrder = TURN_ORDER_BY_GENRE.find(
+							(t) => t.genre.id === newSession.genreId
+						)
+						if (turnOrder)
+							await setSessionNodeRebind(db, {
+								sessionId: newSession.id,
+								userId,
+								spec: turnOrder.spec,
+								nodeKey: turnOrder.strategyNode,
+								definitionId: importedStrategy
+							})
+					}
 
 					for (let i = 0; i < groupItem.memberNames.length; i++) {
 						const charId = memberIds[i]
@@ -1130,6 +1258,7 @@ export const importExecuteSillyTavern: Handler<
 
 					// As above: one push once the copied history is in.
 					broadcastSessionRow(socket.io, newSession.id)
+					await announceImportedSession(db, { sessionId: newSession.id, userId })
 
 					stats.sessions++
 				} catch (e) {
@@ -1144,6 +1273,10 @@ export const importExecuteSillyTavern: Handler<
 			if (stats.characters)
 				parts.push(
 					`${stats.characters} character${stats.characters !== 1 ? "s" : ""}`
+				)
+			if (stats.sprites)
+				parts.push(
+					`${stats.sprites} sprite${stats.sprites !== 1 ? "s" : ""}`
 				)
 			if (stats.personas)
 				parts.push(

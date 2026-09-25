@@ -1,0 +1,326 @@
+/*
+ * The conversation's structural skin (C0b): what the messages widget and its
+ * parts looked like from their own `<style>` blocks, as global, class-keyed
+ * rules. A component's `<style>` does not survive a remote build (styles are
+ * not in the host-element vocabulary), and core's conversation widgets build
+ * as remotes from the same source — so their structure lives here, beside
+ * the sp elements' base skin, and style packs keep layering over it.
+ */
+
+/* ── the widget's box (MessagesWidget) ──────────────────────────────────── */
+
+/* One column, the log taking what is left of it. */
+.sp-conversation {
+	display: flex;
+	flex-direction: column;
+	min-inline-size: 0;
+	min-block-size: 0;
+	block-size: 100%;
+	/* The glass panel's colours, light first and paired below — a message
+	   sits on the page's ground, and the panel is one step off it. */
+	--sp-glass-bg: color-mix(in oklab, var(--color-surface-50) 78%, transparent);
+	--sp-glass-bd: color-mix(in oklab, var(--color-surface-300) 70%, transparent);
+}
+[data-mode="dark"] .sp-conversation {
+	--sp-glass-bg: color-mix(in oklab, var(--color-surface-950) 78%, transparent);
+	--sp-glass-bd: color-mix(in oklab, var(--color-surface-800) 70%, transparent);
+}
+
+/* The measure: about 640px of prose plus the gutter the avatar column needs,
+   centred in however wide the widget's box is (STYLE-GUIDE 3.4). A widget
+   style can move it by setting `--sp-measure`. */
+.sp-conversation .sp-column {
+	display: flex;
+	flex-direction: column;
+	inline-size: 100%;
+	max-inline-size: calc(var(--sp-measure, 40rem) + 3.5rem);
+	margin-inline: auto;
+	min-inline-size: 0;
+	min-block-size: 0;
+	flex: 1;
+}
+
+/* The log grows; the composer is as tall as it needs to be. `overflow` stays
+   visible so the composer's panes grow their box instead of being clipped —
+   the scroll region is the log's own, inside it. */
+.sp-conversation .sp-log {
+	flex: 1;
+	min-block-size: 0;
+	min-inline-size: 0;
+	display: flex;
+	flex-direction: column;
+}
+.sp-conversation .sp-log > * {
+	flex: 1;
+	min-block-size: 0;
+}
+.sp-conversation .sp-compose {
+	flex: 0 0 auto;
+	min-inline-size: 0;
+	display: flex;
+	flex-direction: column;
+}
+.sp-conversation .sp-nudge {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+/* With the log hidden the widget is its composer, and the field keeps the
+   end of the box it was drawn at. */
+.sp-conversation[data-show-messages="false"][data-composer-position="bottom"] .sp-column {
+	justify-content: flex-end;
+}
+
+/* Composer at the top: the field moves above the banners and the nudge, and
+   the whole compose block above the log, so the two strips stay between the
+   field and the conversation at either end. */
+.sp-conversation[data-composer-position="top"] .sp-compose {
+	order: -1;
+}
+.sp-conversation[data-composer-position="top"] .sp-field {
+	order: -1;
+}
+
+/* The glass panel, painted only where a backdrop image is behind it. */
+.sp-conversation[data-backdrop] .sp-column {
+	background: var(--sp-glass-bg);
+	backdrop-filter: blur(14px);
+	border: 1px solid var(--sp-glass-bd);
+	border-radius: 14px;
+	padding: 8px 24px 16px;
+	margin-block: 8px 16px;
+}
+
+/* Avatars off: the cell goes, and the custom properties a style sizes its
+   avatar column with go to zero so the gutter does not stand empty. */
+.sp-conversation[data-show-avatars="false"] .sp-msg-avatar {
+	display: none;
+}
+.sp-conversation[data-show-avatars="false"] .sp-msg {
+	--sp-av: 0;
+	--sp-portrait: 0;
+}
+
+/* ── motion (was JS: softFade, animateHeight) ────────────────────────────── */
+
+/* The newest message fades in as it arrives; older pages and the rows that
+   were already there do not. */
+@media (prefers-reduced-motion: no-preference) {
+	.sp-msg-row[data-arrive] {
+		animation: sp-arrive 130ms cubic-bezier(0.33, 1, 0.68, 1);
+	}
+	/* A discrete swap (a swipe, edit in or out, an error) eases to its new
+	   height where the engine can interpolate to `auto`; elsewhere it is
+	   instant, as reduced motion is. */
+	.sp-msg-size[data-settled] {
+		interpolate-size: allow-keywords;
+		transition: height 180ms cubic-bezier(0.33, 1, 0.68, 1);
+	}
+}
+@keyframes sp-arrive {
+	from {
+		opacity: 0;
+	}
+}
+
+/* ── a message's edit mode (SessionMessage) ──────────────────────────────── */
+
+/* The field is MessageComposer's, anchored to `.edit-surface` so it only ever
+   reaches the edit composer's field, never the session bar's. Colourless on
+   purpose; colour for edit mode is utility classes in the markup. */
+.edit-surface .edit-field {
+	background: transparent;
+	border: none;
+	border-radius: 0;
+	padding: 0.5rem 0.25rem;
+	color: inherit;
+	font: inherit;
+	line-height: 1.6;
+	/* The native grabber is redundant under `field-sizing-content` (the field
+	   already grows to fit) and dragging it only desynchronised the box from
+	   its content. */
+	resize: none;
+	/* Without a cap, editing a long message grows the card unbounded and
+	   pushes Save/Cancel — which live in the header — off the top. */
+	max-height: 45vh;
+	overflow-y: auto;
+
+	&:focus {
+		outline: none;
+		box-shadow: none;
+	}
+	/* Mouse focus needs no ring — the card's own outline already says which
+	   message is open. Keyboard users tabbing back in get a landing cue. */
+	&:focus-visible {
+		outline: 2px solid color-mix(in srgb, currentColor 30%, transparent);
+		outline-offset: -2px;
+		border-radius: 0.375rem;
+	}
+	&::placeholder {
+		color: inherit;
+		opacity: 0.45;
+	}
+}
+
+/* currentColor keeps these legible in both themes without naming a palette entry. */
+.sp-kbd-hint {
+	display: inline-block;
+	padding: 0.05rem 0.3rem;
+	border: 1px solid currentColor;
+	border-radius: 0.25rem;
+	font-family: inherit;
+	font-size: 0.9em;
+	line-height: 1.4;
+	opacity: 0.75;
+}
+
+/* ── message markdown ────────────────────────────────────────────────────── */
+
+.markdown-body {
+	white-space: pre-line;
+}
+.markdown-body blockquote {
+	color: #7dd3fc; /* sky-300 */
+	border-left: 4px solid #38bdf8; /* sky-400 */
+	background: rgba(56, 189, 248, 0.08);
+	padding-left: 1em;
+	margin-left: 0;
+}
+.markdown-body em,
+.markdown-body i {
+	color: #f472b6; /* pink-400 */
+	font-style: italic;
+	background: rgba(244, 114, 182, 0.08);
+	border-radius: 0.2em;
+	padding: 0 0.15em;
+}
+/* Preserve blank lines between paragraphs. */
+.markdown-body p {
+	margin-top: 1em;
+	margin-bottom: 1em;
+	min-height: 1.5em;
+}
+
+/* ── the state ledger under a message (MessageStateLedger, StateProposalList) ── */
+
+.sp-ledger {
+	display: flex;
+	flex-direction: column;
+	gap: 0.15rem;
+	padding: 0.2rem 0.1rem 0;
+	font-size: 0.68rem;
+	opacity: 0.85;
+}
+.sp-ledger-line {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0.25rem;
+	margin: 0;
+}
+.sp-ledger-who {
+	font-weight: 600;
+}
+.sp-ledger-sep {
+	opacity: 0.5;
+}
+.sp-ledger-change {
+	font-variant-numeric: tabular-nums;
+}
+.sp-ledger-review {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.25rem;
+	align-self: flex-start;
+	padding: 0.02rem 0.35rem;
+	border-radius: 999px;
+	background: color-mix(in oklab, currentColor 12%, transparent);
+	font-size: 0.66rem;
+}
+.sp-ledger-review:hover {
+	filter: brightness(1.2);
+}
+
+.sp-proposal {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.3rem;
+	font-size: 0.68rem;
+}
+.sp-proposal-text {
+	min-width: 0;
+	flex: 1 1 8rem;
+}
+.sp-proposal-anchor,
+.sp-proposal-who {
+	opacity: 0.55;
+}
+.sp-proposal-superseded {
+	opacity: 0.7;
+}
+.sp-proposal-decide {
+	padding: 0.02rem 0.4rem;
+	border-radius: 999px;
+	background: color-mix(in oklab, currentColor 14%, transparent);
+}
+.sp-proposal-decide:hover {
+	filter: brightness(1.2);
+}
+.sp-proposal-accept {
+	font-weight: 600;
+}
+.sp-proposal-reject {
+	opacity: 0.75;
+}
+
+/* ── a message's collapsible parts (MessagePartsView) ────────────────────── */
+
+/* 0fr → 1fr transitions to and from auto height in pure CSS. */
+.sp-part-body {
+	grid-template-rows: 0fr;
+}
+.sp-part-body[data-expanded] {
+	grid-template-rows: 1fr;
+}
+/* Collapsed, its focusables leave the tab order (what `inert` did). */
+.sp-part-body:not([data-expanded]) > * {
+	visibility: hidden;
+}
+
+/* ── disclosures and meters (SessionMessage, MessageBlocksView, SessionComposer) ── */
+
+/* A message's thinking and narrator-instructions tracks: 0fr → 1fr, and a
+   collapsed track's focusables out of the tab order. */
+.sp-disclosure-track {
+	grid-template-rows: 0fr;
+}
+.sp-disclosure-track[data-expanded] {
+	grid-template-rows: 1fr;
+}
+.sp-disclosure-track:not([data-expanded]) > * {
+	visibility: hidden;
+}
+
+/* A meter's fill, from the `--sp-fill` the widget sets (a widget writes
+   custom properties, never a declaration of its own). */
+.sp-meter-fill {
+	inline-size: var(--sp-fill, 0%);
+}
+
+/* ── the log's scroll region (SessionContainer) ─────────────────────────── */
+
+/* `sp-scroll` is the log's box: it fills what the column leaves, and its
+   region scrolls inside it. */
+.sp-log-scroll {
+	display: flex;
+	flex-direction: column;
+	flex: 1;
+	min-block-size: 0;
+}
+.sp-log-scroll .sp-scroll-region {
+	flex: 1;
+	min-block-size: 0;
+	block-size: 100%;
+}

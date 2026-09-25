@@ -132,6 +132,12 @@ export interface Candidate {
 	/** Carried through untouched, so the caller keeps its own payload. */
 	payload?: unknown
 	/**
+	 * The keys that matched and the message each matched in (L1: match
+	 * facts at the source) — lore candidates only. The ranking store copies
+	 * it into the decision's `detail`.
+	 */
+	matched?: Array<{ key: string; messageId: number | null; fuzzy?: boolean }>
+	/**
 	 * This candidate is **not eligible**, whatever it scored.
 	 *
 	 * Eligibility and scoring are separate on purpose, and the separation is

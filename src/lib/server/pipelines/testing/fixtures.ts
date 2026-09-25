@@ -155,6 +155,8 @@ export function worldLoreEntry(
 		caseSensitive: false,
 		// A fixture entry is a root; the `parent` role is what a test sets.
 		anchorEntryId: null,
+		// Shared: a fixture belongs to every line, which is what null means.
+		branchId: null,
 		matchMode: null,
 		content: "Some world lore content.",
 		priority: 1,
@@ -195,6 +197,8 @@ export function characterLoreEntry(
 		caseSensitive: false,
 		// A fixture entry is a root; the `parent` role is what a test sets.
 		anchorEntryId: null,
+		// Shared: a fixture belongs to every line, which is what null means.
+		branchId: null,
 		matchMode: null,
 		content: "Some character lore content.",
 		priority: 1,
@@ -238,6 +242,8 @@ export function historyEntry(
 		caseSensitive: false,
 		// A fixture entry is a root; the `parent` role is what a test sets.
 		anchorEntryId: null,
+		// Shared: a fixture belongs to every line, which is what null means.
+		branchId: null,
 		matchMode: null,
 		content: "Some history content.",
 		constant: false,
@@ -418,7 +424,6 @@ export function buildSession(overrides: Record<string, any> = {}): any {
 		userId: 1,
 		scenario: null,
 		metadata: {},
-		groupReplyStrategy: "ordered",
 		lorebookId: null,
 		lorebook: null,
 		sessionCharacters: [],

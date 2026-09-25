@@ -382,10 +382,41 @@ describe("sessions:reassignRemovedParticipant (PGlite integration)", () => {
 	})
 })
 
-describe("sessions:getResponseOrder — removed participant choke-point filter (PGlite integration)", () => {
-	test("never selects a removed character as the next turn, even when it's the only character ever added", async () => {
-		const { sessionsUpdateHandler, sessionsGetResponseOrderHandler } =
-			await import("./sessions")
+describe("the turn pool — removed participant choke-point filter (PGlite integration)", () => {
+	/**
+	 * ⏳ Was `sessions:getResponseOrder`, which previewed a decision a run
+	 * would make. There is no decision to preview since PLAN-turn-order A6:
+	 * who *may* take a turn is `core:task/turn-pool@1`'s answer, and the
+	 * floor this file exists for — a removed row is never a candidate,
+	 * whatever the params say — is the pool's (§4.4). Same choke point, one
+	 * layer down and now unconditional.
+	 */
+	const pool = async (sessionId: number, params: Record<string, unknown> = {}) => {
+		const { coreBindings } = await import(
+			"$lib/server/pipelines/runtime/bindings"
+		)
+		const { createHost } = await import(
+			"$lib/server/pipelines/runtime/host"
+		)
+		const host = createHost(testDb as never, { sessionId })
+		const cast = await host.read!(
+			"session_cast",
+			{ sessionId },
+			{
+				key: "cast",
+				definitionId: "core:query/session-cast",
+				definitionVersion: 1,
+				kind: "query"
+			}
+		)
+		const out = await (coreBindings() as never as Record<string, any>)[
+			"core:task/turn-pool@1"
+		]({ cast, messages: [], params }, {})
+		return (out.value.main as Array<{ ref: string }>).map((c) => c.ref)
+	}
+
+	test("never admits a removed character, even when it is the only character ever added", async () => {
+		const { sessionsUpdateHandler } = await import("./sessions")
 		const owner = await makeUser("choke-point-owner")
 		const session = await makeSession(owner.id)
 		const persona = await testDb
@@ -411,17 +442,16 @@ describe("sessions:getResponseOrder — removed participant choke-point filter (
 			noopEmit
 		)
 
-		const res = await sessionsGetResponseOrderHandler.handler(
-			fakeSocket(owner.id),
-			{ sessionId: session.id } as any,
-			noopEmit
+		expect(await pool(session.id)).not.toContain(`character:${char.id}`)
+		// And not even with `characters: 'all'`, which admits one switched
+		// off in the cast but never one that has left (§4.4's floor).
+		expect(await pool(session.id, { characters: "all" })).not.toContain(
+			`character:${char.id}`
 		)
-		expect(res.nextCharacterId).toBeNull()
 	})
 
-	test("selects the active character over a removed one that would otherwise be due first by position", async () => {
-		const { sessionsUpdateHandler, sessionsGetResponseOrderHandler } =
-			await import("./sessions")
+	test("admits the active character and not the removed one that sits ahead of it by position", async () => {
+		const { sessionsUpdateHandler } = await import("./sessions")
 		const owner = await makeUser("choke-point-owner-2")
 		const session = await makeSession(owner.id)
 		const persona = await testDb
@@ -451,12 +481,9 @@ describe("sessions:getResponseOrder — removed participant choke-point filter (
 			noopEmit
 		)
 
-		const res = await sessionsGetResponseOrderHandler.handler(
-			fakeSocket(owner.id),
-			{ sessionId: session.id } as any,
-			noopEmit
-		)
-		expect(res.nextCharacterId).toBe(activeChar.id)
+		const refs = await pool(session.id)
+		expect(refs).toContain(`character:${activeChar.id}`)
+		expect(refs).not.toContain(`character:${removedChar.id}`)
 	})
 })
 

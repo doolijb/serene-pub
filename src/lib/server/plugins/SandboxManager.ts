@@ -67,6 +67,22 @@ export interface PluginDescriptor {
 	 * next call through re-registration and never a call in flight.
 	 */
 	settings?: Record<string, unknown>
+	/**
+	 * The plaintext of every `secret` setting, host-side only (R63). Never
+	 * merged into a hook's input — the guest's `settings` carries a **secret
+	 * handle** for each (`⟦secret:<key>⟧`) — and handed per call to the fetch
+	 * bridge, which fills a handle in at the network boundary. Every result is
+	 * scrubbed of these values before it leaves the manager.
+	 */
+	secrets?: Record<string, string>
+	/**
+	 * Minted per registration: part of every handle this plugin is given
+	 * (`⟦secret:<key>:<nonce>⟧`), so a handle cannot be forged from text that
+	 * came from anywhere but the host.
+	 */
+	secretNonce?: string
+	/** The secret keys the plugin lends to its nodes in other packages' pipelines (`lend: true`). */
+	lentSecrets?: string[]
 }
 
 export interface CallOptions {
@@ -86,6 +102,13 @@ export interface CallOptions {
 	user?: string
 	/** The pipeline run this hook fired within, if any — the log's soft link. */
 	runId?: string
+	/**
+	 * This call runs the plugin's node in a pipeline another package owns (or
+	 * a person does) — R63: only the secrets it lends reach the fetch bridge.
+	 * Absent is the plugin acting for itself: its own pipelines, lifecycle
+	 * callbacks, event listeners.
+	 */
+	foreignPipeline?: boolean
 	/**
 	 * A lifecycle (startup/install) hook. These run sequentially and bypass the
 	 * ready-gate — they *are* startup. Everything else queues until ready.
@@ -872,6 +895,10 @@ export class SandboxManager {
 					nowMs: opts.nowMs ?? startedAt,
 					maxOutputBytes: opts.maxOutputBytes,
 					rows,
+					// For the fetch bridge alone, host-side (R63): everything
+					// for the plugin's own work, only what it lends when its
+					// node runs in another package's pipeline.
+					secrets: secretsForCall(desc, !!opts.foreignPipeline),
 					// The address `abortCall`/`killCall` stop this call by. The
 					// call id is already the manager's handle for it, and the
 					// live monitor's — one name for one call, end to end.
@@ -885,7 +912,21 @@ export class SandboxManager {
 			// call being queued and it reaching the sandbox is the ordinary
 			// case, not an exotic one — it is what a fold's next link does.
 			if (opts.runId) this.grace.adopt(opts.runId, callId)
-			result = await invoked
+			try {
+				result = await invoked
+			} catch (e) {
+				// A sandbox that rejected rather than resolved is still a
+				// failed call, and still scrubbed below — its message may quote
+				// what the hook did.
+				result = {
+					ok: false,
+					reason: String((e as Error)?.message || e),
+					logs: [],
+					durationMs: Date.now() - startedAt,
+					backend,
+					outcome: "error"
+				}
+			}
 		} finally {
 			this.active.delete(callId)
 			const overrun = this.overruns.get(callId)
@@ -925,6 +966,12 @@ export class SandboxManager {
 		// A file commit that threw never reaches here: it fails the call inside
 		// the worker and carries no `rowChanges`, so rows can never land for a
 		// call whose files did not.
+		// No secret leaves the manager (R63): whatever the hook returned, threw,
+		// logged or wrote to its rows — a response that echoed a key, a bug
+		// that printed one — has every one of this plugin's secret values (and
+		// every handle) replaced before it reaches storage, a node, an event, a
+		// log or a receipt. Before the row commit, so no value is persisted.
+		result = scrubSecrets(result, desc.secrets)
 		if (result.ok && result.rowChanges?.length && this.rows) {
 			try {
 				await this.rows.commit(desc.id, result.rowChanges)
@@ -951,6 +998,7 @@ export class SandboxManager {
 			const { rowChanges: _committed, ...rest } = result
 			result = rest
 		}
+
 
 		// Why core stopped it, when core stopped it. Only ever replaces the
 		// reason on a call that was actually killed: a hook that woke on its
@@ -1039,4 +1087,60 @@ export class SandboxManager {
 		})
 		return result
 	}
+}
+
+/** The shortest value scrubbed: a two-letter "secret" would blank every output. */
+const MIN_SCRUB_LENGTH = 4
+/** What a scrubbed value reads as. */
+export const SCRUBBED = "‹secret›"
+
+/** The secrets one call may use (R63): all for the plugin's own work, the lent ones elsewhere. */
+export function secretsForCall(
+	desc: Pick<PluginDescriptor, "secrets" | "lentSecrets" | "secretNonce">,
+	foreign: boolean
+): { nonce: string; values: Record<string, string> } | undefined {
+	if (!desc.secrets || !desc.secretNonce) return undefined
+	if (!foreign) return { nonce: desc.secretNonce, values: desc.secrets }
+	const lent = new Set(desc.lentSecrets ?? [])
+	const values: Record<string, string> = {}
+	for (const [k, v] of Object.entries(desc.secrets)) if (lent.has(k)) values[k] = v
+	return { nonce: desc.secretNonce, values }
+}
+
+/** A handle in any output: the value is not there, but the nonce is, and it goes no further. */
+const HANDLE_PATTERN = /\u27E6secret:[^\u27E7]*\u27E7/g
+
+/**
+ * Replace every occurrence of a secret value in a result — its value, its
+ * reason, its logs — with `‹secret›`. A seatbelt: an encoded or split value
+ * passes, which is why plugin code holds handles, never values.
+ */
+export function scrubSecrets<T extends HookRunResult>(result: T, secrets?: Record<string, string>): T {
+	// Each value, and the two forms a plugin most often re-spells one in: as a
+	// URL carries it and as base64 — a seatbelt, not a guarantee.
+	const values = [
+		...new Set(
+			Object.values(secrets ?? {})
+				.filter((v) => typeof v === "string" && v.length >= MIN_SCRUB_LENGTH)
+				.flatMap((v) => [v, encodeURIComponent(v), Buffer.from(v, "utf8").toString("base64")])
+		)
+	].sort((a, b) => b.length - a.length)
+	const clean = (text: string) =>
+		values.reduce((t, v) => t.split(v).join(SCRUBBED), text).replace(HANDLE_PATTERN, SCRUBBED)
+	const deep = (v: unknown): unknown => {
+		if (typeof v === "string") return clean(v)
+		if (Array.isArray(v)) return v.map(deep)
+		if (v && typeof v === "object")
+			return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, deep(x)]))
+		return v
+	}
+	const logs = result.logs.map(clean)
+	return result.ok
+		? ({
+				...result,
+				value: deep(result.value),
+				logs,
+				...(result.rowChanges ? { rowChanges: deep(result.rowChanges) } : {})
+			} as T)
+		: ({ ...result, reason: clean(result.reason), logs } as T)
 }

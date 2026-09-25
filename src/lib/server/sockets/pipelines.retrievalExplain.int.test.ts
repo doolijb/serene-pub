@@ -273,11 +273,12 @@ describe("pipelines:runExplain", () => {
 		)
 	})
 
-	it("reads no lore through a run pointed at somebody else's session", async () => {
+	it("an administrator reads the book of the session the run names, whoever owns it (R55)", async () => {
 		const { pipelinesRunExplain } = await import("./pipelines")
 		// The run is the owner's; its `sessionId` names the stranger's session.
-		// A projection that trusted the column would hand back that session's
-		// lorebook — the rows still render, by id, with no levers.
+		// Receipts are an administrator's, and an administrator reads any
+		// session's book — so the rows carry the stranger's entries, levers
+		// and all, rather than the run's user's.
 		await seedRun("explain-crossed", ownerId, strangerSessionId)
 		const res: any = await pipelinesRunExplain.handler(
 			fakeSocket(ownerId, true),
@@ -288,8 +289,6 @@ describe("pipelines:runExplain", () => {
 		const included = res.explanation.rows.find(
 			(r: any) => r.outcome === "included"
 		)
-		expect(included.entry).toBeUndefined()
-		// The payload's own name still stands in, so the row is not anonymous.
 		expect(included.title).toBe("The Ashguard")
 	})
 
@@ -443,12 +442,12 @@ describe("pipelines:runExplain — what the entry says now, against what it said
 	})
 
 	it("claims nothing about a run whose lore it could not read", async () => {
-		// ⚠ The dangerous one. This run is the owner's and its `sessionId`
-		// names the stranger's session, so the lorebook read is refused and the
-		// entry map comes back empty — the same empty map a lorebook that
-		// really lost every entry produces. Reporting "deleted" here would turn
-		// "I could not look" into "your lore is gone", on every row at once.
-		await seedWardRun("ward-crossed", strangerSessionId)
+		// ⚠ The dangerous one. This run names no session, so there is no book
+		// to read and the entry map comes back empty — the same empty map a
+		// lorebook that really lost every entry produces. Reporting "deleted"
+		// here would turn "I could not look" into "your lore is gone", on
+		// every row at once.
+		await seedWardRun("ward-crossed", null)
 		const row = await explainAs("ward-crossed")
 		expect(row.provenance).toBeUndefined()
 		expect(row.provenanceNote).toBeUndefined()

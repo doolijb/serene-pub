@@ -8,6 +8,7 @@
  * with nothing on it.
  */
 import { describe, expect, test } from "vitest"
+import { resolveWidgetSurface } from "@serene-pub/sdk"
 import { ADVENTURE_LAYOUT } from "@serene-pub/core-catalog"
 import { CORE_WIDGETS } from "$lib/shared/widgets/types"
 import { widgetSettingsSchema } from "$lib/shared/widgets/settings"
@@ -23,10 +24,11 @@ describe.each(STATE_WIDGETS)("%s", (id) => {
 	})
 
 	test("its native component is in the registry", () => {
-		const decl = declOf(id)!
-		expect(decl.surface.kind).toBe("native")
+		// Core's `component` resolves to a native component (R25).
+		const surface = resolveWidgetSurface(declOf(id)!, "core")
+		expect(surface?.kind).toBe("native")
 		expect(
-			NATIVE_SURFACES[(decl.surface as { component: string }).component]
+			NATIVE_SURFACES[(surface as { component: string }).component]
 		).toBeDefined()
 	})
 

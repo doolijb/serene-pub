@@ -161,7 +161,7 @@ import "@serene-pub/core-catalog"
 const PUBLISHED_HASHES: Record<string, string> = {
 	"chariot.comfy:render-image@1": "1c1c3bef639b8",
 	"chariot.dice-tray:roll@1": "7d840117afff3",
-	"chariot.recall:rank-recall@1": "88b3c0a62e6ae",
+	"chariot.recall:rank-recall@1": "d2ab2a077c87c",
 	// Moved (U6, R-2, 2026-09-17): a `target` in-port — the row the part lands
 	// on, the port `update-message` takes — and bound. The host's commit read
 	// `p.target?.id` already; the declaration now says so. (was "c499561b77704")
@@ -174,8 +174,7 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// world lore when absent, which is what the code did unconditionally
 	// before) and a `links` **in-port** (the links written in the SAME
 	// transaction as the row). `links` is here rather than only on the link
-	// outlet because of F7: a pipeline has one write-class outlet, so a spec
-	// cannot create an entry and then link it in one run. No shipped spec
+	// outlet so an entry and its links commit together, or not at all. No shipped spec
 	// wires either, so no document moves. (was "c745cab165e22")
 	"core:outlet/create-lore-entry@1": "15401f006df68c",
 	// NEW (L2, 2026-09-17): one link between two entries of the session's
@@ -220,7 +219,7 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Moved (U5d, 2026-09-17): a `blocks` in-port, appended after the text
 	// lands — see `create-message`. (was "1df0cd729ce38f")
 	"core:outlet/update-message@1": "1f7eec771e6f80",
-	"core:inlet/summarize-request@1": "e359d02006672",
+	"core:inlet/summarize-request@1": "1ffc99d5933e6c",
 	// Gained the `greeting` field on its sessionShape (20, migration 0151) —
 	// the default greeting-on-creation behaviour stated, not changed.
 	//
@@ -269,7 +268,7 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// no port carrying the reference to put in it. Additive on the same terms
 	// as `channel` above: no shipped spec wires it, so no document moves.
 	// (was "1a907ed16d5413")
-	"core:inlet/user-message@1": "ad0fd05d15cc",
+	"core:inlet/user-message@1": "5da048e50625c",
 	/**
 	 * Forms (U5d, R-15 *Forms*, 2026-09-17). NEW types — a line each: the
 	 * inlet `core:event/form-addressed@1` lands on; the task that turns the
@@ -280,7 +279,7 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	 * 'write'`, `reviewDefault: 'off'`, `review.fields: ['answer']`,
 	 * `causesEvent: form-answered`).
 	 */
-	"core:inlet/form-addressed@1": "bd719823a91c7",
+	"core:inlet/form-addressed@1": "eaa49f3684cc2",
 	"core:task/form-context@1": "1d7e674904cdd6",
 	"core:task/make-choices@1": "3e585eb0287f8",
 	"core:task/read-answer@1": "16006e4fcd8b3",
@@ -300,13 +299,22 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	 * five write outlets, each `effects: 'write'` with `reviewDefault: 'off'`
 	 * and a `causesEvent` naming its `core:event/message-*` / `session-branched`.
 	 */
-	"core:inlet/built-in-request@1": "789f6700578d8",
+	// +`sprite` port 2026-09-24 (DESIGN-sprites §6): a person's pick for
+	// `core:spec/show-sprite`. Additive; re-recorded pre-release, not bumped.
+	"core:inlet/built-in-request@1": "1cc4d1e1258b67",
 	"core:outlet/delete-message@1": "1df20df447956b",
 	"core:outlet/hide-message@1": "75981562f5865",
 	"core:outlet/edit-message@1": "1f8b8b73d43d57",
 	"core:outlet/swipe-message@1": "9f6bbbdd40316",
 	"core:outlet/branch-session@1": "aedd725871d9d",
-	"core:inlet/session-created@1": "179d2302a903a7",
+	// Sprites (DESIGN-sprites §5, 2026-09-24). NEW types — no migration, just
+	// lines. The reply specs' sprite tail: what the speaker can show (with the
+	// line's and labels' vectors from the local lane), core's picker (every
+	// picker publishes `sprite-pick@1` on `main`), and the write.
+	"core:query/sprites-for@1": "1582ff1430d4c0",
+	"core:task/pick-sprite-similarity@1": "1ded5f377e9a30",
+	"core:outlet/show-sprite@1": "1aed02b2dfc4c0",
+	"core:inlet/session-created@1": "1bac3a1f2d1149",
 	// The side-character turn (ruling 2026-09-07). A NEW type — no migration,
 	// just a line: it inserts a row and conflicts with nothing.
 	//
@@ -334,7 +342,7 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// terms as `user-message@1`'s. (was "1f362f9aad444")
 	// Moved (U5b review S4, 2026-09-16): `changes` → `sessionChanges`, on the
 	// same terms as `user-message@1`'s. (was "4078fdc5d681e")
-	"core:inlet/side-character-turn@1": "72f02c87f57bc",
+	"core:inlet/side-character-turn@1": "16953b445ab691",
 	"core:query/session-greetings@1": "b9be953c1501",
 	"core:outlet/seed-greetings@1": "1afd90048e87d2",
 	// Re-projected by **0201** (policy answer 3): the node is `optional`, which
@@ -426,7 +434,14 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// (was "1f87aae843e9b8")
 	"core:oracle/summarize-batch@1": "104ff874953d6b",
 	"core:oracle/summarize-synth@1": "3f410f2816392",
-	"core:query/session-cast@1": "732ef4e007bf7",
+	"core:query/session-cast@1": "ab1fe8baf6775",
+	/**
+	 * The settings document re-read (PLAN-turn-order §4.12, way 2; A3,
+	 * 2026-09-22). The six session inlets, `session-cast@1` (`envoys` port)
+	 * and every node with a `scripts` slot (`'session'` extra) moved in the
+	 * same change — see PLAN-STATUS-turn-order.md A3.
+	 */
+	"core:query/session-settings@1": "31eb6de4a89d7",
 	// Re-projected by 0186 (policy answer 3), together with `history-entries`
 	// below — one hash, because the three lore gather branches share a slot declaration
 	// and the content hash strips display text. `scanDepth`'s declared default
@@ -801,7 +816,7 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// what fits is the ranker's `select`, per band, so a second drop rule here
 	// had no place to act. Behaviour-preserving: no run ever consulted it.
 	// (was "1d97d036a0a3e4")
-	"core:task/assemble@2": "5f517d8de2d47",
+	"core:task/assemble@2": "17aafe8e99ff34",
 	// Tool calling's pure halves (20 §9), added 2026-08-26. New types — a
 	// row inserts and conflicts with nothing.
 	"core:task/advertise-tools@1": "1fde41dd02ebce",
@@ -1123,7 +1138,7 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// ranker and declared on the five sources; `shareNormalisation` (relative,
 	// the shipped arithmetic) joins the cross-source set. Migration 0135 moves
 	// the stored maps. (was "a4ba08bbc5618")
-	"core:task/rank-hybrid@1": "7f48680db781",
+	"core:task/rank-hybrid@1": "876a234180ff9",
 	// Moved (R-12, 2026-09-16): `params.currentWindow` / `recentWindow` are culled from
 	// the ranker — they size the two windows `query-windows@1` cuts and
 	// declares as its own; here they were rendered twice and read once.
@@ -1138,10 +1153,42 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// envoy can be picked — and a `speaker` out-port beside `characterId`,
 	// so the receipt and the wiring carry the reference; the bare id stays
 	// for the context and generation readers. (was "cadef103232f2")
-	"core:task/turn-round-robin@1": "c744f942f9ab0",
-	"core:task/turn-random@1": "1b93fc66d0df45",
-	"core:task/turn-manual@1": "4e3558050952b",
-	"core:task/turn-none@1": "874db8f3997c4",
+	// ⚠ All six moved again at A6 (PLAN-turn-order §4.4, 2026-09-22): the
+	// strategies are re-ported over turn order as STATE — `candidates` and
+	// `messages` in, `turn-entries@1` out on `main` and `order`, and no
+	// `speaker`/`characterId` in-ports at all, because an explicit pick
+	// never enters a strategy any more (it fires the entry, §4.6).
+	// `turn-none@1` is deleted (§7, renamed to `turn-manual`) and
+	// `turn-narrator@1` joins them.
+	"core:task/turn-round-robin@1": "19e0f487d4e182",
+	"core:task/turn-random@1": "1bf5ca2130f332",
+	"core:task/turn-user-split@1": "1f8697aaf316c4",
+	"core:task/turn-scripted@1": "74526c62974cd",
+	"core:task/turn-manual@1": "125603eaa6f9a8",
+	// The turn-order model path (R41, M4).
+	"core:oracle/turn-advise@1": "ce040959fde78",
+	"core:task/turn-narrator@1": "166b99ce8c8dcf",
+	/**
+	 * The pool and the first orderer (§4.4): who may be seated at all, and
+	 * the mentioned rule that sorts whoever was named to the front. New at
+	 * A6, so they freeze here on the same terms as everything else.
+	 */
+	"core:task/turn-pool@1": "4a8e6145972ba",
+	"core:task/turn-mentioned@1": "14877e0d91b65e",
+	/** The one write path for `metadata.turnOrder` (§4.2). */
+	"core:outlet/set-turn-order@1": "1147dd9013c784",
+	/** The session's annex (§4.3, R6) — the pipeline layer's own memory. */
+	/**
+	 * The session-event inlet (§4.1, §4.4): the door every event-driven
+	 * spec enters through, locked over several events at once.
+	 */
+	// E1 (2026-09-23): also reads the recorded-event envelope. Was "13b58d70fb2f59".
+	"core:inlet/session-event@1": "124b78685ea899",
+	// V1 (2026-09-23): the AI view (`view`, `speaker`) and the write's audience (`see`, `audienceFrom`).
+	"core:query/session-annex@1": "2e774d630cb76",
+	"core:outlet/set-session-annex@1": "1f42d118c9b036",
+	/** Recording a declared event (E1, R45/R47): the write whose event its literal names. */
+	"core:outlet/record-event@1": "5b03e0d2f7394",
 	// The `test:` fixtures are published by the same module as everything else,
 	// so a running instance has rows for them and they freeze on exactly the same
 	// terms. Editing one to suit an SDK test would stop pipelines on every
@@ -1163,6 +1210,7 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// The cast scope (2026-08-26): scripts over what extract-cast publishes.
 	// A new type — inserts a row, conflicts with nothing, needs no migration.
 	"core:script:cast/transform@1": "9abc9e28e8c41",
+	"core:script:turn/select@1": "1eb4afff5c269d",
 	// Local image generation: the modality twin of generate-text, same node kind,
 	// its shape naming which one. A new type — inserts a row, needs no migration.
 	// Gained a `params` slot, holding `streaming` alone — the node had none, so

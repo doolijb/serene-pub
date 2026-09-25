@@ -273,7 +273,7 @@ describe("plugin presets", () => {
 		// back on every boot; refused, the preset would vanish. So it runs
 		// the lenient normaliser: a key one action of the genre declares
 		// becomes that identity, the rest stay bare and are reported.
-		const { spec, compile } = await import("@serene-pub/sdk")
+		const { spec, compile, use } = await import("@serene-pub/sdk")
 		const C = await import("@serene-pub/contracts")
 		const { saveDocument } = await import("$lib/server/pipelines/boot/store")
 		const GENRE = "acme.dice:genre/board"
@@ -285,12 +285,11 @@ describe("plugin presets", () => {
 				compile(
 					spec(id, {
 						version: "1.0.0",
-						taxonomy: { role: "action", genre: GENRE },
+						taxonomy: { role: "action"},
 						contributes: {
 							actions: [
 								{
 									key: fn,
-									genre: GENRE,
 									venue: { kind: "composer" },
 									label: { en: fn },
 									...(slash ? { slash } : {})
@@ -299,7 +298,7 @@ describe("plugin presets", () => {
 						}
 					})
 						.inlet("input", C.userMessage.v1(), {
-							genre: GENRE,
+							genre: use(GENRE),
 							event: "core:event/session-action@1"
 						})
 						.outlet("save", ($) => C.createMessage.v1({ text: $.input.text }))

@@ -52,27 +52,30 @@ describe("the write path", () => {
 		expect(next.apiKey).toMatchObject({ $secret: true })
 		expect(JSON.stringify(next)).not.toContain("sk-live-123")
 
-		// The owning hook's resolution is the one place plaintext reappears.
+		// The hook holds a handle; the plaintext stays host-side (R63).
 		const resolved = hookSettingsFor(MANIFEST, next)!
-		expect(resolved.apiKey).toBe("sk-live-123")
+		expect(resolved.settings.apiKey).toBe(`\u27E6secret:apiKey:${resolved.nonce}\u27E7`)
+		expect(JSON.stringify(resolved.settings)).not.toContain("sk-live-123")
+		expect(resolved.secrets.apiKey).toBe("sk-live-123")
+		expect(resolved.lent).toEqual([])
 	})
 
 	it("absent means unchanged; empty means cleared", () => {
-		const first = applySettingsWrite(SCHEMA, {}, { apiKey: "one" })
+		const first = applySettingsWrite(SCHEMA, {}, { apiKey: "one-key" })
 		const kept = applySettingsWrite(
 			SCHEMA,
 			(first as any).next,
 			{ region: "us" }
 		)
-		expect(hookSettingsFor(MANIFEST, (kept as any).next)!.apiKey).toBe(
-			"one"
+		expect(hookSettingsFor(MANIFEST, (kept as any).next)!.secrets.apiKey).toBe(
+			"one-key"
 		)
 		const cleared = applySettingsWrite(SCHEMA, (kept as any).next, {
 			apiKey: ""
 		})
-		expect(
-			hookSettingsFor(MANIFEST, (cleared as any).next)!.apiKey
-		).toBeUndefined()
+		const after = hookSettingsFor(MANIFEST, (cleared as any).next)!
+		expect(after.secrets.apiKey).toBeUndefined()
+		expect(after.settings.apiKey).toBeUndefined()
 	})
 
 	it("refuses an undeclared field and a mistyped value, by name", () => {
@@ -133,16 +136,46 @@ describe("delivery through the manager", () => {
 			backends: ["quickjs"],
 			backend: "quickjs",
 			sequential: false,
-			settings
+			settings: settings.settings,
+			secrets: settings.secrets,
+			lentSecrets: settings.lent,
+			secretNonce: settings.nonce
 		})
 		mgr.markReady()
 		const r = await mgr.callHook("p", "v", { n: 7 }, { kind: "task", timeoutMs: 2000 })
 		expect(r.ok).toBe(true)
+		// A handle, never the key (R63) — and a handle is scrubbed from any
+		// output too, so its nonce goes no further than the plugin.
 		expect((r as any).value).toEqual({
-			key: "sk-live-123",
+			key: "\u2039secret\u203A",
 			region: "eu",
 			n: 7
 		})
+	})
+
+	it("a value the plugin got hold of anyway is scrubbed from its output and logs (R63)", async () => {
+		const w = applySettingsWrite(SCHEMA, {}, { apiKey: "sk-live-123" })
+		const settings = hookSettingsFor(MANIFEST, (w as any).next)!
+		mgr = new SandboxManager({ onInvocation: () => {} })
+		mgr.register({
+			id: "leaky",
+			name: "Leaky",
+			// Stands in for a response that echoed the key back.
+			bundleSource:
+				"module.exports = { hooks: { v: (i, ctx) => { ctx.log('info', 'got sk-live-123'); return { said: 'token=sk-live-123;' } } } }",
+			bundleHash: "h-leaky",
+			backends: ["quickjs"],
+			backend: "quickjs",
+			sequential: false,
+			settings: settings.settings,
+			secrets: settings.secrets,
+			secretNonce: settings.nonce
+		})
+		mgr.markReady()
+		const r: any = await mgr.callHook("leaky", "v", {}, { kind: "task", timeoutMs: 2000 })
+		expect(r.ok).toBe(true)
+		expect(r.value).toEqual({ said: "token=\u2039secret\u203A;" })
+		expect(JSON.stringify(r)).not.toContain("sk-live-123")
 	})
 
 	it("a settings-free descriptor leaves the input untouched", async () => {
@@ -161,5 +194,21 @@ describe("delivery through the manager", () => {
 		const r = await mgr.callHook("q", "v", { n: 1 }, { kind: "task", timeoutMs: 2000 })
 		expect(r.ok).toBe(true)
 		expect((r as any).value).toEqual(["n"])
+	})
+})
+
+describe("R63 · a node in another package's pipeline gets only what its owner lends", () => {
+	it("secretsForCall: all for the plugin's own work, the lent ones elsewhere", async () => {
+		const { secretsForCall } = await import("./SandboxManager")
+		const desc = { secrets: { apiKey: "sk-one", shared: "sk-two" }, lentSecrets: ["shared"], secretNonce: "n0" }
+		expect(secretsForCall(desc, false)).toEqual({ nonce: "n0", values: { apiKey: "sk-one", shared: "sk-two" } })
+		expect(secretsForCall(desc, true)).toEqual({ nonce: "n0", values: { shared: "sk-two" } })
+		expect(secretsForCall({}, true)).toBeUndefined()
+	})
+
+	it("a secret too short to scrub is refused at write", () => {
+		const w = applySettingsWrite(SCHEMA, {}, { apiKey: "abc" })
+		expect(w).toMatchObject({ ok: false })
+		expect((w as any).error).toMatch(/too short/)
 	})
 })

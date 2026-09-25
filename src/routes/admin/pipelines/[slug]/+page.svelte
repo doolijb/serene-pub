@@ -275,7 +275,7 @@
 			),
 			interest.requestWithInterest(
 				"pipelines:runs",
-				{ limit: 100 },
+				{ limit: 100, specSlug: initialSlug },
 				onRuns
 			)
 		]

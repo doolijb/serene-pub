@@ -16,8 +16,8 @@
  * PGlite's one deadlock (an outer-handle query awaited inside
  * `db.transaction`, which waits on its own mutex forever). It did NOT
  * reproduce: the road completes in about a second either way. The live
- * silence was the trigger loop finding nobody due (`getNextCharacterTurn`)
- * and breaking without a word; the deadlock itself is now refused loudly by
+ * silence was the trigger loop finding nobody due (the pre-pick rotation,
+ * since retired) and breaking without a word; the deadlock itself is now refused loudly by
  * `db/transactionGuard.ts`. This file stays as the road's regression guard.
  *
  * ⚠ **A hang would be the symptom**, so every road here is raced against a
@@ -312,6 +312,8 @@ function fakeSocket(userId: number, io: any) {
 }
 
 async function runsOf(sessionId: number) {
+	// Event work runs after the writer, on the session's queue (PLAN §8 (27)).
+	await (await import("$lib/server/pipelines/runtime/sessionEvents")).settleSessionEvents()
 	const schema = await import("$lib/server/db/schema")
 	return testDb
 		.select({
@@ -352,11 +354,16 @@ describe("the keeper's changes over sessions:triggerGenerateMessage", () => {
 		const { res, emitted } = await reply(w, "the propose road")
 		expect((res as any)?.error).toBeUndefined()
 
-		// The receipt is saved: the run went to its end.
+		// The receipt is saved: the run went to its end. The narrator
+		// prologue run an adventure fire walks first (§4.6) is an ordinary
+		// board run, and the respond run after it is the fire's own.
 		const runs = await runsOf(w.session.id)
 		expect(
 			runs.map((r) => `${r.specSlug}:${r.outcome}${r.haltReason ? ` (${r.haltReason})` : ""}`)
-		).toEqual(["core:spec/adventure-respond:ok"])
+		).toEqual([
+			"core:spec/adventure-turn-order:ok",
+			"core:spec/adventure-respond:ok"
+		])
 
 		// Held, not applied: two proposals, each stamped with the version the
 		// turn read (a fresh session: 0).
@@ -398,7 +405,10 @@ describe("the keeper's changes over sessions:triggerGenerateMessage", () => {
 		const runs = await runsOf(w.session.id)
 		expect(
 			runs.map((r) => `${r.specSlug}:${r.outcome}${r.haltReason ? ` (${r.haltReason})` : ""}`)
-		).toEqual(["core:spec/adventure-respond:ok"])
+		).toEqual([
+			"core:spec/adventure-turn-order:ok",
+			"core:spec/adventure-respond:ok"
+		])
 
 		// Applied: rows, no proposals, and the version moved once per row.
 		const rows = await testDb
@@ -439,7 +449,10 @@ describe("the keeper's changes over sessions:triggerGenerateMessage", () => {
 		expect((first.res as any)?.error).toBeUndefined()
 		const second = await reply(w, "the second send")
 		expect((second.res as any)?.error).toBeUndefined()
+		// Four now: narrator prologue + respond, twice over.
 		expect((await runsOf(w.session.id)).map((r) => r.outcome)).toEqual([
+			"ok",
+			"ok",
 			"ok",
 			"ok"
 		])

@@ -8,7 +8,8 @@ import {
 	keysAfter,
 	orderByMoment,
 	ratioOf,
-	tickAtRatio
+	tickAtRatio,
+	momentAxisRows
 } from "./timelineStrip"
 
 const dates = [
@@ -127,5 +128,74 @@ describe("orderByMoment — the moment's rows first", () => {
 			"c",
 			"d"
 		])
+	})
+})
+
+describe("momentAxisRows — every date the story knows", () => {
+	const hist = [
+		{ id: 1, year: 2, month: null, day: null },
+		{ id: 2, year: 6, month: null, day: null }
+	]
+
+	it("adds an amendment's date to the axis", () => {
+		const rows = momentAxisRows(hist, [
+			{ id: 40, year: 4, month: null, day: null }
+		])
+		expect(rows.map((r) => r.year)).toEqual([2, 4, 6])
+	})
+
+	it("a book with no history still has an axis if something is amended", () => {
+		// The case that read "Nothing is dated yet" while an amendment sat at Y4.
+		const rows = momentAxisRows(
+			[],
+			[{ id: 40, year: 4, month: null, day: null }]
+		)
+		expect(rows).toHaveLength(1)
+		expect(buildTicks(rows)).toHaveLength(1)
+	})
+
+	it("several amendments on one day are one place to stand", () => {
+		const rows = momentAxisRows(hist, [
+			{ id: 40, year: 4, month: 3, day: 1 },
+			{ id: 41, year: 4, month: 3, day: 1 },
+			{ id: 42, year: 4, month: 3, day: 2 }
+		])
+		expect(rows.map((r) => r.id)).toEqual([1, 40, 42, 2])
+	})
+
+	it("the history entry keeps the tick where both share a date", () => {
+		const rows = momentAxisRows(hist, [
+			{ id: 99, year: 2, month: null, day: null }
+		])
+		expect(rows.map((r) => r.id)).toEqual([1, 2])
+	})
+
+	it("is sorted by date whatever order it was given", () => {
+		const rows = momentAxisRows(
+			[{ id: 1, year: 9, month: null, day: null }],
+			[{ id: 2, year: 1, month: null, day: null }]
+		)
+		expect(rows.map((r) => r.year)).toEqual([1, 9])
+	})
+
+	it("nothing dated anywhere is still no axis", () => {
+		expect(momentAxisRows([], [])).toEqual([])
+	})
+})
+
+describe("the axis's identity is the date, not the row id", () => {
+	it("keeps both rows when two tables hand over the same id", () => {
+		// An entry amendment and a cast amendment, each id 1, on two dates.
+		// `MomentBar` keys on `value`; keying on `id` raised each_key_duplicate.
+		const rows = momentAxisRows(
+			[],
+			[
+				{ id: 1, year: 4, month: null, day: null },
+				{ id: 1, year: 9, month: null, day: null }
+			]
+		)
+		expect(rows).toHaveLength(2)
+		const ticks = buildTicks(rows)
+		expect(new Set(ticks.map((t) => t.value)).size).toBe(2)
 	})
 })

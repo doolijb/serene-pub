@@ -187,13 +187,15 @@ describe("normalizeTimestamp", () => {
 })
 
 describe("mapGroupReplyStrategy", () => {
+	// Only `manual` becomes a rebind; every other activation strategy
+	// inherits the respond spec's round robin (2026-09-21).
 	test.each([
-		["manual", "MANUAL"],
-		["natural_order", "NATURAL"],
-		["list_order", "ORDERED"],
-		["pooled_order", "ORDERED"],
-		[undefined, "ORDERED"],
-		["some_unknown_strategy", "ORDERED"]
+		["manual", "core:task/turn-manual@1"],
+		["natural_order", null],
+		["list_order", null],
+		["pooled_order", null],
+		[undefined, null],
+		["some_unknown_strategy", null]
 	])("maps %s to %s", (input, expected) => {
 		expect(mapGroupReplyStrategy(input)).toBe(expected)
 	})

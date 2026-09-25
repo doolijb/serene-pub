@@ -55,6 +55,12 @@ beforeAll(async () => {
 			}, 400)
 			return
 		}
+		// Echoes the Authorization header back — the response that would
+		// hand a plugin its own key, were the bridge not to mask it.
+		if (url.indexOf("/echo-auth") === 0) {
+			res.writeHead(200, { "content-type": "text/plain" })
+			return res.end("auth=" + (req.headers.authorization ?? ""))
+		}
 		res.writeHead(200, { "content-type": "text/plain" })
 		res.end("hello:" + req.method + ":" + url)
 	})
@@ -366,7 +372,7 @@ describe("the two backends are indistinguishable from inside a hook", () => {
 			},
 			refused: {
 				name: "Error",
-				message: "fetch: host not permitted: blocked.example",
+				message: "fetch: host not permitted: blocked.example (see guides/plugin-permissions.md#kind-oracle)",
 				isError: true
 			},
 			denied: null
@@ -391,7 +397,7 @@ describe("the two backends are indistinguishable from inside a hook", () => {
 		expect(seen[0]).toBe(
 			JSON.stringify({
 				name: "Error",
-				message: "network: permission not granted",
+				message: "network: permission not granted (see guides/plugin-permissions.md#kind-oracle)",
 				// The refusal *throws*; it never resolves to a response object,
 				// so a hook cannot mistake a denial for a failed request.
 				threwSynchronously: true
@@ -486,3 +492,78 @@ describe.each(BACKENDS)(
 		}, 30_000)
 	}
 )
+
+// R63: plugin code holds a secret handle; the bridge fills the value in at the
+// network boundary, for this call's secrets only, and masks an echo — and
+// nothing it throws or returns quotes the value.
+const AUTH_HOOK = `module.exports = { hooks: {
+	get: async function (input, ctx) {
+		try {
+			var res = await ctx.fetch(input.url, { headers: { authorization: "Bearer " + input.key } });
+			return { status: res.status, body: res.body };
+		} catch (e) {
+			// A hostile plugin keeps whatever the error told it.
+			return { error: String(e && e.message) };
+		}
+	}
+} }`
+
+describe.each(BACKENDS)("secret handles at the network boundary (%s)", (kind) => {
+	const NONCE = "a1b2c3d4"
+	const HANDLE = "\u27E6secret:apiKey:" + NONCE + "\u27E7"
+	const SECRET = "sk-test-9999/zz"
+	const bag = { nonce: NONCE, values: { apiKey: SECRET } }
+	const call = (input: Record<string, unknown>, secrets: unknown = bag) =>
+		rt.invoke({ pluginId: "p", hookName: "get" }, { ...opts(input), secrets } as never)
+	const load = async () => {
+		rt = make(kind)
+		await rt.load("p", AUTH_HOOK, "h", { networkHosts: [host] })
+	}
+
+	it("fills the handle in for the declared host, and the echo comes back as the handle", async () => {
+		await load()
+		const r = await call({ url: baseUrl + "echo-auth", key: HANDLE })
+		expect(r.ok).toBe(true)
+		if (r.ok) {
+			expect(served).toContain("/echo-auth")
+			expect((r.value as { body: string }).body).toBe("auth=Bearer " + HANDLE)
+			expect(JSON.stringify(r)).not.toContain(SECRET)
+		}
+	}, 15_000)
+
+	it("refuses a handle this call may not use — withheld from another package's pipeline", async () => {
+		await load()
+		const r: any = await call({ url: baseUrl + "echo-auth", key: HANDLE }, { nonce: NONCE, values: {} })
+		expect(r.value.error).toMatch(/secret 'apiKey' is not available to this call/)
+		expect(served).not.toContain("/echo-auth")
+	}, 15_000)
+
+	it("a forged handle — no nonce, or another one — fills nothing", async () => {
+		await load()
+		for (const forged of ["\u27E6secret:apiKey:deadbeef\u27E7", "\u27E6secret:apiKey:" + NONCE.slice(1) + "\u27E7"]) {
+			const r: any = await call({ url: baseUrl + "echo-auth", key: forged })
+			expect(r.value.error).toMatch(/not a secret handle this plugin was given/)
+		}
+		expect(served).not.toContain("/echo-auth")
+	}, 15_000)
+
+	it("no error quotes the value: a handle in the user part is refused, a bad header is refused in words", async () => {
+		await load()
+		const userinfo: any = await call({ url: "http://" + HANDLE + "@" + host + ":" + port + "/echo-auth", key: "x" })
+		expect(userinfo.value.error).toMatch(/cannot ride in the URL's user part|invalid URL/)
+		const crlf: any = await call({ url: baseUrl + "echo-auth", key: HANDLE + "\nX-Evil: 1" })
+		expect(crlf.value.error).toMatch(/line break/)
+		expect(JSON.stringify([userinfo, crlf])).not.toContain(SECRET)
+	}, 15_000)
+
+	it("a URL with no handle is left exactly as written; a value in a URL cannot reshape it", async () => {
+		await load()
+		const plain: any = await call({ url: baseUrl + "q?x=100%&y=%2541", key: "none" })
+		expect(plain.value.body).toContain("/q?x=100%&y=%2541")
+		const inPath: any = await call({ url: baseUrl + "echo-auth?k=" + HANDLE, key: "none" })
+		expect(inPath.value.status).toBe(200)
+		// Served with the value percent-encoded: its "/" did not become a path.
+		expect(served.some((u) => u.startsWith("/echo-auth?k=") && u.includes(encodeURIComponent(SECRET)))).toBe(true)
+		expect(JSON.stringify(inPath)).not.toContain(SECRET)
+	}, 15_000)
+})

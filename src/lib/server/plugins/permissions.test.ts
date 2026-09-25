@@ -9,6 +9,10 @@ import {
 	storageGrant,
 	networkGrant,
 	permissionStates,
+	declaredWidgetScopes,
+	panelGrants,
+	grantedWidgetScopes,
+	reviewMark,
 	type Permission,
 	MAX_ADMIN_STORAGE_QUOTA
 } from "./permissions"
@@ -448,5 +452,51 @@ describe("permissions", () => {
 				after.find((s) => s.key === "network:api.example.com")?.granted
 			).toBe(true)
 		})
+	})
+})
+
+describe("widget scopes (C5): a widget's data request is a reviewed permission", () => {
+	const withPanels = {
+		// The compiled echo is absent on purpose: the panels are the source.
+		permissions: ["event:core:event/message-respond@1"],
+		genres: [
+			{ shape: { panels: [{ id: "clone", scopes: ["session:full", "made-up"] }, { id: "tally" }] } }
+		]
+	}
+
+	it("is read off the panels themselves, never trusted to the compiled list", () => {
+		expect(declaredWidgetScopes(withPanels)).toEqual(["session:full"])
+		const keys = declaredPermissions(withPanels).map((p) => p.key)
+		expect(keys).toContain("widget:session:full")
+		expect(keys).not.toContain("widget:made-up")
+	})
+
+	it("is refused until an admin reviews it, and deniable after", () => {
+		expect(grantedWidgetScopes(withPanels, [])).toEqual([])
+		const reviewed = reviewMarks(declaredPermissions(withPanels))
+		expect(grantedWidgetScopes(withPanels, reviewed)).toEqual(["session:full"])
+		expect(grantedWidgetScopes(withPanels, [...reviewed, "widget:session:full"])).toEqual([])
+		expect(reviewed).toContain(reviewMark("widget:session:full"))
+	})
+
+	it("is not doubled by the CLI's compiled echo of the same request", () => {
+		const echoed = { ...withPanels, permissions: [...withPanels.permissions, "widget:session:full"] }
+		expect(declaredPermissions(echoed).filter((p) => p.key === "widget:session:full")).toHaveLength(1)
+		expect(declaredPermissions(echoed).some((p) => p.key.startsWith("Declared"))).toBe(false)
+	})
+
+	it("gives a panel what it asked for AND its plugin was granted — narrowing, never widening", () => {
+		const two = {
+			genres: [{ shape: { panels: [{ id: "a", scopes: ["session:full", "lore"] }] } }]
+		}
+		const reviewed = reviewMarks(declaredPermissions(two))
+		expect(panelGrants(["session:full"], two, reviewed)).toEqual(["session:full"])
+		// Unreviewed: nothing.
+		expect(panelGrants(["session:full"], two, [])).toEqual([])
+		// Denied: gone; the other scope stands.
+		expect(panelGrants(["session:full", "lore"], two, [...reviewed, "widget:session:full"])).toEqual(["lore"])
+		// A scope no panel of the plugin declared was never granted.
+		expect(panelGrants(["characters"], two, reviewed)).toEqual([])
+		expect(panelGrants(undefined, two, reviewed)).toEqual([])
 	})
 })

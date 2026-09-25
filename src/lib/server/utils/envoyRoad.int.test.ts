@@ -24,11 +24,12 @@
  *     → `envoy:mascot`), and a deviation written through the Pipelines
  *     panel — at the step the panel lists for the envoy — replaces them
  *     byte for byte on the next reply.
- *  5. **The trigger finds the envoy.** With no character due,
- *     `sessions:triggerGenerateMessage` picks the seated in-turn envoy, so a
- *     person's message in a guide session gets an answer. An explicit
- *     `speaker` is owner-only and must name a live in-turn seat; a session
- *     that can have nobody answer says so in a sentence.
+ *  5. **The fired turn drives the envoy.** Turn order is state (A7): the
+ *     guide defers the turn-order binding, so its stored order stays empty and
+ *     Continue says "Nothing is prepared to take a turn." — and an order-less
+ *     session is still playable because the owner's press is the pick (§4.7),
+ *     firing the seated envoy by entry. Picking somebody out of turn is
+ *     owner-only, and firing reads the order, not the seat.
  *  6. **Who may act** (U5g review, C1). An envoy's line is the session
  *     owner's — regenerate, edit and delete run for the owner and refuse a
  *     guest through the real handlers — and a user line with no persona is
@@ -103,7 +104,11 @@ class FakeAdapter {
 	}
 	async generateText() {
 		return {
-			compiledPrompt: { prompt: "p", messages: undefined, meta: {} as any },
+			compiledPrompt: {
+				prompt: "p",
+				messages: undefined,
+				meta: {} as any
+			},
 			isAborted: false,
 			completionResult: async (onContent: (c: string) => void) => {
 				for (const c of CHUNKS) onContent(c)
@@ -134,7 +139,11 @@ async function createGuideSession(name: string, presetId?: number) {
 	const res: any = await sessionsCreateHandler.handler(
 		fakeSocket(userId),
 		{
-			session: { name, genreId: GUIDE, ...(presetId ? { presetId } : {}) },
+			session: {
+				name,
+				genreId: GUIDE,
+				...(presetId ? { presetId } : {})
+			},
 			characterIds: [],
 			personaIds: [],
 			characterPositions: {},
@@ -179,7 +188,9 @@ const systemTextOf = (compiled: any): string => {
 		| undefined
 	if (Array.isArray(messages) && messages.length) {
 		const system = messages.filter((m) => m.role === "system")
-		return (system.length ? system : messages).map((m) => m.content).join("\n")
+		return (system.length ? system : messages)
+			.map((m) => m.content)
+			.join("\n")
 	}
 	return String(compiled?.prompt ?? "")
 }
@@ -216,7 +227,11 @@ beforeAll(async () => {
 		.values({
 			name: "Default",
 			isImmutable: false,
-			values: { contextTokens: 8192, responseTokens: 200, temperature: 0.2 },
+			values: {
+				contextTokens: 8192,
+				responseTokens: 200,
+				temperature: 0.2
+			},
 			enabled: ["contextTokens", "responseTokens", "temperature"]
 		} as any)
 		.returning()
@@ -239,21 +254,23 @@ describe("the guide genre ships", () => {
 		const { listSessionGenres } = await import(
 			"$lib/server/pipelines/entities/sessionGenres"
 		)
-		const guide = (await listSessionGenres(db)).find((g) => g.genreId === GUIDE)
+		const guide = (await listSessionGenres(db)).find(
+			(g) => g.genreId === GUIDE
+		)
 		expect(guide).toBeDefined()
 		expect(guide!.shape.characters).toEqual({ min: 0, max: 0 })
-		expect(guide!.envoys?.map((e) => [e.key, e.default, e.speaks])).toEqual([
-			["mascot", true, "in-turn"]
-		])
+		expect(guide!.envoys?.map((e) => [e.key, e.default, e.speaks])).toEqual(
+			[["mascot", true, "in-turn"]]
+		)
 		const [preset] = await db
 			.select()
 			.from(schema.sessionPresets)
 			.where(eq(schema.sessionPresets.seedKey, "core-guide-default"))
 		expect(preset?.genreId).toBe(GUIDE)
 		expect(preset?.enabled).toBe(true)
-		expect((preset?.bindings as any)?.["core:event/message-respond@1"]?.spec).toBe(
-			GUIDE_RESPOND
-		)
+		expect(
+			(preset?.bindings as any)?.["core:event/message-respond@1"]?.spec
+		).toBe(GUIDE_RESPOND)
 	})
 })
 
@@ -300,7 +317,9 @@ describe("seating", () => {
 			} as any)
 			.returning()
 		const sessionId = await createGuideSession("preset-seats", preset!.id)
-		expect((await seats(sessionId)).map((r) => r.envoySlug)).toEqual(["mascot"])
+		expect((await seats(sessionId)).map((r) => r.envoySlug)).toEqual([
+			"mascot"
+		])
 
 		const { sessionsSetEnvoySeatHandler } = await import(
 			"$lib/server/sockets/sessions"
@@ -357,47 +376,74 @@ describe("the resolver and the strategies", () => {
 			sessionCharacters: [],
 			sessionPersonas: [],
 			envoys: [
-				{ slug: "acme.roller", speaks: "on-action", position: 0, removedAt: null },
-				{ slug: "mascot", speaks: "in-turn", position: 1, removedAt: null }
+				{
+					slug: "acme.roller",
+					speaks: "on-action",
+					position: 0,
+					removedAt: null
+				},
+				{
+					slug: "mascot",
+					speaks: "in-turn",
+					position: 1,
+					removedAt: null
+				}
 			]
 		}
 		const messages = [{ role: "user", content: "hi", metadata: {} }]
+		// The pool admits only in-turn envoys; the on-action one never enters
+		// a strategy — it speaks only through its action's outputs.
+		const pooled = await bindings["core:task/turn-pool@1"](
+			{ cast, params: {} },
+			{}
+		)
+		expect(pooled.value.main.map((c: any) => c.ref)).toEqual([
+			"envoy:mascot"
+		])
+		const candidates = pooled.value.main
 		// Random: every draw lands on the one in-turn envoy.
 		for (const r of [0, 0.5, 0.999]) {
 			const out = await bindings["core:task/turn-random@1"](
-				{ cast, messages },
+				{ candidates, messages },
 				{ random: () => r }
 			)
-			expect(out.value.speaker).toBe("envoy:mascot")
-			expect(out.value.characterId).toBeNull()
+			expect(out.value.order).toEqual([
+				{ ref: "envoy:mascot", via: "strategy" }
+			])
 		}
 		// Round robin: no character due, so the in-turn envoy takes the turn.
 		const rr = await bindings["core:task/turn-round-robin@1"](
-			{ cast, messages },
+			{ candidates, messages },
 			{}
 		)
-		expect(rr.value.speaker).toBe("envoy:mascot")
-		expect(rr.value.main.via).toBe("strategy")
-		// And nobody once the envoy has just replied.
+		expect(rr.value.order).toEqual([
+			{ ref: "envoy:mascot", via: "strategy" }
+		])
+		// And none once the envoy has just replied: after a turn is taken an
+		// empty order is the answer, never a halt (§4.4).
 		const answered = await bindings["core:task/turn-round-robin@1"](
 			{
-				cast,
+				candidates,
 				messages: [
 					...messages,
-					{ role: "assistant", content: "…", metadata: { speaker: "envoy:mascot" } }
+					{
+						role: "assistant",
+						content: "…",
+						metadata: { speaker: "envoy:mascot" }
+					}
 				]
 			},
 			{}
 		)
-		expect(answered.value.speaker).toBeNull()
-		// An explicit pick of the on-action envoy still wins — the trigger
-		// decided, not the strategy (an action's outlet posting as its envoy).
+		expect(answered.value.order).toEqual([])
+		// Manual prepares nothing: an explicit pick never enters a strategy —
+		// a press fires the entry directly (§4.6), and the `speaker` in-port
+		// is gone.
 		const picked = await bindings["core:task/turn-manual@1"](
-			{ cast, messages, speaker: "envoy:acme.roller" },
+			{ candidates, messages },
 			{}
 		)
-		expect(picked.value.speaker).toBe("envoy:acme.roller")
-		expect(picked.value.main.via).toBe("pick")
+		expect(picked.value.order).toEqual([])
 	})
 })
 
@@ -425,9 +471,7 @@ describe("a guide reply", () => {
 		const input = receipt.nodes.find((n) => n.nodeKey === "input")!
 		expect((input.output as any).speaker).toBe("envoy:mascot")
 		expect((input.output as any).characterId).toBeNull()
-		// The strategy passed it through, and the context builder took it.
-		const speaker = receipt.nodes.find((n) => n.nodeKey === "speaker")!
-		expect((speaker.output as any).speaker).toBe("envoy:mascot")
+		// The genre's speaker text reached the context builder.
 		const context = receipt.nodes.find((n) => n.nodeKey === "context")!
 		expect((context.output as any).seedName).toBe("Guide")
 		// Pinned once at run start (R-21 (4)).
@@ -435,15 +479,21 @@ describe("a guide reply", () => {
 		// The docs are the lore: the search ran, published its band intent
 		// first, and — with the docs compiled — found the connections page
 		// for a question about connections, in the `worldLore` band.
-		const docs = receipt.nodes.find((n) => n.nodeKey === "gather.docs.read")!
+		const docs = receipt.nodes.find(
+			(n) => n.nodeKey === "gather.docs.read"
+		)!
 		expect(docs.result).toBe("ok")
-		const published = (docs.output as any).main as Array<Record<string, unknown>>
+		const published = (docs.output as any).main as Array<
+			Record<string, unknown>
+		>
 		expect(published[0]).toMatchObject({ band: "worldLore" })
 		const hits = published.slice(1)
 		if (hits.length) {
 			expect(hits.every((h) => h.source === "worldLore")).toBe(true)
 			expect(
-				hits.some((h) => /connect/i.test(String((h.payload as any)?.name ?? "")))
+				hits.some((h) =>
+					/connect/i.test(String((h.payload as any)?.name ?? ""))
+				)
 			).toBe(true)
 			// …and the ranker allocated them, so the wire carries one.
 			const rank = receipt.nodes.find((n) => n.nodeKey === "rank")!
@@ -487,7 +537,9 @@ describe("a guide reply", () => {
 		// not a step of anything that runs — with the genre's text as the
 		// author default and nothing changed yet.
 		expect(view!.steps.some((s) => s.kind === "envoy")).toBe(false)
-		const step = view!.alsoConfigured.find((s) => s.label === "Envoy · Guide")!
+		const step = view!.alsoConfigured.find(
+			(s) => s.label === "Envoy · Guide"
+		)!
 		expect(step, "an Envoy step").toBeDefined()
 		expect(step.kind).toBe("envoy")
 		const option = step.options.find((o) => o.label === "System prompt")!
@@ -501,15 +553,23 @@ describe("a guide reply", () => {
 		expect(option.writable).toBe(true)
 		// The context step no longer offers a prompt picker of its own: the
 		// envoy owns the text (the three-System-boxes rule).
-		const contextStep = view!.steps.find((s) => s.label === "Build template context")
-		expect(contextStep?.options.some((o) => o.control === "prompts-ref")).toBe(false)
+		const contextStep = view!.steps.find(
+			(s) => s.label === "Build template context"
+		)
+		expect(
+			contextStep?.options.some((o) => o.control === "prompts-ref")
+		).toBe(false)
 
 		// The shipped configuration stays as written; the edit lands on a
 		// copy the instance selects — the panel's own gesture, by hand.
 		const { duplicateConfig, selectConfig } = await import(
 			"$lib/server/pipelines/config/named"
 		)
-		const copy = await duplicateConfig(db, view!.selectedConfig!.id, "Tuned guide")
+		const copy = await duplicateConfig(
+			db,
+			view!.selectedConfig!.id,
+			"Tuned guide"
+		)
 		const [spec] = await db
 			.select({ id: schema.pipelineSpecs.id })
 			.from(schema.pipelineSpecs)
@@ -553,30 +613,49 @@ describe("a guide reply", () => {
 		expect(system).not.toContain(MASCOT_PROMPT)
 
 		// Back to the default is a delete, and the genre's text again.
-		const { clearOption } = await import("$lib/server/pipelines/config/panel")
+		const { clearOption } = await import(
+			"$lib/server/pipelines/config/panel"
+		)
 		await clearOption(db, secret, GUIDE_RESPOND, viewer, option.id)
 		expect(
 			(
 				await db
 					.select()
 					.from(schema.pipelineConfigValues)
-					.where(eq(schema.pipelineConfigValues.nodeKey, "envoy:mascot"))
+					.where(
+						eq(schema.pipelineConfigValues.nodeKey, "envoy:mascot")
+					)
 			).length
 		).toBe(0)
 	})
 
-	it("the trigger finds the seated envoy when no character is due, and a verb re-drives its row as its turn", async () => {
+	it("firing drives the seated envoy — Continue with nothing prepared is refused in a sentence, and a verb re-drives its row as its turn", async () => {
 		const sessionId = await createGuideSession("trigger")
 		await ask(sessionId, "where are my characters?")
-		const { triggerGenerateMessageHandler } = await import(
+		const { sessionsFireTurnHandler } = await import(
 			"$lib/server/sockets/sessions"
 		)
-		const res: any = await triggerGenerateMessageHandler.handler(
+
+		// The question was written straight to the table (no event), so the
+		// guide's turn order has not run yet and its stored order is empty:
+		// Continue is "Nothing is prepared", in a sentence.
+		const nothing: any = await sessionsFireTurnHandler.handler(
 			fakeSocket(userId),
-			{ sessionId, once: true },
+			{ sessionId },
+			emit
+		)
+		expect(nothing.error).toBe("Nothing is prepared to take a turn.")
+		expect((await messagesOf(sessionId)).length).toBe(1)
+
+		// …which is how an order-less session is still playable (§4.7): the
+		// owner's press is the pick, firing the seated envoy by entry.
+		const res: any = await sessionsFireTurnHandler.handler(
+			fakeSocket(userId),
+			{ sessionId, entry: { ref: "envoy:mascot", via: "pick" } },
 			emit
 		)
 		expect(res?.error, res?.error).toBeUndefined()
+		expect(res.ok).toBe(true)
 		const rows = await messagesOf(sessionId)
 		const row = rows[rows.length - 1]!
 		expect(row.role).toBe("assistant")
@@ -584,13 +663,16 @@ describe("a guide reply", () => {
 		expect((row.metadata as any).speaker).toBe("envoy:mascot")
 		expect(row.content).toBe(CHUNKS.join(""))
 
-		// Nobody is due once the envoy has answered: a second trigger writes
-		// nothing rather than a second answer.
-		await triggerGenerateMessageHandler.handler(
+		// Nothing is prepared again once the envoy has answered: its reply
+		// recomputed the guide's turn order (R27), round robin counts the
+		// envoy's row as its turn (M3 fix: history carries `speaker`), and a
+		// second Continue writes nothing rather than a second answer.
+		const quiet: any = await sessionsFireTurnHandler.handler(
 			fakeSocket(userId),
-			{ sessionId, once: true },
+			{ sessionId },
 			emit
 		)
+		expect(quiet.error).toBe("Nothing is prepared to take a turn.")
 		expect((await messagesOf(sessionId)).length).toBe(rows.length)
 
 		// A regenerate reads the row's reference and re-drives the envoy's
@@ -618,213 +700,158 @@ describe("a guide reply", () => {
 		expect((redriven!.metadata as any).speaker).toBe("envoy:mascot")
 		expect(redriven!.content).toBe(CHUNKS.join(""))
 		// Still one live seat, untouched by any of it.
-		expect((await seats(sessionId)).filter((r) => r.removedAt === null).length).toBe(1)
+		expect(
+			(await seats(sessionId)).filter((r) => r.removedAt === null).length
+		).toBe(1)
 	})
 })
 
-describe("the trigger's explicit speaker (U5g review, W1) and an answerless session (S7)", () => {
+describe("the fired turn's explicit pick (U5g review, W1) and an answerless session (S7)", () => {
 	let guestId: number
 	beforeAll(async () => {
 		const { createTestUser } = await import("$lib/server/utils/testDb")
-		guestId = (await createTestUser(db, "envoy-road-trigger-guest")).id
+		guestId = (await createTestUser(db, "envoy-road-fire-guest")).id
 	})
 
-	/** The last error the trigger told the client, if any. */
-	const lastTriggerError = () =>
-		events
-			.filter((e) => e.event === "sessions:triggerGenerateMessage:error")
-			.at(-1)?.data?.error as string | undefined
-
-	it("a guest naming the envoy is refused; the owner naming an unseated slug, a non-reference, or an on-action envoy is refused; the owner naming the seated in-turn envoy runs", async () => {
+	it("a guest picking the envoy out of turn is refused with a sentence; the owner may fire it by entry", async () => {
 		const sessionId = await createGuideSession("explicit-speaker")
-		await db.insert(schema.sessionGuests).values({ sessionId, userId: guestId })
+		await db
+			.insert(schema.sessionGuests)
+			.values({ sessionId, userId: guestId })
 		await ask(sessionId, "may I pick who answers?")
-		const { triggerGenerateMessageHandler } = await import(
+		const { sessionsFireTurnHandler } = await import(
 			"$lib/server/sockets/sessions"
 		)
 		const before = (await messagesOf(sessionId)).length
 
-		// The guest: owner-only, like an explicit characterId.
+		// A guest: the stored order on the deferred genre is empty, so an
+		// explicit envoy is somebody else's turn — owner-only, like the old
+		// explicit-speaker rule.
 		events.length = 0
-		const guest: any = await triggerGenerateMessageHandler.handler(
+		const guest: any = await sessionsFireTurnHandler.handler(
 			fakeSocket(guestId),
-			{ sessionId, once: true, speaker: "envoy:mascot" },
+			{ sessionId, entry: { ref: "envoy:mascot", via: "pick" } },
 			emit
 		)
-		expect(guest.error).toMatch(/Only the session owner can trigger a specific envoy/)
-		expect(lastTriggerError()).toBe(guest.error)
-		expect((await messagesOf(sessionId)).length).toBe(before)
-
-		// The owner naming something that is not an envoy reference.
-		events.length = 0
-		const notRef: any = await triggerGenerateMessageHandler.handler(
-			fakeSocket(userId),
-			{ sessionId, once: true, speaker: "character:1" },
-			emit
+		expect(guest.error).toBe(
+			"Only the session owner can take somebody else's turn out of order."
 		)
-		expect(notRef.error).toMatch(/not an envoy reference/)
-		expect(lastTriggerError()).toBe(notRef.error)
-
-		// The owner naming a slug with no live seat.
-		events.length = 0
-		const unseated: any = await triggerGenerateMessageHandler.handler(
-			fakeSocket(userId),
-			{ sessionId, once: true, speaker: "envoy:nobody" },
-			emit
-		)
-		expect(unseated.error).toMatch(/not an envoy seated in this session/)
-		expect(lastTriggerError()).toBe(unseated.error)
-		expect((await messagesOf(sessionId)).length).toBe(before)
-
-		// The owner naming a seated on-action envoy: seated by hand here,
-		// under a declaration a stand-in action publishes for the guide
-		// genre (an action's envoy is only ever `on-action`).
-		const [herald] = await db
-			.insert(schema.pipelineSpecs)
-			.values({ slug: "acme:spec/herald", name: "Herald" })
-			.returning()
-		const [heraldVersion] = await db
-			.insert(schema.pipelineSpecVersions)
-			.values({
-				specId: herald!.id,
-				semver: "1.0.0",
-				schemaVersion: 1,
-				canonicalHash: "herald-1",
-				status: "published",
-				publishedAt: new Date(),
-				contributes: {
-					actions: [
-						{
-							key: "announce",
-							function: "announce",
-							genre: GUIDE,
-							venue: { kind: "composer" },
-							label: { en: "Announce" },
-							envoy: { key: "herald", name: { en: "Herald" }, speaks: "on-action" }
-						}
-					]
-				}
-			} as any)
-			.returning()
-		await db
-			.update(schema.pipelineSpecs)
-			.set({ activeVersionId: heraldVersion!.id })
-			.where(eq(schema.pipelineSpecs.id, herald!.id))
-		const { invalidateDeclaredEnvoys } = await import(
-			"$lib/server/pipelines/entities/envoys"
-		)
-		invalidateDeclaredEnvoys()
-		await db
-			.insert(schema.sessionCharacters)
-			.values({ sessionId, characterId: null, envoySlug: "acme.herald", position: 1 })
-		events.length = 0
-		const onAction: any = await triggerGenerateMessageHandler.handler(
-			fakeSocket(userId),
-			{ sessionId, once: true, speaker: "envoy:acme.herald" },
-			emit
-		)
-		expect(onAction.error).toMatch(/speaks only through its action/)
-		expect(lastTriggerError()).toBe(onAction.error)
-		expect((await messagesOf(sessionId)).length).toBe(before)
-
-		// The owner naming the seated in-turn envoy: the run.
-		events.length = 0
-		const picked: any = await triggerGenerateMessageHandler.handler(
-			fakeSocket(userId),
-			{ sessionId, once: true, speaker: "envoy:mascot" },
-			emit
-		)
-		expect(picked?.error, picked?.error).toBeUndefined()
-		const rows = await messagesOf(sessionId)
-		expect(rows.length).toBe(before + 1)
-		expect((rows.at(-1)!.metadata as any).speaker).toBe("envoy:mascot")
-		expect(rows.at(-1)!.content).toBe(CHUNKS.join(""))
-
-		// Tidy: the stand-in action, so later genre reads see the shipped set.
-		await db.delete(schema.pipelineSpecs).where(eq(schema.pipelineSpecs.id, herald!.id))
-		invalidateDeclaredEnvoys()
-	})
-
-	it("an explicit characterId's refusals go through the same channel as an explicit speaker's, emitting the error event", async () => {
-		const sessionId = await createGuideSession("explicit-character-id")
-		await db.insert(schema.sessionGuests).values({ sessionId, userId: guestId })
-		await ask(sessionId, "who's there?")
-		const { triggerGenerateMessageHandler } = await import(
-			"$lib/server/sockets/sessions"
-		)
-		const before = (await messagesOf(sessionId)).length
-
-		// A guest: owner-only, like an explicit speaker.
-		events.length = 0
-		const guest: any = await triggerGenerateMessageHandler.handler(
-			fakeSocket(guestId),
-			{ sessionId, once: true, characterId: 1 },
-			emit
-		)
-		expect(guest.error).toMatch(
-			/Only the session owner can trigger a specific character/
-		)
-		expect(lastTriggerError()).toBe(guest.error)
+		expect(events.at(-1)?.event).toBe("sessions:fireTurn:error")
 		expect((await messagesOf(sessionId)).length).toBe(before)
 
 		// A stranger to the session at all: the access-check branch above it.
 		const { createTestUser } = await import("$lib/server/utils/testDb")
-		const strangerId = (await createTestUser(db, "envoy-road-trigger-stranger")).id
+		const strangerId = (
+			await createTestUser(db, "envoy-road-fire-stranger")
+		).id
 		events.length = 0
-		const stranger: any = await triggerGenerateMessageHandler.handler(
+		const stranger: any = await sessionsFireTurnHandler.handler(
 			fakeSocket(strangerId),
-			{ sessionId, once: true, characterId: 1 },
+			{ sessionId, entry: { ref: "envoy:mascot", via: "pick" } },
 			emit
 		)
-		expect(stranger.error).toMatch(/Session not found/)
-		expect(lastTriggerError()).toBe(stranger.error)
+		expect(stranger.error).toBe("Session not found.")
+		expect(events.at(-1)?.event).toBe("sessions:fireTurn:error")
+		expect((await messagesOf(sessionId)).length).toBe(before)
+
+		// The owner naming the seated in-turn envoy: the run.
+		events.length = 0
+		const picked: any = await sessionsFireTurnHandler.handler(
+			fakeSocket(userId),
+			{ sessionId, entry: { ref: "envoy:mascot", via: "pick" } },
+			emit
+		)
+		expect(picked?.error, picked?.error).toBeUndefined()
+		expect(picked.ok).toBe(true)
+		const rows = await messagesOf(sessionId)
+		expect(rows.length).toBe(before + 1)
+		expect((rows.at(-1)!.metadata as any).speaker).toBe("envoy:mascot")
+		expect(rows.at(-1)!.content).toBe(CHUNKS.join(""))
 	})
 
-	it("a guide session with its mascot unseated refuses the trigger with a sentence; seated, nobody due is silent", async () => {
+	it("an explicit character entry's refusals go through the same channel as picking an envoy, emitting the error event", async () => {
+		const sessionId = await createGuideSession("explicit-character-id")
+		await db
+			.insert(schema.sessionGuests)
+			.values({ sessionId, userId: guestId })
+		await ask(sessionId, "who's there?")
+		const { sessionsFireTurnHandler } = await import(
+			"$lib/server/sockets/sessions"
+		)
+		const before = (await messagesOf(sessionId)).length
+
+		// A guest: owner-only, like picking an explicit speaker.
+		events.length = 0
+		const guest: any = await sessionsFireTurnHandler.handler(
+			fakeSocket(guestId),
+			{ sessionId, entry: { ref: "character:1", via: "pick" } },
+			emit
+		)
+		expect(guest.error).toBe(
+			"Only the session owner can take somebody else's turn out of order."
+		)
+		expect(events.at(-1)?.event).toBe("sessions:fireTurn:error")
+		expect((await messagesOf(sessionId)).length).toBe(before)
+
+		// A stranger to the session at all: the access-check branch above it.
+		const { createTestUser } = await import("$lib/server/utils/testDb")
+		const strangerId = (
+			await createTestUser(db, "envoy-road-char-stranger")
+		).id
+		events.length = 0
+		const stranger: any = await sessionsFireTurnHandler.handler(
+			fakeSocket(strangerId),
+			{ sessionId, entry: { ref: "character:1", via: "pick" } },
+			emit
+		)
+		expect(stranger.error).toBe("Session not found.")
+		expect(events.at(-1)?.event).toBe("sessions:fireTurn:error")
+	})
+
+	it("firing reads the order, not the seat: an unseated mascot still answers when fired; Continue stays refused in a sentence", async () => {
 		const sessionId = await createGuideSession("answerless")
 		await ask(sessionId, "anyone there?")
-		const { sessionsSetEnvoySeatHandler, triggerGenerateMessageHandler } =
+		const { sessionsSetEnvoySeatHandler, sessionsFireTurnHandler } =
 			await import("$lib/server/sockets/sessions")
+
+		// Nothing is prepared: Continue is a sentence, not silence.
+		const beyond: any = await sessionsFireTurnHandler.handler(
+			fakeSocket(userId),
+			{ sessionId },
+			emit
+		)
+		expect(beyond.error).toBe("Nothing is prepared to take a turn.")
+		expect((await messagesOf(sessionId)).length).toBe(1)
+
+		// The owner fires the seated envoy: the answer lands.
+		events.length = 0
+		const answered: any = await sessionsFireTurnHandler.handler(
+			fakeSocket(userId),
+			{ sessionId, entry: { ref: "envoy:mascot", via: "pick" } },
+			emit
+		)
+		expect(answered?.error, answered?.error).toBeUndefined()
+		expect((await messagesOf(sessionId)).length).toBe(2)
+
+		// Firing is over prepared turns: the press dispatching the entry reads
+		// no seat, so unseating does not unmake the fired reply — what says
+		// who is due is the order (here, the owner's pick).
 		await sessionsSetEnvoySeatHandler.handler(
 			fakeSocket(userId),
 			{ sessionId, slug: "mascot", seated: false },
 			emit
 		)
 		events.length = 0
-		const refused: any = await triggerGenerateMessageHandler.handler(
+		const unseated: any = await sessionsFireTurnHandler.handler(
 			fakeSocket(userId),
-			{ sessionId, once: true },
+			{ sessionId, entry: { ref: "envoy:mascot", via: "pick" } },
 			emit
 		)
-		expect(refused.error).toBe(
-			"This session has no one to answer — seat an envoy in Session settings."
-		)
-		expect(lastTriggerError()).toBe(refused.error)
-		expect((await messagesOf(sessionId)).length).toBe(1)
-
-		// Seated again: the answer, then silence — nobody due is not a fault.
-		await sessionsSetEnvoySeatHandler.handler(
-			fakeSocket(userId),
-			{ sessionId, slug: "mascot", seated: true },
-			emit
-		)
-		events.length = 0
-		const answered: any = await triggerGenerateMessageHandler.handler(
-			fakeSocket(userId),
-			{ sessionId, once: true },
-			emit
-		)
-		expect(answered?.error, answered?.error).toBeUndefined()
-		expect((await messagesOf(sessionId)).length).toBe(2)
-		events.length = 0
-		const quiet: any = await triggerGenerateMessageHandler.handler(
-			fakeSocket(userId),
-			{ sessionId, once: true },
-			emit
-		)
-		expect(quiet?.error).toBeUndefined()
-		expect(lastTriggerError()).toBeUndefined()
-		expect((await messagesOf(sessionId)).length).toBe(2)
+		expect(unseated.error, unseated.error).toBeUndefined()
+		const rows = await messagesOf(sessionId)
+		expect(rows.length).toBe(3)
+		expect((rows.at(-1)!.metadata as any).speaker).toBe("envoy:mascot")
+		expect(rows.at(-1)!.content).toBe(CHUNKS.join(""))
 	})
 })
 
@@ -845,17 +872,19 @@ describe("who may act (U5g review, C1)", () => {
 
 	it("an envoy's reply is the session owner's: regenerate, edit and delete run for the owner and refuse a guest, through the real handlers", async () => {
 		const sessionId = await createGuideSession("acting")
-		await db.insert(schema.sessionGuests).values({ sessionId, userId: guestId })
+		await db
+			.insert(schema.sessionGuests)
+			.values({ sessionId, userId: guestId })
 		await ask(sessionId, "whose line is yours?")
 		const {
-			triggerGenerateMessageHandler,
+			sessionsFireTurnHandler,
 			sessionMessagesRegenerateHandler,
 			sessionMessagesUpdateHandler,
 			sessionMessagesDeleteHandler
 		} = await import("$lib/server/sockets/sessions")
-		const res: any = await triggerGenerateMessageHandler.handler(
+		const res: any = await sessionsFireTurnHandler.handler(
 			fakeSocket(userId),
-			{ sessionId, once: true },
+			{ sessionId, entry: { ref: "envoy:mascot", via: "pick" } },
 			emit
 		)
 		expect(res?.error, res?.error).toBeUndefined()
@@ -864,7 +893,9 @@ describe("who may act (U5g review, C1)", () => {
 		expect(row.characterId).toBeNull()
 
 		// The rule, asked directly.
-		const { canActOnMessage } = await import("$lib/server/messages/permissions")
+		const { canActOnMessage } = await import(
+			"$lib/server/messages/permissions"
+		)
 		expect(await canActOnMessage(db, row.id, userId)).toBe(true)
 		expect(await canActOnMessage(db, row.id, guestId)).toBe(false)
 
@@ -914,17 +945,28 @@ describe("who may act (U5g review, C1)", () => {
 			emit
 		)
 		expect(deleted.error, deleted.error).toBeUndefined()
-		expect((await messagesOf(sessionId)).some((m) => m.id === row.id)).toBe(false)
+		expect((await messagesOf(sessionId)).some((m) => m.id === row.id)).toBe(
+			false
+		)
 	})
 
 	it("a user line with no persona is its author's — editable by them and by nobody else, the owner included", async () => {
 		const sessionId = await createGuideSession("own-line")
-		await db.insert(schema.sessionGuests).values({ sessionId, userId: guestId })
+		await db
+			.insert(schema.sessionGuests)
+			.values({ sessionId, userId: guestId })
 		const [line] = await db
 			.insert(schema.sessionMessages)
-			.values({ sessionId, userId: guestId, role: "user", content: "my words" } as any)
+			.values({
+				sessionId,
+				userId: guestId,
+				role: "user",
+				content: "my words"
+			} as any)
 			.returning()
-		const { canActOnMessage } = await import("$lib/server/messages/permissions")
+		const { canActOnMessage } = await import(
+			"$lib/server/messages/permissions"
+		)
 		expect(await canActOnMessage(db, line!.id, guestId)).toBe(true)
 		expect(await canActOnMessage(db, line!.id, userId)).toBe(false)
 
@@ -960,9 +1002,15 @@ describe("who may act (U5g review, C1)", () => {
 	})
 	it("an orphaned row — an AI reply whose character was deleted globally, or a line whose author is gone — is the session owner's to delete, never a guest's", async () => {
 		const sessionId = await createGuideSession("orphan")
-		await db.insert(schema.sessionGuests).values({ sessionId, userId: guestId })
-		const { canActOnMessage } = await import("$lib/server/messages/permissions")
-		const { sessionMessagesDeleteHandler } = await import("$lib/server/sockets/sessions")
+		await db
+			.insert(schema.sessionGuests)
+			.values({ sessionId, userId: guestId })
+		const { canActOnMessage } = await import(
+			"$lib/server/messages/permissions"
+		)
+		const { sessionMessagesDeleteHandler } = await import(
+			"$lib/server/sockets/sessions"
+		)
 
 		// The reply of a character that no longer exists: `character_id`
 		// nulled by `onDelete: set null`, no speaker reference, not narration.
@@ -970,7 +1018,12 @@ describe("who may act (U5g review, C1)", () => {
 		// nobody at all could delete it.
 		const [orphanReply] = await db
 			.insert(schema.sessionMessages)
-			.values({ sessionId, role: "assistant", content: "…", characterId: null } as any)
+			.values({
+				sessionId,
+				role: "assistant",
+				content: "…",
+				characterId: null
+			} as any)
 			.returning()
 		expect(await canActOnMessage(db, orphanReply!.id, guestId)).toBe(false)
 		expect(await canActOnMessage(db, orphanReply!.id, userId)).toBe(true)
@@ -980,12 +1033,19 @@ describe("who may act (U5g review, C1)", () => {
 			emit
 		)
 		expect(deleted.error, deleted.error).toBeUndefined()
-		expect((await messagesOf(sessionId)).some((m) => m.id === orphanReply!.id)).toBe(false)
+		expect(
+			(await messagesOf(sessionId)).some((m) => m.id === orphanReply!.id)
+		).toBe(false)
 
 		// A person's line whose author account is gone (`user_id` nulled).
 		const [orphanLine] = await db
 			.insert(schema.sessionMessages)
-			.values({ sessionId, role: "user", content: "…", userId: null } as any)
+			.values({
+				sessionId,
+				role: "user",
+				content: "…",
+				userId: null
+			} as any)
 			.returning()
 		expect(await canActOnMessage(db, orphanLine!.id, guestId)).toBe(false)
 		expect(await canActOnMessage(db, orphanLine!.id, userId)).toBe(true)
@@ -996,11 +1056,12 @@ describe("a branch keeps the seat (U5g review, C2); the shape facts count no cha
 	it("branching a guide session seats the mascot in the copy, and the copy answers its next message through the real trigger", async () => {
 		const sessionId = await createGuideSession("to-branch")
 		await ask(sessionId, "what happens on a branch?")
-		const { triggerGenerateMessageHandler, sessionsBranchHandler } =
-			await import("$lib/server/sockets/sessions")
-		await triggerGenerateMessageHandler.handler(
+		const { sessionsFireTurnHandler, sessionsBranchHandler } = await import(
+			"$lib/server/sockets/sessions"
+		)
+		await sessionsFireTurnHandler.handler(
 			fakeSocket(userId),
-			{ sessionId, once: true },
+			{ sessionId, entry: { ref: "envoy:mascot", via: "pick" } },
 			emit
 		)
 		const fork = (await messagesOf(sessionId)).at(-1)!
@@ -1021,9 +1082,12 @@ describe("a branch keeps the seat (U5g review, C2); the shape facts count no cha
 		expect((copied[1]!.metadata as any).speaker).toBe("envoy:mascot")
 
 		await ask(branchId, "and now?")
-		const res: any = await triggerGenerateMessageHandler.handler(
+		const res: any = await sessionsFireTurnHandler.handler(
 			fakeSocket(userId),
-			{ sessionId: branchId, once: true },
+			{
+				sessionId: branchId,
+				entry: { ref: "envoy:mascot", via: "pick" }
+			},
 			emit
 		)
 		expect(res?.error, res?.error).toBeUndefined()
@@ -1052,9 +1116,8 @@ describe("a branch keeps the seat (U5g review, C2); the shape facts count no cha
 	it("a guide session's shape facts report zero characters with the mascot seated", async () => {
 		const sessionId = await createGuideSession("facts")
 		expect((await seats(sessionId)).length).toBe(1)
-		const { sessionShapeFacts, shapeViolations, getSessionGenre } = await import(
-			"$lib/server/pipelines/entities/sessionGenres"
-		)
+		const { sessionShapeFacts, shapeViolations, getSessionGenre } =
+			await import("$lib/server/pipelines/entities/sessionGenres")
 		const facts = await sessionShapeFacts(db, sessionId)
 		expect(facts.characters).toBe(0)
 		// And so the genre's own bound — characters max 0 — is satisfied.

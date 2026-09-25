@@ -2,7 +2,7 @@
 	import * as Icons from "@lucide/svelte"
 	import LoreContentField from "$lib/client/components/lorebookForms/LoreContentField.svelte"
 	import type { BindingWithRelations } from "$lib/client/components/lorebookForms/entryManager"
-	import { editBounds, formatDateValue } from "../sections/historyDates"
+	import { editBounds, formatDate } from "../sections/historyDates"
 	import type { PoolSource } from "../sections/types"
 	import { readInLine, type TimeSceneRow } from "./storyTime"
 
@@ -63,7 +63,7 @@
 
 	let bounds = $derived(
 		isNew
-			? { min: -Infinity, max: Infinity }
+			? { min: null, max: null }
 			: editBounds(siblings as any, source?.id)
 	)
 </script>
@@ -143,16 +143,16 @@
 				/>
 			</div>
 		</div>
-		{#if bounds.min !== -Infinity || bounds.max !== Infinity}
+		{#if bounds.min || bounds.max}
 			<p class="text-surface-700-300 text-xs">
-				{#if bounds.min !== -Infinity && bounds.max !== Infinity}
-					Must be between {formatDateValue(bounds.min)} and {formatDateValue(
+				{#if bounds.min && bounds.max}
+					Must be between {formatDate(bounds.min)} and {formatDate(
 						bounds.max
 					)}
-				{:else if bounds.min !== -Infinity}
-					Must be after {formatDateValue(bounds.min)}
-				{:else}
-					Must be before {formatDateValue(bounds.max)}
+				{:else if bounds.min}
+					Must be after {formatDate(bounds.min)}
+				{:else if bounds.max}
+					Must be before {formatDate(bounds.max)}
 				{/if}
 			</p>
 		{/if}

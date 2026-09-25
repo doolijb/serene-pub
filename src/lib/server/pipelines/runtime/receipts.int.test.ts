@@ -223,8 +223,12 @@ describe("recording what a run did", () => {
 		expect(found!.nodes.map((n: any) => n.nodeKey)).toEqual([
 			"input",
 			// 09-B B4: the pipeline owns its row. The placeholder outlet
-			// creates the reply row straight after the inlet; `save` at the
-			// end is the update that fills it.
+			// creates the reply row — **directly after the inlet** since
+			// A6 (PLAN-turn-order §4.4), before anything costs a token and
+			// before the reads; `save` at the end is the update that fills
+			// it. The `speaker` node that used to stand between them is
+			// gone: who speaks is state the fired entry names, decided by
+			// `core:spec/<genre>-turn-order` outside this run entirely.
 			"placeholder",
 			// Spec 1.6.0: the four reads moved into an `async` block, which
 			// qualifies the keys inside it. They still each appear, and still
@@ -273,9 +277,6 @@ describe("recording what a run did", () => {
 			"semantic.arm.queries",
 			"semantic.arm.embed",
 			"semantic.arm.search",
-			// Spec 1.11.0: who speaks is decided (or an explicit pick recorded)
-			// inside the run — the receipt line 19 §5 exists for.
-			"speaker",
 			// Spec 1.6.0: how much room the context has, derived from the
 			// sampling config's window instead of typed on the ranker. Its own
 			// node for the same reason `relationships` is — a number that
@@ -310,26 +311,28 @@ describe("recording what a run did", () => {
 			"lines",
 			"prompt",
 			"generate",
-			"save"
+			"save",
+			// The sprite tail (DESIGN-sprites §5), after the save: what the
+			// speaker can show. A card with no sprites stops here — the
+			// junction's branch is skipped, which is a stated outcome, not a
+			// node in the trail.
+			"sprites"
 		])
 		expect(found!.nodes.every((n: any) => n.result === "ok")).toBe(true)
 
 		// "Why did Bram speak" is now a receipt line (19 §5): the trigger's
-		// pick was recorded, with what decided and how. The socket still
-		// pre-picks every turn, so the pick wins under `turn-manual` — the
-		// strategies deciding for themselves is behind U-C5's retirement of
-		// the pre-pick. The row carries identity; the decision itself lives
-		// in the receipt blob, so it is read off the returned receipt.
-		const speakerRow = found!.nodes.find(
-			(n: any) => n.nodeKey === "speaker"
+		// Who spoke is the ENTRY's, not a node's (PLAN-turn-order §4.4):
+		// the reply run seats no `speaker` node any more, and the
+		// placeholder is made from the pick the inlet carried.
+		expect(found!.nodes.some((n: any) => n.nodeKey === "speaker")).toBe(
+			false
 		)
-		expect(speakerRow!.definitionId).toBe("core:task/turn-manual@1")
-		const speaker = receipt.nodes.find((n: any) => n.nodeKey === "speaker")
-		expect(speaker!.output).toMatchObject({
-			characterId,
-			strategy: "manual",
-			main: { characterId, via: "pick" }
-		})
+		const placeholderRow = found!.nodes.find(
+			(n: any) => n.nodeKey === "placeholder"
+		)
+		expect(placeholderRow!.definitionId).toBe("core:outlet/create-message@1")
+		const inlet = receipt.nodes.find((n: any) => n.nodeKey === "input")
+		expect((inlet!.output as any).speaker).toBe(`character:${characterId}`)
 	}, 30_000)
 
 	it("links the run to the message it produced", async () => {
@@ -580,8 +583,14 @@ describe("recording what a run did", () => {
 	it("does not record a comparison sweep", async () => {
 		// The compare tool previews every session on the instance; recording each
 		// would bury the real runs in rows nobody asked for.
+		// Other tests' queued event work settles first, so the count is this
+		// turn's alone (PLAN §8 (27)).
+		const settle = async () =>
+			(await import("$lib/server/pipelines/runtime/sessionEvents")).settleSessionEvents()
+		await settle()
 		const before = await db.select().from(schema.pipelineRuns)
 		await turn({ seed: "receipt:6", preview: true, skipReceipt: true })
+		await settle()
 		const after = await db.select().from(schema.pipelineRuns)
 		expect(after).toHaveLength(before.length)
 	}, 30_000)

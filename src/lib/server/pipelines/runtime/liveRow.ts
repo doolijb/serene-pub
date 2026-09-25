@@ -45,12 +45,11 @@ import {
 	persistGenerationStatus
 } from "$lib/server/utils/generationStatus"
 import { ComposedError } from "$lib/server/connections/visibility"
-import type { StatusText } from "@serene-pub/sdk"
+import { isParticipantRef, type ParticipantRef, type StatusText } from "@serene-pub/sdk"
 import { resolveThinking } from "$lib/shared/utils/thinkingDelimiters"
 import { joinContinuation } from "$lib/server/messages/continuation"
 import type { AuthenticatedSocket } from "$lib/server/sockets/auth"
 import { setLiveRow } from "$lib/server/pipelines/runtime/runRegistry"
-import { recordSessionChange } from "$lib/server/messages/sessionChanges"
 import { broadcastSessionRow } from "$lib/server/sessions/rowPush"
 
 // db is the global Db — see db/types.d.ts
@@ -72,6 +71,12 @@ export interface LiveRowOptions {
 	 * Absent for a run nobody registered (a preview, a test).
 	 */
 	runId?: string
+	/**
+	 * The run's owner — who a stopped row's events are emitted as
+	 * (PLAN-turn-order §4.1, A2). Absent, a stop settles the row and emits
+	 * nothing: there is nobody to emit as.
+	 */
+	userId?: number
 	/**
 	 * The one oracle whose stream is the reply's prose — see
 	 * `narratingProvider`. Undefined streams nothing: the row fills when the
@@ -117,6 +122,8 @@ export interface LiveRow {
 		content: string | null
 		isGenerating?: boolean | null
 		isNarratorResponse?: boolean | null
+		characterId?: number | null
+		metadata?: unknown
 	}): void
 	/**
 	 * Fence this run's writes on a queue item and put it on the row, so the
@@ -343,14 +350,42 @@ export function createLiveRow(opts: LiveRowOptions): LiveRow {
 			})
 			if (released) {
 				await announce(released)
-				if (stopped)
-					await recordSessionChange(db, {
-						event: "core:event/message-stopped@1",
+				// A stop is two events (PLAN-turn-order §4.1): the stop
+				// itself, and the row LANDING — a stopped reply is a row
+				// that is not generating, so the turn-order spec answers it
+				// like a finished one. Both under the run's cause: this
+				// release is the run's own finalisation, whoever pressed.
+				if (stopped && opts.userId != null) {
+					const { emitSessionEvent } = await import(
+						"$lib/server/pipelines/runtime/sessionEvents"
+					)
+					// Never `auto` (R34, "a Stop ends the round"): even when
+					// auto-advance fired this run, its stopped reply's
+					// completion must not fire the next turn.
+					const cause = {
+						kind: "run" as const,
+						...(opts.runId ? { runId: opts.runId } : {})
+					}
+					await emitSessionEvent(db, {
 						sessionId,
-						messageId: released.id,
-						textLength: released.content.length,
-						runId: opts.runId
+						userId: opts.userId,
+						event: "core:event/message-stopped@1",
+						payload: {
+							sessionId,
+							messageId: released.id,
+							textLength: released.content.length,
+							cause
+						},
+						io
 					})
+					await emitSessionEvent(db, {
+						sessionId,
+						userId: opts.userId,
+						event: "core:event/message-completed@1",
+						payload: { sessionId, messageId: released.id, cause },
+						io
+					})
+				}
 			}
 		}
 	}

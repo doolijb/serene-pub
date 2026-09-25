@@ -10,7 +10,7 @@
  */
 
 import { matchedKeyword } from "./criteria"
-import type { EntryDecision } from "../markers"
+import type { RetrievalMarker } from "../markers"
 
 /** The bands whose rows are not entries, so the ranking leaves them out. */
 const NON_ENTRY_BANDS = new Set(["messages", "relationships"])
@@ -23,7 +23,7 @@ export interface ReadInFacts {
 	/** What the session reading this book is called, or null for none. */
 	sessionName: string | null
 	/** What the newest run did, or null when it reported nothing. */
-	decision: EntryDecision | null
+	decision: RetrievalMarker | null
 	/** Its place among the entries the run judged. */
 	rank?: number
 	of?: number
@@ -90,13 +90,18 @@ export function readInFacts(
 	const total = explanation.budget?.total
 	if (typeof total === "number") facts.budget = total
 
-	const ranked = judgedEntryRows(explanation)
-	const at = ranked.findIndex((row) => row.id === entryId)
-	if (at === -1) return facts
+	const judged = judgedEntryRows(explanation)
+	const row = judged.find((r) => r.id === entryId)
+	if (!row) return facts
 
-	const row = ranked[at]
-	facts.rank = at + 1
-	facts.of = ranked.length
+	// Rank and "of" mean what the ranking store means by them (L1): a place
+	// among the lore entries the turn READ IN, never among everything judged.
+	const read = judged.filter((r) => r.outcome === "included")
+	const at = read.findIndex((r) => r.id === entryId)
+	if (at !== -1) {
+		facts.rank = at + 1
+		facts.of = read.length
+	}
 	if (typeof row.tokens === "number") facts.tokens = row.tokens
 	const matched = matchedKeyword(row)
 	if (matched) facts.matched = matched

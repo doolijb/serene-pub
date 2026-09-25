@@ -203,6 +203,72 @@ describe("readPluginPackage", () => {
 	})
 })
 
+describe("built components (C3)", () => {
+	it("stores a component's built module, and refuses one the package does not ship", async () => {
+		const withComponent = (write: boolean) =>
+			broken(async (d) => {
+				const fs = await import("node:fs/promises")
+				const p = join(d, "dist/plugin/manifest.json")
+				const m = JSON.parse(await fs.readFile(p, "utf8"))
+				m.components = [
+					{ slug: "who", label: "Who", framework: "vanilla", entry: "dist/plugin/components/who.js", source: "src/who.ts" }
+				]
+				await writeFile(p, JSON.stringify(m))
+				if (write) {
+					await mkdir(join(d, "dist/plugin/components"), { recursive: true })
+					await writeFile(join(d, "dist/plugin/components/who.js"), "export default () => {}\n")
+				}
+			})
+		const shipped = await withComponent(true)
+		try {
+			const pkg = await readPluginPackage(shipped.dir)
+			expect(pkg.files.map((f) => f.path)).toContain("dist/plugin/components/who.js")
+		} finally {
+			await shipped.cleanup()
+		}
+		const missing = await withComponent(false)
+		try {
+			expect((await findingsOf(missing.dir)).some((f) => f.includes("dist/plugin/components/who.js"))).toBe(true)
+		} finally {
+			await missing.cleanup()
+		}
+	})
+
+	it("refuses a component entry that is its source, not the built module", async () => {
+		const unbuilt = await broken(async (d) => {
+			const fs = await import("node:fs/promises")
+			const p = join(d, "dist/plugin/manifest.json")
+			const m = JSON.parse(await fs.readFile(p, "utf8"))
+			m.components = [{ slug: "who", label: "Who", framework: "svelte", entry: "src/Who.svelte" }]
+			await writeFile(p, JSON.stringify(m))
+			await mkdir(join(d, "src"), { recursive: true })
+			await writeFile(join(d, "src/Who.svelte"), "<p>who</p>\n")
+		})
+		try {
+			expect((await findingsOf(unbuilt.dir)).some((f) => f.includes("is not a built module"))).toBe(true)
+		} finally {
+			await unbuilt.cleanup()
+		}
+	})
+})
+
+describe("the reserved slug", () => {
+	it("refuses a plugin that calls itself core", async () => {
+		const fake = await broken(async (d) => {
+			const fs = await import("node:fs/promises")
+			const p = join(d, "dist/plugin/manifest.json")
+			const m = JSON.parse(await fs.readFile(p, "utf8"))
+			m.slug = "core"
+			await writeFile(p, JSON.stringify(m))
+		})
+		try {
+			expect((await findingsOf(fake.dir)).some((f) => f.includes("'core' is the app's own"))).toBe(true)
+		} finally {
+			await fake.cleanup()
+		}
+	})
+})
+
 describe("package helpers", () => {
 	it("names a document file the way the packager does", () => {
 		expect(documentFileName("demo.unified:spec/create-session")).toBe(

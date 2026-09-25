@@ -35,6 +35,7 @@
 	import ActivitySidebar from "$lib/client/components/sidebars/ActivitySidebar.svelte"
 	import ConnectionTimeoutModal from "$lib/client/components/ConnectionTimeoutModal.svelte"
 	import PipelineReviewModal from "$lib/client/components/pipelines/PipelineReviewModal.svelte"
+	import CapPauseDialog from "$lib/client/components/pipelines/CapPauseDialog.svelte"
 	import RunInspectorModal from "$lib/client/components/pipelines/inspector/RunInspectorModal.svelte"
 	import UpdateNoticeBar from "$lib/client/components/UpdateNoticeBar.svelte"
 	import type { Snippet } from "svelte"
@@ -80,6 +81,9 @@
 		"characters:exportCard:error",
 		"characters:list:error",
 		"characters:update:error",
+		// The lorebook Read-in line handles its own refusal (R55): the line
+		// falls back to the decision, so a toast would be noise.
+		"pipelines:runExplain:error",
 		"characters:uploadGalleryImage:error",
 		"sessions:list:error",
 		"sessions:summarize:error",
@@ -251,7 +255,12 @@
 	 * it stays a theme colour, so this follows a theme change like everything
 	 * else.
 	 */
-	const RAIL_BG = "color-mix(in oklch, var(--color-surface-950), black 20%)"
+	/**
+	 * The rail's ground. Defined in `app.css` as `--sp-rail-bg`, which pairs it
+	 * across modes (ruled 2026-09-23 — the rail used to be dark under every
+	 * theme, STYLE-GUIDE §1.1's one exception, and no longer is).
+	 */
+	const RAIL_BG = "var(--sp-rail-bg)"
 
 	let userCtx: { user: SelectUser } = $state({} as { user: any })
 	let panelsCtx: PanelsCtx = $state({
@@ -429,6 +438,7 @@
 		cast: [],
 		genreName: null,
 		lorebookId: null,
+		lorebookBranchId: null,
 		isOwner: false
 	})
 	let graphBuildsCtx: GraphBuildsCtx = $state({
@@ -917,13 +927,18 @@
 	 * A rail item's colour while it is neither active nor hovered. The wide
 	 * rail's rows sit one step lighter than the narrow rail's icons: a 14px
 	 * label needs contrast a 20px glyph carries on its own.
+	 *
+	 * ⚠ Paired, like everything else. The rail's ground was dark under every
+	 * mode until 2026-09-23 and these stops were deliberately unpaired against
+	 * it; the rail follows the mode now (`--sp-rail-bg`), so anything that sits
+	 * on it has to as well or light mode paints pale text on a pale bar.
 	 */
 	function railRestClass(entry: RailEntry): string {
 		if (entry.tone === "tertiary")
-			return "text-tertiary-400 hover:bg-surface-900 hover:text-surface-50"
+			return "text-tertiary-700 dark:text-tertiary-400 hover:bg-surface-200-800 hover:text-surface-950-50"
 		return railWide
-			? "text-surface-200 hover:bg-surface-900 hover:text-surface-50"
-			: "text-surface-400 hover:bg-surface-900 hover:text-surface-50"
+			? "text-surface-800-200 hover:bg-surface-200-800 hover:text-surface-950-50"
+			: "text-surface-600-400 hover:bg-surface-200-800 hover:text-surface-950-50"
 	}
 
 	let userLabel = $derived(
@@ -1932,7 +1947,7 @@
 							</div>
 						{:else}
 							<div
-								class="bg-surface-900 my-2 h-px w-7 shrink-0"
+								class="bg-surface-300-700 my-2 h-px w-7 shrink-0"
 								aria-hidden="true"
 							></div>
 						{/if}
@@ -1972,20 +1987,20 @@
 									: `Account: ${entry.title}`}
 								aria-label="Account: {entry.title}"
 								class="focus-visible:outline-primary-500 flex shrink-0 items-center transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 {railWide
-									? 'hover:bg-surface-900 h-11 min-w-0 flex-1 gap-3 rounded-[10px] px-2'
+									? 'hover:bg-surface-200-800 h-11 min-w-0 flex-1 gap-3 rounded-[10px] px-2'
 									: 'mt-1.5 size-8 justify-center rounded-full hover:brightness-125'}"
 								onfocus={() => (railFocusIndex = userSlot)}
 								onkeydown={handleRailKeydown}
 								onclick={() => handleRailActivate(entry)}
 							>
 								<span
-									class="bg-surface-800 text-surface-50 flex size-8 shrink-0 items-center justify-center rounded-full text-[13px] font-semibold"
+									class="bg-surface-300-700 text-surface-950-50 flex size-8 shrink-0 items-center justify-center rounded-full text-[13px] font-semibold"
 								>
 									{userInitial}
 								</span>
 								{#if railWide}
 									<span
-										class="text-surface-200 min-w-0 flex-1 truncate text-left text-sm"
+										class="text-surface-800-200 min-w-0 flex-1 truncate text-left text-sm"
 									>
 										{entry.title}
 									</span>
@@ -2018,7 +2033,7 @@
 							class="focus-visible:outline-primary-500 relative flex shrink-0 items-center rounded-[10px] transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 {railWide
 								? 'h-10 w-full gap-3 px-3'
 								: 'size-11 justify-center'} {isActive
-								? 'bg-surface-900 text-primary-500'
+								? 'bg-surface-200-800 text-primary-500'
 								: railRestClass(entry)}"
 							style={isActive
 								? "box-shadow: inset 3px 0 0 var(--color-primary-500);"
@@ -2101,7 +2116,7 @@
 						? "Hide navigation titles"
 						: "Show navigation titles"}
 					aria-expanded={railWide}
-					class="text-surface-400 hover:bg-surface-900 hover:text-surface-50 focus-visible:outline-primary-500 flex shrink-0 items-center justify-center rounded-[10px] transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 {railWide
+					class="text-surface-600-400 hover:bg-surface-200-800 hover:text-surface-950-50 focus-visible:outline-primary-500 flex shrink-0 items-center justify-center rounded-[10px] transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 {railWide
 						? 'size-8'
 						: 'size-11'}"
 					onfocus={() => (railFocusIndex = slot)}
@@ -2143,7 +2158,7 @@
 			     (z-40), hence 45 rather than something lower. -->
 			<div
 				bind:this={sidebarRef}
-				class="bg-surface-950 border-surface-900 fixed inset-0 z-[45] flex flex-col overflow-hidden lg:static lg:border-r {fullPageView
+				class="bg-surface-50-950 border-surface-200-800 fixed inset-0 z-[45] flex flex-col overflow-hidden lg:static lg:border-r {fullPageView
 					? 'lg:min-w-0 lg:flex-1'
 					: 'lg:w-100 lg:flex-none'}"
 				hidden={activeView === null}
@@ -2187,7 +2202,7 @@
 					</h2>
 					<button
 						type="button"
-						class="text-surface-400 hover:bg-surface-900 hover:text-surface-50 focus-visible:outline-primary-500 flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 {fullPageView
+						class="text-surface-600-400 hover:bg-surface-200-800 hover:text-surface-950-50 focus-visible:outline-primary-500 flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 {fullPageView
 							? 'px-2.5'
 							: 'w-8'}"
 						title={fullPageView
@@ -2217,7 +2232,7 @@
 					</button>
 					<button
 						type="button"
-						class="text-surface-400 hover:bg-surface-900 hover:text-surface-50 focus-visible:outline-primary-500 flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors focus-visible:outline-2 focus-visible:outline-offset-2"
+						class="text-surface-600-400 hover:bg-surface-200-800 hover:text-surface-950-50 focus-visible:outline-primary-500 flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors focus-visible:outline-2 focus-visible:outline-offset-2"
 						title="Close"
 						aria-label="Close {activeView
 							? titleOf(activeView)
@@ -2329,7 +2344,7 @@
 			<!-- ══ the mobile bottom bar ═════════════════════════════════
 			     Four destinations and More, replacing the hamburger. -->
 			<nav
-				class="bg-surface-950 border-surface-900 flex shrink-0 items-center justify-around border-t px-1 pt-2 pb-3 lg:hidden"
+				class="bg-surface-50-950 border-surface-200-800 flex shrink-0 items-center justify-around border-t px-1 pt-2 pb-3 lg:hidden"
 				aria-label="Primary navigation"
 			>
 				{#each bottomBarEntries as entry (entry.key)}
@@ -2341,7 +2356,7 @@
 						type="button"
 						class="flex h-12 w-16 flex-col items-center justify-center gap-[3px] rounded-lg transition-colors {isActive
 							? 'text-primary-500'
-							: 'text-surface-400'}"
+							: 'text-surface-600-400'}"
 						aria-label={entry.title}
 						aria-current={isActive && entry.key !== "more"
 							? "true"
@@ -2519,6 +2534,7 @@
      reply, a summarize, an event — and the card has to reach the person
      whichever screen they are on. -->
 <PipelineReviewModal />
+<CapPauseDialog />
 
 <!-- The run inspector (handover §4.8): what a run did, anchored to whatever
      produced it. Mounted globally for the same reason as the card above — a

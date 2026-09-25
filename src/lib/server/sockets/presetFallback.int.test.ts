@@ -11,7 +11,7 @@
 import { beforeAll, describe, expect, test, vi } from "vitest"
 import * as schema from "$lib/server/db/schema"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
-import { and, eq } from "drizzle-orm"
+import { and, asc, eq } from "drizzle-orm"
 
 vi.mock("$lib/server/embedding", () => ({
 	isModelReady: () => false,
@@ -196,11 +196,22 @@ describe("a binding that stopped resolving", () => {
 			}
 		})
 		expect(dispatched?.specSlug).toBe("core:spec/create-chat")
-		const [run] = (await db
+		// The fire's own recompute opens a turn-order run ahead of the one the
+		// binding answered, so the receipt that carries the fact is the second
+		// — never a guess picked by `limit`.
+		await (await import("$lib/server/pipelines/runtime/sessionEvents")).settleSessionEvents()
+		const allRuns = (await db
 			.select()
 			.from(schema.pipelineRuns)
 			.where(eq(schema.pipelineRuns.sessionId, sessionId))
-			.limit(1)) as any[]
+			.orderBy(asc(schema.pipelineRuns.id))) as any[]
+		// The recompute runs on the session's queue after the writer (PLAN
+		// §8 (27)), so its row may land either side of the create's.
+		expect(allRuns.map((r) => r.specSlug).sort()).toEqual([
+			"core:spec/chat-turn-order",
+			"core:spec/create-chat"
+		])
+		const run = allRuns.find((r) => r.specSlug === "core:spec/create-chat")!
 		expect(run?.receipt?.meta?.preset).toMatchObject({
 			via: "fallback",
 			preset: "Plugin creation",

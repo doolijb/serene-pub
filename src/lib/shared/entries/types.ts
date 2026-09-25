@@ -184,6 +184,15 @@ export interface EntryColumns {
 	 * nothing can end.
 	 */
 	anchorEntryId: number | null
+	/**
+	 * The line this entry was written on. `null` is **shared**.
+	 *
+	 * ⚠ Shared is the default and the common case: a branch duplicates nothing,
+	 * so the entries both lines agree about are one row with `null` here. Only
+	 * an entry created while reading a branch carries an id, and only that
+	 * line sees it (`rowsOnLine`, `$lib/shared/lorebooks/amendments.ts`).
+	 */
+	branchId: number | null
 	matchMode: string | null
 	useRegex: boolean | null
 	caseSensitive: boolean

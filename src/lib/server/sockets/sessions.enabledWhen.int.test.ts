@@ -273,12 +273,11 @@ async function publishAskAndAnswer(tag: string, tom: number) {
 	const ask: SpecDocument = compile(
 		spec(askId, {
 			version: "1.0.0",
-			taxonomy: { role: "action", genre: CHAT },
+			taxonomy: { role: "action"},
 			contributes: {
 				actions: [
 					{
 						key: askFn,
-						genre: CHAT,
 						venue: { kind: "composer" },
 						label: { en: "Ask" }
 					}
@@ -301,12 +300,11 @@ async function publishAskAndAnswer(tag: string, tom: number) {
 	const answer: SpecDocument = compile(
 		spec(answerId, {
 			version: "1.0.0",
-			taxonomy: { role: "action", genre: CHAT },
+			taxonomy: { role: "action"},
 			contributes: {
 				actions: [
 					{
 						key: answerFn,
-						genre: CHAT,
 						venue: { kind: "form" },
 						audience: {
 							see: ["participant"],
@@ -348,6 +346,8 @@ async function publishAskAndAnswer(tag: string, tom: number) {
 }
 
 async function runsOf(sessionId: number) {
+	// Event work runs after the writer, on the session's queue (PLAN §8 (27)).
+	await (await import("$lib/server/pipelines/runtime/sessionEvents")).settleSessionEvents()
 	const schema = await import("$lib/server/db/schema")
 	return testDb
 		.select({
@@ -391,12 +391,18 @@ describe("W1 · the oracle road", () => {
 		)
 		expect(asked.error).toBeUndefined()
 		const runs = await runsOf(session.id)
-		expect(runs.map((r) => r.specSlug)).toEqual([
+		// The fire road recomputes at both its ends (§4.6): a turn-order run
+		// opens the turn and the writes put another one before the reply.
+		// The tree in order; its two recomputes run on the session's queue
+		// after their writers, so they land wherever they finish (PLAN §8 (27)).
+		const slugs = runs.map((r) => r.specSlug)
+		expect(slugs.filter((x) => !x.endsWith("-turn-order"))).toEqual([
 			askId,
 			"core:spec/answer-form-chat",
 			answerId
 		])
-		const grandchild = runs[2]!
+		expect(slugs.filter((x) => x.endsWith("-turn-order")).length).toBe(2)
+		const grandchild = runs.find((r) => r.specSlug === answerId)!
 		// Admitted — its own root and parent were registered when it fired,
 		// and they are not "something else generating".
 		expect(grandchild.outcome).toBe("ok")
@@ -618,7 +624,8 @@ describe("S-A2 / W-A2 · a parked run pushes when it settles, and never while it
 			"ok"
 		)
 		const rows = await runsOf(session.id)
-		expect(rows.map((r) => `${r.specSlug}:${r.outcome}`)).toEqual([
+		expect(rows.map((r) => `${r.specSlug}:${r.outcome}`).sort()).toEqual([
+			"core:spec/chat-turn-order:ok",
 			"core:spec/echo:ok"
 		])
 	})
@@ -733,7 +740,7 @@ describe("W-A3 · a reply that moves state announces it after the list", () => {
 		const doc: SpecDocument = compile(
 			spec(specId, {
 				version: "1.0.0",
-				taxonomy: { role: "primary", genre: CHAT }
+				taxonomy: { role: "primary"}
 			})
 				.inlet("input", C.userMessage.v1(), {
 					genre: chatGenre,
@@ -787,8 +794,8 @@ describe("W-A3 · a reply that moves state announces it after the list", () => {
 		)
 		expect((res as any)?.error).toBeUndefined()
 		expect(
-			(await runsOf(session.id)).map((r) => `${r.specSlug}:${r.outcome}`)
-		).toEqual([`${specId}:ok`])
+			(await runsOf(session.id)).map((r) => `${r.specSlug}:${r.outcome}`).sort()
+		).toEqual(["core:spec/chat-turn-order:ok", `${specId}:ok`].sort())
 
 		// The state moved and was announced — after the run left the
 		// registry and the list went out, never before.
@@ -843,12 +850,11 @@ describe("pass 3 · the trigger road announces state whatever the outcome", () =
 		const doc: SpecDocument = compile(
 			spec(specId, {
 				version: "1.0.0",
-				taxonomy: { role: "action", genre: CHAT },
+				taxonomy: { role: "action"},
 				contributes: {
 					actions: [
 						{
 							key: fn,
-							genre: CHAT,
 							venue: { kind: "composer" },
 							label: { en: "Halt" }
 						}
@@ -900,8 +906,13 @@ describe("pass 3 · the trigger road announces state whatever the outcome", () =
 			ownEmit
 		)
 		expect(res.error).toMatch(/nothing to answer/)
-		expect((await runsOf(session.id)).map((r) => r.outcome)).toEqual([
-			"halt"
+		// The recompute (ok) and the tree's halted run: the predicate admitted
+		// the run, the set-state happened, and only then the unreadable form
+		// stopped the tree. The recompute runs on the session's queue, so the
+		// two land in either order (PLAN §8 (27)).
+		expect((await runsOf(session.id)).map((r) => r.outcome).sort()).toEqual([
+			"halt",
+			"ok"
 		])
 
 		// The write was real: the proposal is there…

@@ -175,6 +175,9 @@ function projectedColumns(entry: RegistryEntry, release: string) {
 		entryShape: (entry.entryShape as any) ?? null,
 		configSchema: (entry.configSchema as any) ?? null,
 		causesEvent: entry.causesEvent ?? null,
+		causesEventFrom: entry.causesEventFrom ?? null,
+		audienceFrom: entry.audienceFrom ?? null,
+		payloads: entry.payloads ?? null,
 		isPublic: entry.public ?? false,
 		// The contract flags and declarations beside `optional` (plans/31
 		// V6): each is in the hash, and a row that could not carry one could
@@ -405,6 +408,11 @@ export async function syncDefinitionRegistry(
 		// truth. Healing it here rather than backfilling in the migration
 		// means the fix needs no hardcoded list of which types declare it.
 		const optionalChanged = !!row.optional !== !!entry.optional
+		// `payloads` (R33) is hashed, but its column arrived after the hash
+		// learned it (0155): a row written in between carries NULL under the
+		// right hash. Healed here on the same footing as `optional`.
+		const payloadsChanged =
+			JSON.stringify(row.payloads ?? null) !== JSON.stringify(entry.payloads ?? null)
 		// The name, on the same footing as `slots` and for the same reason:
 		// stripped from the hash so it can change without a version bump,
 		// which is a promise only kept if the row picks it up here. It was
@@ -445,6 +453,7 @@ export async function syncDefinitionRegistry(
 			configSchemaChanged ||
 			slotsChanged ||
 			optionalChanged ||
+			payloadsChanged ||
 			i18nChanged ||
 			pointsChanged ||
 			policyChanged ||
@@ -462,6 +471,7 @@ export async function syncDefinitionRegistry(
 					...(optionalChanged
 						? { optional: entry.optional ?? false }
 						: {}),
+					...(payloadsChanged ? { payloads: entry.payloads ?? null } : {}),
 					...(slotsChanged ? { slots: entry.slots ?? {} } : {}),
 					...(configSchemaChanged
 						? {
@@ -609,6 +619,9 @@ function rowToEntry(r: any): RegistryEntry {
 		configSchema: r.configSchema ?? undefined,
 		i18n: r.i18n ?? undefined,
 		causesEvent: r.causesEvent ?? undefined,
+		causesEventFrom: r.causesEventFrom ?? undefined,
+		audienceFrom: r.audienceFrom ?? undefined,
+		payloads: r.payloads ?? undefined,
 		// ⚠ `|| undefined`, matching `optional` two lines up, and for a reason
 		// the round-trip test found rather than reasoned about: the column is
 		// `NOT NULL DEFAULT false`, so a type that never declared `public`
@@ -712,7 +725,7 @@ const presetSeedKey = (pluginId: string, slug: string) =>
  * namespace; the column holds a `pipeline_configs.id`, which is an instance
  * fact. There is no projection of plugin configs to resolve it against, so the
  * binding lands without one and the spec's shipped default applies —
- * `CORE_PRESET_SEEDS` states the same rule for core's own presets. A preset that
+ * `corePresetSeeds()` states the same rule for core's own presets. A preset that
  * silently pointed at the wrong config row would be worse than one that points
  * at the default.
  */

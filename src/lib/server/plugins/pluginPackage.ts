@@ -172,6 +172,18 @@ export function declaredSurfaceEntries(manifest: unknown): string[] {
 }
 
 /**
+ * The built modules a manifest's components name (§3.5, C3) — `serene-pub
+ * build` writes each under `dist/plugin/components/` and points `entry` at it.
+ */
+export function declaredComponentEntries(manifest: unknown): string[] {
+	const raw = (manifest as { components?: unknown } | null)?.components
+	if (!Array.isArray(raw)) return []
+	return raw
+		.map((c) => (c && typeof c === "object" ? (c as { entry?: unknown }).entry : undefined))
+		.filter((e): e is string => typeof e === "string")
+}
+
+/**
  * Read and structurally validate the package built in `dir`.
  *
  * Throws {@link PluginPackageError} carrying **every** finding rather than the
@@ -223,6 +235,13 @@ export async function readPluginPackage(dir: string): Promise<PluginPackage> {
 				`letters, digits, dots and hyphens ('chariot.dice-tray'). It is the ` +
 				`namespace every id the package registers must sit under, and it is one ` +
 				`URL segment, so it is never slashed.`
+		)
+	// `core` is the app's own owner id: what core's widgets are answered as,
+	// and what a page trusts with the viewer's line (C0b review, H3).
+	if (slug === "core")
+		findings.push(
+			`manifest.slug 'core' is the app's own — a plugin cannot take it. Choose a slug ` +
+				`of your own ('chariot.dice-tray').`
 		)
 	if (typeof manifest.version !== "string" || !/^\d+\.\d+\.\d+/.test(manifest.version))
 		findings.push(
@@ -328,17 +347,25 @@ export async function readPluginPackage(dir: string): Promise<PluginPackage> {
 	// script.
 	const wanted = new Set<string>()
 	for (const rel of await walk(join(root, "ui"))) wanted.add(`ui/${rel}`)
-	for (const entry of declaredSurfaceEntries(manifest)) {
+	const componentEntries = new Set(declaredComponentEntries(manifest))
+	for (const entry of [...declaredSurfaceEntries(manifest), ...componentEntries]) {
+		const what = componentEntries.has(entry) ? "component entry" : "surface entry"
 		if (!isSafeUiPath(entry)) {
+			findings.push(`${what} '${entry}' is not a servable path — relative, no '..', ` + `and under the package root.`)
+			continue
+		}
+		// The worker imports a component as a module: the BUILT one. A manifest
+		// naming its source (`.ts`, `.svelte`) was never built — or was edited.
+		if (componentEntries.has(entry) && !/\.m?js$/.test(entry)) {
 			findings.push(
-				`surface entry '${entry}' is not a servable path — relative, no '..', ` +
-					`and under the package root.`
+				`component entry '${entry}' is not a built module — run \`serene-pub build\`, which ` +
+					`compiles each component to dist/plugin/components/<slug>.js.`
 			)
 			continue
 		}
 		if (!(await exists(join(root, entry)))) {
 			findings.push(
-				`surface entry '${entry}' does not exist in the package. A surface an ` +
+				`${what} '${entry}' does not exist in the package. A surface an ` +
 					`instance offers and cannot serve is a blank frame.`
 			)
 			continue

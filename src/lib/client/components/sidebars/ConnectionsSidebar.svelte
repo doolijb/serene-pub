@@ -76,8 +76,17 @@
 		statusLine,
 		type LastTest
 	} from "$lib/client/components/connections/connectionViewChrome"
+	import {
+		keyUrlFor,
+		needsCredential
+	} from "$lib/shared/connections/credentials"
 	import { manualAddAllowed } from "$lib/client/components/connections/modelManagement"
 	import DownloadsView from "$lib/client/components/connections/DownloadsView.svelte"
+	import ConnectionsOverview from "$lib/client/components/connections/ConnectionsOverview.svelte"
+	import ModelTable from "$lib/client/components/connections/ModelTable.svelte"
+	import { systemCapabilitiesForModel } from "$lib/client/components/connections/modelSystemDefaults"
+	import { capabilityLabel } from "@serene-pub/sdk"
+	import type { JobTile } from "$lib/client/components/connections/jobTile"
 	import { timeAgo } from "$lib/client/utils/timeAgo"
 	import {
 		sectionForCapability,
@@ -173,6 +182,23 @@
 	let initialIndexFilter = $state<string | null>(null)
 	/** The group the index scrolls to on return from a connection or model. */
 	let indexFocusId = $state<number | null>(null)
+	/**
+	 * What the index worked out about readiness, for the full-page empty pane.
+	 *
+	 * Handed up by the index rather than derived again here: the tiles depend
+	 * on live status only that view subscribes to, and a second derivation
+	 * would disagree with the first exactly when something was wrong.
+	 */
+	let overviewFacts = $state<{
+		chat: {
+			modelName: string | null
+			connectionName: string | null
+			problem: string | null
+			set: boolean
+		}
+		tiles: JobTile[]
+		connectionCount: number
+	} | null>(null)
 
 	// ── Data ────────────────────────────────────────────────────────────────
 	let connectionsList: ListRow[] = $state([])
@@ -233,6 +259,25 @@
 		view === "connection"
 			? managedViewKind(selectedRow?.type ?? connection?.type)
 			: null
+	)
+
+	/** The open connection's title and the service chip beside it, if any. */
+	const paneTitle = $derived(
+		connection?.name ?? selectedRow?.name ?? "Connection"
+	)
+	const paneService = $derived(
+		serviceLabelOf(connection?.type ?? selectedRow?.type)
+	)
+	/**
+	 * The chip only where it says something the title has not.
+	 *
+	 * R5 (2026-09-17) asked for both always; a connection's default name IS its
+	 * service label, so the header read "Anthropic (Claude)" beside a chip
+	 * saying "Anthropic (Claude)". Amended 2026-09-23 — see `ConnectionRow`.
+	 */
+	const showPaneChip = $derived(
+		!!paneService &&
+			paneService.trim().toLowerCase() !== paneTitle.trim().toLowerCase()
 	)
 
 	function serviceLabelOf(type: string | null | undefined): string {
@@ -679,6 +724,36 @@
 	 * dropped up front: the server would no-op them, and a no-op must not
 	 * open a cost dialog.
 	 */
+	/**
+	 * Which capabilities each of a connection's models is the default for.
+	 *
+	 * Keyed by model id for the table, which renders a row at a time and must
+	 * not run an O(defaults) scan per row per frame.
+	 */
+	function defaultsByModel(row: {
+		id?: number
+		models: readonly { id: number }[]
+	}): Record<number, string[]> {
+		const defaults = systemSettingsCtx.capabilityDefaults ?? {}
+		const out: Record<number, string[]> = {}
+		if (row.id == null) return out
+		for (const model of row.models) {
+			const labels = systemCapabilitiesForModel(
+				defaults as any,
+				row.id,
+				model.id
+			).map((capability) => {
+				try {
+					return capabilityLabel(capability as any)
+				} catch {
+					return capability
+				}
+			})
+			if (labels.length) out[model.id] = labels
+		}
+		return out
+	}
+
 	function handlePairDefault(
 		connectionId: number,
 		model: { id: number; name: string },
@@ -1200,7 +1275,7 @@
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div
 	class="text-foreground flex h-full min-h-0 flex-col"
-	role="main"
+	role="region"
 	aria-label="Connections"
 	onkeydown={handleKeydown}
 	use:viewMode.observe
@@ -1209,13 +1284,22 @@
 		{announcements}
 	</div>
 
+	<!--
+		340px of list, the rest is detail (STYLE-GUIDE §4.2). It was 380px,
+		which made the list column NARROWER at full page than in the 400px
+		dock — so expanding the view truncated more, not less.
+
+		`empty` rather than `emptyMessage`: the pane with nothing selected is
+		the readiness dashboard, not the line "Pick a connection, or add one."
+		centred in 1,150px.
+	-->
 	<PanelSplit
 		mode={viewMode.mode}
 		hasDetail={view !== "index"}
-		listWidth="380px"
-		emptyMessage="Pick a connection, or add one."
+		listWidth="340px"
 		list={indexPane}
 		detail={detailPane}
+		empty={overviewPane}
 	/>
 </div>
 
@@ -1231,6 +1315,7 @@
 		initialFilter={initialIndexFilter}
 		focusConnectionId={indexFocusId}
 		{selectedConnectionId}
+		mode={viewMode.mode}
 		onAddNew={handleNew}
 		onEnableManager={handleEnableManager}
 		onOpenConnection={openConnection}
@@ -1241,7 +1326,23 @@
 		onOpenDownloads={() => openDownloads("index")}
 		onRefresh={(row) => requestSync(row.id, true)}
 		onAddModel={handleAddModel}
+		onFacts={(facts) => (overviewFacts = facts)}
 	/>
+{/snippet}
+
+<!--
+	The detail pane at full page with nothing open. See `ConnectionsOverview`:
+	`PanelSplit` has always taken this snippet and nobody had passed one.
+-->
+{#snippet overviewPane()}
+	{#if overviewFacts}
+		<ConnectionsOverview
+			tiles={overviewFacts.tiles}
+			connectionCount={overviewFacts.connectionCount}
+			onOpenCapability={openCapability}
+			onGetModel={() => openFinder()}
+		/>
+	{/if}
 {/snippet}
 
 {#snippet detailPane()}
@@ -1304,6 +1405,11 @@
 		isAdmin={userCtx.user?.isAdmin ?? false}
 		capabilityDefaults={systemSettingsCtx.capabilityDefaults ?? {}}
 		managedConnectionIds={managedConnectionIds(kind, connectionsList)}
+		connections={connectionsList.filter(
+			(c): c is (typeof connectionsList)[number] & { id: number } =>
+				c.id != null
+		)}
+		onOpenModel={(id, modelId) => openModel(id, modelId, "connection")}
 		onBack={navigateBack}
 		onGetModels={(id) => openFinder({ connectionId: id })}
 		onOpenDownloads={() => openDownloads("connection")}
@@ -1634,16 +1740,17 @@
 			</button>
 			<h2 class="flex min-w-0 flex-1 items-center gap-2">
 				<span class="min-w-0 truncate text-sm font-semibold">
-					{connection?.name ?? selectedRow?.name ?? "Connection"}
+					{paneTitle}
 				</span>
-				<!-- Title + service chip, always both (R5). -->
-				<span
-					class="shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-normal {managed
-						? 'preset-tonal-tertiary'
-						: 'border-surface-300-700 text-surface-600-400 border'}"
-				>
-					{serviceLabelOf(connection?.type ?? selectedRow?.type)}
-				</span>
+				{#if showPaneChip}
+					<span
+						class="shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-normal {managed
+							? 'preset-tonal-tertiary'
+							: 'border-surface-300-700 text-surface-600-400 border'}"
+					>
+						{paneService}
+					</span>
+				{/if}
 			</h2>
 		</div>
 		<div class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pb-2">
@@ -1668,27 +1775,63 @@
 							missingCount: selectedMissingCount,
 							timeAgo
 						})}
-						<!-- The status card. -->
+						{@const unfinished = needsCredential({
+							type: connection.type,
+							preset: selectedRow.preset,
+							baseUrl: connection.baseUrl,
+							hasCredential: selectedRow.hasCredential
+						})}
+						{@const keyUrl = keyUrlFor({
+							type: connection.type,
+							preset: selectedRow.preset
+						})}
+						<!--
+							The status card.
+
+							⚠ While a key is still missing it does NOT report the
+							listing failure that missing key obviously caused.
+							The shipped view greeted a ten-second-old connection
+							with a red "Couldn't list models · Missing
+							credentia…" — a symptom of a thing nobody had done
+							yet, reported as a fault. Ask whether it is finished
+							before asking whether it works.
+						-->
 						<section
-							class="panel-card flex flex-col gap-2"
+							class="panel-card flex flex-col gap-2 {unfinished
+								? 'border-primary-500/30!'
+								: ''}"
 							aria-label="Status"
 						>
 							<div class="flex min-w-0 items-center gap-2">
-								<span
-									class="size-2 shrink-0 rounded-full {CHROME_DOT[
-										line.dot
-									]}"
-									aria-hidden="true"
-								></span>
-								<span class="shrink-0 text-sm font-medium">
-									{line.word}
-								</span>
-								<span
-									class="text-surface-600-400 min-w-0 flex-1 truncate text-xs"
-									title={line.sentence}
-								>
-									· {line.sentence}
-								</span>
+								{#if unfinished}
+									<Icons.CircleAlert
+										size={16}
+										class="text-primary-500 shrink-0"
+										aria-hidden="true"
+									/>
+									<span
+										class="text-primary-700 dark:text-primary-300 shrink-0 text-sm font-medium"
+									>
+										Needs an API key
+									</span>
+								{:else}
+									<span
+										class="size-2 shrink-0 rounded-full {CHROME_DOT[
+											line.dot
+										]}"
+										aria-hidden="true"
+									></span>
+									<span class="shrink-0 text-sm font-medium">
+										{line.word}
+									</span>
+									<span
+										class="text-surface-600-400 min-w-0 flex-1 truncate text-xs"
+										title={line.sentence}
+									>
+										· {line.sentence}
+									</span>
+								{/if}
+								<div class="flex-1"></div>
 								<button
 									type="button"
 									class="btn btn-sm preset-tonal shrink-0"
@@ -1698,6 +1841,30 @@
 									{lastTest ? "Test again" : "Test"}
 								</button>
 							</div>
+							{#if unfinished}
+								<p class="text-surface-600-400 text-xs">
+									Nothing has failed — this connection isn't
+									finished. Put a key in <strong
+										class="text-surface-950-50 font-medium"
+									>
+										API Key
+									</strong>
+									below, then press Test.
+									{#if keyUrl}
+										<!-- Underlined: a link inside a text block
+										     may not rely on colour alone
+										     (axe: `link-in-text-block`). -->
+										<a
+											class="anchor underline underline-offset-2"
+											href={keyUrl}
+											target="_blank"
+											rel="noopener noreferrer"
+										>
+											Get a key ↗
+										</a>
+									{/if}
+								</p>
+							{/if}
 						</section>
 
 						<!-- The models card: how many, whether the host still
@@ -1737,8 +1904,66 @@
 									/>
 								</button>
 							</div>
+							<!--
+								At desk width the models are a TABLE, with the
+								context and price columns 400px cannot hold. In
+								the dock the same rows are `ModelRow`s, reached
+								through Browse — one list, two shapes.
+							-->
+							{#if viewMode.mode === "desk" && selectedRow.models.length}
+								<ModelTable
+									models={selectedRow.models}
+									defaultsByModel={defaultsByModel(
+										selectedRow
+									)}
+									local={endpointKind(connection.type) !==
+										"api"}
+									onOpen={(modelId) =>
+										openModel(
+											connection.id,
+											modelId,
+											"connection"
+										)}
+									onUse={(modelId) => {
+										const m = selectedRow.models.find(
+											(x) => x.id === modelId
+										)
+										if (!m) return
+										// Chat where the pair can serve it,
+										// otherwise the first thing it can.
+										//
+										// ⚠ Named rather than taken from [0].
+										// `satisfiableTransforms` happens to
+										// return TRANSFORMS' declaration order,
+										// which puts chat first — but that is an
+										// accident of a table in the SDK, and a
+										// Use button that quietly registered an
+										// embedding model as what sessions reply
+										// with is not a thing to leave to one.
+										const serves =
+											m.satisfiableCapabilities ?? []
+										const capability = serves.includes(
+											"text->text"
+										)
+											? "text->text"
+											: serves[0]
+										if (!capability) return
+										handlePairDefault(
+											connection.id,
+											{ id: m.id, name: m.name },
+											{ kind: "one", capability }
+										)
+									}}
+									onToggleEnabled={(modelId, enabled) =>
+										socket.emit("connections:updateModel", {
+											id: connection.id,
+											modelId,
+											model: { enabled }
+										})}
+								/>
+							{/if}
 							<div class="flex flex-wrap gap-2">
-								{#if selectedRow.models.length}
+								{#if selectedRow.models.length && viewMode.mode !== "desk"}
 									<button
 										type="button"
 										class="btn btn-sm preset-tonal"

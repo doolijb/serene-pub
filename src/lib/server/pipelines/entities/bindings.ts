@@ -19,13 +19,13 @@
  * scope inherits again. There is no "bound to nothing" state.
  */
 
-import { and, eq } from "drizzle-orm"
-import { isEventId, sessionEvents, type EnabledWhen } from "@serene-pub/sdk"
+import { and, asc, eq, inArray } from "drizzle-orm"
+import { i18nText, isEventId, sessionEvents, type EnabledWhen } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
+import { answersEvent } from "$lib/server/pipelines/entities/presetBindings"
 import { parseActionIdentity } from "$lib/shared/actions/identity"
 import {
 	listGenreActions,
-	listSpeakerStrategies,
 	resolveSubjectSpec
 } from "$lib/server/pipelines/entities/sessionGenres"
 
@@ -163,7 +163,11 @@ export async function subjectCandidates(
 				.from(schema.pipelineNodes)
 				.where(eq(schema.pipelineNodes.specVersionId, v.id))
 			if (isGenreId) {
-				if ((v as any).inputGenre !== genreId || (v as any).inputEvent !== subject) continue
+				if (
+					(v as any).inputGenre !== genreId ||
+					!answersEvent(v as any, subject)
+				)
+					continue
 			} else {
 				if (!primary) continue
 				const entry = nodes
@@ -306,6 +310,59 @@ async function shapeCompatible(
 }
 
 /**
+ * May `candidateId` stand in for a node pinned to `pinnedId` in the spec
+ * `specSlug`? The one rule every door asks — the session picker's listing,
+ * the run's rebind (session or instance scope) — so none can offer or apply
+ * what another refuses:
+ *
+ *  - **R53**: a node that uses a connection takes only core's stand-ins —
+ *    a plugin's code never touches connection data or calls a model;
+ *  - **R62**: a plugin's private node runs only in its own package's
+ *    pipelines, so it stands in only there.
+ *
+ * Core's definitions are public to all. Reads the registry rows, never a
+ * manifest, so what decides is what this instance installed.
+ */
+export async function mayStandIn(
+	db: Db,
+	specSlug: string,
+	pinnedId: string,
+	candidateId: string
+): Promise<boolean> {
+	if (candidateId === pinnedId) return true
+	const [pinDef, pinVer] = pinnedId.split("@")
+	const [candDef, candVer] = candidateId.split("@")
+	const rows = await db
+		.select({
+			definitionId: schema.pipelineDefinitionRegistry.definitionId,
+			version: schema.pipelineDefinitionRegistry.version,
+			slots: schema.pipelineDefinitionRegistry.slots,
+			isPublic: schema.pipelineDefinitionRegistry.isPublic,
+			ownerPluginId: schema.pipelineDefinitionRegistry.ownerPluginId
+		})
+		.from(schema.pipelineDefinitionRegistry)
+		.where(inArray(schema.pipelineDefinitionRegistry.definitionId, [pinDef!, candDef!]))
+	const pin = rows.find((r) => r.definitionId === pinDef && r.version === Number(pinVer))
+	const cand = rows.find((r) => r.definitionId === candDef && r.version === Number(candVer))
+	if (!cand) return false
+	const usesConnection = Object.values((pin?.slots ?? {}) as Record<string, { kind?: unknown }>).some(
+		(slot) => slot?.kind === "connection"
+	)
+	// Core's by namespace, not by a missing owner: an unowned plugin row is a
+	// node nothing can run, never core's.
+	const isCore = cand.definitionId.startsWith("core:")
+	if (usesConnection && !isCore) return false
+	if (isCore || cand.isPublic) return true
+	if (cand.ownerPluginId == null) return false
+	const [spec] = await db
+		.select({ sourcePluginId: schema.pipelineSpecs.sourcePluginId })
+		.from(schema.pipelineSpecs)
+		.where(eq(schema.pipelineSpecs.slug, specSlug))
+		.limit(1)
+	return spec?.sourcePluginId === cand.ownerPluginId
+}
+
+/**
  * Apply a scope's node rebinds to a loaded document — the load-time step.
  *
  * Consulted session > instance per node key; the winning row's type pin
@@ -342,13 +399,29 @@ export async function applyNodeRebinds(
 		for (const node of doc.nodes ?? []) {
 			let winner: any = null
 			for (const addr of addresses) {
-				winner = rows.find(
+				const candidate = rows.find(
 					(r) =>
 						r.nodeKey === node.key &&
 						r.scopeKind === addr.kind &&
 						r.scopeId === addr.id
 				)
-				if (winner) break
+				if (!candidate) continue
+				// A session's choice holds only while it is still offered
+				// (R28, R29; M2 review): an admin disabling a contribution, a
+				// plugin switched off, or an author dropping a swap withdraws
+				// it from every session that picked it, not just from new
+				// picks. The session's row stays (the person's choice, visible
+				// and clearable); it simply stops winning.
+				if (addr.kind === "session" && spec.activeVersionId != null) {
+					const offered = await listSessionNodeSwaps(db, {
+						spec: opts.specSlug,
+						nodeKey: node.key,
+						specVersionId: spec.activeVersionId
+					})
+					if (!offered.some((o) => o.definitionId === candidate.definitionId)) continue
+				}
+				winner = candidate
+				break
 			}
 			if (!winner) continue
 
@@ -357,6 +430,9 @@ export async function applyNodeRebinds(
 			// The load-side guard: a rebind that went stale (type retired,
 			// re-projected away, never this shape) degrades to the pin.
 			if (!(await shapeCompatible(db, pinnedId, winner.definitionId))) continue
+			// …and so does one R53 or R62 forbids, at any scope — an instance
+			// row included, which the listing never sees.
+			if (!(await mayStandIn(db, opts.specSlug, pinnedId, winner.definitionId))) continue
 
 			const [bare, version] = String(winner.definitionId).split("@")
 			node.definitionId = bare
@@ -368,166 +444,365 @@ export async function applyNodeRebinds(
 	}
 }
 
-/* --- the speaker swap, named (19 §5) ------------------------------------ */
+/* --- session-scope swaps (PLAN-turn-order R28, R29) ---------------------- */
 
 /**
- * The strategy swap as a person meets it: which strategy runs this session's
- * next-speaker node. A thin, named wrapper over the generic rebind — the
- * speaker node is found by its published shape, not by a hardcoded key, so
- * a respond spec that renames the node keeps the control working.
+ * The session-settings mark of one node on a published version (§4.11,
+ * R28), read off `pipeline_nodes.expose` — the same row for a plugin's spec
+ * as for core's, so there is no core-only path (R26). `null` = the node is
+ * not in session settings.
  */
-export async function setSessionSpeakerStrategy(
+async function exposeOf(
+	db: Db,
+	specVersionId: number,
+	nodeKey: string
+): Promise<{ definitionId: string; expose: { session?: boolean; swaps?: string[] } | null } | null> {
+	const [node] = await db
+		.select({
+			definitionId: schema.pipelineNodes.definitionId,
+			definitionVersion: schema.pipelineNodes.definitionVersion,
+			expose: schema.pipelineNodes.expose
+		})
+		.from(schema.pipelineNodes)
+		.where(
+			and(
+				eq(schema.pipelineNodes.specVersionId, specVersionId),
+				eq(schema.pipelineNodes.nodeKey, nodeKey)
+			)
+		)
+		.limit(1)
+	if (!node) return null
+	return {
+		definitionId: `${node.definitionId}@${node.definitionVersion}`,
+		expose: node.expose ?? null
+	}
+}
+
+/**
+ * Rebind a node at **session scope** (PLAN-turn-order §4.7) — the one verb
+ * for every swappable node; the Turn order control is one use of it.
+ *
+ * What it checks, in order: the spec is published and serves this session's
+ * genre (a rebind on another genre's spec would never run — refused rather
+ * than stored, R26); the node exists and is in session settings (`expose.session`; R28, M4 —
+ * declaration is the only way in); and the definition is in the offered
+ * list (`listSessionNodeSwaps`). `null` clears the rebind and the session
+ * falls back to the pin.
+ */
+export async function setSessionNodeRebind(
 	db: Db,
 	opts: {
 		sessionId: number
 		userId: number
-		/** A strategy type pin from `listSpeakerStrategies`, or null to inherit. */
+		/** The spec slug the node belongs to. */
+		spec: string
+		nodeKey: string
+		/** A definition id from the offered list, or null to inherit. */
 		definitionId: string | null
 	}
 ): Promise<{ error?: string }> {
-	// Which spec serves respond for this session — the strategy lives in it.
 	const [session] = await db
 		.select({ genreId: schema.sessions.genreId })
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, opts.sessionId))
 		.limit(1)
 	if (!session) return { error: "That session no longer exists." }
-	const specSlug = await resolveSubjectSpec(
-		db,
-		session.genreId ?? "core:genre/chat",
-		sessionEvents.messageRespond,
-		{ sessionId: opts.sessionId }
-	)
-	if (!specSlug)
-		return { error: "No pipeline serves this session's replies to rebind." }
 
-	const nodeKey = await speakerNodeKey(db, specSlug)
-	if (!nodeKey)
+	const [spec] = await db
+		.select({
+			id: schema.pipelineSpecs.id,
+			activeVersionId: schema.pipelineSpecs.activeVersionId
+		})
+		.from(schema.pipelineSpecs)
+		.where(eq(schema.pipelineSpecs.slug, opts.spec))
+		.limit(1)
+	if (!spec?.activeVersionId)
+		return { error: `'${opts.spec}' is not a pipeline this instance publishes.` }
+	const [version] = await db
+		.select({
+			inputGenre: schema.pipelineSpecVersions.inputGenre,
+			inputEvent: schema.pipelineSpecVersions.inputEvent,
+			inputEvents: schema.pipelineSpecVersions.inputEvents
+		})
+		.from(schema.pipelineSpecVersions)
+		.where(eq(schema.pipelineSpecVersions.id, spec.activeVersionId))
+		.limit(1)
+	if (version?.inputGenre && version.inputGenre !== session.genreId)
 		return {
-			error: `'${specSlug}' has no next-speaker node — nothing to swap.`
+			error: `'${opts.spec}' serves '${version.inputGenre}', not this session's genre ('${session.genreId}').`
+		}
+	// …and is a pipeline this session actually runs: for some event its lock
+	// answers, the session's own resolution picks this spec — the reply
+	// through the reply path's resolver (instance binding and companion rule
+	// included), any other event through the event dispatcher's. A swap on a
+	// pipeline nothing runs here would be a choice with no effect, stored as
+	// if it had one. An action's spec is the session's whenever its action is
+	// offered, which its own listing decides — so a lock that names the action
+	// passes whatever its other events resolve to (the spec runs through the
+	// action either way). A spec with no lock at all is run by nothing and
+	// refused.
+	if (opts.definitionId != null) {
+		const events = [
+			...new Set(
+				[
+					version?.inputEvent,
+					...(Array.isArray(version?.inputEvents) ? (version!.inputEvents as string[]) : [])
+				].filter((e): e is string => typeof e === "string" && !!e)
+			)
+		]
+		const { sessionEvents } = await import("@serene-pub/sdk")
+		const actionLocked = events.includes(sessionEvents.sessionAction)
+		const judged = events.filter((e) => e !== sessionEvents.sessionAction)
+		if (!events.length)
+			return {
+				error: `'${opts.spec}' is not a pipeline this session runs — it answers no event.`
+			}
+		if (!actionLocked) {
+			const { resolveSessionEventSpec } = await import(
+				"$lib/server/pipelines/runtime/sessionEvents"
+			)
+			const { resolveSubjectSpec } = await import(
+				"$lib/server/pipelines/entities/sessionGenres"
+			)
+			let runs = false
+			for (const event of judged) {
+				const chosen =
+					event === sessionEvents.messageRespond
+						? await resolveSubjectSpec(db, session.genreId, event, {
+								sessionId: opts.sessionId
+							})
+						: await resolveSessionEventSpec(db, session.genreId, event, {
+								sessionId: opts.sessionId
+							})
+				if (chosen === opts.spec) {
+					runs = true
+					break
+				}
+			}
+			if (!runs)
+				return {
+					error: `'${opts.spec}' is not a pipeline this session runs — its preset, its genre and its own choices bind another for ${judged.join(", ")}.`
+				}
+		}
+	}
+
+	const node = await exposeOf(db, spec.activeVersionId, opts.nodeKey)
+	if (!node) return { error: `'${opts.spec}' has no node '${opts.nodeKey}' to swap.` }
+	// Clearing is always allowed (reset-is-delete): a rebind left from before
+	// a node stopped offering swaps must stay removable (M2 review). A node
+	// in session settings is swappable to what it offers (M4): its declared
+	// swaps and any enabled contribution.
+	if (opts.definitionId != null && !node.expose?.session)
+		return {
+			error: `'${opts.nodeKey}' is not a node a session may swap — the pipeline does not offer it.`
 		}
 
 	if (opts.definitionId != null) {
-		const strategies = await listSpeakerStrategies(db)
-		if (!strategies.some((s) => s.definitionId === opts.definitionId))
+		const offered = await listSessionNodeSwaps(db, {
+			spec: opts.spec,
+			nodeKey: opts.nodeKey,
+			specVersionId: spec.activeVersionId
+		})
+		if (!offered.some((o) => o.definitionId === opts.definitionId))
 			return {
-				error: `'${opts.definitionId}' is not a next-speaker strategy this build registers.`
+				error: `'${opts.definitionId}' is not offered for '${opts.nodeKey}' on '${opts.spec}'.`
 			}
 	}
 
 	return await setNodeRebind(db, {
 		scope: { kind: "session", id: opts.sessionId },
-		specSlug,
-		nodeKey,
+		specSlug: opts.spec,
+		nodeKey: opts.nodeKey,
 		definitionId: opts.definitionId,
 		userId: opts.userId
 	})
 }
 
 /**
- * Whether this session's replies have a next-speaker node to swap at all.
- *
- * A narrator-driven genre — Adventure, the Lair — answers through a planner
- * and a junction, never a `speaker` task, so its respond spec publishes no
- * `speaker-selection@1` anywhere. The Turn order control is meaningless
- * there, and offering it only to refuse on Apply ("has no next-speaker node
- * — nothing to swap") is the shape of the defect this exists to close: the
- * list handler asks this first and answers with no strategies, so the card
- * never renders.
+ * What a session may swap one node to (§4.7's `sessions:nodeSwapOptions`,
+ * R28, R29), in the order a picker lists them: the **pin** first (it is the
+ * default), then the node's declared `expose.swaps`, then the swaps enabled
+ * plugins contribute to this spec and node, in install order, minus the ones
+ * an admin switched off (`plugins.disabled_swaps`). Only live definitions
+ * are offered. A node that declares no swaps offers nothing — never a shape
+ * match, which is the admin panel's instance-scope list, not a session's.
  */
-export async function sessionHasSpeakerNode(
+export async function listSessionNodeSwaps(
 	db: Db,
-	sessionId: number
-): Promise<boolean> {
-	try {
-		const [session] = await db
-			.select({ genreId: schema.sessions.genreId })
-			.from(schema.sessions)
-			.where(eq(schema.sessions.id, sessionId))
-			.limit(1)
-		if (!session) return false
-		const specSlug = await resolveSubjectSpec(
-			db,
-			session.genreId ?? "core:genre/chat",
-			sessionEvents.messageRespond,
-			{ sessionId }
-		)
-		if (!specSlug) return false
-		return (await speakerNodeKey(db, specSlug)) !== null
-	} catch {
-		return false
+	opts: {
+		spec: string
+		nodeKey: string
+		specVersionId: number
 	}
+): Promise<Array<{ definitionId: string; name: string }>> {
+	const node = await exposeOf(db, opts.specVersionId, opts.nodeKey)
+	// A node in session settings accepts contributions even when it lists
+	// no swaps of its own (M4: the model path's `advise` oracle has no core
+	// alternative, and a plugin's must still reach it). A picker is only
+	// worth drawing when this list has more than the pin.
+	if (!node?.expose?.session) return []
+
+	const contributed: string[] = []
+	const plugins = await db
+		.select({
+			pluginId: schema.plugins.pluginId,
+			manifest: schema.plugins.manifest,
+			disabledSwaps: schema.plugins.disabledSwaps
+		})
+		.from(schema.plugins)
+		.where(eq(schema.plugins.enabled, true))
+		.orderBy(asc(schema.plugins.id))
+	for (const p of plugins) {
+		const swaps = ((p.manifest as { swaps?: unknown })?.swaps ?? []) as Array<{
+			spec?: string
+			node?: string
+			definition?: string
+		}>
+		for (const c of Array.isArray(swaps) ? swaps : []) {
+			if (c?.spec !== opts.spec || c.node !== opts.nodeKey || !c.definition) continue
+			if ((p.disabledSwaps ?? []).includes(swapKey(c.spec, c.node, c.definition))) continue
+			contributed.push(c.definition)
+		}
+	}
+
+	const rows = await db
+		.select({
+			definitionId: schema.pipelineDefinitionRegistry.definitionId,
+			version: schema.pipelineDefinitionRegistry.version,
+			status: schema.pipelineDefinitionRegistry.status,
+			i18n: schema.pipelineDefinitionRegistry.i18n
+		})
+		.from(schema.pipelineDefinitionRegistry)
+	// Every candidate — the node's own `expose.swaps` and every contribution —
+	// passes the one rule the run applies (`mayStandIn`: R53, R62), so the
+	// picker never offers what a turn would refuse.
+	const candidates = [...new Set([...(node.expose.swaps ?? []), ...contributed])]
+	const allowed: string[] = []
+	for (const id of candidates)
+		if (await mayStandIn(db, opts.spec, node.definitionId, id)) allowed.push(id)
+	const ids = [...new Set([node.definitionId, ...allowed])]
+	const live = new Map(
+		(rows as any[])
+			.filter((r) => r.status === "live")
+			.map((r) => [`${r.definitionId}@${r.version}`, i18nText(r.i18n?.name) || r.definitionId])
+	)
+	return ids
+		.filter((id) => live.has(id))
+		.map((id) => ({ definitionId: id, name: live.get(id)! }))
 }
 
-/** The session's rebound strategy pin, or null when it inherits the spec's. */
-export async function getSessionSpeakerStrategy(
+/** The key an admin's `plugins.disabled_swaps` entry is: `<spec>#<node>#<definition>`. */
+export const swapKey = (spec: string, node: string, definition: string) =>
+	`${spec}#${node}#${definition}`
+
+
+/**
+ * The session form's **pipeline cards** (PLAN-turn-order §4.11): for every
+ * pipeline this session actually runs — each event its genre lists,
+ * resolved the way a turn resolves it — the nodes the pipeline marks
+ * `expose: { session: true }` that offer more than their pin. Each card is a
+ * swap picker over `listSessionNodeSwaps`, with the session's choice.
+ *
+ * ⏳ A node that offers only its pin would get param controls instead
+ * (§4.11); none is exposed that way yet, so none is listed.
+ */
+export async function listSessionPipelineCards(
 	db: Db,
 	sessionId: number
-): Promise<string | null> {
-	try {
-		const [session] = await db
-			.select({ genreId: schema.sessions.genreId })
-			.from(schema.sessions)
-			.where(eq(schema.sessions.id, sessionId))
-			.limit(1)
-		if (!session) return null
-		const specSlug = await resolveSubjectSpec(
-			db,
-			session.genreId ?? "core:genre/chat",
-			sessionEvents.messageRespond,
-			{ sessionId }
-		)
-		if (!specSlug) return null
-		const nodeKey = await speakerNodeKey(db, specSlug)
-		if (!nodeKey) return null
-		const [spec] = await db
-			.select()
-			.from(schema.pipelineSpecs)
-			.where(eq(schema.pipelineSpecs.slug, specSlug))
-			.limit(1)
-		const [row] = await db
-			.select()
-			.from(schema.pipelineNodeRebinds)
-			.where(
-				and(
-					eq(schema.pipelineNodeRebinds.specId, spec.id),
-					eq(schema.pipelineNodeRebinds.scopeKind, "session"),
-					eq(schema.pipelineNodeRebinds.scopeId, sessionId),
-					eq(schema.pipelineNodeRebinds.nodeKey, nodeKey)
-				)
-			)
-			.limit(1)
-		return row?.definitionId ?? null
-	} catch {
-		return null
-	}
-}
-
-/** The node whose pinned type publishes `speaker-selection@1` on `main`. */
-async function speakerNodeKey(
-	db: Db,
-	specSlug: string
-): Promise<string | null> {
-	const [spec] = await db
-		.select()
-		.from(schema.pipelineSpecs)
-		.where(eq(schema.pipelineSpecs.slug, specSlug))
+): Promise<
+	Array<{
+		spec: string
+		specName: string
+		nodeKey: string
+		options: Array<{ definitionId: string; name: string }>
+		selected: string | null
+		default: string | null
+	}>
+> {
+	const [session] = await db
+		.select({ genreId: schema.sessions.genreId })
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
-	if (!spec || spec.activeVersionId == null) return null
-	const nodes = await db
-		.select()
-		.from(schema.pipelineNodes)
-		.where(eq(schema.pipelineNodes.specVersionId, spec.activeVersionId))
-	for (const n of nodes) {
-		const rows = await db
-			.select()
-			.from(schema.pipelineDefinitionRegistry)
-			.where(eq(schema.pipelineDefinitionRegistry.definitionId, n.definitionId))
-		const row = rows.find(
-			(r) => String(r.version) === String(n.definitionVersion)
-		)
-		if (row?.ports?.out?.main === "core:shape/speaker-selection@1")
-			return n.nodeKey
+	if (!session?.genreId) return []
+	const { getSessionGenre, resolveSubjectSpec } = await import(
+		"$lib/server/pipelines/entities/sessionGenres"
+	)
+	const { resolveSessionEventSpec } = await import(
+		"$lib/server/pipelines/runtime/sessionEvents"
+	)
+	const { sessionEvents } = await import("@serene-pub/sdk")
+	const genre = await getSessionGenre(db, session.genreId)
+	const specs = new Set<string>()
+	for (const event of Object.keys(genre?.events ?? {})) {
+		if (event === sessionEvents.sessionAction) continue
+		const slug =
+			event === sessionEvents.messageRespond
+				? await resolveSubjectSpec(db, session.genreId, event, { sessionId })
+				: await resolveSessionEventSpec(db, session.genreId, event, { sessionId })
+		if (slug) specs.add(slug)
 	}
-	return null
+
+	const out: Awaited<ReturnType<typeof listSessionPipelineCards>> = []
+	if (!specs.size) return out
+	// Three reads for every pipeline at once — the specs, their exposed
+	// nodes, the session's choices — rather than three per pipeline.
+	const specRows = await db
+		.select({
+			id: schema.pipelineSpecs.id,
+			slug: schema.pipelineSpecs.slug,
+			name: schema.pipelineSpecs.name,
+			activeVersionId: schema.pipelineSpecs.activeVersionId
+		})
+		.from(schema.pipelineSpecs)
+		.where(inArray(schema.pipelineSpecs.slug, [...specs]))
+	const live = specRows.filter((r) => r.activeVersionId != null)
+	if (!live.length) return out
+	const nodeRows = await db
+		.select({
+			specVersionId: schema.pipelineNodes.specVersionId,
+			nodeKey: schema.pipelineNodes.nodeKey,
+			definitionId: schema.pipelineNodes.definitionId,
+			definitionVersion: schema.pipelineNodes.definitionVersion,
+			expose: schema.pipelineNodes.expose
+		})
+		.from(schema.pipelineNodes)
+		.where(inArray(schema.pipelineNodes.specVersionId, live.map((r) => r.activeVersionId!)))
+	const rebinds = await db
+		.select({
+			specId: schema.pipelineNodeRebinds.specId,
+			nodeKey: schema.pipelineNodeRebinds.nodeKey,
+			definitionId: schema.pipelineNodeRebinds.definitionId
+		})
+		.from(schema.pipelineNodeRebinds)
+		.where(
+			and(
+				inArray(schema.pipelineNodeRebinds.specId, live.map((r) => r.id)),
+				eq(schema.pipelineNodeRebinds.scopeKind, "session"),
+				eq(schema.pipelineNodeRebinds.scopeId, sessionId)
+			)
+		)
+	const chosen = new Map(rebinds.map((r) => [`${r.specId}#${r.nodeKey}`, r.definitionId]))
+
+	for (const spec of live.sort((x, y) => x.slug.localeCompare(y.slug))) {
+		for (const n of nodeRows) {
+			if (n.specVersionId !== spec.activeVersionId) continue
+			if (!(n.expose as { session?: boolean } | null)?.session) continue
+			const options = await listSessionNodeSwaps(db, {
+				spec: spec.slug,
+				nodeKey: n.nodeKey,
+				specVersionId: spec.activeVersionId!
+			})
+			if (options.length < 2) continue
+			out.push({
+				spec: spec.slug,
+				specName: spec.name ?? spec.slug,
+				nodeKey: n.nodeKey,
+				options,
+				selected: chosen.get(`${spec.id}#${n.nodeKey}`) ?? null,
+				default: `${n.definitionId}@${n.definitionVersion}`
+			})
+		}
+	}
+	return out
 }

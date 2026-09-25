@@ -15,6 +15,13 @@
 	import * as Icons from "@lucide/svelte"
 	import { sceneImages } from "$lib/client/stores/sceneImages"
 	import { avatarSrc, type HasAvatar } from "$lib/client/utils/media"
+	import {
+		currentSpriteIn,
+		currentSpriteOf,
+		spriteSrc
+	} from "$lib/client/utils/sprites"
+	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
+	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { useWidgetContext } from "$lib/shared/widgets/context"
 	import {
 		openSessionState,
@@ -42,7 +49,23 @@
 			source?: string
 			persona?: boolean
 			bars?: boolean
+			sprites?: boolean
 		}
+	)
+	/**
+	 * Faces follow the conversation (DESIGN-sprites §7): each member shows its
+	 * CURRENT sprite — the one on the newest line it spoke — instead of its
+	 * avatar. On unless the widget's `sprites` setting turns it off; a member
+	 * with no sprites shows its avatar either way.
+	 */
+	let showSprites = $derived(settings.sprites !== false)
+	let messages = $derived(
+		(widget?.current?.messages?.v1 ?? []) as {
+			id: number
+			characterId?: number | null
+			isHidden?: boolean
+			metadata?: unknown
+		}[]
 	)
 	let showBars = $derived(settings.bars === true)
 	let fromScene = $derived(settings.source === "scene")
@@ -77,7 +100,7 @@
 	interface CastMember {
 		id: number
 		name: string
-		entity: HasAvatar
+		entity: HasAvatar & { spriteSets?: any }
 	}
 
 	/** Everyone still in the session — the scene, before the persona. */
@@ -115,18 +138,59 @@
 
 	interface ScenePortrait {
 		key: string
+		/** The character behind a cast portrait; absent for the persona. */
+		characterId?: number
 		name: string
 		src: string | undefined
 		/** Null for the persona, which carries no state of its own. */
 		ownerKey: string | null
+		/** The card's sprite set names — the face menu offers them. */
+		setNames?: string[]
+		/** The session's override, when there is one. */
+		spriteSet?: string | null
+	}
+
+	/**
+	 * The session's sprite-set overrides (DESIGN-sprites §2.3), kept current
+	 * by the session page from `sessions:spriteSetChanged`.
+	 */
+	let overrides = $derived(
+		((session as any)?.spriteSetOverrides ?? {}) as Record<number, string>
+	)
+
+	/**
+	 * The face menu's sprite-set switch: show a character in another of its sprite sets for
+	 * this session only. The server checks the asker may (the session's or the
+	 * character's owner) and pushes the change to every member.
+	 */
+	const socket = useTypedSocket()
+	let setMenuFor = $state<string | null>(null)
+	function changeSpriteSet(characterId: number, set: string | null) {
+		setMenuFor = null
+		if (sessionId == null) return
+		socket.emit("sessions:setSpriteSet", { sessionId, characterId, set })
 	}
 
 	let scenePortraits = $derived.by((): ScenePortrait[] => {
 		const out: ScenePortrait[] = castMembers.map((member) => ({
 			key: `character:${member.id}`,
+			characterId: member.id,
 			name: member.name,
-			src: avatarSrc(member.entity, { full: true }),
-			ownerKey: ownerKeyOf(member.id)
+			src: showSprites
+				? spriteSrc(
+						member.entity,
+						currentSpriteIn(
+							currentSpriteOf(member.id, messages),
+							overrides[member.id]
+						),
+						{ full: true }
+					)
+				: avatarSrc(member.entity, { full: true }),
+			ownerKey: ownerKeyOf(member.id),
+			setNames: ((member.entity as any).spriteSets ?? []).map(
+				(s: { name: string }) => s.name
+			),
+			spriteSet: overrides[member.id] ?? null
 		}))
 		if (!showPersona) return out
 		const persona = (
@@ -197,6 +261,62 @@
 							</div>
 						{/if}
 						<span class="face-name">{member.name}</span>
+						{#if showSprites && member.characterId !== undefined && (member.setNames?.length ?? 0) > 1}
+							<Popover
+								open={setMenuFor === member.key}
+								onOpenChange={(e) =>
+									(setMenuFor = e.open ? member.key : null)}
+								positioning={{ placement: "bottom-end" }}
+							>
+								<Popover.Trigger
+									class="face-sprite-set"
+									aria-label="Change {member.name}'s sprite set"
+								>
+									<Icons.Shirt size={12} aria-hidden="true" />
+									<span>{member.spriteSet ?? "Sprite set"}</span>
+								</Popover.Trigger>
+								<Portal>
+									<Popover.Positioner class="z-[1000]!">
+										<Popover.Content
+											class="card bg-primary-200-800 w-[min(90vw,220px)] space-y-3 p-3 shadow-xl"
+										>
+											<header class="popover-menu-title">
+												<Icons.Shirt size={16} aria-hidden="true" />
+												<p>Sprite set</p>
+											</header>
+											<article class="flex flex-col gap-2" role="menu">
+												{#each member.setNames ?? [] as setName (setName)}
+													<button
+														type="button"
+														role="menuitemradio"
+														aria-checked={member.spriteSet === setName}
+														class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
+														onclick={() =>
+															changeSpriteSet(member.characterId!, setName)}
+													>
+														<span>{setName}</span>
+													</button>
+												{/each}
+												<button
+													type="button"
+													role="menuitemradio"
+													aria-checked={!member.spriteSet}
+													class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
+													onclick={() => changeSpriteSet(member.characterId!, null)}
+												>
+													<span>As the story has it</span>
+												</button>
+											</article>
+											<p class="text-xs opacity-80">
+												For this session only. An outfit, an age or a
+												form; the lorebook's cast decides it everywhere
+												else.
+											</p>
+										</Popover.Content>
+									</Popover.Positioner>
+								</Portal>
+							</Popover>
+						{/if}
 						{#if showBars && member.ownerKey}
 							<StatBars ownerKey={member.ownerKey} />
 						{/if}
@@ -274,6 +394,7 @@
 		align-content: flex-start;
 	}
 	.face {
+		position: relative;
 		display: flex;
 		flex-direction: column;
 		align-items: center;
@@ -296,6 +417,39 @@
 		align-items: center;
 		justify-content: center;
 		opacity: 0.5;
+	}
+	/* Over the portrait's top corner, not under the name: a short widget
+	   clips everything below the face, and the switch must stay reachable. */
+	:global(.face-sprite-set) {
+		position: absolute;
+		top: 0.25rem;
+		left: 0.25rem;
+		display: inline-flex;
+		align-items: center;
+		gap: 0.2rem;
+		max-width: calc(100% - 0.5rem);
+		font-size: 0.62rem;
+		opacity: 0.85;
+		border-radius: 999px;
+		padding: 0.05rem 0.4rem;
+		color: var(--color-surface-50);
+		background: color-mix(in oklab, var(--color-surface-950) 70%, transparent);
+	}
+	/* STYLE-GUIDE §9: a 44px target on a coarse pointer. */
+	@media (pointer: coarse) {
+		:global(.face-sprite-set) {
+			min-height: 44px;
+			padding-inline: 0.75rem;
+		}
+	}
+	:global(.face-sprite-set:hover),
+	:global(.face-sprite-set:focus-visible) {
+		opacity: 1;
+	}
+	:global(.face-sprite-set span) {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 	.face-name {
 		max-width: 100%;

@@ -17,7 +17,8 @@ import {
 	serviceLabel,
 	statusSentence,
 	type CapabilityConnection,
-	type CapabilityModel
+	type CapabilityModel,
+	modelFactLine
 } from "./capabilityView"
 import { readinessRow } from "./readiness"
 
@@ -320,5 +321,102 @@ describe("the summary entry", () => {
 		expect(entry.capability).toBe("text->hologram")
 		expect(entry.set).toBe(false)
 		expect(entry.stateWord).toBe("not set")
+	})
+})
+
+describe("modelFactLine — the capability view is a chooser", () => {
+	test("puts the facts a choice turns on in front of the state", () => {
+		expect(
+			modelFact({
+				id: 1,
+				name: "Claude Sonnet 4.5",
+				enabled: true,
+				missingSince: null,
+				facts: {
+					contextWindow: 200000,
+					pricing: { inPerMTok: 3, currency: "USD" },
+					source: "list"
+				}
+			})
+		).toBe("200k context · $3.00 in")
+	})
+
+	test("falls back to the state where the host said nothing", () => {
+		// Eight rows each reading "listed" distinguish none of them, but it is
+		// still the honest answer when there is no other.
+		expect(
+			modelFact({
+				id: 1,
+				name: "gpt-4o",
+				enabled: true,
+				missingSince: null
+			})
+		).toBe("listed")
+	})
+
+	test("keeps a state that is not merely 'listed'", () => {
+		const out = modelFact({
+			id: 1,
+			name: "bge-small",
+			enabled: true,
+			missingSince: null,
+			facts: { sizeBytes: 133_000_000, source: "list" },
+			local: { state: "not_downloaded" }
+		} as any)
+		expect(out).toContain("133 MB")
+		expect(out).not.toBe("133 MB")
+	})
+
+	test("the admin's override wins over the host's context", () => {
+		expect(
+			modelFactLine({
+				contextWindow: 8192,
+				facts: { contextWindow: 200000, source: "host" }
+			})
+		).toBe("8k context")
+	})
+
+	test("a free model says Free, not $0.00", () => {
+		expect(
+			modelFactLine({
+				facts: {
+					pricing: { inPerMTok: 0, currency: "USD" },
+					source: "host"
+				}
+			})
+		).toBe("Free")
+	})
+
+	test("says nothing at all when the host said nothing", () => {
+		expect(modelFactLine({})).toBe("")
+	})
+})
+
+describe("finderNote — promise only the scope the finder has", () => {
+	test("names the scope for the four modalities that have one", () => {
+		expect(finderNote("Embeddings", "text->embedding")).toBe(
+			"Opens the model finder scoped to embeddings."
+		)
+		expect(finderNote("Chat", "text->text")).toBe(
+			"Opens the model finder scoped to chat."
+		)
+	})
+
+	test("claims no scope for a capability the finder cannot scope to", () => {
+		// The shipped view said "scoped to vision" under a button that lands on
+		// Chat: there is no vision list, and a model that can see is a chat
+		// model on the same host.
+		expect(finderNote("Vision", "text+image->text")).toBe(
+			"Opens the model finder."
+		)
+		expect(finderNote("Speech", "text->audio")).toBe(
+			"Opens the model finder."
+		)
+	})
+
+	test("keeps the old sentence when no capability is given", () => {
+		expect(finderNote("Embeddings")).toBe(
+			"Opens the model finder scoped to embeddings."
+		)
 	})
 })

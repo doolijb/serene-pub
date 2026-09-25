@@ -324,3 +324,13 @@ describe("LayoutStore", () => {
 		expect(store.box).toBe(box)
 	})
 })
+
+describe("declsFor with a genre's omissions (R71)", () => {
+	test("a withheld core widget is not declared, so resolve never appends it", () => {
+		const decls = declsFor([], new Set(["messages", "inventory"]))
+		const ids = decls.widgets?.map((w) => w.id) ?? []
+		expect(ids).not.toContain("messages")
+		expect(ids).not.toContain("inventory")
+		expect(ids).toContain("stats")
+	})
+})

@@ -4,6 +4,7 @@ import { relations, sql } from "drizzle-orm"
 // SvelteKit's aliases — a `$lib` import here fails with MODULE_NOT_FOUND and
 // no migration can be generated at all until it is changed back.
 import { PromptFormats } from "../../shared/constants/PromptFormats"
+import type { ShownSprite } from "../../shared/sprites"
 import type { RenderMode } from "../../shared/constants/completionTemplates"
 import {
 	pgTable,
@@ -33,7 +34,6 @@ import {
 export type NodeState = "active" | "deceased" | "missing" | "departed"
 export type NodeVisibility = "normal" | "legendary" | "hidden"
 export type RelationshipVisibility = "secret" | "acknowledged" | "public"
-import { GroupReplyStrategies } from "../../shared/constants/GroupReplyStrategies"
 import { SessionCharacterVisibility } from "../../shared/constants/SessionCharacterVisibility"
 import { SessionTypes } from "../../shared/constants/SessionTypes"
 import type { ConnectionIdentity } from "../../shared/connections/identity"
@@ -698,6 +698,31 @@ export const connectionModels = pgTable(
 		 * 17 §1a states — a step does not get its own window; a model has one.
 		 */
 		contextWindow: integer("context_window"),
+		/**
+		 * What the HOST said about this model — context window, price per
+		 * million tokens, parameter size, quantisation, size on disk.
+		 * `ModelFacts` (`$lib/shared/connections/modelFacts.ts`), sparse.
+		 *
+		 * Written only by `syncConnectionModels`, from the listing, on insert and
+		 * on every successful re-listing. Never written by a person and never
+		 * read by the resolver.
+		 *
+		 * ⚠ **Not `context_window` above.** That is the admin's OVERRIDE and the
+		 * one thing `dispatchStep` reads; this is the host's claim, and the two
+		 * answer different questions (NOMENCLATURE R5 — reconcile at the seam,
+		 * never merge). A host revising its catalogue must not silently move a
+		 * window somebody set by hand, and a person capping a window must not
+		 * make the app forget what the model can really hold.
+		 *
+		 * ⚠ Absent fields mean UNKNOWN and render as `—`. A bag is `{}` for the
+		 * many services whose listing is `{id, object, created, owned_by}` —
+		 * there is nothing there worth a column, and inventing one would be the
+		 * guessing every other status surface in this app refuses to do.
+		 */
+		facts: json("facts")
+			.notNull()
+			.default({})
+			.$type<Record<string, unknown>>(),
 		/**
 		 * This model's completion template, overriding the endpoint's.
 		 *
@@ -1537,6 +1562,17 @@ export const lorebookBindings = pgTable(
 			.default([])
 			.$type<string[]>(),
 		summary: text("summary"),
+		/**
+		 * The **sprite set** this cast member is shown in (DESIGN-sprites §2.2)
+		 * — a set NAME on whichever card the member resolves to, never an id,
+		 * because a card-swap amendment must resolve the same name against the
+		 * NEW card's sets. The base value; `cast_amendments.fields.spriteSet`
+		 * overlays it at dates, like every other amendable cast field. Null =
+		 * the card's default set. A name the resolved card has no set by is
+		 * kept as written and falls back to the default set at render — the
+		 * receipt says so; nothing clears it.
+		 */
+		spriteSet: text("sprite_set"),
 		embedding: real("embedding").array(),
 		embeddingModel: text("embedding_model"),
 		vectorizedAt: timestamp("vectorized_at"),
@@ -2080,6 +2116,101 @@ export const characterTagsRelations = relations(characterTags, ({ one }) => ({
 // ⚠ No `persona_tags`: a persona is a character, so its labels are that
 // character's labels and `character_tags` above is the only join.
 
+/**
+ * A named group of a card's **sprites** — an outfit, an age, a form
+ * (DESIGN-sprites §1, §3.1). SillyTavern calls this a *sprite folder
+ * override*; RisuAI has only the one flat list, which imports as the default
+ * set.
+ *
+ * ⚠ **Sprites belong to the CARD** (§2.1): art is the reusable asset's, it
+ * travels in a CHARX, and a card shared by two books shows the same art in
+ * both. What a *cast member* decides is which set is shown, by the amendable
+ * cast field `spriteSet` — a set NAME, resolved against whichever card the
+ * member resolves to, which is why `name` is unique per character and is the
+ * key other rows use.
+ *
+ * Exactly one set per character is the default (`is_default`, enforced by the
+ * partial unique index). It is created the first time a card gains a sprite.
+ */
+export const spriteSets = pgTable(
+	"sprite_sets",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		characterId: integer("character_id")
+			.notNull()
+			.references(() => characters.id, { onDelete: "cascade" }),
+		name: text("name").notNull(),
+		isDefault: boolean("is_default").notNull().default(false),
+		position: integer("position").notNull().default(0),
+		createdAt: timestamp("created_at").notNull().defaultNow()
+	},
+	(t) => [
+		uniqueIndex("sprite_sets_character_name_idx").on(t.characterId, t.name),
+		uniqueIndex("sprite_sets_one_default_idx")
+			.on(t.characterId)
+			.where(sql`${t.isDefault}`)
+	]
+)
+
+/**
+ * One **sprite**: a labelled image a card can show (DESIGN-sprites §0, §3.1).
+ *
+ * `label` is the **sprite label** exactly as the card authored it, trimmed
+ * and case-folded — never mapped onto a fixed vocabulary, because real packs
+ * hold `swimsuit` and `sleeping` beside `joy`. Several rows under one label
+ * are **variants** (SillyTavern's `joy.png`, `joy-2.png`), ordered by
+ * `position`.
+ *
+ * `file_id` is a **role pointer** into `files` — a real FK, `ON DELETE SET
+ * NULL`, exactly like `characters.avatar_media_id` (see the `files` doc for
+ * why a role is an inbound FK and provenance is not). A row whose file is gone
+ * is an **empty sprite**: a slot the editor shows waiting for an image.
+ */
+export const sprites = pgTable(
+	"sprites",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		spriteSetId: integer("sprite_set_id")
+			.notNull()
+			.references(() => spriteSets.id, { onDelete: "cascade" }),
+		label: text("label").notNull(),
+		position: integer("position").notNull().default(0),
+		fileId: integer("file_id").references((): AnyPgColumn => files.id, {
+			onDelete: "set null"
+		}),
+		/** Where it came from: `card` · `upload` · `sillytavern` · `generated`. */
+		source: text("source").notNull().default("upload"),
+		createdAt: timestamp("created_at").notNull().defaultNow()
+	},
+	(t) => [
+		uniqueIndex("sprites_set_label_position_idx").on(
+			t.spriteSetId,
+			t.label,
+			t.position
+		),
+		index("sprites_file_idx").on(t.fileId)
+	]
+)
+
+export const spriteSetsRelations = relations(spriteSets, ({ one, many }) => ({
+	character: one(characters, {
+		fields: [spriteSets.characterId],
+		references: [characters.id]
+	}),
+	sprites: many(sprites)
+}))
+
+export const spritesRelations = relations(sprites, ({ one }) => ({
+	spriteSet: one(spriteSets, {
+		fields: [sprites.spriteSetId],
+		references: [spriteSets.id]
+	}),
+	file: one(files, {
+		fields: [sprites.fileId],
+		references: [files.id]
+	})
+}))
+
 export const lorebookTags = pgTable(
 	"lorebook_tags",
 	{
@@ -2344,6 +2475,8 @@ export const charactersRelations = relations(characters, ({ many, one }) => ({
 		references: [characterFolders.id]
 	}),
 	characterTags: many(characterTags),
+	/** The card's sprite sets — its art, DESIGN-sprites §2.1. */
+	spriteSets: many(spriteSets),
 	sessionCharacters: many(sessionCharacters),
 	sessionPersonas: many(sessionPersonas),
 	sessionMessages: many(sessionMessages)
@@ -2411,12 +2544,59 @@ export const sessions = pgTable(
 			.notNull()
 			.default({})
 			.$type<Record<string, any>>(), // JSON for extra settings
-		groupReplyStrategy: text("group_reply_strategy").default(
-			GroupReplyStrategies.ORDERED
-		),
+		/**
+		 * The session's pipeline-owned json (PLAN-turn-order §4.3, R6):
+		 * whatever a genre, a plugin or a user-authored spec wants to keep on
+		 * this session, namespaced by owner key (`core`, `acme.rp`,
+		 * `user:<slug>`). Written by `core:outlet/set-session-annex@1` alone;
+		 * read by `core:query/session-annex@1` and by every run's settings
+		 * document — pipelines only. A person gets their own view
+		 * (`annexViewFor`, R57), never this column.
+		 *
+		 * The counterpart of `metadata`, which is core's own and read-only
+		 * from the pipeline layer — the one key core writes there is
+		 * `turnOrder`, by `core:outlet/set-turn-order@1` alone. The split is
+		 * the whole point: a spec that wants to remember something has
+		 * somewhere to put it that core will never reinterpret, and core has
+		 * somewhere no spec can corrupt. Docs discourage narrative data here:
+		 * a scene's facts belong in the history or a lorebook, where a person
+		 * can see and edit them.
+		 */
+		annex: jsonb("annex")
+			.notNull()
+			.default({})
+			.$type<Record<string, unknown>>(),
+		/**
+		 * Who, besides pipelines, may see each annex value (R57, V1): owner →
+		 * key → participant references. A key with no entry is pipelines
+		 * only (R59). Beside `annex` rather than inside it, so every pipeline
+		 * reads the values exactly as before; written by `set-session-annex`
+		 * from its `see` literal, and read per reader — a person's screen and
+		 * widgets, or the AI's view — through `visibleTo`. Never sent raw.
+		 */
+		annexAudiences: jsonb("annex_audiences")
+			.notNull()
+			.default({})
+			.$type<Record<string, Record<string, string[]>>>(),
 		lorebookId: integer("lorebook_id").references(() => lorebooks.id, {
 			onDelete: "set null"
 		}),
+		/**
+		 * Which line of the book this session runs on. NULL = main.
+		 *
+		 * A session is on a line, not at a moment: retrieval reads the book as
+		 * of NOW on this branch, which is the current state of that line's
+		 * story. Reading as of a past date is the author's tool, not the
+		 * model's (ruling 4 parks the pinned-session case).
+		 *
+		 * `set null` rather than cascade: deleting a branch must not delete the
+		 * sessions played on it. They fall back to main, which is a story the
+		 * author can still read.
+		 */
+		lorebookBranchId: integer("lorebook_branch_id").references(
+			(): AnyPgColumn => lorebookBranches.id,
+			{ onDelete: "set null" }
+		),
 		samplingConfigId: integer("sampling_config_id").references(
 			() => samplingConfigs.id,
 			{ onDelete: "set null" }
@@ -2543,7 +2723,21 @@ export const sessionMessages = pgTable(
 				currentIdx: number | null
 				history: string[]
 				thinkingHistory?: (string | null)[]
+				/**
+				 * The sprite each swipe showed, parallel to `history` exactly as
+				 * `thinkingHistory` is (DESIGN-sprites §3.3). `null` where a swipe
+				 * showed none.
+				 */
+				spriteHistory?: (ShownSprite | null)[]
 			}
+			/**
+			 * The **shown sprite** of the active swipe — mirrors
+			 * `swipes.spriteHistory[currentIdx]`, denormalised like `thinking`
+			 * below because that is what the renderer reads. The set is recorded
+			 * WITH the label: a line shows what the speaker wore when they said
+			 * it, not what they wear now.
+			 */
+			sprite?: ShownSprite | null
 			// Native model thinking content (e.g. Ollama `think: true`) for the
 			// message's currently-active swipe — mirrors swipes.thinkingHistory[currentIdx],
 			// kept denormalized here since that's what SessionMessage.svelte reads.
@@ -3953,6 +4147,18 @@ export const scenes = pgTable(
 		embeddingModel: text("embedding_model"),
 		// Whether this scene has been processed into the causal graph
 		graphed: boolean("graphed").notNull().default(false),
+		/**
+		 * The line this scene was captured on. NULL = shared, which is every
+		 * scene captured before there were lines and every scene on main.
+		 *
+		 * A scene is a session's output, so it belongs to the line the session
+		 * ran on — two lines playing the same fork forward produce two
+		 * histories, and neither is the other's.
+		 */
+		branchId: integer("branch_id").references(
+			(): AnyPgColumn => lorebookBranches.id,
+			{ onDelete: "cascade" }
+		),
 		createdAt: date("created_at")
 			.notNull()
 			.default(sql`(CURRENT_TIMESTAMP)`),
@@ -4122,6 +4328,18 @@ export const narrativeRelationships = pgTable(
 		status: text("status").notNull().default("active"),
 		// Why this relationship changed (for non-initial entries)
 		reason: text("reason"),
+		/**
+		 * The line this edge was drawn on. NULL = shared.
+		 *
+		 * An edge is already dated through `history_entry_id`, so it needs no
+		 * amendment table: a relationship that changes is a NEW dated edge with
+		 * the old one `status: ended`. The branch column is what keeps one
+		 * line's new edge out of another's reading.
+		 */
+		branchId: integer("branch_id").references(
+			(): AnyPgColumn => lorebookBranches.id,
+			{ onDelete: "cascade" }
+		),
 		embedding: real("embedding").array(),
 		embeddingModel: text("embedding_model"),
 		vectorizedAt: timestamp("vectorized_at"),
@@ -4327,6 +4545,18 @@ export const pipelineSpecVersions = pgTable(
 		inputGenre: text("input_genre"),
 		inputEvent: text("input_event"),
 		/**
+		 * The events this version's inlet is locked over, when it is locked
+		 * over several (PLAN-turn-order §4.1, A7).
+		 *
+		 * `.inlet(key, node, { genre, events: [...] })` is how one document
+		 * answers N events — the turn-order spec answers nine — and
+		 * `input_event` holds one string. Rather than overload that column,
+		 * the list lives here and `input_event` stays null for a multi-event
+		 * lock. Every eligibility check reads both: an event answers when it
+		 * IS `input_event` or is in this list.
+		 */
+		inputEvents: json("input_events").$type<string[] | null>(),
+		/**
 		 * Contributed surfaces (19 §3–§4) — the version's `contributes` block,
 		 * stored like `mode` so function routing and the trigger UI are
 		 * SELECTs over rows, never document loads.
@@ -4463,7 +4693,19 @@ export const pipelineNodes = pgTable(
 		enabledDefault: boolean("enabled_default").notNull().default(true),
 		budgetTokens: integer("budget_tokens"),
 		budgetCalls: integer("budget_calls"),
-		position: integer("position").notNull()
+		position: integer("position").notNull(),
+		/**
+		 * The session-settings mark (PLAN-turn-order §4.11, R28): `{ session:
+		 * true }` shows the node's controls in session settings, and `swaps`
+		 * lists the definition ids a session may seat instead of the pin.
+		 * Stored so every reader — the settings form, `setSessionNodeRebind`,
+		 * `sessions:nodeSwapOptions` — reads it off the published spec, for a
+		 * plugin's spec exactly as for core's. Null = admin panel only.
+		 */
+		expose: json("expose").$type<{
+			session?: boolean
+			swaps?: string[]
+		} | null>()
 	},
 	(t) => [
 		uniqueIndex("pipeline_nodes_version_key_idx").on(
@@ -4924,7 +5166,9 @@ export const seenActions = pgTable(
 		actionKey: text("action_key").notNull(),
 		seenAt: timestamp("seen_at").notNull().defaultNow()
 	},
-	(t) => [uniqueIndex("seen_actions_user_action_idx").on(t.userId, t.actionKey)]
+	(t) => [
+		uniqueIndex("seen_actions_user_action_idx").on(t.userId, t.actionKey)
+	]
 )
 
 /**
@@ -5500,10 +5744,15 @@ export const pipelineContextTemplates = pgTable(
 		updatedAt: timestamp("updated_at").notNull().defaultNow()
 	},
 	(t) => [
-		index("pipeline_context_templates_node_definition_idx").on(t.nodeDefinitionId),
+		index("pipeline_context_templates_node_definition_idx").on(
+			t.nodeDefinitionId
+		),
 		index("pipeline_context_templates_spec_idx").on(t.createdForSpecId),
 		/** The pool the picker reads: node definition AND language. */
-		index("pipeline_context_templates_pool_idx").on(t.nodeDefinitionId, t.engine),
+		index("pipeline_context_templates_pool_idx").on(
+			t.nodeDefinitionId,
+			t.engine
+		),
 		uniqueIndex("pipeline_context_templates_node_definition_name_idx").on(
 			t.nodeDefinitionId,
 			t.engine,
@@ -5778,6 +6027,122 @@ export const pipelineRunNodes = pgTable(
  * parsed back out of the receipt blob, whose per-node `ids` shape varies with
  * whatever each host commit happens to return.
  */
+/**
+ * The ranking store (PLAN-sdk-1.0 §3.9, R58, R64): what every ranker judged,
+ * recorded automatically for any node publishing `core:shape/decisions@1`.
+ *
+ * `rankings` — one row per ranking node per run (the run's FK cascades it).
+ * `ranking_decisions` — one narrow row per candidate with a subject; a
+ *   candidate with none (a message band) is counted on its ranking only.
+ * `ranking_subject_stats` — the rollup readers use, per (session, subject),
+ *   upserted in the same write; kept when old rankings are pruned.
+ *
+ * Narrow on purpose: integer and short-text columns, `detail` bounded to
+ * 2 KiB, and indexes only for the three reads (latest per subject, a
+ * ranking's decisions, a session's rankings).
+ */
+export const rankings = pgTable(
+	"rankings",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		runId: integer("run_id")
+			.notNull()
+			.references(() => pipelineRuns.id, { onDelete: "cascade" }),
+		nodeKey: text("node_key").notNull(),
+		/** The ranker's definition id, `<id>@<version>`. */
+		definitionId: text("definition_id").notNull(),
+		/**
+		 * A deleted session's rankings go with it. The run's own FK does not
+		 * reach them: `pipeline_runs.session_id` is set null on delete, which
+		 * would leave these rows under a session no reader or prune can name.
+		 */
+		sessionId: integer("session_id").references(() => sessions.id, {
+			onDelete: "cascade"
+		}),
+		/** Whose turn it was, as a participant reference, when the run says. */
+		speakerRef: text("speaker_ref"),
+		/** The user whose action triggered the run. */
+		userId: integer("user_id"),
+		candidatesJudged: integer("candidates_judged").notNull().default(0),
+		/** How many were stored as decisions (the rest had no subject or were over the cap). */
+		decisionsStored: integer("decisions_stored").notNull().default(0),
+		budgetTotal: integer("budget_total"),
+		/** Small run-level facts a ranker states (the relationship lens's ceiling, a truncation note). */
+		detail: jsonb("detail").$type<Record<string, unknown> | null>(),
+		createdAt: timestamp("created_at").notNull().defaultNow()
+	},
+	(t) => [
+		index("rankings_session_idx").on(t.sessionId, t.id),
+		index("rankings_run_idx").on(t.runId)
+	]
+)
+
+export const rankingDecisions = pgTable(
+	"ranking_decisions",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		rankingId: integer("ranking_id")
+			.notNull()
+			.references(() => rankings.id, { onDelete: "cascade" }),
+		/** `lore-entry`, or a package's `<slug>:<kind>`. */
+		subjectKind: text("subject_kind").notNull(),
+		subjectId: text("subject_id").notNull(),
+		included: boolean("included").notNull(),
+		/** A short code: core's closed set or `<slug>:<code>`. */
+		reason: text("reason").notNull(),
+		score: real("score"),
+		rank: integer("rank"),
+		tokens: integer("tokens"),
+		why: text("why"),
+		detail: jsonb("detail").$type<Record<string, unknown> | null>()
+	},
+	(t) => [
+		index("ranking_decisions_ranking_idx").on(t.rankingId),
+		index("ranking_decisions_subject_idx").on(
+			t.subjectKind,
+			t.subjectId,
+			t.rankingId
+		)
+	]
+)
+
+export const rankingSubjectStats = pgTable(
+	"ranking_subject_stats",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		sessionId: integer("session_id")
+			.notNull()
+			.references(() => sessions.id, { onDelete: "cascade" }),
+		subjectKind: text("subject_kind").notNull(),
+		subjectId: text("subject_id").notNull(),
+		timesJudged: integer("times_judged").notNull().default(0),
+		timesIncluded: integer("times_included").notNull().default(0),
+		/** The newest ranking that judged it — may have been pruned since. */
+		lastRankingId: integer("last_ranking_id"),
+		lastJudgedAt: timestamp("last_judged_at"),
+		lastIncludedAt: timestamp("last_included_at"),
+		/**
+		 * The run that last let it in, and what it cost there — kept here
+		 * because the round prune (R68) drops that run's ranking long before
+		 * the run itself. No FK: evidence, like the rest of the rollup.
+		 */
+		lastIncludedRunId: integer("last_included_run_id"),
+		lastIncludedTokens: integer("last_included_tokens"),
+		/** The latest decision's facts, kept here so a reader needs no join. */
+		lastIncluded: boolean("last_included"),
+		lastReason: text("last_reason"),
+		lastRank: integer("last_rank"),
+		lastScore: real("last_score")
+	},
+	(t) => [
+		uniqueIndex("ranking_subject_stats_unique").on(
+			t.sessionId,
+			t.subjectKind,
+			t.subjectId
+		)
+	]
+)
+
 export const pipelineRunArtifacts = pgTable(
 	"pipeline_run_artifacts",
 	{
@@ -5856,6 +6221,16 @@ export const plugins = pgTable(
 		 * out derives from the effective set, never the raw manifest.
 		 */
 		adminDenied: json("admin_denied")
+			.notNull()
+			.default([])
+			.$type<string[]>(),
+		/**
+		 * Swap contributions an admin has switched off (PLAN-turn-order R29),
+		 * as `<spec>#<node>#<definition>`. The manifest declares what the plugin
+		 * offers; this is the admin's decision about it, never overwritten by a
+		 * reinstall — the `admin_denied` posture, one axis over.
+		 */
+		disabledSwaps: json("disabled_swaps")
 			.notNull()
 			.default([])
 			.$type<string[]>(),
@@ -6142,6 +6517,21 @@ export const pipelineDefinitionRegistry = pgTable(
 		 */
 		entryShape: json("entry_shape").$type<Record<string, unknown> | null>(),
 		causesEvent: text("causes_event"),
+		/**
+		 * The in-port whose literal names the event a write causes, when that
+		 * is per node (`record-event`, E1). Hashed with the contract, so stored:
+		 * a row read back must reproduce its own hash.
+		 */
+		causesEventFrom: text("causes_event_from"),
+		/** The in-port whose literal is the audience of what a write stores (R57) — hashed with the contract. */
+		audienceFrom: text("audience_from"),
+		/**
+		 * Inlet only: the event payload shapes it reads (R33) — which events one
+		 * `events` lock may list. Part of the contract hash since the modder
+		 * pass, so it is stored: `registrySync` rebuilds a definition from its
+		 * row to hash it.
+		 */
+		payloads: json("payloads").$type<string[] | null>(),
 		isPublic: boolean("is_public").notNull().default(false),
 		/**
 		 * The contract flags and declarations beside `optional` (plans/31 V6):
@@ -6521,13 +6911,15 @@ export const sessionLayoutPresets = pgTable(
 		 */
 		document: json("document").$type<LayoutDoc>(),
 		/** `{ [instanceKey]: { [field]: value } }`, pinned under a person's own. */
-		widgetSettings: json("widget_settings").$type<
-			Record<string, Record<string, unknown>>
-		>(),
+		widgetSettings:
+			json("widget_settings").$type<
+				Record<string, Record<string, unknown>>
+			>(),
 		/** `{ [instanceKey]: { id, slug } }` style pins. */
-		widgetStyles: json("widget_styles").$type<
-			Record<string, { id: number; slug: string }>
-		>(),
+		widgetStyles:
+			json("widget_styles").$type<
+				Record<string, { id: number; slug: string }>
+			>(),
 		/** Provenance: the app/plugin version that last seeded a shipped row. */
 		seededByVersion: text("seeded_by_version"),
 		createdAt: timestamp("created_at").notNull().defaultNow(),
@@ -7353,10 +7745,15 @@ export const lorebookEntries = pgTable(
 			{ onDelete: "set null" }
 		),
 		/**
-		 * The `parent` role — an amendment's base entry, a scene's history
+		 * The `parent` role — a nested entry's parent, a scene's history
 		 * entry, a district's city.
 		 *
-		 * Cascades: an amendment without its base is not an entry, it is a
+		 * ⚠ This once read "an amendment's base entry". Renamed 2026-09-23
+		 * (NOMENCLATURE R1, §24.3): an **amendment** is now a dated overlay in
+		 * `entry_amendments`, which hangs off `entry_id` and never off this
+		 * column. A row pointing here is a CHILD, not an amendment.
+		 *
+		 * Cascades: a child without its parent is not an entry, it is a
 		 * fragment. Declared now because it is also the traversal edge for
 		 * nested lore, and the alternative to a self-reference now is one
 		 * later, at `@2` on all three types, to state a column that already
@@ -7364,6 +7761,22 @@ export const lorebookEntries = pgTable(
 		 */
 		anchorEntryId: integer("anchor_entry_id").references(
 			(): AnyPgColumn => lorebookEntries.id,
+			{ onDelete: "cascade" }
+		),
+		/**
+		 * The line this entry was written on. NULL = shared.
+		 *
+		 * ⚠ An entry is SHARED unless it was created while reading a branch.
+		 * That is what makes a branch cheap: the 27 entries both lines agree
+		 * about are one row, and only what diverged is duplicated. A branch
+		 * that copied the book would make every later edit to a shared entry a
+		 * job to do twice.
+		 *
+		 * Cascade: an entry that exists only on a deleted line goes with it.
+		 * A shared entry has NULL here and is untouched.
+		 */
+		branchId: integer("branch_id").references(
+			(): AnyPgColumn => lorebookBranches.id,
 			{ onDelete: "cascade" }
 		),
 
@@ -7435,6 +7848,327 @@ export const lorebookEntries = pgTable(
 			t.position
 		),
 		index("lorebook_entries_book_type_idx").on(t.lorebookId, t.typeId)
+	]
+)
+
+// ── Amendments and branches ─────────────────────────────────────────────────
+//
+// Ruled 2026-09-23; design of record `~/.claude/plans/DESIGN-lore-amendments-
+// branches.md`. Three tables land together even though the build order does
+// amendments before branches, because an amendment carries `branch_id` from
+// the first row and a nullable FK cannot point at a table that does not exist
+// yet. Adding the column later would mean two migrations touching the same
+// column for no gain.
+
+/**
+ * A line of the story that diverged, and where it diverged from.
+ *
+ * ⚠ `main` is IMPLICIT and never a row. A book with no branches has an empty
+ * table, and `branch_id IS NULL` everywhere means "shared, reads the same on
+ * every line". Giving main a row would mean every existing amendment, scene
+ * and edge had to be backfilled to point at it, and every query that means
+ * "shared" would have to say "main's id OR null".
+ *
+ * ⚠ Nothing merges back. A branch is a way to ask "what if", not a way to do
+ * work you later integrate — see the design's "Why not versions or copies".
+ */
+export const lorebookBranches = pgTable(
+	"lorebook_branches",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		lorebookId: integer("lorebook_id")
+			.notNull()
+			.references(() => lorebooks.id, { onDelete: "cascade" }),
+		/** Unique within the book. `main` is refused: it is the implicit line. */
+		name: text("name").notNull(),
+		/**
+		 * The line this one left. NULL = it left main.
+		 *
+		 * `set null` rather than cascade: deleting a branch must not silently
+		 * delete the branches forked FROM it. They become children of main,
+		 * which is wrong in the story sense and right in the data sense — the
+		 * alternative is a delete that removes work nobody asked about.
+		 */
+		forkedFromBranchId: integer("forked_from_branch_id").references(
+			(): any => lorebookBranches.id,
+			{ onDelete: "set null" }
+		),
+		/**
+		 * The story date it forked at, in the book's own calendar — the same
+		 * three columns a history entry uses, so one comparator orders both.
+		 */
+		forkYear: integer("fork_year"),
+		forkMonth: integer("fork_month"),
+		forkDay: integer("fork_day"),
+		createdAt: timestamp("created_at").notNull().defaultNow(),
+		updatedAt: timestamp("updated_at")
+			.notNull()
+			.defaultNow()
+			.$onUpdate(() => new Date())
+	},
+	(t) => [
+		uniqueIndex("lorebook_branches_book_name").on(t.lorebookId, t.name),
+		// `main` is the implicit line; a row claiming it would make
+		// `branch_id IS NULL` ambiguous.
+		check(
+			"lorebook_branches_name_check",
+			sql`lower(${t.name}) <> 'main' AND ${t.name} <> ''`
+		)
+	]
+)
+
+/**
+ * What changed about an ENTRY, and when in the story it became true.
+ *
+ * An amendment is a dated overlay, never a version: resolution walks the base
+ * row, then main's amendments up to the moment in date order, then the
+ * branch's, later winning per field (`asOf`, `$lib/shared/lorebooks/asOf.ts`).
+ *
+ * ⚠ **An amendment IS a date.** An undated one is refused by the CHECK below,
+ * because a change with no date is just an edit to the entry and belongs on
+ * the entry.
+ *
+ * ⚠ `fields` is a PARTIAL of the entry's writable columns, and only the keys
+ * present are overlaid. An amendment that sets `enabled: false` says nothing
+ * about the content; that is the whole point of a partial, and it is why a
+ * time RANGE is two amendments — off at one date, on at another.
+ */
+export const entryAmendments = pgTable(
+	"entry_amendments",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		/**
+		 * Carried beside `entry_id` so the pool can read every amendment in a
+		 * book with one query rather than one per entry. Cascades with the
+		 * book for the same reason every other lorebook child does.
+		 */
+		lorebookId: integer("lorebook_id")
+			.notNull()
+			.references(() => lorebooks.id, { onDelete: "cascade" }),
+		/**
+		 * ⚠ CASCADE, and the reason these are two tables rather than one
+		 * polymorphic `amendments` with a `subject_kind`: a deleted entry must
+		 * not leave dated overlays behind, and a polymorphic subject column
+		 * cannot cascade.
+		 */
+		entryId: integer("entry_id")
+			.notNull()
+			.references(() => lorebookEntries.id, { onDelete: "cascade" }),
+		/** NULL = main, the shared line. See `lorebook_branches`. */
+		branchId: integer("branch_id").references(() => lorebookBranches.id, {
+			onDelete: "cascade"
+		}),
+		/** The book's own calendar. `year` is required; the rest narrow it. */
+		year: integer("year").notNull(),
+		month: integer("month"),
+		day: integer("day"),
+		/** A partial of the entry's writable columns. Only present keys overlay. */
+		fields: json("fields")
+			.notNull()
+			.default({})
+			.$type<Record<string, unknown>>(),
+		/**
+		 * The history entry that made it true, where there is one. `set null`:
+		 * deleting the event does not un-happen the change it recorded.
+		 */
+		historyEntryId: integer("history_entry_id").references(
+			() => lorebookEntries.id,
+			{ onDelete: "set null" }
+		),
+		createdAt: timestamp("created_at").notNull().defaultNow(),
+		updatedAt: timestamp("updated_at")
+			.notNull()
+			.defaultNow()
+			.$onUpdate(() => new Date())
+	},
+	(t) => [
+		// The pool's read: every amendment in a book, grouped client-side.
+		index("entry_amendments_book_idx").on(t.lorebookId),
+		// One entry's overlays, already in date order.
+		index("entry_amendments_entry_date_idx").on(
+			t.entryId,
+			t.year,
+			t.month,
+			t.day
+		),
+		// A month cannot be named without a year, nor a day without a month:
+		// the calendar narrows left to right or the comparator has no order.
+		check(
+			"entry_amendments_date_check",
+			sql`(${t.month} IS NOT NULL OR ${t.day} IS NULL)`
+		)
+	]
+)
+
+/**
+ * The same thing for a CHARACTER CARD.
+ *
+ * Ruled 2026-09-23 (question 5, which the 09-11 design never asked): a cast
+ * member's card — the description that actually reaches the prompt — changes
+ * as the story runs, and until now only their *lore* could be dated. A card is
+ * a `characters` row, not a lorebook entry, so it needs its own cascade.
+ *
+ * ⚠ Keyed to the CHARACTER, not to the cast binding. The same character may be
+ * bound into several books; whether an amendment should be per-book is the
+ * question `lorebook_id` answers — it is carried, nullable, so a card change
+ * can be scoped to one book's line or left global.
+ */
+/**
+ * Where in their own life a member is standing, and when.
+ *
+ * A **presence** says: this member, at this point of their life, is in the
+ * world from this date until that one. One member normally has one; a book
+ * that never says otherwise has none at all, which reads as "always here, at
+ * no particular age".
+ *
+ * ⚠ **This is the minimal form of the track** in the story-time design (§4d),
+ * and it is what makes two of somebody possible: two overlapping presences of
+ * one member are two people in a room, which no amount of resolving a single
+ * row can express.
+ *
+ * ⚠ `personal_position` is a plain integer the author gives — an age, a
+ * chapter, whatever they count in — so it needs no calendar and works in a
+ * free-form book. When the calendar core lands it can be derived from a birth
+ * instead of typed, and nothing stored here changes.
+ *
+ * ⚠ `until` is **exclusive**, as a window is: a presence ending at Y540 is
+ * already over when you read Y540.
+ */
+export const castPresences = pgTable(
+	"cast_presences",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		lorebookBindingId: integer("lorebook_binding_id")
+			.notNull()
+			.references(() => lorebookBindings.id, { onDelete: "cascade" }),
+		/** Denormalised so the workspace reads a book's presences in one query. */
+		lorebookId: integer("lorebook_id")
+			.notNull()
+			.references(() => lorebooks.id, { onDelete: "cascade" }),
+		branchId: integer("branch_id").references(() => lorebookBranches.id, {
+			onDelete: "cascade"
+		}),
+		/** Their own point. Ordered numerically; the calendar has no say. */
+		personalPosition: integer("personal_position").notNull(),
+		fromYear: integer("from_year").notNull(),
+		fromMonth: integer("from_month"),
+		fromDay: integer("from_day"),
+		untilYear: integer("until_year"),
+		untilMonth: integer("until_month"),
+		untilDay: integer("until_day"),
+		/** Why this version is here — "came back to stop herself". */
+		note: text("note"),
+		createdAt: timestamp("created_at").notNull().defaultNow(),
+		updatedAt: timestamp("updated_at")
+			.notNull()
+			.defaultNow()
+			.$onUpdate(() => new Date())
+	},
+	(t) => [
+		index("cast_presences_member_idx").on(t.lorebookBindingId),
+		index("cast_presences_book_idx").on(t.lorebookId),
+		// The calendar narrows left to right, at both ends of the window.
+		check(
+			"cast_presences_from_check",
+			sql`(${t.fromMonth} IS NOT NULL OR ${t.fromDay} IS NULL)`
+		),
+		check(
+			"cast_presences_until_check",
+			sql`(${t.untilMonth} IS NOT NULL OR ${t.untilDay} IS NULL)`
+		),
+		// A day without a year is not a date; an end needs one to be an end.
+		check(
+			"cast_presences_until_year_check",
+			sql`(${t.untilYear} IS NOT NULL OR (${t.untilMonth} IS NULL AND ${t.untilDay} IS NULL))`
+		)
+	]
+)
+
+export const castAmendments = pgTable(
+	"cast_amendments",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		/**
+		 * The cast member this overlays — a `lorebook_bindings` row, not a
+		 * `characters` row.
+		 *
+		 * ⚠ **Ruled 2026-09-23, superseding ruling 5's wording.** What shifts
+		 * over a story is the CAST MEMBER: their name, aliases, state, summary
+		 * — and **which card represents them**. A character card is a
+		 * reusable asset that can appear in several books; the person in *this*
+		 * story is the cast member. Amending the card itself would change them
+		 * in every book that uses it, which is never what a dated change means.
+		 *
+		 * ⚠ This is what makes "a different card for a different lifecycle"
+		 * fall out for free: `character_id` is one of the columns `fields` can
+		 * overlay, so an amendment at Y20 can point the same cast member at the
+		 * older card, and every read as of Y20 resolves through it.
+		 */
+		lorebookBindingId: integer("lorebook_binding_id")
+			.notNull()
+			.references(() => lorebookBindings.id, { onDelete: "cascade" }),
+		/**
+		 * Denormalised from the binding so the pool can read every overlay in
+		 * a book in ONE query, exactly as `entry_amendments` does.
+		 *
+		 * NOT NULL, unlike the `character_amendments` it replaces: a cast
+		 * member always belongs to a book, so the "true everywhere" case that
+		 * table allowed does not exist here — and with it goes the CHECK that
+		 * had to refuse a branch without a book.
+		 */
+		lorebookId: integer("lorebook_id")
+			.notNull()
+			.references(() => lorebooks.id, { onDelete: "cascade" }),
+		branchId: integer("branch_id").references(() => lorebookBranches.id, {
+			onDelete: "cascade"
+		}),
+		year: integer("year").notNull(),
+		month: integer("month"),
+		day: integer("day"),
+		/**
+		 * Where in their own LIFE this change begins, when it is a change to
+		 * them rather than to the world around them.
+		 *
+		 * ⚠ Two axes on one table, deliberately (design §4d, §4i.1). A row with
+		 * a personal position resolves against an APPEARANCE's position; a row
+		 * without resolves against the world date in `year`/`month`/`day`, as
+		 * every row does today. The author picks by answering "when she was
+		 * 34" or "in Y540", and both are true things to say.
+		 *
+		 * ⚠ It survives time travel, which a world date cannot: "Y-300" cannot
+		 * say whether she was thirty or sixty when she was there.
+		 */
+		personalPosition: integer("personal_position"),
+		/**
+		 * A partial of the cast member's writable columns: `name`, `aliases`,
+		 * `nodeState`, `summary`, and `characterId` — the card.
+		 */
+		fields: json("fields")
+			.notNull()
+			.default({})
+			.$type<Record<string, unknown>>(),
+		historyEntryId: integer("history_entry_id").references(
+			() => lorebookEntries.id,
+			{ onDelete: "set null" }
+		),
+		createdAt: timestamp("created_at").notNull().defaultNow(),
+		updatedAt: timestamp("updated_at")
+			.notNull()
+			.defaultNow()
+			.$onUpdate(() => new Date())
+	},
+	(t) => [
+		index("cast_amendments_member_date_idx").on(
+			t.lorebookBindingId,
+			t.year,
+			t.month,
+			t.day
+		),
+		index("cast_amendments_book_idx").on(t.lorebookId),
+		check(
+			"cast_amendments_date_check",
+			sql`(${t.month} IS NOT NULL OR ${t.day} IS NULL)`
+		)
 	]
 )
 

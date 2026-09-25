@@ -15,6 +15,7 @@
 	fullscreen panel.
 -->
 <script lang="ts">
+	import { getContext } from "svelte"
 	import { SvelteMap } from "svelte/reactivity"
 	import * as Icons from "@lucide/svelte"
 	import { Dialog, Popover, Portal } from "@skeletonlabs/skeleton-svelte"
@@ -25,7 +26,7 @@
 	import { toaster } from "$lib/client/utils/toaster"
 	import PanelToolbar from "$lib/client/components/panels/PanelToolbar.svelte"
 	import Select from "$lib/client/components/inputs/Select.svelte"
-	import EntityGalleryViewModal from "$lib/client/components/sessionMessages/EntityGalleryViewModal.svelte"
+	import EntityGalleryViewModal from "$lib/client/components/gallery/EntityGalleryViewModal.svelte"
 	import AvatarCropEditor from "./AvatarCropEditor.svelte"
 	import type { MediaFrame } from "$lib/shared/media/frame"
 	import {
@@ -81,6 +82,10 @@
 	/** The newest few, which is all a popover has room to link. The count on
 	 *  the label above them is the real total. */
 	const runsFor = (item: Item) => artifactRuns.get(item.id) ?? []
+	// A receipt is an administrator's (R55): everyone sees which pipeline
+	// made a picture, only an admin gets the link to what the run did.
+	const userCtx: UserCtx | undefined = getContext("userCtx")
+	const isAdmin = $derived(!!userCtx?.user?.isAdmin)
 
 	/**
 	 * Where a run's receipt actually lives.
@@ -543,15 +548,19 @@
 									: `Made by ${runsFor(item).length} runs`}
 								{#each runsFor(item).slice(0, 3) as r (r.runId)}
 									<br />
-									<a
-										class="anchor"
-										href={runHref(r)}
-										title="Open this run's receipt ({r.runId})"
-									>
-										{r.specSlug}{r.isPreview
-											? " (preview)"
-											: ""}
-									</a>
+									{#if isAdmin}
+										<a
+											class="anchor"
+											href={runHref(r)}
+											title="Open this run's receipt ({r.runId})"
+										>
+											{r.specSlug}{r.isPreview
+												? " (preview)"
+												: ""}
+										</a>
+									{:else}
+										{r.specSlug}{r.isPreview ? " (preview)" : ""}
+									{/if}
 									· {shortDate(String(r.startedAt))}
 								{/each}
 							</p>

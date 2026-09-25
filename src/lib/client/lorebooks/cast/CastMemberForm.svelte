@@ -1,6 +1,11 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
+	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import Avatar from "$lib/client/components/Avatar.svelte"
+	import { declareInterest } from "$lib/client/sockets/interest.svelte"
+	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import { interestKey } from "$lib/shared/sockets/interest"
+	import { normalizeSpriteName } from "$lib/shared/sprites"
 	import type { CastMember, CastRow } from "../castPool"
 	import {
 		CAST_STATES,
@@ -27,6 +32,13 @@
 			name?: string
 			aliases?: string[]
 		}) => void
+		/**
+		 * File the change as a dated overlay instead. Absent at now, where
+		 * there is nothing to choose between.
+		 */
+		onAmend?: (patch: Record<string, unknown>) => void
+		/** The moment being read, spelled for the button. */
+		momentLabel?: string | null
 		onDelete: () => void
 		onLinkCharacter: () => void
 		onUnlink: () => void
@@ -37,6 +49,8 @@
 		row,
 		hasUnsavedChanges = $bindable(false),
 		onSave,
+		onAmend,
+		momentLabel = null,
 		onDelete,
 		onLinkCharacter,
 		onUnlink
@@ -49,6 +63,8 @@
 	let summary = $state("")
 	let nodeState = $state("active")
 	let nodeVisibility = $state("normal")
+	/** Which of the card's sprite sets they are drawn with. "" = its default. */
+	let spriteSet = $state("")
 	/** Which member the draft belongs to, so a list arrival never discards it. */
 	let draftFor = $state<number | null>(null)
 
@@ -63,6 +79,7 @@
 		summary = row.summary ?? ""
 		nodeState = member.state
 		nodeVisibility = member.visibility
+		spriteSet = row.spriteSet ?? ""
 	})
 
 	let dirty = $derived(
@@ -70,6 +87,7 @@
 			(summary.trim() !== (row.summary ?? "") ||
 				nodeState !== member.state ||
 				nodeVisibility !== member.visibility ||
+				spriteSet !== (row.spriteSet ?? "") ||
 				(!member.linked &&
 					(name.trim() !== (row.name ?? "") ||
 						aliasList.join("\u0000") !==
@@ -80,19 +98,112 @@
 		hasUnsavedChanges = dirty
 	})
 
-	function save() {
-		onSave({
+	/** What is on the form, whether it is going to the member or to a date. */
+	function patch() {
+		return {
 			summary: summary.trim() || null,
 			nodeState,
 			nodeVisibility,
+			// ⚠ Empty means "the card's default set", which is NULL on the row —
+			// not the empty string, which would be a set nothing is named.
+			spriteSet: spriteSet || null,
 			...(member.linked
 				? {}
 				: {
 						name: name.trim(),
 						aliases: aliasList
 					})
-		})
+		}
 	}
+
+	function save() {
+		onSave(patch() as any)
+	}
+
+	let saveMenuOpen = $state(false)
+
+	/**
+	 * The sprite sets of the card this member RESOLVES to, at this moment.
+	 *
+	 * ⚠ The resolved card, not the base one: which card represents them is
+	 * itself amendable, so reading as of a later year can put them on a
+	 * different card with a different set of sets. `row` is already resolved;
+	 * `member` is not, and using it would offer the wrong card's sets.
+	 *
+	 * ⚠ **A set this card does not have is kept, never cleared.** The server
+	 * falls back to the card's default and records the miss on the receipt, so
+	 * a card swap does not silently throw away what the author wrote. That is
+	 * why the stored name is offered as its own option when it is missing.
+	 */
+	const socket = useTypedSocket()
+	let spriteSets = $state<{ name: string; isDefault: boolean }[]>([])
+	/**
+	 * The card whose list has actually ARRIVED.
+	 *
+	 * ⚠ An empty `spriteSets` is two different facts — "the reply is still in
+	 * flight" and "this card has no sets at all" — and the difference decides
+	 * whether a stored name is missing or merely unconfirmed. Without this the
+	 * zero-set card never offers the stored name below, which is the one way
+	 * the picker could silently drop it.
+	 */
+	let loadedFor = $state<number | null>(null)
+
+	/**
+	 * ⚠ A PRIMITIVE, deliberately — the effect below must depend on the card's
+	 * id and nothing else. `row` is rebuilt by `resolvedCast` on every
+	 * recompute, so an effect that reads `row.characterId` directly re-runs
+	 * whenever any unrelated cast state moves, clearing `spriteSets` a moment
+	 * after the reply filled it and firing another request. A `$derived`
+	 * holding a number only notifies when the number changes.
+	 */
+	let cardIdForSprites = $derived(row.characterId ?? null)
+
+	$effect(() => {
+		const cardId = cardIdForSprites
+		spriteSets = []
+		loadedFor = null
+		if (cardId == null) return
+		const release = declareInterest<"characters:listSprites">(
+			interestKey("characters:listSprites", cardId),
+			(msg) => {
+				if (msg.characterId !== cardId) return
+				spriteSets = msg.sets.map((s) => ({
+					name: s.name,
+					isDefault: s.isDefault
+				}))
+				loadedFor = cardId
+			}
+		)
+		socket.emit("characters:listSprites", { characterId: cardId })
+		return release
+	})
+
+	/**
+	 * The chosen set, when no set of the resolved card carries that name.
+	 *
+	 * ⚠ Computed WITHOUT waiting for the list, because it is what keeps the
+	 * stored name as an `<option>`: a `<select>` bound to a value no option
+	 * carries can write the empty string back over it, and clearing what the
+	 * author wrote is the one thing this control must never do.
+	 */
+	let missingSet = $derived(
+		spriteSet &&
+			!spriteSets.some(
+				(s) => normalizeSpriteName(s.name) === normalizeSpriteName(spriteSet)
+			)
+			? spriteSet
+			: null
+	)
+
+	/**
+	 * Whether to SAY it is missing — only once the card's list has arrived.
+	 *
+	 * The option above must exist immediately; the warning must not, or every
+	 * card swap flashes "not on this card" for the length of a round trip.
+	 */
+	let missingConfirmed = $derived(
+		missingSet != null && loadedFor === cardIdForSprites
+	)
 
 	function addAlias() {
 		const value = aliasDraft.trim()
@@ -301,6 +412,47 @@
 		</p>
 	</div>
 
+	{#if member.linked && (spriteSets.length > 0 || spriteSet)}
+		<div class="border-border flex flex-col gap-1 border-t pt-3">
+			<label class="text-sm font-semibold" for="castSpriteSet-{member.id}">
+				Sprite set
+			</label>
+			<select
+				id="castSpriteSet-{member.id}"
+				class="select text-sm"
+				bind:value={spriteSet}
+			>
+				<option value="">The card's default set</option>
+				{#each spriteSets as set (set.name)}
+					<option value={set.name}>
+						{set.name}{set.isDefault ? " (default)" : ""}
+					</option>
+				{/each}
+				{#if missingSet}
+					<!-- ⚠ Offered so choosing it again is possible and saving
+					     does not silently drop it. The card they resolve to
+					     here has no set by this name; another card may. -->
+					<option value={missingSet}>{missingSet} — not on this card</option>
+				{/if}
+			</select>
+			{#if missingConfirmed}
+				<p class="text-warning-700-300 text-xs leading-relaxed">
+					The card they are drawn with here has no set called
+					<strong>{missingSet}</strong>
+					, so they fall back to its default. The name is kept: a card
+					swap does not throw away what you wrote, and another card may
+					have it.
+				</p>
+			{:else}
+				<p class="text-surface-700-300 text-xs leading-relaxed">
+					Which of the card's sets this member is drawn with. Sets belong
+					to the card; which one they use is theirs, and can be dated like
+					anything else on this page.
+				</p>
+			{/if}
+		</div>
+	{/if}
+
 	<div class="border-border flex flex-wrap items-center gap-2 border-t pt-3">
 		{#if member.linked}
 			<div class="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -338,13 +490,92 @@
 				<Icons.Link size={14} aria-hidden="true" /> Link character
 			</button>
 		{/if}
-		<button
-			class="btn btn-sm preset-filled-success-500 ml-auto"
-			type="button"
-			disabled={!member.linked && !name.trim()}
-			onclick={save}
-		>
-			<Icons.Save size={14} aria-hidden="true" /> Save
-		</button>
+		{#if onAmend && momentLabel}
+			<!-- The same two-action save the entry editor offers, and the same
+			     rule: the one that rewrites what was always true is in the
+			     menu, never the primary (STYLE-GUIDE §6.1). -->
+			<div class="ml-auto flex items-center">
+				<button
+					class="btn btn-sm preset-filled-success-500 rounded-r-none"
+					type="button"
+					disabled={!member.linked && !name.trim()}
+					onclick={() => onAmend(patch())}
+					title="File this change as an amendment dated {momentLabel}"
+				>
+					<Icons.Save size={14} aria-hidden="true" />
+					Save as of {momentLabel}
+				</button>
+				<Popover
+					open={saveMenuOpen}
+					onOpenChange={(e) => (saveMenuOpen = e.open)}
+					positioning={{ placement: "bottom-end" }}
+				>
+					<Popover.Trigger
+						class="btn btn-sm preset-filled-success-500 rounded-l-none border-l border-white/25 p-2"
+						title="Other ways to save this change"
+						aria-label="Other ways to save this change"
+					>
+						<Icons.ChevronDown size={16} aria-hidden="true" />
+					</Popover.Trigger>
+					<Portal>
+						<Popover.Positioner class="z-[1000]!">
+							<Popover.Content
+								class="card bg-surface-100-900 flex w-[min(90vw,320px)] flex-col gap-3 p-4 shadow-xl"
+							>
+								<div class="flex flex-col gap-1">
+									<span class="text-sm font-semibold">
+										Save as of {momentLabel}
+									</span>
+									<p
+										class="text-surface-700-300 text-xs leading-relaxed"
+									>
+										They stay as they are. The change begins
+										at {momentLabel} and reads from then on.
+									</p>
+								</div>
+								<hr class="border-surface-300-700" />
+								<div class="flex flex-col gap-2">
+									<p
+										class="text-surface-700-300 text-xs leading-relaxed"
+									>
+										Or change them outright: they read this
+										way <strong>everywhere</strong>
+										, on every line and at every moment — including
+										before
+										{momentLabel}, where it is who they
+										always were.
+									</p>
+									<button
+										class="btn btn-sm preset-tonal-warning w-full justify-start"
+										type="button"
+										disabled={!member.linked &&
+											!name.trim()}
+										onclick={() => {
+											saveMenuOpen = false
+											save()
+										}}
+									>
+										<Icons.PenLine
+											size={14}
+											aria-hidden="true"
+										/>
+										Change the member
+									</button>
+								</div>
+							</Popover.Content>
+						</Popover.Positioner>
+					</Portal>
+				</Popover>
+			</div>
+		{:else}
+			<button
+				class="btn btn-sm preset-filled-success-500 ml-auto"
+				type="button"
+				disabled={!member.linked && !name.trim()}
+				onclick={save}
+			>
+				<Icons.Save size={14} aria-hidden="true" /> Save
+			</button>
+		{/if}
 	</div>
 </div>

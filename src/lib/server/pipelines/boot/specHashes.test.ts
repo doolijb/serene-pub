@@ -72,7 +72,40 @@ const PUBLISHED: Record<string, string> = {
 	// which rides `meta.genre` on the create spec, declares
 	// `core:event/form-addressed@1` (optional) — the same move for all three
 	// create specs. Nothing the pipeline sends changes. (was "9bfdda8a4f589")
-	"core:spec/create-chat@2.2.0": "1bc0b0f6dc8999",
+	/**
+	 * Turn order as state (PLAN-turn-order §4.5, A6). Two specs, one
+	 * builder: the cast's order, and one narrator entry per send for the
+	 * planner genres.
+	 */
+	// One turn-order spec per genre since the modder pass (R27, M2); the
+	// shared `turn-order` / `turn-order-narrator` pins are retired.
+	"core:spec/chat-turn-order@1.0.0": "2d13f7b17a0fb",
+	"core:spec/guide-turn-order@1.0.0": "1e155929f443a5",
+	"core:spec/writing-room-turn-order@1.0.0": "12a3845234143f",
+	"core:spec/adventure-turn-order@1.0.0": "b605f68c2205f",
+	"core:spec/lair-turn-order@1.0.0": "6bc2842fd6676",
+	"core:spec/whodunit-turn-order@1.0.0": "6a86fc61965f4",
+	/**
+	 * ⚠ Every respond spec bumped a semver at A6 (§4.4, §7): the `speaker`
+	 * node moved to the turn-order spec and `placeholder` returned to
+	 * directly after the inlet. A new version rather than an in-place edit,
+	 * because the node list changed and a stored document must stay as it
+	 * is. The writing room's nine action specs move with them — their
+	 * `speaker` node was `turn-manual`, whose whole job was recording the
+	 * action's explicit pick, and a pick never enters a strategy now.
+	 */
+	"core:spec/respond@1.21.0": "1970a642240009",
+	"core:spec/guide-respond@1.1.0": "b0c3e32a16d1d",
+	"core:spec/writing-room-respond@1.1.0": "6f13ddc7e1241",
+	"core:spec/writing-room-continue@1.1.0": "1c840e424672ef",
+	"core:spec/writing-room-rewrite@1.1.0": "fccbddab17e0a",
+	"core:spec/writing-room-expand@1.1.0": "d22df61829b8a",
+	"core:spec/writing-room-tighten@1.1.0": "75942fb0cdc59",
+	"core:spec/writing-room-brainstorm@1.1.0": "147a45688788ba",
+	"core:spec/writing-room-critique@1.1.0": "18b10044e3c21",
+	"core:spec/writing-room-add-to-bible@1.1.0": "ed2170a1e7971",
+	"core:spec/writing-room-export@1.1.0": "c963cdf7f631c",
+	"core:spec/create-chat@2.2.0": "765f3317d71e6",
 	/**
 	 * The guide genre (plans/29 R-18; U5g, 2026-09-16) — two new slugs, and
 	 * nothing above them moves. `create-guide` carries the genre's
@@ -90,9 +123,9 @@ const PUBLISHED: Record<string, string> = {
 	// opens no scene; the declaration is what the write sites refuse from.
 	// `create-chat` and `adventure-create` are untouched — neither declares
 	// `writes`, and a genre that says nothing still means both on.
-	"core:spec/create-guide@1.0.0": "fad8888e9b78f",
+	"core:spec/create-guide@1.0.0": "1febb9fe3bd3f5",
 	// (was "1d39898d4c7a0c") — W9 shape pins, see the note above adventure-ask.
-	"core:spec/guide-respond@1.0.0": "e9e2afe8ba8fb",
+	"core:spec/guide-respond@1.0.0": "b7997d7b1d904",
 	/**
 	 * The Adventure genre (DESIGN-adventure-genre.md) — five new slugs, and
 	 * nothing above them moves. Every node they pin is either one core already
@@ -105,7 +138,7 @@ const PUBLISHED: Record<string, string> = {
 	 * open `session-action` slot.
 	 */
 	// (was "1c67b7acb698cf") — moved with the genre surface, U5d; see create-chat.
-	"core:spec/adventure-create@1.0.0": "240458abb4e3b",
+	"core:spec/adventure-create@1.0.0": "4b16999c12ab3",
 	// ⚠ MOVED, in place, while the genre is still unreleased: the planner and
 	// the keeper now pin `core:oracle/generate-json@1` instead of
 	// `generate-text` + `parse-json`, their transcript comes from
@@ -156,7 +189,7 @@ const PUBLISHED: Record<string, string> = {
 	// reference the voice's context node already resolved. The spine's
 	// character-lore lane stays the narrator's.
 	// (was "1d49758bb5b83c")
-	"core:spec/adventure-respond@1.0.0": "138f57a4301cd9",
+	"core:spec/adventure-respond@1.0.0": "6147f53a5ed3f",
 	// ⚠ MOVED, unreleased-genre terms (R-8, 2026-09-15): the three actions'
 	// `contextBudget` shares the writing step's connection for the model's
 	// own window, like every other budget node.
@@ -180,7 +213,7 @@ const PUBLISHED: Record<string, string> = {
 	// `contributes.actions[].function` — the key is the identity, and the
 	// compiled document carries one word for it. Content of the
 	// contribution, not of the run. The 28 old hashes are in git.
-	"core:spec/adventure-look@1.0.0": "fb15c2d04afa8",
+	"core:spec/adventure-look@1.0.0": "15bfea21b5acfe",
 	// ⚠ MOVED, in place, on the same unreleased-genre terms: Rest and Time
 	// passes ask `core:oracle/generate-json@1` for the keeper's own shape
 	// instead of parsing prose out of a prefilled reply.
@@ -454,7 +487,7 @@ const PUBLISHED: Record<string, string> = {
 	// character's row carries `metadata.speaker = character:<id>`, the same
 	// shape 0138 writes for a migrated row. (was "e3ab80dc58afa")
 	// (was "174220ef023ed7") — W9 shape pins, see the note above adventure-ask.
-	"core:spec/narrate-character@1.0.0": "dc7fab4edc2c4",
+	"core:spec/narrate-character@1.0.0": "199a1f680b0bc3",
 	// (was "b6ba835e86244", then "431aa4254af1", then "12971669b900fd",
 	//  then "bc304a8a52b71")
 	// ⚠ MOVED on the same terms as `narrate-character` above (09-B B4):
@@ -482,7 +515,7 @@ const PUBLISHED: Record<string, string> = {
 	// Content of the contribution, not of the run: nothing the pipeline
 	// sends changes. (was "11ca2223b19a22")
 	// (was "3d0b93608ab5b") — W9 shape pins, see the note above adventure-ask.
-	"core:spec/narrate@1.11.0": "1b22fdf56d7757",
+	"core:spec/narrate@1.11.0": "d361fe0665805",
 	// ⚠ `core:spec/respond@1.20.0`'s hash MOVED for the SECOND time without a
 	// bump, on the same terms as the two paragraphs above and paired with
 	// `drizzle/0106_continuation_prefill_reprojection`, which deletes its
@@ -591,7 +624,7 @@ const PUBLISHED: Record<string, string> = {
 	// downstream reader still takes `$.speaker.characterId`; nothing the run
 	// sends changes. (was "1ace29594a6283")
 	// (was "1c503cc437da52") — W9 shape pins, see the note above adventure-ask.
-	"core:spec/respond@1.20.0": "c0b92cae6b39d",
+	"core:spec/respond@1.20.0": "1c2931c6f16055",
 	"core:spec/respond@1.19.0": "fdf2f7090f13c",
 	"core:spec/respond@1.18.0": "9315ce3ddeaa4",
 	"core:spec/respond@1.17.0": "118378cf44739b",
@@ -692,6 +725,11 @@ const PUBLISHED: Record<string, string> = {
 	"core:spec/builtin-edit@1.0.0": "1f50517efb4c61",
 	"core:spec/builtin-swipe@1.0.0": "b69ef788e2df7",
 	"core:spec/builtin-branch@1.0.0": "be5ac081454e9",
+	// A person's pick of a line's sprite (DESIGN-sprites §6). NEW — not a
+	// built-in (its outlet is also placed by the reply specs' sprite tail).
+	// The five reply specs above moved in place for the tail; re-projected by
+	// drizzle/0169_sprite_tail_reprojection.
+	"core:spec/show-sprite@1.0.0": "1546b4989f83e5",
 	// 1.0.0: local image generation end to end — a composer button, the review
 	// gate as the prompt entry, and the render posted as a message.
 	// Hash moved: `render` names its `params` slot, which the node type now
@@ -723,7 +761,7 @@ const PUBLISHED: Record<string, string> = {
 	// panel from rendering a copy. Nothing the run sends changes.
 	// (was "9420cfdf9c246")
 	// (was "1d560d3f202dd5") — W9 shape pins, see the note above adventure-ask.
-	"core:spec/tool-loop@1.0.0": "58c36603a5520",
+	"core:spec/tool-loop@1.0.0": "182cfadc250d12",
 	/**
 	 * The **Lair** genre (plans/genres-and-showcase-plugins §3, U3) — nine new
 	 * slugs, and nothing above them moves. Every node they pin is one core
@@ -732,8 +770,8 @@ const PUBLISHED: Record<string, string> = {
 	 * `lair-respond` is the reverse crawler's turn: plan, then a junction that
 	 * either halts at a room nobody built (a `choices` block addressed to the
 	 * OWNER) or narrates — and, in `cast` style, gives one voice call per
-	 * character the planner named. The write is on the spine for both arms,
-	 * because a write-class outlet may not sit inside a clause (01 §4).
+	 * character the planner named. The write is on the spine for both arms:
+	 * the reply is the run's one live row, opened before the junction (F7).
 	 *
 	 * ⚠ **Recorded before the catalog's `dist` carries them.** These pins were
 	 * computed from `core-catalog/src` (the SDK suite's `lair.test.ts` records
@@ -743,11 +781,11 @@ const PUBLISHED: Record<string, string> = {
 	 * being checked the moment the build catches up, which is exactly when a
 	 * drift would matter.
 	 */
-	"core:spec/lair-create@1.0.0": "181409e22c0b57",
+	"core:spec/lair-create@1.0.0": "14053b92f897da",
 	// Moved (W1, 2026-09-17): the same per-voice lore lane Adventure's
 	// respond gained, inside the `cast` branch's `each`.
 	// (was "7557cc5126f8e")
-	"core:spec/lair-respond@1.0.0": "17f42bf5411cc8",
+	"core:spec/lair-respond@1.0.0": "4f1008e05a481",
 	// Moved twice on 2026-09-17. First (L3, contracts batch 2): `params:
 	// slot.params()` on the `create-lore-entry` node. That outlet now declares
 	// an `entryType` parameters slot, and a slot the spec never NAMES is not a
@@ -763,7 +801,7 @@ const PUBLISHED: Record<string, string> = {
 	// be laid out. The exits stay prose: `create-lore-entry@1`'s `links` port is
 	// unwired because nothing in core parses a drafted `Exits:` line into names.
 	// (was 15ceae616882db, then 94ce032b7c0b)
-	"core:spec/lair-build-room@1.0.0": "190c73e865eb9f",
+	"core:spec/lair-build-room@1.0.0": "33d82ec4ccd23",
 	// Moved (L1, 2026-09-17): the knock's options write the room. The one
 	// write-class outlet is `core:outlet/create-lore-entry` (was
 	// `create-message`), the `build` branch drafts the dungeon's room layout
@@ -773,11 +811,11 @@ const PUBLISHED: Record<string, string> = {
 	// Moved again by the Lair finish lane: the room files as a
 	// `core:entry/location`, exactly as *Build room* now files one.
 	// (was "912b4d1226a36", then 1c5e452458312a, then 3899346f4eb21)
-	"core:spec/lair-room-answer@1.0.0": "11e6395a67d358",
+	"core:spec/lair-room-answer@1.0.0": "334691209cc9f",
 	"core:spec/lair-whisper@1.0.0": "7056f498d2824",
 	"core:spec/lair-nudge@1.0.0": "13f22ac089c1d3",
-	"core:spec/lair-trap@1.0.0": "bc6188056ee88",
-	"core:spec/lair-reveal@1.0.0": "10266438456afd",
+	"core:spec/lair-trap@1.0.0": "4b6a00eff51c8",
+	"core:spec/lair-reveal@1.0.0": "d8da18ba3b211",
 	/** The genre's answer pipeline — one graph, published once per shipped genre. */
 	"core:spec/answer-form-lair@1.0.0": "15c9296cf3ab70",
 	/**
@@ -802,8 +840,8 @@ const PUBLISHED: Record<string, string> = {
 	 * SDK suite's `writingRoom.test.ts` records the same ten), skipped by
 	 * construction until `npm run sdk:build` catches up.
 	 */
-	"core:spec/writing-room-create@1.0.0": "183229685dbfb",
-	"core:spec/writing-room-respond@1.0.0": "14c09e41ae6abd",
+	"core:spec/writing-room-create@1.0.0": "bb48499be797a",
+	"core:spec/writing-room-respond@1.0.0": "13252804b8a380",
 	"core:spec/writing-room-continue@1.0.0": "167b0adb63b018",
 	"core:spec/writing-room-rewrite@1.0.0": "31f36c88bf487",
 	"core:spec/writing-room-expand@1.0.0": "11351d7d9ca9d2",
@@ -868,11 +906,11 @@ const PUBLISHED: Record<string, string> = {
 	// that publish to nothing — the derivation is the record, and the one
 	// per-session store a spec can reach is the ledger two widgets render.
 	// (was "1e3ab7a4c2af5e", then "19d5dd6ff887f0")
-	"core:spec/whodunit-create@1.0.0": "1117893aafdd92",
+	"core:spec/whodunit-create@1.0.0": "fc0acbf4d8443",
 	// Moved (W1, 2026-09-17): the same per-voice lore lane, pool and rank
 	// Adventure's and Lair's respond specs gained — a suspect reads their own
 	// private entries, and only their own. (was "112b003db90fdb")
-	"core:spec/whodunit-respond@1.0.0": "1631751a942d1a",
+	"core:spec/whodunit-respond@1.0.0": "1cb242cfc9bd24",
 	// D-4a: the picker's `contextBudget → context → lines → prompt → write`
 	// chain — a whole `generate-json` call whose job was to read the cast back
 	// out as `{ key, label }` — is one `cast-choices` task, and the history lane
@@ -880,8 +918,8 @@ const PUBLISHED: Record<string, string> = {
 	// now, not by a name a model spelled. (was "80dd0b85bd53c")
 	"core:spec/whodunit-question@1.0.0": "5832beca7487a",
 	/** What the question's options fire — in no listing; see `whodunitActions.ts`. */
-	"core:spec/whodunit-answer@1.0.0": "1fdc133dbc3a7b",
-	"core:spec/whodunit-search@1.0.0": "10b9daa275052b",
+	"core:spec/whodunit-answer@1.0.0": "b606e9189f9e5",
+	"core:spec/whodunit-search@1.0.0": "fb753d069204",
 	// The same removal as `whodunit-question`. (was "1041c44a77e79")
 	"core:spec/whodunit-accuse@1.0.0": "15fb4fa0bbffdd",
 	/**
@@ -898,7 +936,7 @@ const PUBLISHED: Record<string, string> = {
 	 * ending's planner: told the verdict and the culprit through its context's
 	 * `fields`, and answering with beats alone. (was "8be81c0e7bbf5")
 	 */
-	"core:spec/whodunit-verdict@1.0.0": "b92b02c30a527",
+	"core:spec/whodunit-verdict@1.0.0": "ef322651da15",
 	/**
 	 * Whodunit's answer pipeline, added by the same ruling and the same one
 	 * graph — and this is the genre with the clearest use for it: a narrator
